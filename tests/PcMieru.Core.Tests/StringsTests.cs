@@ -2,7 +2,7 @@ namespace PcMieru.Core.Tests;
 
 public class StringsTests
 {
-    private static PcMieruServices Services() => PcMieruServices.Create();
+    private static PcMieruServices Services() => PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
 
     [Fact]
     public void Every_registered_string_has_both_languages_with_the_same_placeholders()
