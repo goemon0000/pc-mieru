@@ -53,7 +53,7 @@ internal static unsafe partial class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool CloseServiceHandle(nint handle);
 
-    [LibraryImport("wintrust.dll")]
+    [LibraryImport("wintrust.dll", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial int WinVerifyTrust(nint window, ref Guid action, void* data);
 
