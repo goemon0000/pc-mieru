@@ -11,6 +11,13 @@ public class ServicesTests
     private static PcMieruServices Create(bool redact = true) =>
         PcMieruServices.Create(new PcMieruOptions { Redact = redact, Clock = static () => Fixture.FixedTime });
 
+    /// <summary>
+    /// Management has real implementations: a test that expects the Fake's behaviour (and must not act on this PC: end a
+    /// process, switch a startup entry, start the Helper) has to ask for the Fakes.
+    /// </summary>
+    private static PcMieruServices CreateFakes() =>
+        PcMieruServices.Create(new PcMieruOptions { ForceFakes = true, Clock = static () => Fixture.FixedTime });
+
     [Fact]
     public void Every_boundary_interface_resolves_after_create()
     {
@@ -176,7 +183,7 @@ public class ServicesTests
     [Fact]
     public void Protection_policy_treats_system_and_unknown_processes_as_not_operable()
     {
-        using var s = Create();
+        using var s = CreateFakes();
         Assert.False(s.Protection.Evaluate(new ProcessKey(4, 1)).MayOperate);
         Assert.False(s.Protection.Evaluate(new ProcessKey(123_456, 1)).MayOperate);
         Assert.Equal(ProtectionKind.Unknown, s.Protection.Evaluate(new ProcessKey(123_456, 1)).Kind);
@@ -185,7 +192,7 @@ public class ServicesTests
     [Fact]
     public async Task Process_control_refuses_a_protected_process()
     {
-        using var s = Create();
+        using var s = CreateFakes();
         var snapshot = await s.Snapshots.SampleAsync();
         var lsass = snapshot.Processes.First(p => p.Name == "lsass.exe").Key;
         var result = await s.ProcessControl.TerminateAsync(lsass);
@@ -197,7 +204,7 @@ public class ServicesTests
     [Fact]
     public async Task Terminate_tree_plan_skips_protected_children()
     {
-        using var s = Create();
+        using var s = CreateFakes();
         var snapshot = await s.Snapshots.SampleAsync();
         var services = snapshot.Processes.First(p => p.Name == "services.exe").Key;
         var plan = await s.ProcessControl.PlanTerminateTreeAsync(services);
@@ -208,7 +215,7 @@ public class ServicesTests
     [Fact]
     public async Task Startup_toggle_works_only_on_toggleable_entries()
     {
-        using var s = Create();
+        using var s = CreateFakes();
         Assert.True((await s.Startup.SetEnabledAsync("runHkcu:Steam", true)).IsSuccess);
         Assert.Equal(OperationCode.Unsupported, (await s.Startup.SetEnabledAsync("scheduledTask:OneDrive Standalone Update", true)).Code);
         Assert.Equal(OperationCode.NotFound, (await s.Startup.SetEnabledAsync("nope", true)).Code);
@@ -217,7 +224,7 @@ public class ServicesTests
     [Fact]
     public async Task Fake_helper_never_runs_anything()
     {
-        using var s = Create();
+        using var s = CreateFakes();
         var request = new HelperRequest(HelperOperation.ServiceStart, "0123456789abcdef0123", @"C:\Temp\0123456789abcdef0123.json") { ServiceName = "Spooler" };
         var outcome = await s.Helper.RunAsync(request);
         Assert.Equal(OperationCode.Ok, outcome.Code);

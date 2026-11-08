@@ -16,7 +16,11 @@ public enum HelperOperation
 
 public static class HelperOperations
 {
-    public sealed record Spec(HelperOperation Op, string Name, IReadOnlyList<string> Options);
+    public sealed record Spec(HelperOperation Op, string Name, IReadOnlyList<string> Options)
+    {
+        /// <summary>Accepted but not required (process-efficiency "off" may carry the values to restore).</summary>
+        public IReadOnlyList<string> OptionalOptions { get; init; } = [];
+    }
 
     /// <summary>Option names are listed without the leading "--". --result and --nonce are always required.</summary>
     public static IReadOnlyList<Spec> All { get; } =
@@ -27,7 +31,10 @@ public static class HelperOperations
         new(HelperOperation.StartupHklmSet, "startup-hklm-set", ["provider", "name", "state"]),
         new(HelperOperation.ProcessTerminate, "process-terminate", ["pid", "created"]),
         new(HelperOperation.ProcessPriority, "process-priority", ["pid", "created", "priority"]),
-        new(HelperOperation.ProcessEfficiency, "process-efficiency", ["pid", "created", "state"]),
+        new(HelperOperation.ProcessEfficiency, "process-efficiency", ["pid", "created", "state"])
+        {
+            OptionalOptions = ["prev-priority", "prev-control", "prev-state"],
+        },
         new(HelperOperation.SmartRead, "smart-read", ["drive"]),
         new(HelperOperation.NvmeHealth, "nvme-health", ["drive"]),
     ];

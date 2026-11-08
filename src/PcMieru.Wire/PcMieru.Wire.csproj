@@ -3,11 +3,22 @@
   <!--
     Wire types shared by PcMieru.Core and the NativeAOT Helper.
     Must stay AOT-safe: no reflection-based JSON, no dependency on Core.
+
+    Also hosts the privileged operations (Privileged/): the code that actually terminates a process, changes its
+    priority, starts or stops a service, flips a StartupApproved value or reads SMART/NVMe bytes. The Helper
+    references only this project, and Core uses the very same code for the operations that need no elevation, so
+    the safety rules (re-open by ProcessKey, protection check on the same handle) exist exactly once and the
+    tests can run them in-process without ever starting an elevated exe.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>PcMieru.Wire</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PcMieru.Core.Tests" />
+  </ItemGroup>
 
 </Project>
