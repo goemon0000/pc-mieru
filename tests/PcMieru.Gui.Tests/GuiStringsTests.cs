@@ -83,7 +83,7 @@ public partial class GuiStringsTests
         Check("gui.svc.state.", Enum.GetValues<ServiceState>());
         Check("gui.svc.start.", Enum.GetValues<ServiceStartType>());
         Check("gui.startup.state.", Enum.GetValues<StartupState>());
-        Check("gui.perf.certainty.", Enum.GetValues<ObservationCertainty>());
+        Check("gui.overview.certainty.", Enum.GetValues<ObservationCertainty>());
     }
 
     [Fact]
