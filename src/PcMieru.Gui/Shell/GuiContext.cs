@@ -30,6 +30,9 @@ internal sealed class GuiContext
 
     public event Action? AlwaysOnTopChanged;
 
+    /// <summary>Raised after the text size changed. MainForm sets the window font; every control that takes its font from the window follows.</summary>
+    public event Action? TextSizeChanged;
+
     public void SetLanguage(Language language)
     {
         if (Settings.Language == language && Strings.Current == language)
@@ -73,6 +76,18 @@ internal sealed class GuiContext
         Settings.AlwaysOnTop = onTop;
         Settings.Save();
         AlwaysOnTopChanged?.Invoke();
+    }
+
+    public void SetTextSize(TextSize size)
+    {
+        if (Settings.TextSize == size)
+        {
+            return;
+        }
+
+        Settings.TextSize = size;
+        Settings.Save();
+        TextSizeChanged?.Invoke();
     }
 
     public void Report(string message) => StatusMessage?.Invoke(message);

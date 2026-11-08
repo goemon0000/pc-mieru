@@ -83,8 +83,13 @@ internal class GridView : ListView, IThemed
     private bool _sortDescending;
     private bool _fitting;
 
-    /// <summary>The DPI the column widths are in. Column widths are plain pixels that nothing rescales, so a change is followed by hand.</summary>
+    /// <summary>The font size column widths are written for: widths in the code are logical pixels at this size.</summary>
+    public const float DesignPoints = 9f;
+
+    /// <summary>The DPI and the font size the column widths are in. Column widths are plain pixels that nothing rescales, so a change is followed by hand.</summary>
     private int _columnDpi;
+
+    private float _columnPoints = DesignPoints;
 
     public GridView()
     {
@@ -754,17 +759,25 @@ internal class GridView : ListView, IThemed
 
     private int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
 
+    /// <summary>A column width written in logical pixels at the design font size, in pixels for this table's DPI and font.</summary>
+    public int ColumnWidth(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0 * Font.SizeInPoints / DesignPoints);
+
+    /// <summary>The reverse of <see cref="ColumnWidth"/>: what a width on screen is worth in the units the code and the settings file use.</summary>
+    public int ToLogicalWidth(int device) => (int)Math.Round(device * 96.0 / Math.Max(CurrentDpi, 96) * DesignPoints / Font.SizeInPoints);
+
     /// <summary>After a DPI change the column widths (and row height) are brought to the new scale.</summary>
     private void SyncDpi()
     {
         var dpi = CurrentDpi;
-        if (dpi == _columnDpi)
+        var points = Font.SizeInPoints;
+        if (dpi == _columnDpi && Math.Abs(points - _columnPoints) < 0.01f)
         {
             return;
         }
 
-        var factor = (double)dpi / _columnDpi;
+        var factor = (double)dpi / _columnDpi * (points / _columnPoints);
         _columnDpi = dpi;
+        _columnPoints = points;
         _fitting = true;
         try
         {

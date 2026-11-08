@@ -11,10 +11,11 @@ namespace PcMieru.Gui;
 /// </summary>
 internal sealed class ServicesPage : PageBase
 {
-    private const int NameColumn = 0;
-    private const int DisplayColumn = 1;
-    private const int StateColumn = 2;
-    private const int StartColumn = 3;
+    // The name people know first (the display name), then what it is doing and how it starts; the internal name comes after.
+    private const int DisplayColumn = 0;
+    private const int StateColumn = 1;
+    private const int StartColumn = 2;
+    private const int NameColumn = 3;
     private const int PidColumn = 4;
     private const int DescriptionColumn = 5;
 
@@ -59,10 +60,10 @@ internal sealed class ServicesPage : PageBase
         PageLayout.Prepare(
             _grid,
             Strings.Get("gui.nav.services"),
+            (string.Empty, Px(230), HorizontalAlignment.Left),
+            (string.Empty, Px(100), HorizontalAlignment.Left),
+            (string.Empty, Px(170), HorizontalAlignment.Left),
             (string.Empty, Px(150), HorizontalAlignment.Left),
-            (string.Empty, Px(210), HorizontalAlignment.Left),
-            (string.Empty, Px(90), HorizontalAlignment.Left),
-            (string.Empty, Px(120), HorizontalAlignment.Left),
             (string.Empty, Px(70), HorizontalAlignment.Right),
             (string.Empty, Px(420), HorizontalAlignment.Left));
         _grid.Cells = Cell;
@@ -125,8 +126,8 @@ internal sealed class ServicesPage : PageBase
         Controls.Add(_grid);
         Controls.Add(PageLayout.Footer("serviceFooter", pad, _count, _hint));
         Controls.Add(PageLayout.Bar("serviceBar", pad, [_filterLabel, _filter], [_start, _stop, _restart, _reload]));
-        _table.SetSort(NameColumn, false);
-        _grid.SetSort(NameColumn, false);
+        _table.SetSort(DisplayColumn, false);
+        _grid.SetSort(DisplayColumn, false);
         ApplyLanguage();
         UpdateButtons();
     }
@@ -200,7 +201,7 @@ internal sealed class ServicesPage : PageBase
         _grid.AccessibleName = Strings.Get("gui.nav.services");
         _tips.SetToolTip(_filter, Strings.Get("gui.svc.filter.tip"));
         _tips.SetToolTip(_reload, Strings.Get("gui.svc.reload.tip"));
-        string[] keys = ["name", "display", "state", "start", "pid", "desc"];
+        string[] keys = ["display", "state", "start", "name", "pid", "desc"];
         for (var i = 0; i < keys.Length && i < _grid.Columns.Count; i++)
         {
             _grid.Columns[i].Text = Strings.Get("gui.svc.col." + keys[i]);

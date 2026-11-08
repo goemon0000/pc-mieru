@@ -6,6 +6,8 @@ namespace PcMieru.Gui;
 internal sealed class MainForm : Form
 {
     private readonly GuiContext _context;
+    private readonly Font _systemFont = SystemFonts.MessageBoxFont ?? Control.DefaultFont;
+    private Font? _sizedFont;
     private readonly NavListBox _nav = new() { Name = "nav" };
     private readonly Panel _host = new() { Dock = DockStyle.Fill, Name = "pageHost" };
     private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Name = "statusBar", AccessibleRole = AccessibleRole.StatusBar };
@@ -25,17 +27,18 @@ internal sealed class MainForm : Form
     /// </summary>
     private void PlaceStatusControls()
     {
-        var height = _interval.Height;
-        var top = Math.Max((_controls.ClientSize.Height - height) / 2, 0);
+        var comboHeight = _interval.Height;
+        var buttonHeight = Math.Max(comboHeight, _pause.GetPreferredSize(Size.Empty).Height);
+        var barHeight = _controls.ClientSize.Height;
         var right = _controls.ClientSize.Width - LogicalToDeviceUnits(12);
-        _interval.SetBounds(right - _interval.Width, top, _interval.Width, height);
-        _pause.SetBounds(_interval.Left - LogicalToDeviceUnits(8) - _pause.Width, top, _pause.Width, height);
+        _interval.SetBounds(right - _interval.Width, Math.Max((barHeight - comboHeight) / 2, 0), _interval.Width, comboHeight);
+        _pause.SetBounds(_interval.Left - LogicalToDeviceUnits(8) - _pause.Width, Math.Max((barHeight - buttonHeight) / 2, 0), _pause.Width, buttonHeight);
     }
 
     public MainForm(GuiContext context)
     {
         _context = context;
-        Font = SystemFonts.MessageBoxFont ?? Font;
+        ApplyFont();
         AutoScaleMode = AutoScaleMode.Dpi;
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
@@ -43,16 +46,11 @@ internal sealed class MainForm : Form
         ClientSize = StartSize();
         KeyPreview = true;
 
-        _nav.Width = LogicalToDeviceUnits(188);
-        _statusBar.Height = LogicalToDeviceUnits(38);
         _statusBar.Padding = new Padding(0, LogicalToDeviceUnits(4), 0, LogicalToDeviceUnits(4));
         _status.Padding = new Padding(LogicalToDeviceUnits(10), 0, 0, 0);
         _updated.Padding = new Padding(0, 0, LogicalToDeviceUnits(12), 0);
-        _updated.Width = LogicalToDeviceUnits(230);
-        _pause.Width = LogicalToDeviceUnits(140);
         _pause.Margin = Padding.Empty;
-        _interval.Width = LogicalToDeviceUnits(120);
-        _controls.Width = LogicalToDeviceUnits(12 + 8) + _pause.Width + _interval.Width;
+        SizeChrome();
         _controls.Controls.Add(_pause);
         _controls.Controls.Add(_interval);
         _controls.Layout += (_, _) => PlaceStatusControls();
@@ -88,11 +86,54 @@ internal sealed class MainForm : Form
         _context.Pump.StateChanged += ShowPumpState;
         _context.NavigateRequested += OnNavigateRequested;
         _context.AlwaysOnTopChanged += () => TopMost = _context.Settings.AlwaysOnTop;
+        _context.TextSizeChanged += OnTextSizeChanged;
         TopMost = _context.Settings.AlwaysOnTop;
         Resize += (_, _) => FollowWindowState();
         VisibleChanged += (_, _) => FollowWindowState();
 
         ApplyLanguage();
+    }
+
+    /// <summary>
+    /// The window font follows the text-size choice; every control that takes its font from the window (all of them except
+    /// the few that derive their own) follows by itself. The things in the frame that have a fixed size are re-sized to match.
+    /// </summary>
+    private void ApplyFont()
+    {
+        var old = _sizedFont;
+        _sizedFont = new Font(_systemFont.FontFamily, TextSizes.Points(_context.Settings.TextSize, _systemFont.SizeInPoints), _systemFont.Style, GraphicsUnit.Point);
+        Font = _sizedFont;
+        old?.Dispose();
+    }
+
+    private double TextFactor => Font.SizeInPoints / _systemFont.SizeInPoints;
+
+    private int Chrome(int logical) => (int)Math.Round(LogicalToDeviceUnits(logical) * TextFactor);
+
+    private void SizeChrome()
+    {
+        _nav.Width = Chrome(188);
+        _statusBar.Height = Chrome(38);
+        _updated.Width = Chrome(230);
+        _pause.Width = Chrome(140);
+        _interval.Width = Chrome(120);
+        _controls.Width = LogicalToDeviceUnits(12 + 8) + _pause.Width + _interval.Width;
+    }
+
+    private void OnTextSizeChanged()
+    {
+        SuspendLayout();
+        try
+        {
+            ApplyFont();
+            SizeChrome();
+        }
+        finally
+        {
+            ResumeLayout(performLayout: true);
+        }
+
+        PlaceStatusControls();
     }
 
     private bool _noActivate;

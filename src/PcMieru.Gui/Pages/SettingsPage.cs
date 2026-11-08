@@ -13,6 +13,8 @@ internal sealed class SettingsPage : PageBase
     private readonly ComboBox _theme = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsTheme" };
     private readonly Label _languageLabel = new() { AutoSize = true };
     private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsLanguage" };
+    private readonly Label _textSizeLabel = new() { AutoSize = true };
+    private readonly ComboBox _textSize = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsTextSize" };
     private readonly CheckBox _onTop = new() { AutoSize = true, Name = "settingsOnTop" };
     private readonly Label _about = new() { AutoSize = true, Name = "settingsAbout" };
     private readonly ToneLabel _privacy = new() { AutoSize = true, Name = "settingsPrivacy" };
@@ -35,7 +37,7 @@ internal sealed class SettingsPage : PageBase
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         // Explicit cells: a hidden spacer would be skipped by the automatic flow and shift every control after it.
-        foreach (var box in new[] { _interval, _theme, _language })
+        foreach (var box in new[] { _interval, _theme, _language, _textSize })
         {
             box.Width = Px(260);
         }
@@ -44,14 +46,15 @@ internal sealed class SettingsPage : PageBase
         AddWide(grid, _pause, 1);
         AddRow(grid, _themeLabel, _theme, 2);
         AddRow(grid, _languageLabel, _language, 3);
-        AddWide(grid, _onTop, 4);
+        AddRow(grid, _textSizeLabel, _textSize, 4);
+        AddWide(grid, _onTop, 5);
         _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
         _privacy.MaximumSize = new Size(Px(640), 0);
-        grid.Controls.Add(_about, 0, 5);
+        grid.Controls.Add(_about, 0, 6);
         grid.SetColumnSpan(_about, 2);
-        grid.Controls.Add(_privacy, 0, 6);
+        grid.Controls.Add(_privacy, 0, 7);
         grid.SetColumnSpan(_privacy, 2);
         Controls.Add(grid);
 
@@ -59,7 +62,8 @@ internal sealed class SettingsPage : PageBase
         _pause.TabIndex = 1;
         _theme.TabIndex = 2;
         _language.TabIndex = 3;
-        _onTop.TabIndex = 4;
+        _textSize.TabIndex = 4;
+        _onTop.TabIndex = 5;
         _interval.SelectedIndexChanged += (_, _) =>
         {
             if (!_filling && _interval.SelectedIndex >= 0)
@@ -88,6 +92,13 @@ internal sealed class SettingsPage : PageBase
                 Context.SetLanguage((Language)_language.SelectedIndex);
             }
         };
+        _textSize.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_filling && _textSize.SelectedIndex >= 0)
+            {
+                Context.SetTextSize((TextSize)_textSize.SelectedIndex);
+            }
+        };
         _onTop.CheckedChanged += (_, _) =>
         {
             if (!_filling)
@@ -106,6 +117,8 @@ internal sealed class SettingsPage : PageBase
     internal ComboBox ThemeBox => _theme;
 
     internal ComboBox LanguageBox => _language;
+
+    internal ComboBox TextSizeBox => _textSize;
 
     internal CheckBox OnTopBox => _onTop;
 
@@ -131,6 +144,9 @@ internal sealed class SettingsPage : PageBase
             _languageLabel.Text = Strings.Get("gui.settings.language");
             _language.Items.Clear();
             _language.Items.AddRange(["日本語", "English"]);
+            _textSizeLabel.Text = Strings.Get("gui.settings.textsize");
+            _textSize.Items.Clear();
+            _textSize.Items.AddRange([Strings.Get("gui.settings.textsize.small"), Strings.Get("gui.settings.textsize.normal"), Strings.Get("gui.settings.textsize.large")]);
             _onTop.Text = Strings.Get("gui.settings.ontop");
             ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
@@ -138,6 +154,8 @@ internal sealed class SettingsPage : PageBase
             _interval.AccessibleName = _intervalLabel.Text;
             _theme.AccessibleName = _themeLabel.Text;
             _language.AccessibleName = _languageLabel.Text;
+            _textSize.AccessibleName = _textSizeLabel.Text;
+            _tips.SetToolTip(_textSize, Strings.Get("gui.settings.textsize.tip"));
             _tips.SetToolTip(_pause, Strings.Get("gui.pause.tip"));
             _tips.SetToolTip(_onTop, Strings.Get("gui.settings.ontop.tip"));
         }
@@ -178,6 +196,7 @@ internal sealed class SettingsPage : PageBase
         _pause.Checked = Context.Pump.Paused;
         _theme.SelectedIndex = (int)Context.Theme.Mode;
         _language.SelectedIndex = (int)Strings.Current;
+        _textSize.SelectedIndex = (int)Context.Settings.TextSize;
         _onTop.Checked = Context.Settings.AlwaysOnTop;
     }
 
@@ -224,6 +243,11 @@ internal static class SettingsStrings
         new("gui.settings.theme.system", "Windows の設定に合わせる", "Follow Windows"),
         new("gui.settings.theme.light", "ライト", "Light"),
         new("gui.settings.theme.dark", "ダーク", "Dark"),
+        new("gui.settings.textsize", "文字サイズ", "Text size"),
+        new("gui.settings.textsize.small", "小（密度が高い）", "Small (dense)"),
+        new("gui.settings.textsize.normal", "標準", "Normal"),
+        new("gui.settings.textsize.large", "大", "Large"),
+        new("gui.settings.textsize.tip", "画面全体の文字の大きさです。表と詳細欄も一緒に変わります", "The size of the text everywhere. Tables and detail panes follow"),
         new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),

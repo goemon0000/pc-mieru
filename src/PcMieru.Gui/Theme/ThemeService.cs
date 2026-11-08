@@ -18,7 +18,8 @@ internal sealed record Palette(
     Color Accent,
     Color Border,
     Color Selection,
-    Color SelectionText);
+    Color SelectionText,
+    Color TextDisabled);
 
 /// <summary>
 /// Light/dark plumbing. Pages never hard-code a colour: they take it from <see cref="Palette"/> and are re-applied
@@ -30,24 +31,27 @@ internal sealed class ThemeService : IDisposable
         Window: Color.FromArgb(243, 243, 243),
         Surface: Color.White,
         Text: Color.FromArgb(28, 28, 28),
-        TextDim: Color.FromArgb(96, 96, 96),
+        TextDim: Color.FromArgb(86, 86, 86),
         Accent: Color.FromArgb(0, 95, 184),
         Border: Color.FromArgb(214, 214, 214),
         Selection: Color.FromArgb(204, 228, 247),
-        SelectionText: Color.FromArgb(0, 0, 0));
+        SelectionText: Color.FromArgb(0, 0, 0),
+        TextDisabled: Color.FromArgb(118, 118, 118));
 
     private static readonly Palette DarkPalette = new(
         Window: Color.FromArgb(32, 32, 32),
         Surface: Color.FromArgb(43, 43, 43),
         Text: Color.FromArgb(240, 240, 240),
-        TextDim: Color.FromArgb(166, 166, 166),
+        TextDim: Color.FromArgb(192, 192, 192),
         Accent: Color.FromArgb(96, 165, 255),
         Border: Color.FromArgb(70, 70, 70),
         Selection: Color.FromArgb(0, 80, 140),
-        SelectionText: Color.FromArgb(255, 255, 255));
+        SelectionText: Color.FromArgb(255, 255, 255),
+        TextDisabled: Color.FromArgb(150, 150, 150));
 
     private readonly Func<bool> _systemIsDark;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> _hooked = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Button, object> _disabledHooked = new();
     private ThemeMode _mode;
 
     public ThemeService(ThemeMode mode = ThemeMode.System, Func<bool>? systemIsDark = null)
@@ -118,6 +122,7 @@ internal sealed class ThemeService : IDisposable
                 button.FlatAppearance.BorderColor = palette.Border;
                 button.BackColor = palette.Surface;
                 button.ForeColor = palette.Text;
+                HookDisabledText(button);
                 break;
             case NumericUpDown or ComboBox:
                 control.BackColor = palette.Surface;
@@ -183,13 +188,50 @@ internal sealed class ThemeService : IDisposable
         strip.ForeColor = palette.Text;
         foreach (ToolStripItem item in strip.Items)
         {
-            item.ForeColor = item.Enabled ? palette.Text : palette.TextDim;
+            item.ForeColor = item.Enabled ? palette.Text : palette.TextDisabled;
             item.BackColor = palette.Surface;
             if (item is ToolStripMenuItem { HasDropDownItems: true } parent)
             {
                 StyleMenu(parent.DropDown);
             }
         }
+    }
+
+    /// <summary>
+    /// A flat button that is disabled is painted by Windows with its own grey, which on the dark surface is nearly the
+    /// background. The label is painted again in the palette's disabled colour (still clearly dimmer than an enabled one).
+    /// </summary>
+    private void HookDisabledText(Button button)
+    {
+        if (_disabledHooked.TryGetValue(button, out _))
+        {
+            return;
+        }
+
+        _disabledHooked.Add(button, this);
+        button.Paint += (_, e) =>
+        {
+            if (button.Enabled || button.Text.Length == 0)
+            {
+                return;
+            }
+
+            var palette = Palette;
+            var border = Math.Max(1, button.FlatAppearance.BorderSize);
+            var inner = new Rectangle(border, border, Math.Max(button.Width - (border * 2), 0), Math.Max(button.Height - (border * 2), 0));
+            using (var back = new SolidBrush(button.BackColor))
+            {
+                e.Graphics.FillRectangle(back, inner);
+            }
+
+            TextRenderer.DrawText(
+                e.Graphics,
+                button.Text,
+                button.Font,
+                inner,
+                palette.TextDisabled,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        };
     }
 
     /// <summary>Native theming needs a window handle; a page that has never been shown gets it when the handle appears.</summary>

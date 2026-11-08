@@ -462,7 +462,7 @@ internal sealed partial class ProcessesPage : PageBase
         {
             if (_list.Columns[i].Tag is ColumnSpec spec && _list.Columns[i].Width > 0)
             {
-                _widths[spec.Column] = Math.Clamp(ToLogical(_list.Columns[i].Width), 40, 900);
+                _widths[spec.Column] = Math.Clamp(_list.ToLogicalWidth(_list.Columns[i].Width), 40, 900);
             }
         }
     }
@@ -487,7 +487,7 @@ internal sealed partial class ProcessesPage : PageBase
                 {
                     Text = Strings.Get(spec.Key),
                     TextAlign = spec.Align,
-                    Width = Px(_widths[spec.Column]),
+                    Width = _list.ColumnWidth(_widths[spec.Column]),
                     Tag = spec,
                 });
             }
