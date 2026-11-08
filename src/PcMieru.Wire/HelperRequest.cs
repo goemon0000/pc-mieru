@@ -18,7 +18,19 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
     public SettablePriority? Priority { get; init; }
     public int? DriveNumber { get; init; }
 
+    /// <summary>process-efficiency off only: the priority class to restore (a Win32 *_PRIORITY_CLASS value, never realtime).</summary>
+    public uint? PreviousPriorityClass { get; init; }
+
+    /// <summary>process-efficiency off only: PROCESS_POWER_THROTTLING_STATE.ControlMask to restore (0 or 1).</summary>
+    public uint? PreviousThrottleControl { get; init; }
+
+    /// <summary>process-efficiency off only: PROCESS_POWER_THROTTLING_STATE.StateMask to restore (0 or 1).</summary>
+    public uint? PreviousThrottleState { get; init; }
+
     public const int MaxNameLength = 256;
+
+    /// <summary>The Win32 priority classes the Helper may restore. Realtime (0x100) is deliberately not here.</summary>
+    public static bool IsRestorablePriorityClass(uint value) => value is 0x40 or 0x4000 or 0x20 or 0x8000 or 0x80;
 
     public IReadOnlyList<string> ToArgs()
     {
@@ -39,6 +51,9 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
         Add("created", CreateTime?.ToString(CultureInfo.InvariantCulture));
         Add("priority", Priority is { } pr ? PriorityToWire(pr) : null);
         Add("drive", DriveNumber?.ToString(CultureInfo.InvariantCulture));
+        Add("prev-priority", PreviousPriorityClass?.ToString(CultureInfo.InvariantCulture));
+        Add("prev-control", PreviousThrottleControl?.ToString(CultureInfo.InvariantCulture));
+        Add("prev-state", PreviousThrottleState?.ToString(CultureInfo.InvariantCulture));
         if (Enable is { } enable)
         {
             Add("state", Op == HelperOperation.StartupHklmSet ? (enable ? "enable" : "disable") : (enable ? "on" : "off"));
@@ -68,6 +83,8 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
         }
 
         var allowed = new HashSet<string>(spec.Options, StringComparer.Ordinal) { "result", "nonce" };
+        var accepted = new HashSet<string>(allowed, StringComparer.Ordinal);
+        accepted.UnionWith(spec.OptionalOptions);
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Count; i += 2)
         {
@@ -79,7 +96,7 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
             }
 
             key = key[2..];
-            if (!allowed.Contains(key))
+            if (!accepted.Contains(key))
             {
                 error = $"option --{key} is not accepted by {spec.Name}";
                 return false;
@@ -194,6 +211,12 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
                     }
 
                     req = req with { Enable = values["state"] == "on" };
+                    if (!TryRestoreValues(values, req.Enable == false, out var prevPriority, out var prevControl, out var prevState, out error))
+                    {
+                        return false;
+                    }
+
+                    req = req with { PreviousPriorityClass = prevPriority, PreviousThrottleControl = prevControl, PreviousThrottleState = prevState };
                 }
 
                 break;
@@ -211,6 +234,38 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
         }
 
         request = req;
+        return true;
+    }
+
+    /// <summary>The three restore values travel together, only with "off", and only as values the Helper could itself have saved.</summary>
+    private static bool TryRestoreValues(
+        Dictionary<string, string> values, bool isOff, out uint? priority, out uint? control, out uint? state, out string error)
+    {
+        priority = control = state = null;
+        error = "";
+        var given = new[] { "prev-priority", "prev-control", "prev-state" }.Count(values.ContainsKey);
+        if (given == 0)
+        {
+            return true;
+        }
+
+        if (!isOff || given != 3)
+        {
+            error = "--prev-priority, --prev-control and --prev-state go together and only with state off";
+            return false;
+        }
+
+        if (!uint.TryParse(values["prev-priority"], NumberStyles.None, CultureInfo.InvariantCulture, out var p) || !IsRestorablePriorityClass(p)
+            || !uint.TryParse(values["prev-control"], NumberStyles.None, CultureInfo.InvariantCulture, out var c) || c > 1
+            || !uint.TryParse(values["prev-state"], NumberStyles.None, CultureInfo.InvariantCulture, out var s) || s > 1)
+        {
+            error = "invalid restore values";
+            return false;
+        }
+
+        priority = p;
+        control = c;
+        state = s;
         return true;
     }
 

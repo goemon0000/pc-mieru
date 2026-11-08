@@ -11,12 +11,15 @@
     <AssemblyName>PCMieru.Helper</AssemblyName>
     <RootNamespace>PcMieru.Helper</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
     <OptimizationPreference>Size</OptimizationPreference>
     <StackTraceSupport>false</StackTraceSupport>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetricsSupport>false</MetricsSupport>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,5 +29,69 @@
   <ItemGroup>
     <LinkerArg Include="/DEPENDENTLOADFLAG:0x800" />
   </ItemGroup>
+
+  <!--
+    Libraries that load a DLL by name at run time look next to the exe first (DllImportSearchPath.AssemblyDirectory |
+    System32), and in NativeAOT that is a real load by absolute path that DEPENDENTLOADFLAG and SetDefaultDllDirectories do
+    not stop (measured in the owner's pl-sensors helper, 2026-10-09, with a planted sspicli.dll). Program.cs
+    (NativeSearch.Pin) pins the listed assemblies to System32. The check below stops the publish if another assembly brings
+    in a lazy load that also searches next to the exe, and also if it cannot vouch for the build (no map file, no lazy module
+    symbols at all, an unknown symbol shape): a check that silently does nothing is worse than none.
+    Copied from the owner's pl-sensors (MIT, same owner): src/PartsLife.Check/PartsLife.Check.csproj.
+  -->
+  <PropertyGroup>
+    <IlcGenerateMapFile>true</IlcGenerateMapFile>
+    <!-- Assemblies pinned in NativeSearch.Pin (dots become underscores; the map abbreviates System.Private.CoreLib to S_P_CoreLib) -->
+    <PinnedNativeSearchAssemblies>S_P_CoreLib;System_Security_Principal_Windows;System_Diagnostics_Process;System_Security_AccessControl;Microsoft_Win32_Registry</PinnedNativeSearchAssemblies>
+  </PropertyGroup>
+
+  <UsingTask TaskName="CheckLazyNativeModules" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <MapFile ParameterType="System.String" Required="true" />
+      <Pinned ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var pinned = new HashSet<string>(Pinned.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries));
+        if (!File.Exists(MapFile))
+        {
+            Log.LogError("The ILC map file was not produced: " + MapFile + ". The native search check cannot run, so the publish is stopped.");
+            return false;
+        }
+        var text = File.ReadAllText(MapFile);
+        var seen = new HashSet<string>();
+        var matches = Regex.Matches(text, @"__nativemodule_(\w+?)__Module__(\w+?)_(\d+)""");
+        var loose = new HashSet<string>();
+        foreach (Match m in Regex.Matches(text, @"__nativemodule_[^""<>\s]*")) loose.Add(m.Value);
+        var strict = new HashSet<string>();
+        foreach (Match m in matches) strict.Add(m.Value.TrimEnd('"'));
+        if (matches.Count == 0)
+        {
+            Log.LogError("No __nativemodule_ (lazy P/Invoke) symbols were found in " + MapFile + ". The map format may have changed; the native search check cannot vouch for this build, so the publish is stopped.");
+            return false;
+        }
+        foreach (var name in loose)
+            if (!strict.Contains(name))
+                Log.LogError("Unrecognised native module symbol in the ILC map: " + name + ". Update the check in PcMieru.Helper.csproj.");
+        foreach (Match m in matches)
+        {
+            int flags = int.Parse(m.Groups[3].Value);
+            string asm = m.Groups[1].Value, dll = m.Groups[2].Value;
+            bool searchesExeDir = (flags & 0x2) != 0 || (flags & 0x800) == 0;
+            if (!seen.Add(asm + "/" + dll)) continue;
+            Log.LogMessage(MessageImportance.High, "  lazy native module: " + asm + " -> " + dll + " (search 0x" + flags.ToString("X") + ")");
+            if (searchesExeDir && !pinned.Contains(asm))
+                Log.LogError(asm + " loads " + dll + " at run time and searches next to the exe. Pin it to System32 in NativeSearch.Pin (Program.cs) and add it to PinnedNativeSearchAssemblies.");
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="CheckHelperNativeSearch" AfterTargets="IlcCompile">
+    <CheckLazyNativeModules MapFile="$([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(NativeIntermediateOutputPath), $(TargetName).map.xml))"
+                            Pinned="$(PinnedNativeSearchAssemblies)" />
+  </Target>
 
 </Project>
