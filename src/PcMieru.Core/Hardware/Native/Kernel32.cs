@@ -98,7 +98,7 @@ internal static partial class Kernel32
     public static extern bool GetFirmwareType(out int firmwareType);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetUserDefaultLocaleName([Out] char[] name, int size);
 
     [StructLayout(LayoutKind.Sequential)]
