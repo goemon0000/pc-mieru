@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build PcMieru.slnx -c Release --nologo
+
+      - name: Test
+        run: dotnet test PcMieru.slnx -c Release --no-build --nologo
+
+      # Opens the real window off screen, walks every page in both languages and themes, exits 0 only if every check holds.
+      - name: GUI smoke
+        run: dotnet run --project src/PcMieru.Gui -c Release --no-build -- --smoke "${{ runner.temp }}/smoke.json"
+
+      - name: Smoke report
+        if: always()
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'smoke.json'
+          if (Test-Path $path) { Get-Content $path -Raw }
+
+  # The release script is the only thing that produces the shipped folder, so it runs here too (without the zip).
+  # This catches a merge conflict between published files, a Helper that links something it should not, or a folder
+  # whose exes do not start, on the pull request instead of on the tag.
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish and run the folder
+        shell: pwsh
+        run: ./tools/publish.ps1 -Version 0.0.0 -Verify -SkipZip
