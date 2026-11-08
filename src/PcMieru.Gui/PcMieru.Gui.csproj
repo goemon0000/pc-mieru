@@ -23,10 +23,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+    <!-- Not linked: only built, so PCMieru.SensorHost.exe lands next to the app (the GPU live values are read by that process). -->
+    <ProjectReference Include="..\PcMieru.SensorHost\PcMieru.SensorHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Gui.Tests" />
   </ItemGroup>
+
+  <Import Project="..\..\build\SensorHostNextToApp.targets" />
 
 </Project>

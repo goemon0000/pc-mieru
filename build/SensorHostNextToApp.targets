@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Imported by Gui and Cli. The ProjectReference (ReferenceOutputAssembly=false) makes MSBuild build SensorHost first and copy its
+    apphost, runtimeconfig and deps.json, but not the managed PCMieru.SensorHost.dll, which the apphost needs to start. A
+    plain "dotnet build" or F5 would then leave an exe that fails with "application to execute does not exist", and every GPU
+    live value (VBIOS, power limit, temperature) would read "no response". This copies the dll (and pdb) as well.
+    tools/publish.ps1 does not rely on this: it publishes SensorHost on its own and merges the folders.
+  -->
+  <Target Name="CopySensorHostDllNextToApp" AfterTargets="CopyFilesToOutputDirectory" Condition="'$(OutDir)' != ''">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\PcMieru.SensorHost\PcMieru.SensorHost.csproj" Targets="GetTargetPath" SkipNonexistentTargets="false">
+      <Output TaskParameter="TargetOutputs" ItemName="_SensorHostDll" />
+    </MSBuild>
+    <ItemGroup>
+      <_SensorHostFile Include="@(_SensorHostDll)" />
+      <_SensorHostFile Include="@(_SensorHostDll->'%(RootDir)%(Directory)%(Filename).pdb')" Condition="Exists('%(RootDir)%(Directory)%(Filename).pdb')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_SensorHostFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
