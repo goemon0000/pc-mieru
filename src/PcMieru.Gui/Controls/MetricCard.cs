@@ -15,6 +15,7 @@ internal sealed class MetricCard : Control, IThemed
     private Font? _small;
     private bool _hover;
     private readonly ToolTip _tip = new() { ShowAlways = true };
+    private string? _tipText;
 
     /// <summary>The context under the value: at most this many lines.</summary>
     private const int MaxSubLines = 2;
@@ -63,7 +64,12 @@ internal sealed class MetricCard : Control, IThemed
             var spoken = sub.Replace('\n', ' ');
             AccessibleName = title + ": " + value + (state.Length > 0 ? ", " + state : string.Empty);
             AccessibleDescription = spoken;
-            _tip.SetToolTip(this, title + ": " + value + (spoken.Length > 0 ? Environment.NewLine + sub.Replace("\n", Environment.NewLine) : string.Empty));
+            _tipText = title + ": " + value + (spoken.Length > 0 ? Environment.NewLine + sub.Replace("\n", Environment.NewLine) : string.Empty);
+            if (Visible)
+            {
+                _tip.SetToolTip(this, _tipText);
+            }
+
             Invalidate();
         }
     }
@@ -98,11 +104,9 @@ internal sealed class MetricCard : Control, IThemed
     protected override void OnVisibleChanged(EventArgs e)
     {
         base.OnVisibleChanged(e);
-        if (!Visible)
-        {
-            // A tip that is showing when the page is switched away would stay on screen over the next page.
-            _tip.Hide(this);
-        }
+        // A tip that is showing when the page is switched away would stay on screen over the next page: while the card
+        // is hidden it has no tip at all (taking the tool away is what pops a showing tip).
+        _tip.SetToolTip(this, Visible ? _tipText : null);
     }
 
     protected override void OnClick(EventArgs e)

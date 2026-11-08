@@ -11,12 +11,26 @@ internal sealed class MainForm : Form
     private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Name = "statusBar", AccessibleRole = AccessibleRole.StatusBar };
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Name = "statusText" };
     private readonly Label _updated = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updated" };
-    private readonly Button _pause = new() { Name = "pauseButton", Dock = DockStyle.Right, TabStop = true, UseVisualStyleBackColor = false };
-    private readonly ComboBox _interval = new() { Name = "intervalCombo", Dock = DockStyle.Right, DropDownStyle = ComboBoxStyle.DropDownList, TabStop = true };
+    private readonly Button _pause = new() { Name = "pauseButton", TabStop = true, UseVisualStyleBackColor = false };
+    private readonly ComboBox _interval = new() { Name = "intervalCombo", DropDownStyle = ComboBoxStyle.DropDownList, TabStop = true };
+    private readonly Panel _controls = new() { Dock = DockStyle.Right, Name = "statusControls" };
     private readonly ToolTip _tips = new();
     private readonly PageBase?[] _pages = new PageBase?[PageCatalog.All.Count];
     private int _current = -1;
     private bool _rebuildingNav;
+
+    /// <summary>
+    /// The pause button and the interval box are the same height and centred in the bar. A docked combo box would stay at
+    /// its own (smaller) height at the top of the bar, next to a button as tall as the bar.
+    /// </summary>
+    private void PlaceStatusControls()
+    {
+        var height = _interval.Height;
+        var top = Math.Max((_controls.ClientSize.Height - height) / 2, 0);
+        var right = _controls.ClientSize.Width - LogicalToDeviceUnits(12);
+        _interval.SetBounds(right - _interval.Width, top, _interval.Width, height);
+        _pause.SetBounds(_interval.Left - LogicalToDeviceUnits(8) - _pause.Width, top, _pause.Width, height);
+    }
 
     public MainForm(GuiContext context)
     {
@@ -38,12 +52,15 @@ internal sealed class MainForm : Form
         _pause.Width = LogicalToDeviceUnits(140);
         _pause.Margin = Padding.Empty;
         _interval.Width = LogicalToDeviceUnits(120);
+        _controls.Width = LogicalToDeviceUnits(12 + 8) + _pause.Width + _interval.Width;
+        _controls.Controls.Add(_pause);
+        _controls.Controls.Add(_interval);
+        _controls.Layout += (_, _) => PlaceStatusControls();
 
         // Dock order: the last control added is laid out first (outermost on its edge), so Fill goes in first.
         _statusBar.Controls.Add(_status);
         _statusBar.Controls.Add(_updated);
-        _statusBar.Controls.Add(_pause);
-        _statusBar.Controls.Add(_interval);
+        _statusBar.Controls.Add(_controls);
         Controls.Add(_host);
         Controls.Add(_nav);
         Controls.Add(_statusBar);
