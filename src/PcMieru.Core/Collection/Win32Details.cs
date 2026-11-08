@@ -145,6 +145,24 @@ internal static unsafe partial class Win32
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     public static partial nint FindWindowEx(nint parent, nint after, string? className, string? title);
 
+    [LibraryImport("version.dll", EntryPoint = "GetFileVersionInfoSizeExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial uint GetFileVersionInfoSizeEx(uint flags, string path, out uint handle);
+
+    [LibraryImport("version.dll", EntryPoint = "GetFileVersionInfoExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetFileVersionInfoEx(uint flags, string path, uint handle, uint length, byte* data);
+
+    [LibraryImport("version.dll", EntryPoint = "VerQueryValueW", StringMarshalling = StringMarshalling.Utf16)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool VerQueryValue(byte* block, string subBlock, out byte* buffer, out uint length);
+
+    [LibraryImport("user32.dll", EntryPoint = "PrivateExtractIconsW", StringMarshalling = StringMarshalling.Utf16)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    public static partial uint PrivateExtractIcons(string file, int index, int width, int height, nint* icons, uint* ids, uint count, uint flags);
+
     public const uint ShgfiIcon = 0x100;
     public const uint ShgfiSmallIcon = 0x1;
     public const uint ShgfiLargeIcon = 0x0;

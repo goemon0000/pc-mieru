@@ -56,6 +56,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
     private volatile bool _nicReset;
     private volatile bool _gpuReset;
     private bool _disposed;
+    private ProcessInfo[]? _latestProcesses;
 
     /// <param name="clock">Wall clock for <see cref="Snapshot.TakenAtUtc"/> (tests and CLI inject their own).</param>
     /// <param name="control">Interval, pause and GPU subscription state; a default <see cref="SamplerSettings"/> when null.</param>
@@ -76,6 +77,30 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
     public ISamplerControl Control => _control;
 
     public int LogicalProcessors => _cpu.LogicalProcessors;
+
+    /// <summary>
+    /// The image name of this exact process (PID and creation time) if the most recent sample contained it, otherwise null.
+    /// Lets the details provider name kernel processes that have no image file and confirm a PID it cannot open is still the
+    /// same process. Safe from any thread.
+    /// </summary>
+    internal string? NameOf(ProcessKey key)
+    {
+        var latest = Volatile.Read(ref _latestProcesses);
+        if (latest is null)
+        {
+            return null;
+        }
+
+        foreach (var p in latest)
+        {
+            if (p.Key == key)
+            {
+                return p.Name;
+            }
+        }
+
+        return null;
+    }
 
     public void ResetBaseline() => _resetRequested = true;
 
@@ -194,6 +219,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         _lastSleepDebt = sleepDebt;
         _lastTakenAt = takenAt;
         _hasPrevious = true;
+        _latestProcesses = processes;
         return snapshot;
     }
 

@@ -181,7 +181,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         Assert.Null(ProcessImagePath.Resolve(0x7FFFFFF0));
     }
 
-    private static ProcessKey ProcessKeyOf(uint pid)
+    internal static ProcessKey ProcessKeyOf(uint pid)
     {
         var handle = Win32.OpenProcess(Win32.ProcessQueryLimitedInformation, false, pid);
         if (handle == 0)

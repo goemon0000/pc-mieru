@@ -32,8 +32,6 @@ internal sealed unsafe class SignatureVerifier
 
     private static Guid _genericVerifyV2 = new(0x00AAC56B, 0xCD44, 0x11d0, 0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE);
 
-    private readonly record struct FileStamp(string Path, long Length, long WriteTicks);
-
     private readonly ConcurrentDictionary<FileStamp, Value<SignatureInfo>> _cache = new();
 
     public int CacheCount => _cache.Count;
@@ -45,20 +43,10 @@ internal sealed unsafe class SignatureVerifier
 
     public Value<SignatureInfo> Verify(string path)
     {
-        FileStamp stamp;
-        try
+        var read = FileStamp.TryRead(path, out var problem);
+        if (read is not { } stamp)
         {
-            var info = new FileInfo(path);
-            if (!info.Exists)
-            {
-                return Value.Failed<SignatureInfo>(Source, "the image file does not exist (deleted or replaced after the process started)");
-            }
-
-            stamp = new FileStamp(info.FullName, info.Length, info.LastWriteTimeUtc.Ticks);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return Value.Failed<SignatureInfo>(Source, $"the image file could not be examined: {ex.GetType().Name}");
+            return Value.Failed<SignatureInfo>(Source, problem ?? "the image file could not be examined");
         }
 
         if (_cache.TryGetValue(stamp, out var cached))
