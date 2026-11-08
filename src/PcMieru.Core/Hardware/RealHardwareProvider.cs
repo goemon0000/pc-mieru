@@ -35,7 +35,7 @@ public sealed class RealHardwareProvider(Func<DateTime>? clock = null) : IHardwa
         var storage = Run(HardwareCategory.Storage, StorageCollector.Collect);
         var network = Run(HardwareCategory.Network, NetworkCollector.Collect);
         var displays = Run(HardwareCategory.Display, () => DisplayCollector.Collect());
-        var audio = Run(HardwareCategory.Audio, () => Value.NotCollected<IReadOnlyList<AudioEndpoint>>("hardware", "collector not written yet"));
+        var audio = Run(HardwareCategory.Audio, AudioCollector.Collect);
         var usb = Run(HardwareCategory.Usb, () => Value.NotCollected<IReadOnlyList<UsbDevice>>("hardware", "collector not written yet"));
         var battery = Run(HardwareCategory.Battery, () => Value.NotCollected<BatteryHardware>("hardware", "collector not written yet"));
         var os = Run(HardwareCategory.Os, () => Value.NotCollected<OsHardware>("hardware", "collector not written yet"));
