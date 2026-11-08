@@ -249,6 +249,14 @@ internal static class SmokeRun
                 Check("performance: one entry per device", performance.List.Items.Count >= 3, performance.List.Items.Count + " entries");
                 Check("performance: a panel is shown", performance.Current is not null);
                 Check("performance: graphs exist", performance.Graphs.Length > 0);
+                if (performance.Graphs.Length > 0 && context.Pump.Latest is { } sampled)
+                {
+                    var graph = performance.Graphs[0];
+                    var ago = Strings.Format("gui.perf.ago", Fmt.Dict(("span", PerfMetrics.Span(PerfMetrics.HistorySeconds(sampled.IntervalMs)))));
+                    Check("performance: the time axis names how far back the left edge is", graph.TimeStartText == ago && graph.TimeEndText == Strings.Get("gui.perf.now"), graph.TimeStartText + " / " + graph.TimeEndText + " (wanted " + ago + ")");
+                    Check("performance: the note under the graphs says the same span", performance.NoteText.Contains(ago, StringComparison.Ordinal) && !SmokeText.IsPlaceholder(performance.NoteText), performance.NoteText);
+                    Check("performance: a graph that has readings is not shown as collecting", !graph.Collecting, string.Empty);
+                }
             }
 
             if (await Open("startup").ConfigureAwait(true) is StartupPage startup)

@@ -453,6 +453,33 @@ public class DataAndPagesTests
         Assert.Equal(Fmt.Dash, PartsModel.SourceText(string.Empty));
     }
 
+    // ---- Performance graphs ----
+
+    [Theory]
+    [InlineData(500, "30")]
+    [InlineData(1000, "60")]
+    [InlineData(2000, "2")]
+    [InlineData(5000, "5")]
+    [InlineData(10000, "10")]
+    public void The_graph_span_follows_the_interval(int intervalMs, string number)
+    {
+        var span = PerfMetrics.Span(PerfMetrics.HistorySeconds(intervalMs));
+        Assert.Contains(number, span, StringComparison.Ordinal);
+        var minutes = PerfMetrics.HistorySeconds(intervalMs) >= 120;
+        Assert.Equal(minutes, span.Contains(Strings.Format("gui.perf.span.min", Fmt.Dict(("n", number))), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_graph_with_no_readings_is_collecting_and_one_with_a_line_is_not()
+    {
+        using var graph = new GraphControl();
+        Assert.True(graph.Collecting);
+        graph.SetSeries(0, new double[SnapshotPump.HistoryLength], 1);
+        Assert.True(graph.Collecting);
+        graph.SetSeries(0, new double[SnapshotPump.HistoryLength], 2);
+        Assert.False(graph.Collecting);
+    }
+
     // ---- Services / settings / pump ----
 
     private static ServiceInfo Service(ServiceState state, ServiceStartType start) =>
