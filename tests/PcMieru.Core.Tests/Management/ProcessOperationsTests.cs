@@ -466,4 +466,114 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         var result = DiskOperations.SmartRead(drive);
         Assert.NotEqual(OperationCode.Ok, result.Code);
     }
+
+    [Fact]
+    public void Disk_health_all_on_this_pc_answers_every_drive_it_was_given_and_matches_the_single_reads()
+    {
+        // The batch code run for real, WITHOUT elevation (no prompt can appear: this process never starts the Helper). Each drive is
+        // either read or refused cleanly, every drive has its own code, and what a drive gives in the batch is what the single
+        // operation of its bus gives for it.
+        int[] drives = [0, 1, 2, 3, 4, 5, 6, 7];
+        var all = DiskOperations.HealthAll(drives);
+        output.WriteLine($"disk-health-all: {all.Code} {all.MessageKey}");
+
+        Assert.Contains(all.Code, new[] { OperationCode.Ok, OperationCode.PartialSuccess, OperationCode.Denied, OperationCode.NotFound, OperationCode.Unsupported, OperationCode.Error });
+        var data = all.Data!;
+        foreach (var drive in drives)
+        {
+            Assert.True(data.TryGetValue(HelperDataKeys.ForDrive(drive, HelperDataKeys.DriveCode), out var code), $"drive {drive} has no code");
+            var batch = (OperationCode)int.Parse(code!, System.Globalization.CultureInfo.InvariantCulture);
+            var single = data.ContainsKey(HelperDataKeys.ForDrive(drive, HelperDataKeys.NvmeHealth)) ? DiskOperations.NvmeHealth(drive) : DiskOperations.SmartRead(drive);
+            output.WriteLine($"  drive {drive}: batch {batch}, single {single.Code}");
+
+            if (batch == OperationCode.Ok)
+            {
+                var key = data.ContainsKey(HelperDataKeys.ForDrive(drive, HelperDataKeys.NvmeHealth)) ? HelperDataKeys.NvmeHealth : HelperDataKeys.SmartData;
+                Assert.Equal(512, Convert.FromBase64String(data[HelperDataKeys.ForDrive(drive, key)]).Length);
+                Assert.Equal(OperationCode.Ok, single.Code);
+            }
+            else
+            {
+                Assert.DoesNotContain(data.Keys, k => k.StartsWith(HelperDataKeys.ForDrive(drive, "smart"), StringComparison.Ordinal) || k.StartsWith(HelperDataKeys.ForDrive(drive, "nvme"), StringComparison.Ordinal));
+            }
+        }
+    }
+
+    [Fact]
+    public void Disk_health_all_never_adds_a_key_outside_the_drives_it_was_given()
+    {
+        var all = DiskOperations.HealthAll([0, 2]);
+
+        Assert.All(all.Data!.Keys, key => Assert.StartsWith("drive.", key, StringComparison.Ordinal));
+        Assert.All(all.Data.Keys, key => Assert.True(key.StartsWith("drive.0.", StringComparison.Ordinal) || key.StartsWith("drive.2.", StringComparison.Ordinal), key));
+    }
+
+    private static (int, ActionResult) Answer(int drive, OperationCode code, params (string Key, string Value)[] data) =>
+        (drive, ActionResult.Of(code, code == OperationCode.Ok ? MessageKeys.DiskRead : MessageKeys.DiskDenied).WithData(data.ToDictionary(d => d.Key, d => d.Value)));
+
+    [Fact]
+    public void Combined_health_answers_carry_every_drives_code_and_only_the_bytes_of_the_drives_that_were_read()
+    {
+        var combined = DiskOperations.CombineHealth(
+        [
+            Answer(0, OperationCode.Ok, (HelperDataKeys.Bus, "nvme"), (HelperDataKeys.NvmeHealth, "AAAA")),
+            Answer(2, OperationCode.Denied, (HelperDataKeys.SmartData, "must not be copied")),
+            Answer(3, OperationCode.Ok, (HelperDataKeys.Bus, "ata"), (HelperDataKeys.SmartData, "BBBB")),
+        ]);
+
+        Assert.Equal(OperationCode.PartialSuccess, combined.Code);
+        Assert.Equal("0", combined.Data!["drive.0.code"]);
+        Assert.Equal("4", combined.Data["drive.2.code"]);
+        Assert.Equal("0", combined.Data["drive.3.code"]);
+        Assert.Equal("AAAA", combined.Data["drive.0.nvme.health"]);
+        Assert.Equal("BBBB", combined.Data["drive.3.smart.data"]);
+        Assert.Equal("nvme", combined.Data["drive.0.bus"]);
+        Assert.DoesNotContain("drive.2.smart.data", combined.Data.Keys);
+        Assert.Equal(7, combined.Data.Count);
+    }
+
+    [Fact]
+    public void Combined_health_is_ok_only_when_every_drive_was_read()
+    {
+        var combined = DiskOperations.CombineHealth([Answer(1, OperationCode.Ok, (HelperDataKeys.SmartData, "AAAA")), Answer(4, OperationCode.Ok, (HelperDataKeys.SmartData, "BBBB"))]);
+
+        Assert.Equal(OperationCode.Ok, combined.Code);
+        Assert.Equal(MessageKeys.DiskRead, combined.MessageKey);
+    }
+
+    [Fact]
+    public void Combined_health_keeps_the_common_code_when_no_drive_was_read_and_says_error_when_they_differ()
+    {
+        var allDenied = DiskOperations.CombineHealth([Answer(0, OperationCode.Denied), Answer(1, OperationCode.Denied)]);
+        Assert.Equal(OperationCode.Denied, allDenied.Code);
+        Assert.Equal(MessageKeys.DiskDenied, allDenied.MessageKey);
+        Assert.Equal("4", allDenied.Data!["drive.1.code"]);
+
+        var mixed = DiskOperations.CombineHealth([Answer(0, OperationCode.Denied), Answer(1, OperationCode.NotFound)]);
+        Assert.Equal(OperationCode.Error, mixed.Code);
+        Assert.Equal(MessageKeys.DiskNoData, mixed.MessageKey);
+        Assert.Equal("3", mixed.Data!["drive.1.code"]);
+
+        Assert.Equal(OperationCode.Error, DiskOperations.CombineHealth([]).Code);
+    }
+
+    [Fact]
+    public void The_executor_runs_disk_health_all_without_any_request_option_but_the_list()
+    {
+        // Through the same entry the Helper uses (parse the argv, then execute): no elevation is involved, so drives that need it say denied.
+        const string nonce = "0123456789abcdef0123";
+        var args = new HelperRequest(HelperOperation.DiskHealthAll, nonce, @"C:\x\" + nonce + ".json") { Drives = Drives(0, 1) }.ToArgs();
+        Assert.True(HelperRequest.TryParse(args, out var request, out var error), error);
+
+        var result = HelperExecutor.Execute(request!, HelperEnvironment.Real());
+
+        Assert.True(result.Data!.ContainsKey("drive.0.code"));
+        Assert.True(result.Data.ContainsKey("drive.1.code"));
+    }
+
+    private static DriveList Drives(params int[] numbers)
+    {
+        Assert.True(DriveList.TryCreate(numbers, out var list));
+        return list!;
+    }
 }

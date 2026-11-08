@@ -24,7 +24,68 @@ public static class DiskOperations
     private const int ErrorFileNotFound = 2;
     private const int ErrorPathNotFound = 3;
 
-    public static ActionResult SmartRead(int drive)
+    public static ActionResult SmartRead(int drive) => ReadDrive(drive, sata: true, nvme: false);
+
+    public static ActionResult NvmeHealth(int drive) => ReadDrive(drive, sata: false, nvme: true);
+
+    /// <summary>
+    /// disk-health-all: each listed drive is identified (its bus) and read the way that bus is read, all in this one run.
+    /// A drive that cannot be read does not stop the others; see <see cref="CombineHealth"/> for how the answers are joined.
+    /// </summary>
+    public static ActionResult HealthAll(IReadOnlyList<int> drives)
+    {
+        var answers = new List<(int Drive, ActionResult Result)>(drives.Count);
+        foreach (var drive in drives)
+        {
+            answers.Add((drive, ReadDrive(drive, sata: true, nvme: true)));
+        }
+
+        return CombineHealth(answers);
+    }
+
+    /// <summary>
+    /// One answer from several. Every drive's code goes in as "drive.&lt;n&gt;.code" and, when it was read, its bytes under the same
+    /// prefix. The exit code says Ok when every drive was read, PartialSuccess when some were, and when none was the code they all
+    /// shared (Denied for all-denied) or Error. The caller still checks each drive's own code before it trusts its bytes.
+    /// </summary>
+    public static ActionResult CombineHealth(IReadOnlyList<(int Drive, ActionResult Result)> answers)
+    {
+        var data = new Dictionary<string, string>(StringComparer.Ordinal);
+        var ok = 0;
+        foreach (var (drive, result) in answers)
+        {
+            data[HelperDataKeys.ForDrive(drive, HelperDataKeys.DriveCode)] = ((int)result.Code).ToString(CultureInfo.InvariantCulture);
+            if (result.Code != OperationCode.Ok)
+            {
+                continue;
+            }
+
+            ok++;
+            if (result.Data is not null)
+            {
+                foreach (var (key, value) in result.Data)
+                {
+                    data[HelperDataKeys.ForDrive(drive, key)] = value;
+                }
+            }
+        }
+
+        if (ok == answers.Count && ok > 0)
+        {
+            return ActionResult.Of(OperationCode.Ok, MessageKeys.DiskRead).WithData(data);
+        }
+
+        if (ok > 0)
+        {
+            return ActionResult.Of(OperationCode.PartialSuccess, MessageKeys.DiskRead).WithData(data);
+        }
+
+        var first = answers.Count == 0 ? null : answers[0].Result;
+        var same = first is not null && answers.All(a => a.Result.Code == first.Code);
+        return same ? first! with { Data = data } : ActionResult.Of(OperationCode.Error, MessageKeys.DiskNoData).WithData(data);
+    }
+
+    private static ActionResult ReadDrive(int drive, bool sata, bool nvme)
     {
         var path = $@"\\.\PhysicalDrive{drive.ToString(CultureInfo.InvariantCulture)}";
         using var info = Native.CreateFile(path, 0, FileShareReadWrite, 0, OpenExisting, 0, 0);
@@ -34,11 +95,21 @@ public static class DiskOperations
         }
 
         var bus = ReadBus(info);
-        if (bus is not (StorageProtocol.BusTypeAta or StorageProtocol.BusTypeSata))
+        if (sata && bus is StorageProtocol.BusTypeAta or StorageProtocol.BusTypeSata)
         {
-            return ActionResult.Of(OperationCode.Unsupported, MessageKeys.DiskUnsupportedBus, ("bus", StorageProtocol.BusName(bus)));
+            return ReadSata(path, drive);
         }
 
+        if (nvme && bus == StorageProtocol.BusTypeNvme)
+        {
+            return ReadNvme(path);
+        }
+
+        return ActionResult.Of(OperationCode.Unsupported, MessageKeys.DiskUnsupportedBus, ("bus", StorageProtocol.BusName(bus)));
+    }
+
+    private static ActionResult ReadSata(string path, int drive)
+    {
         var data = new Dictionary<string, string>(StringComparer.Ordinal) { [HelperDataKeys.Bus] = "ata" };
 
         using (var rw = Native.CreateFile(path, GenericRead | GenericWrite, FileShareReadWrite, 0, OpenExisting, 0, 0))
@@ -83,21 +154,8 @@ public static class DiskOperations
         return ActionResult.Of(OperationCode.Error, MessageKeys.DiskNoData);
     }
 
-    public static ActionResult NvmeHealth(int drive)
+    private static ActionResult ReadNvme(string path)
     {
-        var path = $@"\\.\PhysicalDrive{drive.ToString(CultureInfo.InvariantCulture)}";
-        using var info = Native.CreateFile(path, 0, FileShareReadWrite, 0, OpenExisting, 0, 0);
-        if (info.IsInvalid)
-        {
-            return OpenFailure(drive, Marshal.GetLastPInvokeError());
-        }
-
-        var bus = ReadBus(info);
-        if (bus != StorageProtocol.BusTypeNvme)
-        {
-            return ActionResult.Of(OperationCode.Unsupported, MessageKeys.DiskUnsupportedBus, ("bus", StorageProtocol.BusName(bus)));
-        }
-
         byte[]? health = null;
         byte[]? errors = null;
         var denied = false;

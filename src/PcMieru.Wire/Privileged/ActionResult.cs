@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace PcMieru.Wire;
 
 /// <summary>
@@ -124,4 +126,14 @@ public static class HelperDataKeys
 
     /// <summary>nvme-health: base64 of the first 16 entries of the Error Information log page (0x01), if it could be read.</summary>
     public const string NvmeErrors = "nvme.errors";
+
+    /// <summary>disk-health-all: what drive N answered (a decimal <see cref="OperationCode"/>); the rest of its keys follow under the same prefix.</summary>
+    public const string DriveCode = "code";
+
+    /// <summary>
+    /// disk-health-all answers for several drives in one file, so each drive's keys carry "drive.&lt;n&gt;." in front:
+    /// "drive.2.code", "drive.2.bus", "drive.2.smart.data", "drive.2.nvme.health" and so on.
+    /// </summary>
+    public static string ForDrive(int drive, string key) =>
+        string.Concat("drive.", drive.ToString(CultureInfo.InvariantCulture), ".", key);
 }

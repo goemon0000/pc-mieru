@@ -12,6 +12,9 @@ public enum HelperOperation
     ProcessEfficiency,
     SmartRead,
     NvmeHealth,
+
+    /// <summary>Health bytes of every listed drive in ONE elevated run (one UAC prompt); the Helper finds out each drive's bus itself.</summary>
+    DiskHealthAll,
 }
 
 public static class HelperOperations
@@ -37,6 +40,7 @@ public static class HelperOperations
         },
         new(HelperOperation.SmartRead, "smart-read", ["drive"]),
         new(HelperOperation.NvmeHealth, "nvme-health", ["drive"]),
+        new(HelperOperation.DiskHealthAll, "disk-health-all", ["drives"]),
     ];
 
     public static Spec Get(HelperOperation op) => All.First(s => s.Op == op);

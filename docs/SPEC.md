@@ -141,7 +141,7 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
 - ツリーごと終了: その時点の子孫だけ。後から生まれた子は追わない。
 - スタートアップの無効化は消さず戻せる。サービスの停止は依存を出して確認、前の状態を記録。
 - Helper（パイプは使わない）: GUI/CLI が `ShellExecuteEx("runas")` で **要求をコマンドライン引数に固定して** 起動する（例 `PCMieru.Helper.exe service-stop --name Spooler --result <path> --nonce <乱数>`）。起動後に別の要求へ差し替えられない。1 回の UAC で 1 要求、終わったら終了。結果は終了コードと、呼び出し元が作った `%LOCALAPPDATA%\PCMieru\helper\<nonce>.json` への JSON（呼び出し元は nonce と一致する物だけ読む。結果は表示に使うだけ）。
-  - 受ける要求（固定の表）: service-start/stop/restart（ローカル SCM・サービス名だけ）・startup-hklm-set（provider と値名と enable/disable だけ。キーのパスは受けない）・process-terminate/priority/efficiency（pid＋作成時刻。Helper 側で開き直し・守る判定をやり直す）・smart-read（物理ドライブ番号だけ。固定の SMART 読み取りだけで任意の IOCTL・ATA コマンドは受けない）・nvme-health（物理ドライブ番号だけ）。
+  - 受ける要求（固定の表）: service-start/stop/restart（ローカル SCM・サービス名だけ）・startup-hklm-set（provider と値名と enable/disable だけ。キーのパスは受けない）・process-terminate/priority/efficiency（pid＋作成時刻。Helper 側で開き直し・守る判定をやり直す）・smart-read（物理ドライブ番号だけ。固定の SMART 読み取りだけで任意の IOCTL・ATA コマンドは受けない）・nvme-health（物理ドライブ番号だけ）・disk-health-all（物理ドライブ番号の一覧 `--drives 0,2,3` だけ。0〜255 の小さな整数・昇順・重複なし・16 個まで。パスは受けない。バスは Helper が自分で見分け、1 回の昇格＝UAC 1 回で全ドライブを読む。結果は `drive.<n>.*` のキーで返り、各ドライブが自分の code を持つ）。
   - 別の資格情報の UAC（標準ユーザーが管理者のパスワードを入れる）だと Helper のユーザーは別人になる。結果ファイルは呼び出し元が先に作って Helper は上書きするだけ（ACL は呼び出し元のもの）。
   - Helper は NativeAOT 単体で、system32 以外の DLL を読まない（発行時に検査）。ZIP の置き場所が利用者の書けるフォルダであることは残る危険として README に書く。
   - Explorer の再起動は Helper ではなく呼び出し元のユーザーで行う（昇格した Explorer を作らない）。

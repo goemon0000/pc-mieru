@@ -17,6 +17,21 @@ namespace PcMieru.Core.Hardware;
 public interface IElevatedStorageReader
 {
     Task<byte[]?> ReadRawAsync(int physicalDriveNumber, StorageHealthKind kind, CancellationToken ct);
+
+    /// <summary>
+    /// Several drives at once. The real reader answers them all with ONE elevated run (one UAC prompt); this default asks one by one
+    /// and is only for readers that have no cheaper way. A drive that could not be read is null; a drive that was not asked is absent.
+    /// </summary>
+    async Task<IReadOnlyDictionary<int, byte[]?>> ReadRawManyAsync(IReadOnlyList<(int PhysicalDriveNumber, StorageHealthKind Kind)> drives, CancellationToken ct)
+    {
+        var all = new Dictionary<int, byte[]?>();
+        foreach (var (number, kind) in drives)
+        {
+            all[number] = await ReadRawAsync(number, kind, ct).ConfigureAwait(false);
+        }
+
+        return all;
+    }
 }
 
 /// <summary>
@@ -33,22 +48,82 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     private const int ErrorAccessDenied = 5;
     private const int ErrorInvalidParameter = 87;
 
+    /// <summary>
+    /// What reading one drive without the Helper came to: <see cref="Health"/> is the answer, or null when only the elevated Helper can
+    /// give it (the drive is then waiting in the batch of <see cref="ResolveAsync"/>, which asks for all of them at once).
+    /// </summary>
+    internal sealed record Step(int Number, string Model, StorageHealthKind Kind, Value<StorageHealth>? Health);
+
     public Task<IReadOnlyList<DriveHealth>> ReadAsync(bool allowElevation, CancellationToken ct) =>
         Task.Run(async () =>
         {
-            var list = new List<DriveHealth>();
+            var steps = new List<Step>();
             foreach (var n in DriveNumbers())
             {
                 ct.ThrowIfCancellationRequested();
-                list.Add(await ReadOneAsync(n, allowElevation, ct).ConfigureAwait(false));
+                steps.Add(ReadOne(n, allowElevation));
             }
 
-            return (IReadOnlyList<DriveHealth>)list;
+            return await ResolveAsync(steps, elevated, ct).ConfigureAwait(false);
         }, ct);
+
+    /// <summary>
+    /// Every drive that waits for administrator rights is read by ONE call to the elevated reader, so the user sees one UAC prompt
+    /// whether the PC has one such drive or five. Drives that already have an answer keep it, and the order of the list does not change.
+    /// </summary>
+    internal static async Task<IReadOnlyList<DriveHealth>> ResolveAsync(IReadOnlyList<Step> steps, IElevatedStorageReader? elevated, CancellationToken ct)
+    {
+        var waiting = steps.Where(s => s.Health is null).ToList();
+        IReadOnlyDictionary<int, byte[]?>? raw = null;
+        Exception? failure = null;
+        if (waiting.Count > 0 && elevated is not null)
+        {
+            try
+            {
+                raw = await elevated.ReadRawManyAsync(waiting.Select(s => (s.Number, s.Kind)).ToList(), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+            {
+                failure = ex;
+            }
+        }
+
+        var list = new List<DriveHealth>(steps.Count);
+        foreach (var step in steps)
+        {
+            if (step.Health is { } known)
+            {
+                list.Add(new DriveHealth(step.Number, step.Model, known));
+                continue;
+            }
+
+            var source = "helper:" + step.Kind;
+            byte[]? bytes = null;
+            raw?.TryGetValue(step.Number, out bytes);
+            Value<StorageHealth> health;
+            if (failure is not null)
+            {
+                health = Probe.FromException<StorageHealth>(failure, source);
+            }
+            else if (bytes is null)
+            {
+                health = Value.Denied<StorageHealth>(source, "the elevated helper could not read this drive");
+            }
+            else
+            {
+                var parsed = step.Kind == StorageHealthKind.Nvme ? StorageHealthParsers.FromNvmeLogPage(bytes) : StorageHealthParsers.FromSmartBlob(bytes);
+                health = new Value<StorageHealth>(parsed.Data, parsed.Status, parsed.Source + " via helper", parsed.Detail);
+            }
+
+            list.Add(new DriveHealth(step.Number, step.Model, health));
+        }
+
+        return list;
+    }
 
     private static List<int> DriveNumbers() => Collectors.StorageCollector.PhysicalDriveNumbers().ToList();
 
-    private async Task<DriveHealth> ReadOneAsync(int number, bool allowElevation, CancellationToken ct)
+    private Step ReadOne(int number, bool allowElevation)
     {
         var path = $@"\\.\PhysicalDrive{number}";
         DeviceDescriptor? desc;
@@ -60,28 +135,31 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
 
         if (desc is null)
         {
-            return new DriveHealth(number, string.Empty, Value.Failed<StorageHealth>("ioctl:StorageDeviceProperty", "could not identify the drive"));
+            return new Step(number, string.Empty, StorageHealthKind.Sata, Value.Failed<StorageHealth>("ioctl:StorageDeviceProperty", "could not identify the drive"));
         }
 
         var model = StorageProtocol.JoinVendorModel(desc.Vendor, desc.Product);
-        Value<StorageHealth> health;
+        Value<StorageHealth>? health;
+        var kind = StorageHealthKind.Sata;
         switch (desc.BusType)
         {
             case 17:
-                health = await ReadNvmeAsync(path, number, allowElevation, ct).ConfigureAwait(false);
+                kind = StorageHealthKind.Nvme;
+                health = ReadNvme(path, allowElevation);
                 break;
             case 3 or 11:
-                health = await ReadSataAsync(path, number, allowElevation, ct).ConfigureAwait(false);
+                health = ReadSata(path, number, allowElevation);
                 break;
             default:
                 health = Value.Unsupported<StorageHealth>("ioctl:StorageDeviceProperty", "health data is only read for NVMe and SATA drives; USB bridges, RAID and virtual disks are not guessed");
                 break;
         }
 
-        return new DriveHealth(number, model, health);
+        return new Step(number, model, kind, health);
     }
 
-    private async Task<Value<StorageHealth>> ReadNvmeAsync(string path, int number, bool allowElevation, CancellationToken ct)
+    /// <summary>Null means "only the elevated Helper can read this one": the drive is then handed to the batch in <see cref="ResolveAsync"/>.</summary>
+    private Value<StorageHealth>? ReadNvme(string path, bool allowElevation)
     {
         const string source = "ioctl:StorageDeviceProtocolSpecificProperty";
         var sawDenied = false;
@@ -124,10 +202,10 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source}, handle access: {label}", parsed.Detail);
         }
 
-        return await FromHelperAsync(number, StorageHealthKind.Nvme, allowElevation, sawDenied, source, ct).ConfigureAwait(false);
+        return NeedsHelper(allowElevation, sawDenied, source);
     }
 
-    private async Task<Value<StorageHealth>> ReadSataAsync(string path, int number, bool allowElevation, CancellationToken ct)
+    private Value<StorageHealth>? ReadSata(string path, int number, bool allowElevation)
     {
         const string source = "ioctl:SMART_RCV_DRIVE_DATA";
         if (IsElevated())
@@ -151,38 +229,23 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source} (elevated process)", parsed.Detail);
         }
 
-        return await FromHelperAsync(number, StorageHealthKind.Sata, allowElevation, true, source, ct).ConfigureAwait(false);
+        return NeedsHelper(allowElevation, true, source);
     }
 
-    private async Task<Value<StorageHealth>> FromHelperAsync(int number, StorageHealthKind kind, bool allowElevation, bool denied, string source, CancellationToken ct)
+    /// <summary>
+    /// The answer when the drive can not be read here, or null when the elevated Helper may be asked (it is allowed, there is one, and
+    /// Windows said the drive needs administrator rights). Asking happens once for all such drives, in <see cref="ResolveAsync"/>.
+    /// </summary>
+    private Value<StorageHealth>? NeedsHelper(bool allowElevation, bool denied, string source)
     {
         if (!denied)
         {
             return Value.Unsupported<StorageHealth>(source, "not readable");
         }
 
-        if (!allowElevation || elevated is null)
-        {
-            return Value.Denied<StorageHealth>(source, "Windows requires administrator rights for this drive's health data");
-        }
-
-        byte[]? raw;
-        try
-        {
-            raw = await elevated.ReadRawAsync(number, kind, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
-        {
-            return Probe.FromException<StorageHealth>(ex, "helper:" + kind);
-        }
-
-        if (raw is null)
-        {
-            return Value.Denied<StorageHealth>("helper:" + kind, "the elevated helper could not read this drive");
-        }
-
-        var parsed = kind == StorageHealthKind.Nvme ? StorageHealthParsers.FromNvmeLogPage(raw) : StorageHealthParsers.FromSmartBlob(raw);
-        return new Value<StorageHealth>(parsed.Data, parsed.Status, parsed.Source + " via helper", parsed.Detail);
+        return !allowElevation || elevated is null
+            ? Value.Denied<StorageHealth>(source, "Windows requires administrator rights for this drive's health data")
+            : null;
     }
 
     private static bool IsElevated()

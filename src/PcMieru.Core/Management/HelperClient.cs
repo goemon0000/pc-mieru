@@ -125,7 +125,7 @@ public sealed class HelperClient : IHelperClient
     /// <summary>Long enough for a service stop plus start with the staged wait; the Helper's own waits are shorter.</summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
 
-    private const long MaxResultBytes = 256 * 1024;
+    internal const long MaxResultBytes = 256 * 1024;
     private const int NonceLength = 32;
 
     private readonly IElevatedLauncher _launcher;

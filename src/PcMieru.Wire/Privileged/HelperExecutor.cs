@@ -42,7 +42,7 @@ public sealed class HelperEnvironment
 }
 
 /// <summary>
-/// Runs one already-parsed <see cref="HelperRequest"/>. The table is closed: every operation is one of the nine, each
+/// Runs one already-parsed <see cref="HelperRequest"/>. The table is closed: every operation is one of the ten, each
 /// one re-checks its own preconditions (process identity and protection, service dependents, that the startup entry
 /// exists), and nothing here can run a program, write a file or open a socket.
 /// </summary>
@@ -84,6 +84,9 @@ public static class HelperExecutor
 
             case HelperOperation.NvmeHealth:
                 return DiskOperations.NvmeHealth(request.DriveNumber!.Value);
+
+            case HelperOperation.DiskHealthAll:
+                return DiskOperations.HealthAll(request.Drives!.Numbers);
 
             default:
                 return ActionResult.Of(OperationCode.Unsupported, MessageKeys.HelperUnexpectedExit, ("code", "op-" + request.Op));

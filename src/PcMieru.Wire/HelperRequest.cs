@@ -18,6 +18,9 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
     public SettablePriority? Priority { get; init; }
     public int? DriveNumber { get; init; }
 
+    /// <summary>disk-health-all: the drives to read, as a validated list of small integers (never a path).</summary>
+    public DriveList? Drives { get; init; }
+
     /// <summary>process-efficiency off only: the priority class to restore (a Win32 *_PRIORITY_CLASS value, never realtime).</summary>
     public uint? PreviousPriorityClass { get; init; }
 
@@ -51,6 +54,7 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
         Add("created", CreateTime?.ToString(CultureInfo.InvariantCulture));
         Add("priority", Priority is { } pr ? PriorityToWire(pr) : null);
         Add("drive", DriveNumber?.ToString(CultureInfo.InvariantCulture));
+        Add("drives", Drives?.ToWire());
         Add("prev-priority", PreviousPriorityClass?.ToString(CultureInfo.InvariantCulture));
         Add("prev-control", PreviousThrottleControl?.ToString(CultureInfo.InvariantCulture));
         Add("prev-state", PreviousThrottleState?.ToString(CultureInfo.InvariantCulture));
@@ -230,6 +234,16 @@ public sealed record HelperRequest(HelperOperation Op, string Nonce, string Resu
                 }
 
                 req = req with { DriveNumber = drive };
+                break;
+
+            case HelperOperation.DiskHealthAll:
+                if (!DriveList.TryParse(values["drives"], out var drives))
+                {
+                    error = $"drives must be 1 to {DriveList.MaxCount} distinct physical drive numbers (0-{DriveList.MaxNumber}), ascending, comma-separated";
+                    return false;
+                }
+
+                req = req with { Drives = drives };
                 break;
         }
 
