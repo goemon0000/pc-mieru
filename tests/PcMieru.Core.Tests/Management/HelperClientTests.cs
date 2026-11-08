@@ -439,7 +439,11 @@ public class HelperClientTests : IDisposable
         {
             if (File.Exists(Path.Combine(dir.FullName, "PcMieru.slnx")))
             {
-                foreach (var config in new[] { "Debug", "Release" })
+                // The configuration this test assembly was built in first: a stale Helper of the other configuration
+                // (e.g. an old Debug build) would otherwise be picked and test yesterday's code.
+                var ownConfig = AppContext.BaseDirectory.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                    ? "Release" : "Debug";
+                foreach (var config in new[] { ownConfig, ownConfig == "Release" ? "Debug" : "Release" })
                 {
                     var exe = Path.Combine(dir.FullName, "src", "PcMieru.Helper", "bin", config, "net10.0-windows", "PCMieru.Helper.exe");
                     if (File.Exists(exe))
