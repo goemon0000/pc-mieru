@@ -218,13 +218,13 @@ internal static class SettingsStrings
 {
     public static readonly StringEntry[] All =
     [
-        new("gui.settings.pause", "数値の更新を一時停止する", "Pause the numbers"),
+        new("gui.settings.pause", "更新を一時停止する", "Pause updates"),
         new("gui.settings.language", "表示言語", "Language"),
         new("gui.settings.theme", "テーマ", "Theme"),
         new("gui.settings.theme.system", "Windows の設定に合わせる", "Follow Windows"),
         new("gui.settings.theme.light", "ライト", "Light"),
         new("gui.settings.theme.dark", "ダーク", "Dark"),
-        new("gui.settings.ontop", "ウィンドウを常に手前に表示する", "Keep the window on top"),
+        new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
         new("gui.settings.privacy", "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。", "This app sends nothing anywhere. A diagnostic report leaves the app only when you copy or save it."),

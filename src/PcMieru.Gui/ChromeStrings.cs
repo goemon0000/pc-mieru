@@ -7,18 +7,18 @@ internal static class ChromeStrings
     [
         new("gui.nav.overview", "概要", "Overview"),
         new("gui.nav.users", "ユーザー", "Users"),
-        new("gui.nav.hardware", "PCの部品", "Parts"),
+        new("gui.nav.hardware", "PCの構成", "PC specs"),
         new("gui.nav.diagnose", "診断レポート", "Report"),
 
-        new("gui.interval.label", "更新の間隔", "Update interval"),
+        new("gui.interval.label", "更新間隔", "Update interval"),
         new("gui.interval.500", "0.5 秒", "0.5 s"),
         new("gui.interval.1000", "1 秒", "1 s"),
         new("gui.interval.2000", "2 秒", "2 s"),
         new("gui.interval.5000", "5 秒", "5 s"),
-        new("gui.pause.pause", "一時停止", "Pause"),
-        new("gui.pause.resume", "再開", "Resume"),
+        new("gui.pause.pause", "更新を一時停止", "Pause updates"),
+        new("gui.pause.resume", "更新を再開", "Resume updates"),
         new("gui.pause.tip", "数値の更新を止めます（Space キーでも切り替わります）", "Stops the numbers from updating (the Space key does the same)"),
-        new("gui.status.paused", "一時停止中", "Paused"),
+        new("gui.status.paused", "更新を一時停止中", "Updates paused"),
 
         new("gui.common.ok", "OK", "OK"),
         new("gui.common.cancel", "キャンセル", "Cancel"),
