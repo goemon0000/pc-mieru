@@ -31,6 +31,8 @@ internal static class DevKeys
     public static readonly DevPropKey Parent = new(new Guid("4340a6c5-93fa-4706-972c-7b648008a5a7"), 8);
     public static readonly DevPropKey InstanceId = new(new Guid("78c34fc8-104a-4aca-9ea4-524d52996e57"), 256);
     public static readonly DevPropKey BusReportedDeviceDesc = new(new Guid("540b947e-8b40-45bc-a8a2-6a0b894cbda2"), 4);
+    public static readonly DevPropKey Address = new(DeviceGuid, 30);
+    public static readonly DevPropKey BusNumber = new(new Guid("540b947e-8b40-45bc-a8a2-6a0b894cbda2"), 23);
     public static readonly DevPropKey PciCurrentLinkSpeed = new(PciGuid, 9);
     public static readonly DevPropKey PciCurrentLinkWidth = new(PciGuid, 10);
     public static readonly DevPropKey PciMaxLinkSpeed = new(PciGuid, 11);
@@ -43,6 +45,7 @@ internal static partial class SetupApiNative
     public const uint DigcfAllClasses = 0x4;
     public const uint DigcfDeviceInterface = 0x10;
     public const uint DicsFlagGlobal = 1;
+    public const uint DiregDev = 1;
     public const uint DiregDrv = 2;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -257,6 +260,18 @@ internal sealed class DeviceNode
     public RegistryKey? OpenDriverKey()
     {
         var h = SetupApiNative.SetupDiOpenDevRegKey(_set, ref _data, SetupApiNative.DicsFlagGlobal, 0, SetupApiNative.DiregDrv, 0x20019);
+        if (h == IntPtr.Zero || h == new IntPtr(-1))
+        {
+            return null;
+        }
+
+        return RegistryKey.FromHandle(new SafeRegistryHandle(h, ownsHandle: true));
+    }
+
+    /// <summary>The device's hardware (Device Parameters) registry key, read only. Monitors keep their EDID here.</summary>
+    public RegistryKey? OpenDeviceKey()
+    {
+        var h = SetupApiNative.SetupDiOpenDevRegKey(_set, ref _data, SetupApiNative.DicsFlagGlobal, 0, SetupApiNative.DiregDev, 0x20019);
         if (h == IntPtr.Zero || h == new IntPtr(-1))
         {
             return null;
