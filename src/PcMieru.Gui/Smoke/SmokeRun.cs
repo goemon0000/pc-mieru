@@ -127,6 +127,30 @@ internal static class SmokeRun
             Check("process list has an apps group (a window is open)", appRows > 0, appRows + " group headers");
             Check("process list is filled", processes is { VisibleRowCount: > 0 }, (processes?.VisibleRowCount ?? 0) + " rows, selected " + (processes?.List.SelectedIndices.Count ?? -1) + ", row " + (processes?.List.SelectedRow ?? -2));
 
+            if (processes is not null)
+            {
+                // Default columns: what a first-time reader looks at. PID and the I/O split stay behind the column chooser.
+                var columns = processes.VisibleColumns;
+                var wanted = new[] { ProcessColumn.Name, ProcessColumn.Cpu, ProcessColumn.Memory, ProcessColumn.Disk, ProcessColumn.Gpu, ProcessColumn.State };
+                var hidden = new[] { ProcessColumn.Pid, ProcessColumn.IoRead, ProcessColumn.IoWrite };
+                Check(
+                    "process list starts with name, CPU, memory, disk, GPU and state; PID and I/O are behind the column chooser",
+                    wanted.All(columns.Contains) && !hidden.Any(columns.Contains),
+                    string.Join(",", columns));
+
+                // The detail pane can be hidden; the list then takes its width, and showing it again gives the width back.
+                var widthWith = processes.List.Width;
+                processes.SetDetailShown(false);
+                await Task.Delay(120).ConfigureAwait(true);
+                var widthWithout = processes.List.Width;
+                processes.SetDetailShown(true);
+                await Task.Delay(120).ConfigureAwait(true);
+                Check(
+                    "hiding the process detail pane widens the list, and showing it again restores the width",
+                    widthWithout > widthWith && processes.List.Width == widthWith,
+                    $"{widthWith} -> {widthWithout} -> {processes.List.Width}");
+            }
+
             if (processes is not null && !context.Services.UsesFakeData)
             {
                 // Program icons come from the collection area (path first, then the image); a real list shows at least one.

@@ -11,6 +11,7 @@ internal sealed class ProcessDetailPane : UserControl
 {
     private enum Row
     {
+        Executable,
         Product,
         Description,
         Company,
@@ -28,6 +29,7 @@ internal sealed class ProcessDetailPane : UserControl
 
     private static readonly string[] RowKeys =
     [
+        "gui.proc.detail.exe",
         "gui.proc.detail.product",
         "gui.proc.detail.description",
         "gui.proc.detail.company",
@@ -233,8 +235,10 @@ internal sealed class ProcessDetailPane : UserControl
         _goneName = null;
         _empty.Text = Strings.Get("gui.proc.detail.none");
         SetVisibility(content: true, empty: false);
-        _title.Text = process.Name;
+        _title.Text = FriendlyName(details, process.Name) ?? process.Name;
 
+        // The title leads with what the program calls itself; the file name it runs as is always here, as it is.
+        Set(Row.Executable, process.Name, CellTone.Normal, null);
         Set(Row.Parent, parentText.Length > 0 ? parentText : Fmt.Dash, parentText.Length > 0 ? CellTone.Normal : CellTone.Dim, null);
         Set(Row.Started, Fmt.Started(process.Key), CellTone.Normal, null);
         UpdateNumbers(process);
@@ -347,6 +351,33 @@ internal sealed class ProcessDetailPane : UserControl
         }
 
         base.Dispose(disposing);
+    }
+
+    /// <summary>
+    /// What the program calls itself: its file description ("Google Chrome"), else its product name. Null while the details are
+    /// not in, when neither is known, or when it is just the exe name again.
+    /// </summary>
+    internal static string? FriendlyName(ProcessDetails? details, string exeName)
+    {
+        if (details is null)
+        {
+            return null;
+        }
+
+        foreach (var value in new[] { details.Description, details.Product })
+        {
+            if (value.TryGet(out var text) && !string.IsNullOrWhiteSpace(text))
+            {
+                var name = text.Trim();
+                if (!string.Equals(name, exeName, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(name + ".exe", exeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+            }
+        }
+
+        return null;
     }
 
     internal static string ProtectionText(ProtectionVerdict? verdict)

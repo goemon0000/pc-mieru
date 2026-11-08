@@ -13,12 +13,15 @@ internal sealed partial class ProcessesPage : PageBase
 
     private static readonly ColumnSpec[] Specs =
     [
-        new(ProcessColumn.Name, "gui.proc.col.name", 200, HorizontalAlignment.Left, true),
-        new(ProcessColumn.Pid, "gui.proc.col.pid", 64, HorizontalAlignment.Right, true),
+        // What a first-time reader looks at: name, how busy, how big, state. PID and the fine I/O split are one click away
+        // in the column chooser. (No per-process network column: Core does not collect one.)
+        new(ProcessColumn.Name, "gui.proc.col.name", 220, HorizontalAlignment.Left, true),
+        new(ProcessColumn.Pid, "gui.proc.col.pid", 64, HorizontalAlignment.Right, false),
         new(ProcessColumn.Cpu, "gui.proc.col.cpu", 72, HorizontalAlignment.Right, true),
         new(ProcessColumn.Memory, "gui.proc.col.memory", 92, HorizontalAlignment.Right, true),
-        new(ProcessColumn.IoRead, "gui.proc.col.ioread", 100, HorizontalAlignment.Right, true),
-        new(ProcessColumn.IoWrite, "gui.proc.col.iowrite", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Disk, "gui.proc.col.disk", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.IoRead, "gui.proc.col.ioread", 100, HorizontalAlignment.Right, false),
+        new(ProcessColumn.IoWrite, "gui.proc.col.iowrite", 100, HorizontalAlignment.Right, false),
         new(ProcessColumn.Gpu, "gui.proc.col.gpu", 64, HorizontalAlignment.Right, true),
         new(ProcessColumn.State, "gui.proc.col.state", 84, HorizontalAlignment.Left, true),
         new(ProcessColumn.Threads, "gui.proc.col.threads", 96, HorizontalAlignment.Right, false),
@@ -28,6 +31,22 @@ internal sealed partial class ProcessesPage : PageBase
         new(ProcessColumn.Priority, "gui.proc.col.priority", 110, HorizontalAlignment.Left, false),
         new(ProcessColumn.Session, "gui.proc.col.session", 110, HorizontalAlignment.Right, false),
         new(ProcessColumn.Started, "gui.proc.col.started", 170, HorizontalAlignment.Left, false),
+    ];
+
+    private sealed record ViewOption(ProcessViewMode Mode, string Key, string Saved);
+
+    /// <summary>The View box, in order. Grouped is the default; "no groups" is how to find the heaviest process overall.</summary>
+    private static readonly ViewOption[] ViewOptions =
+    [
+        new(ProcessViewMode.List, "gui.proc.view.list", "list"),
+        new(ProcessViewMode.Flat, "gui.proc.view.flat", "flat"),
+        new(ProcessViewMode.Tree, "gui.proc.view.tree", "tree"),
+    ];
+
+    private static readonly ProcessColumn[] LegacyDefault =
+    [
+        ProcessColumn.Name, ProcessColumn.Pid, ProcessColumn.Cpu, ProcessColumn.Memory,
+        ProcessColumn.IoRead, ProcessColumn.IoWrite, ProcessColumn.Gpu, ProcessColumn.State,
     ];
 
     /// <summary>CPU at or above this share is shown in the accent colour (always together with the number).</summary>
@@ -52,6 +71,7 @@ internal sealed partial class ProcessesPage : PageBase
     private readonly ComboBox _view = new() { Name = "processView", DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Right };
     private readonly Button _columns = new() { Name = "processColumns", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Button _run = new() { Name = "processRun", AutoSize = true, Anchor = AnchorStyles.Right };
+    private readonly Button _detailToggle = new() { Name = "processDetailToggle", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Label _count = new() { AutoSize = true, Name = "processCount", Margin = new Padding(0, 0, 16, 0), Anchor = AnchorStyles.Left };
     private readonly ToneLabel _hint = new() { AutoSize = true, Name = "processHint", Anchor = AnchorStyles.Left };
     private readonly ContextMenuStrip _menu = new() { Name = "processMenu" };
@@ -66,6 +86,10 @@ internal sealed partial class ProcessesPage : PageBase
     private bool _resortNext;
     private bool _goneShown;
     private bool _splitReady;
+    private bool _detailShown = true;
+
+    /// <summary>False when the icon source is the sample-data stand-in: no icons will ever come, so no empty slot is kept in front of the names.</summary>
+    private readonly bool _iconSlots;
 
     public ProcessesPage(GuiContext context)
         : base(context, "processes", "gui.nav.processes")
@@ -76,6 +100,7 @@ internal sealed partial class ProcessesPage : PageBase
             : new ProcessClassifier(WindowProbe.VisibleWindowPids, groups);
         _details = new DetailsCache(context.Services.ProcessDetails, this);
         _icons = new ProcessIconCache(context.Services.ProcessIcons, this);
+        _iconSlots = context.Services.ProcessIcons is not IFakeImplementation;
         _details.Loaded += key =>
         {
             if (key == _selectedKey)
@@ -93,7 +118,8 @@ internal sealed partial class ProcessesPage : PageBase
         };
 
         LoadColumnChoices();
-        _model.Mode = context.Settings.GetValue("proc.view") == "tree" ? ProcessViewMode.Tree : ProcessViewMode.List;
+        _detailShown = context.Settings.GetBool("proc.detail", true);
+        _model.Mode = (ViewOptions.FirstOrDefault(o => o.Saved == context.Settings.GetValue("proc.view")) ?? ViewOptions[0]).Mode;
         if (Enum.TryParse<ProcessColumn>(context.Settings.GetValue("proc.sort"), out var sort) && Enum.IsDefined(sort))
         {
             _model.SetSort(sort, context.Settings.GetBool("proc.desc", true));
@@ -107,7 +133,7 @@ internal sealed partial class ProcessesPage : PageBase
         _list.SelectedIndexChanged += OnSelectionChanged;
         _list.ExpanderClicked += OnExpanderClicked;
         _list.KeyDown += OnListKeyDown;
-        _list.TabIndex = 4;
+        _list.TabIndex = 5;
         _menu.Opening += OnMenuOpening;
         _menu.Closed += (_, _) =>
         {
@@ -143,16 +169,18 @@ internal sealed partial class ProcessesPage : PageBase
                 return;
             }
 
-            _model.Mode = _view.SelectedIndex == 1 ? ProcessViewMode.Tree : ProcessViewMode.List;
+            _model.Mode = ViewOptions[Math.Min(_view.SelectedIndex, ViewOptions.Length - 1)].Mode;
             Reload();
         };
         _columns.Click += (_, _) => ShowColumnMenu();
+        _detailToggle.Click += (_, _) => SetDetailShown(!_detailShown);
         _run.Click += (_, _) => RunNewTask();
         _pane.EndRequested += () => Run(TerminateSelectedAsync);
         _pane.FolderRequested += OpenSelectedFolder;
         _pane.WebRequested += SearchSelectedOnWeb;
 
         BuildLayout();
+        _split.Panel2Collapsed = !_detailShown;
         RebuildColumns();
         _split.SplitterMoved += (_, _) =>
         {
@@ -261,7 +289,7 @@ internal sealed partial class ProcessesPage : PageBase
     public override void SaveState()
     {
         var settings = Context.Settings;
-        settings.SetValue("proc.view", _model.Mode == ProcessViewMode.Tree ? "tree" : "list");
+        settings.SetValue("proc.view", ViewOptions.First(o => o.Mode == _model.Mode).Saved);
         settings.SetValue("proc.sort", _model.SortColumn.ToString());
         settings.SetBool("proc.desc", _model.Descending);
         settings.SetValue("proc.cols", string.Join(",", Specs.Where(s => _shown.Contains(s.Column)).Select(s => s.Column.ToString())));
@@ -271,7 +299,8 @@ internal sealed partial class ProcessesPage : PageBase
             settings.SetInt("proc.w." + column, width);
         }
 
-        if (_splitReady && _split.Panel2.Width > 0)
+        settings.SetBool("proc.detail", _detailShown);
+        if (_splitReady && !_split.Panel2Collapsed && _split.Panel2.Width > 0)
         {
             settings.SetInt("proc.split", ToLogical(_split.Panel2.Width));
         }
@@ -286,12 +315,16 @@ internal sealed partial class ProcessesPage : PageBase
             _viewLabel.Text = Strings.Get("gui.proc.view.label");
             _columns.Text = Strings.Get("gui.proc.columns");
             _run.Text = Strings.Get("gui.proc.run");
+            _detailToggle.Text = Strings.Get(_detailShown ? "gui.proc.detail.hide" : "gui.proc.detail.show");
             var mode = _model.Mode;
             _view.BeginUpdate();
             _view.Items.Clear();
-            _view.Items.Add(Strings.Get("gui.proc.view.list"));
-            _view.Items.Add(Strings.Get("gui.proc.view.tree"));
-            _view.SelectedIndex = mode == ProcessViewMode.Tree ? 1 : 0;
+            foreach (var option in ViewOptions)
+            {
+                _view.Items.Add(Strings.Get(option.Key));
+            }
+
+            _view.SelectedIndex = Math.Max(0, Array.FindIndex(ViewOptions, o => o.Mode == mode));
             _view.EndUpdate();
         }
         finally
@@ -305,6 +338,7 @@ internal sealed partial class ProcessesPage : PageBase
         _tips.SetToolTip(_filter, Strings.Get("gui.proc.filter.tip"));
         _tips.SetToolTip(_view, Strings.Get("gui.proc.view.tip"));
         _tips.SetToolTip(_columns, Strings.Get("gui.proc.columns.tip"));
+        _tips.SetToolTip(_detailToggle, Strings.Get("gui.proc.detail.toggle.tip"));
         foreach (ColumnHeader header in _list.Columns)
         {
             if (header.Tag is ColumnSpec spec)
@@ -354,7 +388,7 @@ internal sealed partial class ProcessesPage : PageBase
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 7,
+            ColumnCount = 8,
             RowCount = 1,
             Padding = new Padding(Px(12), Px(10), Px(12), Px(8)),
             Name = "processBar",
@@ -362,6 +396,7 @@ internal sealed partial class ProcessesPage : PageBase
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(260)));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -374,18 +409,22 @@ internal sealed partial class ProcessesPage : PageBase
         _view.Margin = new Padding(0, 0, Px(12), 0);
         _columns.MinimumSize = new Size(Px(72), Px(30));
         _columns.Margin = new Padding(0, 0, Px(8), 0);
+        _detailToggle.MinimumSize = new Size(Px(96), Px(30));
+        _detailToggle.Margin = new Padding(0, 0, Px(8), 0);
         _run.MinimumSize = new Size(Px(150), Px(30));
         _run.Margin = new Padding(0);
         _filter.TabIndex = 0;
         _view.TabIndex = 1;
         _columns.TabIndex = 2;
-        _run.TabIndex = 3;
+        _detailToggle.TabIndex = 3;
+        _run.TabIndex = 4;
         bar.Controls.Add(_filterLabel, 0, 0);
         bar.Controls.Add(_filter, 1, 0);
         bar.Controls.Add(_viewLabel, 3, 0);
         bar.Controls.Add(_view, 4, 0);
         bar.Controls.Add(_columns, 5, 0);
-        bar.Controls.Add(_run, 6, 0);
+        bar.Controls.Add(_detailToggle, 6, 0);
+        bar.Controls.Add(_run, 7, 0);
 
         var footer = new FlowLayoutPanel
         {
@@ -418,12 +457,28 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         // The minimum sizes only fit once the split has a real width; set earlier they throw.
+        // Opened up for the moment: the distance is worked out against both panels even when the user keeps the detail hidden.
+        _split.Panel2Collapsed = false;
         _split.Panel1MinSize = Px(420);
         _split.Panel2MinSize = Px(250);
         var wanted = Px(Math.Clamp(Context.Settings.GetInt("proc.split", 290), 250, 700));
         var distance = _split.Width - wanted - _split.SplitterWidth;
         _split.SplitterDistance = Math.Clamp(distance, _split.Panel1MinSize, _split.Width - _split.Panel2MinSize - _split.SplitterWidth);
         _splitReady = true;
+        _split.Panel2Collapsed = !_detailShown;
+    }
+
+    /// <summary>
+    /// Hides or shows the detail pane. With it hidden the list gets the whole width (a wide table wants it); the choice is kept.
+    /// Selecting a row never opens it by itself, so the list does not jump sideways under the pointer.
+    /// </summary>
+    internal void SetDetailShown(bool shown)
+    {
+        _detailShown = shown;
+        _split.Panel2Collapsed = !shown;
+        _detailToggle.Text = Strings.Get(shown ? "gui.proc.detail.hide" : "gui.proc.detail.show");
+        _list.FitLastColumn();
+        _list.Invalidate();
     }
 
     private void LoadColumnChoices()
@@ -439,6 +494,13 @@ internal sealed partial class ProcessesPage : PageBase
                     _shown.Add(column);
                 }
             }
+        }
+
+        // A saved set that is exactly the old factory default (PID and both I/O columns, no Disk) was never a choice:
+        // it moves to the new default. Anything the user changed is kept as it is.
+        if (_shown.Count == LegacyDefault.Length && LegacyDefault.All(_shown.Contains))
+        {
+            _shown.Clear();
         }
 
         if (_shown.Count == 0)
@@ -788,7 +850,7 @@ internal sealed partial class ProcessesPage : PageBase
                 {
                     Indent = _model.Mode == ProcessViewMode.Tree ? line.Depth : 0,
                     Glyph = line.HasChildren ? (line.Expanded ? ExpanderGlyph.Expanded : ExpanderGlyph.Collapsed) : ExpanderGlyph.None,
-                    IconSlot = true,
+                    IconSlot = _iconSlots,
                     Icon = IconOf(p.Key),
                 };
             case ProcessColumn.Pid:
@@ -797,6 +859,10 @@ internal sealed partial class ProcessesPage : PageBase
                 return Number(p.CpuPercent, highlight: HighCpuPercent);
             case ProcessColumn.Memory:
                 return new GridCell(Fmt.Bytes(p.PrivateWorkingSetBytes), p.PrivateWorkingSetBytes >= HighMemoryBytes ? CellTone.Accent : CellTone.Normal);
+            case ProcessColumn.Disk:
+                return p.IoReadBytesPerSec.IsOk || p.IoWriteBytesPerSec.IsOk
+                    ? new GridCell(Fmt.Rate(p.IoReadBytesPerSec, p.IoWriteBytesPerSec))
+                    : new GridCell(Fmt.Dash, CellTone.Dim);
             case ProcessColumn.IoRead:
                 return Rate(p.IoReadBytesPerSec);
             case ProcessColumn.IoWrite:
@@ -858,6 +924,13 @@ internal sealed partial class ProcessesPage : PageBase
         _ => "gui.proc.group.background",
     });
 
+    /// <summary>
+    /// The program's own description ("Google Chrome") under the exe name, once its details are in. The list itself keeps the
+    /// exe name, so sorting, searching and what is read aloud all agree with what is on screen.
+    /// </summary>
+    private string? NameTip(ProcessInfo p) =>
+        ProcessDetailPane.FriendlyName(_details.TryGet(p.Key), p.Name) is { } friendly ? friendly : null;
+
     private string? CellTip(int row, int column)
     {
         if (row < 0 || row >= _model.Count || column < 0 || column >= _visible.Count)
@@ -873,6 +946,9 @@ internal sealed partial class ProcessesPage : PageBase
 
         return _visible[column].Column switch
         {
+            ProcessColumn.Name => NameTip(p),
+            ProcessColumn.Disk when !p.IoReadBytesPerSec.IsOk && !p.IoWriteBytesPerSec.IsOk => Fmt.MissingTip(p.IoReadBytesPerSec),
+            ProcessColumn.Disk => Strings.Get("gui.proc.col.disk.hint"),
             ProcessColumn.Cpu when !p.CpuPercent.IsOk => Fmt.MissingTip(p.CpuPercent),
             ProcessColumn.Gpu when !p.GpuPercent.IsOk => Fmt.MissingTip(p.GpuPercent),
             ProcessColumn.IoRead when !p.IoReadBytesPerSec.IsOk => Fmt.MissingTip(p.IoReadBytesPerSec),
