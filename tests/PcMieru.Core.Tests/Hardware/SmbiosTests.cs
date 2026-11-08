@@ -94,6 +94,75 @@ public class SmbiosTests
         }
     }
 
+    // A type 17 structure with only the two strings that matter here: device locator (offset 0x10) and bank locator (0x11).
+    private static SmbiosStructure Dimm(int handle, string? locator, string? bank)
+    {
+        var data = new byte[0x20];
+        data[0] = 17;
+        data[1] = (byte)data.Length;
+        var strings = new List<string>();
+        if (locator is not null)
+        {
+            strings.Add(locator);
+            data[0x10] = (byte)strings.Count;
+        }
+
+        if (bank is not null)
+        {
+            strings.Add(bank);
+            data[0x11] = (byte)strings.Count;
+        }
+
+        return new SmbiosStructure(17, handle, data, strings);
+    }
+
+    [Fact]
+    public void Slot_names_stay_as_the_firmware_wrote_them_when_they_are_already_unique()
+    {
+        var names = MemoryCollector.SlotNames([Dimm(1, "DIMM_A1", "BANK 0"), Dimm(2, "DIMM_A2", "BANK 0"), Dimm(3, null, null)]);
+
+        Assert.Equal(["DIMM_A1", "DIMM_A2", "Slot 3"], names);
+    }
+
+    [Fact]
+    public void A_locator_that_repeats_per_channel_is_told_apart_by_the_bank_locator()
+    {
+        // The real two-channel board: every channel has "DIMM 0" and "DIMM 1".
+        var names = MemoryCollector.SlotNames(
+        [
+            Dimm(1, "DIMM 0", "P0 CHANNEL A"),
+            Dimm(2, "DIMM 1", "P0 CHANNEL A"),
+            Dimm(3, "DIMM 0", "P0 CHANNEL B"),
+            Dimm(4, "DIMM 1", "P0 CHANNEL B"),
+        ]);
+
+        Assert.Equal(["P0 CHANNEL A DIMM 0", "P0 CHANNEL A DIMM 1", "P0 CHANNEL B DIMM 0", "P0 CHANNEL B DIMM 1"], names);
+    }
+
+    [Fact]
+    public void Only_the_repeated_names_are_qualified_and_what_is_still_equal_is_numbered_in_table_order()
+    {
+        var names = MemoryCollector.SlotNames(
+        [
+            Dimm(1, "DIMM 0", null),
+            Dimm(2, "DIMM 0", null),
+            Dimm(3, "DIMM 9", "BANK X"),
+            Dimm(4, "DIMM 0", "BANK X"),
+            Dimm(5, "DIMM 0", "BANK X"),
+        ]);
+
+        Assert.Equal(["DIMM 0 #1", "DIMM 0 #2", "DIMM 9", "BANK X DIMM 0 #1", "BANK X DIMM 0 #2"], names);
+        Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Every_module_of_a_real_dump_has_its_own_slot_name()
+    {
+        var modules = MemoryCollector.Collect(Table(), null).Data!.Modules;
+
+        Assert.Equal(modules.Count, modules.Select(m => m.Slot.Data).Distinct(StringComparer.Ordinal).Count());
+    }
+
     [Fact]
     public void CpuStructureGivesSocketAndFirmwareClocks()
     {

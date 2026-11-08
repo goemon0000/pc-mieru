@@ -72,7 +72,8 @@ internal static class MemoryCollector
                 ? Value.Ok((long)ms.AvailPhys, "winapi:GlobalMemoryStatusEx")
                 : Probe.FromWin32<long>(Marshal.GetLastWin32Error(), "winapi:GlobalMemoryStatusEx", "memory status");
 
-            var modules = devices.Select(Module).ToList();
+            var slotNames = SlotNames(devices);
+            var modules = devices.Select((d, i) => Module(d, slotNames[i])).ToList();
             var installed = devices.Count(d => InstalledBytes(d) is > 0);
 
             Value<int> slotsTotal = devices.Count > 0 ? Value.Ok(devices.Count, s17) : Value.Unsupported<int>(s17, smbiosDetail);
@@ -132,7 +133,50 @@ internal static class MemoryCollector
         return (w.Value & 0x8000) != 0 ? (w.Value & 0x7FFF) * 1024L : (w.Value & 0x7FFF) * 1024L * 1024L;
     }
 
-    private static MemoryModule Module(SmbiosStructure d)
+    /// <summary>
+    /// One distinguishable name per memory device. The firmware's device locator is only unique within a channel on many boards
+    /// ("DIMM 0" and "DIMM 1" once per channel), so a locator that more than one device carries is prefixed with the bank
+    /// locator ("P0 CHANNEL A DIMM 1"); whatever is still the same after that (no bank locator, or the same one) is numbered in
+    /// table order. Names that were unique to begin with are left exactly as the firmware wrote them.
+    /// </summary>
+    internal static string[] SlotNames(IReadOnlyList<SmbiosStructure> devices)
+    {
+        var names = new string[devices.Count];
+        for (var i = 0; i < names.Length; i++)
+        {
+            names[i] = devices[i].Str(0x10) ?? $"Slot {devices[i].Handle:X}";
+        }
+
+        var repeated = names.GroupBy(static n => n, StringComparer.Ordinal).Where(static g => g.Count() > 1).Select(static g => g.Key).ToHashSet(StringComparer.Ordinal);
+        if (repeated.Count == 0)
+        {
+            return names;
+        }
+
+        var plain = (string[])names.Clone();
+        for (var i = 0; i < names.Length; i++)
+        {
+            if (repeated.Contains(plain[i]) && devices[i].Str(0x11) is { } bank)
+            {
+                names[i] = bank + " " + plain[i];
+            }
+        }
+
+        var counts = names.GroupBy(static n => n, StringComparer.Ordinal).ToDictionary(static g => g.Key, static g => g.Count(), StringComparer.Ordinal);
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < names.Length; i++)
+        {
+            if (counts[names[i]] > 1)
+            {
+                next[names[i]] = next.GetValueOrDefault(names[i]) + 1;
+                names[i] = names[i] + " #" + next[names[i]].ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        return names;
+    }
+
+    private static MemoryModule Module(SmbiosStructure d, string slotName)
     {
         const string s = "smbios:type17";
         var size = InstalledBytes(d);
@@ -140,8 +184,6 @@ internal static class MemoryCollector
         const string emptyDetail = "slot is empty";
 
         Value<T> Skip<T>(Func<Value<T>> read) => empty ? Value.Unsupported<T>(s, emptyDetail) : read();
-
-        var slotName = d.Str(0x10) ?? $"Slot {d.Handle:X}";
 
         Value<int> Speed(int offset, int extOffset)
         {
