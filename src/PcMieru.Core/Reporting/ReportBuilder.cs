@@ -59,15 +59,52 @@ public sealed class ReportBuilder : IReportBuilder
     {
         var effective = redact && _redactor.Enabled;
         // The model has no serial, MAC, IP, SSID, command line, volume label, audio or USB name in the Markdown at all
-        // (ReportMarkdown never prints them), so what is left to hide is text inside names: the final pass does that.
-        var markdown = ReportMarkdown.Render(document with { Redacted = effective }, language, appVersion);
+        // (ReportMarkdown never prints them). The one live free-text name it DOES print is the NIC friendly name
+        // (an InterfaceAlias a user can rename to their own name), so blank it in the graph; the final pass hides the rest.
+        var prepared = Prepare(document, effective);
+        var markdown = ReportMarkdown.Render(prepared, language, appVersion);
         return _redactor.RedactText(markdown, effective);
     }
 
     public JsonNode RenderJson(ReportDocument document, bool redact)
     {
         var effective = redact && _redactor.Enabled;
-        var node = PcMieruJson.ToNode(document with { Redacted = effective }) ?? new JsonObject();
+        var prepared = Prepare(document, effective);
+        var node = PcMieruJson.ToNode(prepared) ?? new JsonObject();
         return _redactor.RedactJson(node, effective) ?? node;
+    }
+
+    /// <summary>
+    /// Stamps the chosen redaction flag and, when redacting, blanks the live NIC friendly name in the summary.
+    /// The hardware model's adapter names go through <c>BlankedPaths</c> (<c>network[].name</c>); the summary's live
+    /// <c>SystemInfo.Nics[].Name</c> is a renameable InterfaceAlias that reaches both the JSON and the Markdown, and
+    /// neither the path rules (summary-scoped, not hardware) nor the content pass can catch an arbitrary rename, so it
+    /// is replaced here with the same placeholder. The GUI live view reads raw snapshots, not this document, so it is unaffected.
+    /// </summary>
+    private static ReportDocument Prepare(ReportDocument document, bool effective)
+    {
+        if (!effective)
+        {
+            return document with { Redacted = false };
+        }
+
+        var system = document.Summary.System;
+        var nics = system.Nics;
+        if (nics.Count > 0)
+        {
+            var blanked = new NicInfo[nics.Count];
+            for (var i = 0; i < nics.Count; i++)
+            {
+                blanked[i] = nics[i] with { Name = SimpleRedactor.Placeholder };
+            }
+
+            system = system with { Nics = blanked };
+        }
+
+        return document with
+        {
+            Redacted = true,
+            Summary = document.Summary with { System = system },
+        };
     }
 }

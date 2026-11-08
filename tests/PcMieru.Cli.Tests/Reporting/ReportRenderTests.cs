@@ -46,6 +46,39 @@ public class ReportRenderTests
     }
 
     [Fact]
+    public async Task The_live_nic_friendly_name_is_blanked_in_both_renders_when_redacting()
+    {
+        // The NIC friendly name in the summary is a Windows InterfaceAlias a user can rename to their own name, and it is
+        // the one live free-text name the report prints. It is summary-scoped (not the hardware model's network[].name),
+        // so neither the path rules nor the content pass reach it: the builder must blank it at render time.
+        var builder = Builder(true, out var services);
+        using (services)
+        {
+            var document = await builder.BuildAsync(new ReportOptions(0));
+            var realName = document.Summary.System.Nics.Single(n => n.IsUp).Name;
+            Assert.False(string.IsNullOrWhiteSpace(realName));
+
+            var hiddenJson = builder.RenderJson(document, redact: true);
+            var nics = (JsonArray)hiddenJson["summary"]!["system"]!["nics"]!;
+            Assert.NotEmpty(nics);
+            foreach (var nic in nics)
+            {
+                Assert.Equal("<redacted>", nic!["name"]!.GetValue<string>());
+            }
+
+            var hiddenMd = builder.RenderMarkdown(document, Language.En, redact: true);
+            Assert.DoesNotContain(realName, hiddenMd, StringComparison.Ordinal);
+            Assert.Contains("<redacted>", hiddenMd, StringComparison.Ordinal);
+
+            // the same document, rendered again without redaction: the real name is intact in place (blanking is not destructive)
+            var shownJson = builder.RenderJson(document, redact: false);
+            Assert.Equal(realName, ((JsonArray)shownJson["summary"]!["system"]!["nics"]!).Select(n => n!["name"]!.GetValue<string>()).First(name => name == realName));
+            var shownMd = builder.RenderMarkdown(document, Language.En, redact: false);
+            Assert.Contains(realName, shownMd, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task A_box_that_is_on_cannot_override_no_redact()
     {
         var builder = Builder(false, out var services);
