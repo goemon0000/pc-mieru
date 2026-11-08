@@ -239,6 +239,13 @@ internal sealed class MainForm : Form
         base.OnFormClosed(e);
     }
 
+    protected override void WndProc(ref Message m)
+    {
+        // A plugged or removed device makes the hardware facts stale (B.md 6). Cheap: it only drops the provider's cache.
+        _ = DeviceChange.Handle(m, _context.Services.Hardware);
+        base.WndProc(ref m);
+    }
+
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         if (keyData == Keys.F5)
