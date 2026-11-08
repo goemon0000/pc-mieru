@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- pcmi.exe: command line front end and the stdio MCP server. Console app, no UI. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>pcmi</AssemblyName>
+    <RootNamespace>PcMieru.Cli</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PcMieru.Cli.Tests" />
+  </ItemGroup>
+
+</Project>

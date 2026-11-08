@@ -117,7 +117,7 @@ public static class Strings
         return names;
     }
 
-    public static string Status(ValueStatus status) => Get("core.status." + status switch
+    public static string Status(ValueStatus status, Language? language = null) => Get("core.status." + status switch
     {
         ValueStatus.NotCollected => "notCollected",
         ValueStatus.Ok => "ok",
@@ -127,7 +127,7 @@ public static class Strings
         ValueStatus.Error => "error",
         ValueStatus.Gone => "gone",
         _ => "error",
-    });
+    }, language ?? Current);
 
     /// <summary>Renders an observation in the requested language from its key and arguments.</summary>
     public static string Render(Observation observation, Language? language = null) =>
