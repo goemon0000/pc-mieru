@@ -37,10 +37,13 @@ public sealed partial class SimpleRedactor : IRedactor
     /// Blanked only at this place in the tree. A path is the dotted key names from the root; an array adds "[]" and a
     /// Value&lt;T&gt; wrapper's own "value" is not a segment, so <c>audio[].name</c> is the friendly name of every audio
     /// endpoint however deep the hardware tree sits in a report. The match is on the end of the path.
-    /// These are names that a person or a pairing wizard typed: a drive label ("Tatsuki's backup"), the endpoint name
-    /// Windows builds from a Bluetooth device ("Headphones (Tatsuki's AirPods)") and a USB product string.
+    /// These are names that a person, a pairing wizard or a monitor's own EDID carries: a drive label ("Tatsuki's backup"),
+    /// the endpoint name Windows builds from a Bluetooth device ("Headphones (Tatsuki's AirPods)"), a USB product string,
+    /// a network adapter the owner renamed ("Tatsuki Wi-Fi"), the monitor name a person set in its OSD, and the audio
+    /// device's adapter name. "label", "name" and "adapter" mean other things elsewhere, so each is blanked by its place.
     /// </summary>
-    public static readonly IReadOnlyList<string> BlankedPaths = ["volumes[].label", "audio[].name", "usb[].name"];
+    public static readonly IReadOnlyList<string> BlankedPaths =
+        ["volumes[].label", "network[].name", "displays[].details.monitorName", "audio[].name", "audio[].details.adapter", "usb[].name"];
 
     /// <summary>
     /// Version-like fields: a four-part number such as 1.2.3.4 is a firmware version here, not an IPv4 address,

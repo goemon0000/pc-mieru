@@ -218,14 +218,70 @@ public class RedactorTests
     [Fact]
     public void The_blanked_places_are_listed_in_one_place()
     {
-        Assert.Equal(["audio[].name", "usb[].name", "volumes[].label"], SimpleRedactor.BlankedPaths.Order().ToArray());
+        Assert.Equal(
+            ["audio[].details.adapter", "audio[].name", "displays[].details.monitorName", "network[].name", "usb[].name", "volumes[].label"],
+            SimpleRedactor.BlankedPaths.Order().ToArray());
         Assert.True(SimpleRedactor.IsBlankedPath("storage[].volumes[].label"));
         Assert.True(SimpleRedactor.IsBlankedPath("volumes[].label"));
+        Assert.True(SimpleRedactor.IsBlankedPath("network[].name"));
+        Assert.True(SimpleRedactor.IsBlankedPath("hardware.network[].name"));
+        Assert.True(SimpleRedactor.IsBlankedPath("displays[].details.monitorName"));
+        Assert.True(SimpleRedactor.IsBlankedPath("audio[].details.adapter"));
         Assert.False(SimpleRedactor.IsBlankedPath("label"));
         Assert.False(SimpleRedactor.IsBlankedPath("storage[].label"));
         Assert.False(SimpleRedactor.IsBlankedPath("myvolumes[].label"));
         Assert.False(SimpleRedactor.IsBlankedPath("name"));
         Assert.False(SimpleRedactor.IsBlankedPath("processes[].name"));
+        Assert.False(SimpleRedactor.IsBlankedPath("details.adapter"));
+        Assert.False(SimpleRedactor.IsBlankedPath("monitorName"));
+    }
+
+    [Fact]
+    public void A_network_name_monitor_name_and_audio_adapter_are_blanked_at_their_place()
+    {
+        // These three free-text fields carry a person's name in a real report (a renamed NIC, a monitor's OSD name,
+        // an audio device's adapter) and the integrator left them unblanked. They are hidden by their tree place.
+        const string json = """
+            {
+              "network": { "status": "ok", "source": "iphlp", "value": [
+                { "name": { "status": "ok", "source": "iphlp", "value": "Tatsuki Wi-Fi" },
+                  "driverVersion": { "status": "ok", "source": "iphlp", "value": "1.2.3.4" } } ] },
+              "displays": { "status": "ok", "source": "edid", "value": [
+                { "model": { "status": "ok", "source": "edid", "value": "kept monitor model" },
+                  "details": {
+                    "monitorName": { "status": "ok", "source": "edid", "value": "Tatsuki's Display" },
+                    "serialNumber": { "status": "ok", "source": "edid", "value": "SN-XYZ" },
+                    "inputType": { "status": "ok", "source": "edid", "value": "digital" } } } ] },
+              "audio": { "status": "ok", "source": "mmdevice", "value": [
+                { "name": { "status": "ok", "source": "mmdevice", "value": "Speakers" },
+                  "details": {
+                    "adapter": { "status": "ok", "source": "mmdevice", "value": "Tatsuki's USB DAC" },
+                    "channels": { "status": "ok", "source": "mmdevice", "value": 2 } } } ] }
+            }
+            """;
+        foreach (var wrapped in new[] { false, true })
+        {
+            var node = JsonNode.Parse(json)!;
+            var root = wrapped ? new JsonObject { ["hardware"] = node } : node;
+            On.RedactJson(root);
+            var hw = wrapped ? root["hardware"]! : root;
+
+            Assert.Equal("<redacted>", hw["network"]!["value"]![0]!["name"]!["value"]!.GetValue<string>());
+            Assert.Equal("ok", hw["network"]!["value"]![0]!["name"]!["status"]!.GetValue<string>());
+            // the four-part driver version must not be read as an IPv4 address
+            Assert.Equal("1.2.3.4", hw["network"]!["value"]![0]!["driverVersion"]!["value"]!.GetValue<string>());
+
+            var display = hw["displays"]!["value"]![0]!;
+            Assert.Equal("<redacted>", display["details"]!["monitorName"]!["value"]!.GetValue<string>());
+            Assert.Equal("<redacted>", display["details"]!["serialNumber"]!["value"]!.GetValue<string>()); // key-name rule still applies in details
+            Assert.Equal("digital", display["details"]!["inputType"]!["value"]!.GetValue<string>());
+            Assert.Equal("kept monitor model", display["model"]!["value"]!.GetValue<string>());
+
+            var audio = hw["audio"]!["value"]![0]!;
+            Assert.Equal("<redacted>", audio["details"]!["adapter"]!["value"]!.GetValue<string>());
+            Assert.Equal(2, audio["details"]!["channels"]!["value"]!.GetValue<int>());
+            Assert.Equal("<redacted>", audio["name"]!["value"]!.GetValue<string>()); // the endpoint name was already blanked by audio[].name
+        }
     }
 
     // ---- the per-call switch -------------------------------------------------------------------------------------

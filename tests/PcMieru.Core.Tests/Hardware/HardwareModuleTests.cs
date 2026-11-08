@@ -208,16 +208,24 @@ public class HardwareRedactionTests
         Assert.Equal(["StorageVolume"], labels);
 
         // Each blanked path ends in a property that really exists on the type that sits at that place in the model.
-        Assert.Equal(["audio[].name", "usb[].name", "volumes[].label"], SimpleRedactor.BlankedPaths.Order().ToArray());
+        Assert.Equal(
+            ["audio[].details.adapter", "audio[].name", "displays[].details.monitorName", "network[].name", "usb[].name", "volumes[].label"],
+            SimpleRedactor.BlankedPaths.Order().ToArray());
         Assert.NotNull(typeof(StorageVolume).GetProperty("Label"));
         Assert.NotNull(typeof(AudioEndpoint).GetProperty("Name"));
         Assert.NotNull(typeof(UsbDevice).GetProperty("Name"));
+        Assert.NotNull(typeof(NetworkAdapter).GetProperty("Name"));
+        Assert.NotNull(typeof(DisplayDetails).GetProperty("MonitorName"));
+        Assert.NotNull(typeof(AudioDetails).GetProperty("Adapter"));
     }
 
     [Fact]
     public async Task VolumeLabelsAudioNamesAndUsbNamesAreBlankedInAWholeHardwareReport()
     {
         var info = await new FakeHardwareProvider(static () => Fixture.FixedTime).GetAsync(HardwareCategory.All);
+        // The fake leaves every Details null (the skeleton shows the top-level fields only). The monitor's OSD name and the
+        // audio adapter name live under details, so give the sample display/audio a details record to reach those blanked paths.
+        info = WithDisplayAndAudioDetails(info);
         var report = new JsonObject { ["hardware"] = ToNode(info) };
 
         var placed = new Dictionary<string, int>();
@@ -359,6 +367,32 @@ public class HardwareRedactionTests
 
     private static JsonNode ToNode(HardwareInfo info) =>
         System.Text.Json.JsonSerializer.SerializeToNode(info, PcMieruJson.Compact)!;
+
+    /// <summary>
+    /// Attach a details record to the sample display and audio endpoints so a report walk can reach the two blanked paths that
+    /// live under details: <c>displays[].details.monitorName</c> (the monitor's OSD name) and <c>audio[].details.adapter</c>.
+    /// </summary>
+    private static HardwareInfo WithDisplayAndAudioDetails(HardwareInfo info)
+    {
+        static Value<T> Ok<T>(T value) => Value.Ok(value, "test");
+
+        var displays = info.Displays.Data!
+            .Select(d => d with
+            {
+                Details = new DisplayDetails(
+                    Ok("MONITOR\\FAKE1234"), Ok(0x1234), Ok("FAKE-DISPLAY-SERIAL"), Ok("1.4"), Ok(true), Ok(1), Ok(27.0),
+                    Ok("Digital"), Ok(8), Ok("tatsuki's monitor"), Ok(48.0), Ok(165.0), Ok(false), Ok(false), Ok(0)),
+            })
+            .ToList();
+        var audio = info.Audio.Data!
+            .Select(a => a with { Details = new AudioDetails(Ok("active"), Ok("Speakers"), Ok("Realtek(R) Audio"), Ok(2)) })
+            .ToList();
+        return info with
+        {
+            Displays = Value.Ok<IReadOnlyList<DisplayDevice>>(displays, "test"),
+            Audio = Value.Ok<IReadOnlyList<AudioEndpoint>>(audio, "test"),
+        };
+    }
 
     private static void Inject(JsonNode? node, Dictionary<string, int> found)
     {
