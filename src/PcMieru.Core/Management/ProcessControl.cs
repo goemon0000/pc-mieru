@@ -69,6 +69,9 @@ public sealed class ProcessControl : IProcessControl, IProcessAffinityControl
         _eco = eco;
     }
 
+    /// <summary>The policy this control enforces (tests check that it is the one the front end is given).</summary>
+    internal IProtectionPolicy Policy => _policy;
+
     public Task<OperationResult> CloseWindowAsync(ProcessKey key, CancellationToken ct = default) =>
         Run(() => OperationMapper.ToResult(_actions.Close(key)), ct);
 
