@@ -55,6 +55,11 @@ Strings の現在言語と culture は全体で 1 つなので、Cli.Tests と G
 interface の一覧は `Core/Contracts/Interfaces.cs`（A: `ISnapshotSource` `IProcessDetailsProvider`／C: `IHardwareProvider` `IStorageHealthProvider` `ISensorClient`／
 D: `IProcessControl` `IProtectionPolicy` `IServiceManager` `IStartupManager` `ISessionProvider` `IHelperClient` `ITaskLauncher`／
 E: `IObservationEngine` `IKnownProcessCatalog` `IRedactor` `IReportBuilder`、`Core/Contracts/Insights.cs` の `IReadOnlyInsights`）。
+統合で `Contracts/` に移した物: `IProcessGroupSource` `IProcessIconSource` `ProcessGroup`（A が集計の領域に置いていたもの。名前空間は同じ）。
+`PcMieruServices` からは `ProcessGroups` `ProcessIcons` `Sampler` で引く。`Sampler`（`SamplerLoop`）は `CollectionModule` が本物・Fake のどちらでも登録する、**唯一の採取ループ**。
+GUI の `SnapshotPump` は間隔・一時停止・低速をループの設定に書いて結果を UI スレッドへ渡すだけで、自分では採らない。
+レポートと診断（`ReportBuilder` / `Insights.DiagnoseAsync`）の観察窓は、ループが動いていて止まっていなければループの履歴（`SamplerLoop.History`）から作る。
+ループが動いていない（`pcmi` と MCP は起動しない）・一時停止中・まだ 1 回も採れていない・5 秒以上新しい採取が無いときは、これまで通り窓が自分で採る。
 
 ## 4. 文字列と JSON
 
@@ -82,7 +87,12 @@ JSON（`Core/Json/`）は領域ごとに `JsonSerializerContext` を持ち、`Pc
 
 **MCP のツール**: `Cli/Mcp/McpTools.cs` に足す。道具は 7 つ（`get_system_summary` `list_processes` `get_process` `get_hardware` `get_storage_health` `diagnose` `get_report`）で、
 `IReadOnlyInsights` の読み取り 7 メソッドに 1 対 1。MCP は読み取り専用で、プロセス操作・サービス・Helper を一切名指ししない（`McpBoundaryTests` がソースを grep して守る）。
-伏せ字は起動引数 `--no-redact` だけで切り替わり、呼び出しごとの切り替えは無い。プロトコルは stdio の ndjson JSON-RPC、版は 2025-06-18 / 2025-03-26 / 2024-11-05。
+MCP の伏せ字は起動引数 `--no-redact` だけで切り替わり、呼び出しごとの切り替えは無い（MCP は 1 引数の `RedactText` / `RedactJson` しか呼ばない）。
+`IRedactor` には呼び出しごとの形 `RedactText(text, redact)` / `RedactJson(node, redact)` があるが、これは GUI の「個人情報を伏せる」チェックと `pcmi report --no-redact` 用で、
+`redact && Enabled` のときだけ伏せる。つまり**チェックを入れても `--no-redact` は上書きできず、外した 1 回だけ素通しにできる**。
+同じく `IReportBuilder.RenderMarkdown` / `RenderJson`（既定は `NotSupportedException`）は同じ文書を伏せる・伏せないの両方で出せて、`ReportDocument.Redacted` は実際にやったことを書く。
+ボリュームラベル・音声の名前・USB の名前は JSON の木の中の場所（`volumes[].label` `audio[].name` `usb[].name`）で伏せる。キー名 `label` / `name` では伏せない（他の項目まで消えるため）。
+プロトコルは stdio の ndjson JSON-RPC、版は 2025-06-18 / 2025-03-26 / 2024-11-05。
 ツールを増やすなら「読むだけ」を保てるか先に決めて、`IReadOnlyInsights` の側を変える（それは統合担当に連絡）。
 
 **Fake を本物に**: 自分の領域の `Fake*.cs` の中の `XxxModule.Register` で `registry.Set<IXxx>(new RealXxx(...))`。Fake の class は他の試験が使うので、本物が安定するまで消さない。
@@ -107,6 +117,7 @@ powershell -File tools\publish.ps1 -Version 0.1.0 -Verify     # dist\PCMieru-0.1
   （Gui だけが Desktop ランタイムを参照するため、型の転送表が違う。Gui の物を採る）。例外を増やすときは文字列表で違いを見てから。
 - Helper は NativeAOT の単体 exe。マネージドの dll としては入れない（あれば失敗）。
 - `-Verify` は合流後のフォルダで `pcmi version`・`ps --json`・`hw --json`・MCP の initialize と tools/list・`PCMieru.exe --smoke` を実際に動かす。
+  Windows PowerShell 5.1 は UTF-8 コンソールだと、ネイティブ exe へ流す最初の行の前に BOM を付ける。MCP サーバは先頭の U+FEFF を 1 つだけ読み飛ばす（途中のは読み飛ばさない）。
 - LICENSE（MIT）と NOTICE.txt（第三者の表記）を同梱する。他のプロジェクトのコードを入れたら NOTICE に書く。
 - CI（`.github/workflows/ci.yml`）は build・test・GUI smoke と、zip なしの publish。`release.yml` は `v*` のタグで試験・発行・Release に zip と SHA256.txt を付ける。
   どちらも「手元で通った」を保証しない。GitHub 上での初回の結果は未確認。

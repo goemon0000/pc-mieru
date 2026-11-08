@@ -5,6 +5,19 @@ Directory.Packages.props, the slnx, CI or tools/ was edited. No new NuGet packag
 everything else is P/Invoke). Strings are only `hw.*`. The items below are small; none blocks the merge, 1 and 2 are
 needed for a correct merged result.
 
+> **Integration status (branch `integrate`).** The paragraph above is C's original state. Now:
+>
+> | Item | Result | Commit |
+> |---|---|---|
+> | 1. `ForceFakes` in tests | Kept everywhere (every test that builds `PcMieruServices` uses it). | - |
+> | 2. SensorHost next to the apps | Applied, but not as the one-line `ProjectReference` alone: `ReferenceOutputAssembly="false"` copies the apphost, runtimeconfig and deps.json but not `PCMieru.SensorHost.dll`, so the exe in `bin/` could not start and every GPU live value read "no response". A shared targets file copies the dll and pdb as well. Checked on this PC with `pcmi hw gpu`: VBIOS, power limit and temperature are read. | 5b2af93 |
+> | 3. NOTICE.txt | Done, with the lines from this file and the sources the other areas named; a RepoGuard test fails when a file under `src/` names parts-life / pl-sensors and NOTICE.txt does not list it. | fff0d8a |
+> | 4. Elevated SATA health | One UAC prompt for all drives (new Helper operation `disk-health-all`); `HelperDataKeys.*` replace the repeated strings. See the note in section 4. | f2b2df1 |
+> | 5. Privacy (`volumes[].label`, audio name, USB name) | Done by path, not by the global keys. See the note in section 5. | 0a79a17 |
+> | 8. AMD iGPU power | Shown only in the GPU's own fact list with a ja/en note. See the note in section 8. | 82ec41b |
+>
+> Fixes that came back from E's checks on the merged tree: duplicate DIMM names (6a1ddf3), TOSHIBA attribute 194 shown as the temperature byte in `pcmi health` (d29fa79), Wi-Fi rows left out of wired adapters in the text and window views (de27a10; the JSON keeps them as `unsupported` with `NetworkAdapter.NotWirelessReason`). VBIOS and power limit were checked on the real PC after 5b2af93.
+
 ## 1. REQUIRED: tests that create PcMieruServices must use ForceFakes
 
 `HardwareModule.Register` now builds the REAL implementations unless `PcMieruOptions.ForceFakes` is set. A test that creates
@@ -49,6 +62,16 @@ goemon0000/parts-life (MIT, same owner as PC Mieru)
 
 ## 4. Elevated SATA health: adapter written, one UAC prompt per drive
 
+> **Integrator note (f2b2df1): now one prompt for all drives.** The text below is the state before the merge ("two UAC
+> prompts on this PC", "D can add a multi-drive request later"). The Helper has a new operation `disk-health-all`
+> (`--drives 0,2,3`: a validated list of small integers, 0..255, ascending, distinct, at most 16, no paths). The Helper
+> identifies each drive's bus itself, reads it the way that bus is read, and returns every drive's keys under
+> `drive.<n>.` with the drive's own code; the exit code is `Ok`, `PartialSuccess` or the common failure.
+> `RealStorageHealthProvider` collects the drives that wait for the Helper and asks once, so
+> `ReadAsync(allowElevation: true)` shows **one** UAC prompt however many SATA drives there are. `smart-read` and
+> `nvme-health` stay in the table. Tested on bytes with a stand-in client only (the Helper is never started in the tests);
+> the batch code was also run read-only on this PC. The elevated path itself was never run for real (no UAC prompt can be answered here).
+
 D's Helper returns the raw sectors as base64 in `HelperResult.Data` (keys `smart.data`, `smart.thresholds`, `nvme.health`).
 `Hardware/Collectors/HelperStorageReader.cs` (mine) turns that into the bytes my parsers read: it asks through the frozen
 `IHelperClient` with `new HelperRequest(op, "", "") { DriveNumber = n }`, accepts only `Ok` with exactly 512-byte sectors,
@@ -69,6 +92,12 @@ Notes for the integrator and front ends:
   on this PC, as administrator and as a standard user; the standard-user run reports `Denied` for SATA, as designed.
 
 ## 5. Privacy: what the redactor needs to know
+
+> **Integrator note (0a79a17).** `SimpleRedactor` now also blanks `volumes[].label`, `audio[].name` and `usb[].name` **by
+> their place in the tree** (an array is `[]`; the `value` of a `Value<T>` is not a step), not by the global keys `label` /
+> `name`, which would blank unrelated fields. An empty label stays empty, and a name that could not be read keeps its status.
+> A reflection test fails when a model field called `Label` appears that no path covers. Not covered: the network adapter's
+> own name, `DisplayDetails.MonitorName` and `AudioDetails.Adapter`.
 
 `SimpleRedactor` blanks by JSON key name. Hardware fields that can identify a person or a place, and the key each uses:
 
@@ -127,5 +156,8 @@ process names.
 - AMD integrated GPU power: ADLX answers a number (about 1 to 60 W within seconds on an idle desktop, moving with the system
   load more than with graphics load). The value is shown with the note "the AMD driver's GPU power value; the board total is not
   reported". Its true meaning for an APU is not confirmed, so the front end should show that note next to it (or hide it).
+  **Integrator (82ec41b):** done. `GpuPowerSource.DriverReport` names the `Value.Source`; the Performance page shows such a number
+  only in the GPU's own fact list, captioned "Power (driver report)" with the ja/en note as its tip. The left list, the headline
+  and the CLI perf summary carry no power from it. NVML readings and the ADLX board total stay plain. The Hardware page has no live power row.
 - NVIDIA values were compared with `nvidia-smi` on this PC (temperature, power, limit, fan, clocks, PCIe link, VBIOS, driver):
   they match; instantaneous values differ by what one sample interval changes (27.2 W against 27.7 W).

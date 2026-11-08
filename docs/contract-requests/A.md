@@ -3,6 +3,19 @@
 Nothing here has been applied. Every item that touches a frozen contract is an exact proposed diff for the integrator.
 Items marked "note" change no contract; they tell B, C, D, E what area A actually serves.
 
+> **Integration status (branch `integrate`).** The two paragraphs above describe the state when A wrote this file.
+>
+> | Item | Result | Commit |
+> |---|---|---|
+> | 1. `ProcessGroup` on `ProcessInfo` | **Declined.** The verdict is asynchronous (`NotCollected` while it is worked out), so a copy inside a snapshot would be a tick stale; it would add about 100 bytes per process to every snapshot, history entry and MCP reply. The live lookup is the contract instead. | fe5740e |
+> | 2. `IProcessGroupSource`, `IProcessIconSource`, `ProcessGroup` | Moved into `Core/Contracts` (same namespace). `PcMieruServices.ProcessGroups` / `ProcessIcons` expose them; the GUI uses them for grouping and the program icons. | fe5740e |
+> | 2. `SamplerLoop` | Registered by `CollectionModule` in both modes and reachable as `PcMieruServices.Sampler`. The GUI pump is a view of the loop; reports and diagnosis read `SamplerLoop.History`. `ISamplerControl` / `SamplerLoop` stay public in `Core/Collection`. | 02d95f7 |
+> | 3. "No status carrier on lists" | Applied in another form: `SystemInfo` has `DisksState` / `NicsState` / `GpusState` (`Value<int>`) beside the lists instead of wrapping the lists. Fixtures regenerated, only those three objects added. | 4b17b5d |
+> | 4. Sampler cost | No change by the integrator (the default interval is still B's / SPEC's decision). | - |
+> | 5. `ForceFakes` in shared tests | Kept everywhere. | - |
+>
+> Not done: the GUI never sets `GpuDefaultOn = false` (section 2 recommends it), so the GPU counters are sampled all the time.
+
 ## 1. Request: `ProcessGroup` on `ProcessInfo` (optional, not needed to ship)
 
 Today grouping (SPEC 5.2: Apps / Windows processes / Background processes) is answered by `IProcessGroupSource`, a type

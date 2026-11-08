@@ -4,6 +4,18 @@ Nothing here has been applied. B edited nothing in `Core/Contracts/`, `Core/Loca
 `PcMieruJsonContext.cs`, any csproj, props, slnx, CI or tools. No NuGet package is needed. Every item below says what the
 GUI does today without the change (the "local workaround"), so none of them blocks the merge. Items 1 and 2 give the most.
 
+> **Integration status (branch `integrate`).** "Nothing here has been applied" was true when B wrote the file. Now:
+>
+> | Item | Result | Commit |
+> |---|---|---|
+> | 1. Icons, grouping, sampler loop | Applied as proposed: the three types moved into `Core/Contracts`; the process list and detail pane show program icons (path-keyed, bounded, off-thread cache) and group by `IProcessGroupSource`, the local rule is only the fallback while the source cannot answer. `SamplerLoop` is `PcMieruServices.Sampler` and the GUI pump is a view of it. | fe5740e, 02d95f7 |
+> | 2. Per-call redaction, honest `Redacted` | Applied, a little wider than proposed: `IRedactor.RedactText/RedactJson(.., bool redact)` and `IReportBuilder.RenderMarkdown/RenderJson` are default members; `ReportDocument.Redacted` is stamped with what the render really did. Volume label, audio name and USB name are blanked by their place in the tree, so the Markdown is covered too. The CLI report and the GUI use them instead of the local workaround. | 0a79a17 |
+> | 3. CPU affinity | Applied in the GUI through D's `IProcessAffinityControl` (already in the tree), not through a new `IProcessControl` member: "Set CPU affinity..." check-list dialog, "back to all", protected processes refused before the dialog and again by the API. No `AffinityMask` in `ProcessDetails`, so the detail pane still has no affinity line. | a7b686c |
+> | 4. CPU temperature | Contract added (`CpuInfo.TemperatureC`, trailing init property). The real sampler answers `Unsupported` with a reason, because no kernel driver is shipped; there is no GUI row for it. | 4eac55b |
+> | 5. `PeekMany` | Applied (default member returns null for every key; `ProcessMetadataProvider` answers from its caches and starts the rest in the background). No GUI column uses it yet. | 1e482d0 |
+> | 6. Hardware cache invalidation | Applied: `MainForm.WndProc` calls `IHardwareProvider.Invalidate()` on `WM_DEVICECHANGE`. The Hardware page does not reload by itself; the next read is fresh. | a3935df |
+> | 7. One sampler, two consumers | Resolved: reports and diagnosis read the loop's `History` while it runs; otherwise (pcmi, MCP, paused) they sample the source themselves. The "largest unverified point" is covered by `ReportFromLoopTests` (a counting source proves nothing else samples) and a smoke check. | 02d95f7 |
+
 ## 1. Request: process icons, grouping and the sampler loop live outside the contracts
 
 A's area (see `A/docs/contract-requests/A.md` section 2) registers three public types that are not in `Core/Contracts/`:

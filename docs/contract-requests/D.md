@@ -4,6 +4,19 @@ Nothing in Core/Contracts, Core/Localization, Core/Services, PcMieruJsonContext.
 Directory.Packages.props, the slnx, CI or tools/ was edited. No new NuGet package. No change to tools/publish.ps1
 is needed (see 5). The requests below are small and none of them blocks the merge.
 
+> **Integration status (branch `integrate`).**
+>
+> | Item | Result | Commit |
+> |---|---|---|
+> | 1. `ForceFakes` in tests | Kept everywhere. | - |
+> | 2. `IProcessAffinityControl` | Used by the GUI's "Set CPU affinity..." menu item (B.md 3). The other three interfaces (`IElevatedProcessActions`, `IShellActions`, `IStartupUndo`) are as D left them; the integrator added no GUI for them. | a7b686c |
+> | 3. `smart-read` / `nvme-health` data keys | C's reader now uses `HelperDataKeys.*`. The Helper gained one more operation, `disk-health-all` (see C.md 4): a validated drive list, one UAC prompt for all drives, per-drive keys under `drive.<n>.`. `smart-read` and `nvme-health` are unchanged. | f2b2df1 |
+> | 4. Helper project | Published with NativeAOT by `tools/publish.ps1`: 1886 KB, load flags 0x800, imports only system DLLs (ADVAPI32, bcrypt, KERNEL32, ole32, api-ms-win-crt-*), no `publish.ps1` change was needed for the new operation. | f2b2df1 |
+> | Publish check | `tools/publish.ps1 -Version 0.1.0-int -Verify` passes on this PC: `pcmi version`, `ps --json`, `hw --json`, the MCP handshake (7 tools) and `PCMieru.exe --smoke` (285 checks). The Helper itself is never started by the script. | baac9c2 |
+>
+> Still true from section 5: the elevated paths (UAC prompt, service operations, Explorer restart, `runas` of a task, HKLM
+> StartupApproved writes) were never run for real, because the integration was done on the owner's PC with no UAC prompt allowed.
+
 ## 1. REQUIRED for the integrator: tests that call management operations must use ForceFakes
 
 `ManagementModule.Register` now fills the slots with REAL implementations unless `PcMieruOptions.ForceFakes` is set.

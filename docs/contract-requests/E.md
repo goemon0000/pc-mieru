@@ -2,6 +2,15 @@
 
 Only one change to a frozen contract is wanted. Everything else E needed fitted inside its own folders.
 
+> **Integration status (branch `integrate`).**
+>
+> | Item | Result | Commit |
+> |---|---|---|
+> | 1. `GpuInfo.TemperatureLimitC` | Applied as proposed (trailing init property, default `NotCollected` / source `none`). The SensorHost reads the NVML slowdown threshold (`nvmlDeviceGetTemperatureThreshold`, type 1) and `GpuSensorMerge` puts it on the GPU with its own status; `ObservationRules` prefers it and keeps `IGpuTemperatureLimits` as the fallback. Read as 87 C on the NVIDIA GPU of this PC. Golden fixtures regenerated (additive keys only). The AMD iGPU stays without a limit. | 4eac55b |
+> | 2. Notes | No change. The MCP boundary is unchanged: the server still takes only `IReadOnlyInsights` and `IRedactor`. MCP still has no per-call redaction switch (the per-call members of `IRedactor` / `IReportBuilder` are for the CLI report and the GUI; see ARCHITECTURE.md section 5). | 0a79a17 |
+>
+> Findings from E's checks on the merged tree and what became of them: duplicate DIMM names (6a1ddf3), TOSHIBA attribute 194 in the `pcmi health` table (d29fa79), Wi-Fi rows on wired adapters in `pcmi hw` (de27a10). The MCP server ignores a leading BOM on the first message (baac9c2).
+
 ## 1. `GpuInfo.TemperatureLimitC` (wanted, not blocking)
 
 **Why.** SPEC section 6 has the observation "GPU temperature is close to the limit the vendor API reports". The rule
