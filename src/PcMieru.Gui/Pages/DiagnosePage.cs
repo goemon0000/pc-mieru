@@ -5,8 +5,9 @@ using PcMieru.Core.Reporting;
 namespace PcMieru.Gui;
 
 /// <summary>
-/// The diagnostic report: watch the PC for a chosen number of seconds, then show a report (Markdown or JSON) that can be copied
-/// or saved. Personal data is hidden by default and the page says which it is. The app never sends the report anywhere:
+/// The diagnostic report: watch the PC for a chosen number of seconds, then show a report that can be copied or saved. It opens
+/// as a formatted preview; the Markdown source and the JSON are one click away. The preview is drawn from the same Markdown that
+/// Copy and Save give, so the three never differ. Personal data is hidden by default and the page says which it is. The app never sends the report anywhere:
 /// copying and saving are the only ways out, and the user decides where it goes.
 /// </summary>
 internal sealed class DiagnosePage : PageBase
@@ -19,19 +20,23 @@ internal sealed class DiagnosePage : PageBase
     private readonly Label _durationLabel = new() { AutoSize = true, Name = "diagnoseDurationLabel" };
     private readonly ComboBox _duration = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "diagnoseDuration", Width = 110 };
     private readonly Button _start = new() { AutoSize = true, Name = "diagnoseStart" };
-    private readonly RadioButton _viewMarkdown = new() { AutoSize = true, Name = "diagnoseViewMarkdown", Checked = true, Text = "Markdown" };
-    private readonly RadioButton _viewJson = new() { AutoSize = true, Name = "diagnoseViewJson", Text = "JSON" };
+    private readonly ToggleButton _viewPreview = new() { Name = "diagnoseViewPreview" };
+    private readonly ToggleButton _viewMarkdown = new() { Name = "diagnoseViewMarkdown", Text = "Markdown" };
+    private readonly ToggleButton _viewJson = new() { Name = "diagnoseViewJson", Text = "JSON" };
+    private readonly FlowLayoutPanel _views = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Name = "diagnoseViews" };
     private readonly CheckBox _redact = new() { AutoSize = true, Name = "diagnoseRedact", Checked = true };
     private readonly Button _copy = new() { AutoSize = true, Enabled = false, Name = "diagnoseCopy" };
     private readonly Button _save = new() { AutoSize = true, Enabled = false, Name = "diagnoseSave" };
     private readonly ToneLabel _intro = new() { AutoSize = false, Name = "diagnoseIntro" };
     private readonly Label _state = new() { AutoSize = true, Name = "diagnoseState", Margin = new Padding(0, 0, 16, 0) };
     private readonly ToneLabel _pii = new() { AutoSize = true, Name = "diagnosePii" };
-    private readonly TextBox _text = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Name = "diagnoseText", BorderStyle = BorderStyle.None };
+    private readonly TextBox _text = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Name = "diagnoseText", BorderStyle = BorderStyle.None, Visible = false };
+    private readonly ReportPreviewBox _preview = new() { Dock = DockStyle.Fill, Name = "diagnosePreview" };
     private readonly ToolTip _tips = new() { ShowAlways = true };
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 1000 };
 
     private Font? _mono;
+    private DiagnoseView _view = DiagnoseView.Preview;
     private CancellationTokenSource? _running;
     private ReportDocument? _document;
     private DateTime _startedUtc;
@@ -53,8 +58,14 @@ internal sealed class DiagnosePage : PageBase
             Context.Settings.SetBool("diag.redact", _redact.Checked);
             Render();
         };
-        _viewMarkdown.CheckedChanged += (_, _) => Render();
-        _viewJson.CheckedChanged += (_, _) => Render();
+        if (Enum.TryParse<DiagnoseView>(context.Settings.GetValue("diag.view"), out var saved) && Enum.IsDefined(saved))
+        {
+            _view = saved;
+        }
+
+        _viewPreview.Click += (_, _) => SetView(DiagnoseView.Preview);
+        _viewMarkdown.Click += (_, _) => SetView(DiagnoseView.Markdown);
+        _viewJson.Click += (_, _) => SetView(DiagnoseView.Json);
         _start.MinimumSize = new Size(Px(120), Px(30));
         _copy.MinimumSize = new Size(Px(88), Px(30));
         _save.MinimumSize = new Size(Px(88), Px(30));
@@ -65,27 +76,41 @@ internal sealed class DiagnosePage : PageBase
         _duration.Width = Px(110);
         _intro.SetTone(CellTone.Dim);
 
+        var pad = Px(12);
+        foreach (var toggle in new[] { _viewPreview, _viewMarkdown, _viewJson })
+        {
+            toggle.Margin = new Padding(0, 0, Px(4), 0);
+            toggle.Padding = new Padding(Px(6), 0, Px(6), 0);
+            toggle.MinimumSize = new Size(0, Px(30));
+            _views.Controls.Add(toggle);
+        }
+
+        _views.Margin = new Padding(0);
+        _viewPreview.TabIndex = 0;
+        _viewMarkdown.TabIndex = 1;
+        _viewJson.TabIndex = 2;
         _start.TabIndex = 1;
         _duration.TabIndex = 0;
-        _viewMarkdown.TabIndex = 2;
-        _viewJson.TabIndex = 3;
-        _redact.TabIndex = 4;
-        _copy.TabIndex = 5;
-        _save.TabIndex = 6;
-        _text.TabIndex = 7;
+        _views.TabIndex = 2;
+        _redact.TabIndex = 3;
+        _copy.TabIndex = 4;
+        _save.TabIndex = 5;
+        _text.TabIndex = 6;
+        _preview.TabIndex = 7;
 
-        var pad = Px(12);
-        var bar = PageLayout.Bar("diagnoseBar", pad, [_durationLabel, _duration, _start], [_viewMarkdown, _viewJson, _redact, _copy, _save]);
+        var bar = PageLayout.Bar("diagnoseBar", pad, [_durationLabel, _duration, _start], [_views, _redact, _copy, _save]);
         _intro.Dock = DockStyle.Top;
         _intro.Height = Px(34);
         _intro.Padding = new Padding(pad, 0, pad, 0);
         _intro.TextAlign = ContentAlignment.MiddleLeft;
 
         Controls.Add(_text);
+        Controls.Add(_preview);
         Controls.Add(PageLayout.Footer("diagnoseFooter", pad, _state, _pii));
         Controls.Add(_intro);
         Controls.Add(bar);
         UpdateMonoFont();
+        ShowView();
         FillDurations(DefaultSeconds);
         ApplyLanguage();
     }
@@ -96,15 +121,23 @@ internal sealed class DiagnosePage : PageBase
 
     internal CheckBox RedactBox => _redact;
 
-    internal RadioButton MarkdownView => _viewMarkdown;
+    internal ToggleButton PreviewView => _viewPreview;
 
-    internal RadioButton JsonView => _viewJson;
+    internal ToggleButton MarkdownView => _viewMarkdown;
+
+    internal ToggleButton JsonView => _viewJson;
 
     internal Button CopyButton => _copy;
 
     internal Button SaveButton => _save;
 
-    internal TextBox TextView => _text;
+    /// <summary>The text box that is showing the report now: the preview, or the plain text of the Markdown or JSON view.</summary>
+    internal TextBoxBase TextView => _view == DiagnoseView.Preview ? _preview : _text;
+
+    internal DiagnoseView View => _view;
+
+    /// <summary>What Copy and Save give now: Markdown in the preview and the Markdown view, JSON in the JSON view.</summary>
+    internal string ExportText => CurrentText();
 
     internal ReportDocument? Document => _document;
 
@@ -150,6 +183,11 @@ internal sealed class DiagnosePage : PageBase
         _save.Text = Strings.Get("gui.common.save");
         _intro.Text = Strings.Get("gui.diag.intro");
         _text.AccessibleName = Strings.Get("gui.nav.diagnose");
+        _preview.AccessibleName = Strings.Get("gui.nav.diagnose");
+        _viewPreview.Text = Strings.Get("gui.diag.view.preview");
+        _tips.SetToolTip(_viewPreview, Strings.Get("gui.diag.view.preview.tip"));
+        _tips.SetToolTip(_viewMarkdown, Strings.Get("gui.diag.view.markdown.tip"));
+        _tips.SetToolTip(_viewJson, Strings.Get("gui.diag.view.json.tip"));
         _duration.AccessibleName = Strings.Get("gui.diag.seconds");
         Render();
     }
@@ -159,6 +197,8 @@ internal sealed class DiagnosePage : PageBase
         base.OnFontChanged(e);
         UpdateMonoFont();
     }
+
+    public override void SaveState() => Context.Settings.SetValue("diag.view", _view.ToString());
 
     protected override void Dispose(bool disposing)
     {
@@ -278,24 +318,69 @@ internal sealed class DiagnosePage : PageBase
         _duration.EndUpdate();
     }
 
+    private void SetView(DiagnoseView view)
+    {
+        if (_view == view)
+        {
+            ShowView();
+            return;
+        }
+
+        _view = view;
+        ShowView();
+        Render();
+    }
+
+    /// <summary>Which of the two boxes is on screen, and which switch is pressed.</summary>
+    private void ShowView()
+    {
+        _viewPreview.Checked = _view == DiagnoseView.Preview;
+        _viewMarkdown.Checked = _view == DiagnoseView.Markdown;
+        _viewJson.Checked = _view == DiagnoseView.Json;
+        _preview.Visible = _view == DiagnoseView.Preview;
+        _text.Visible = _view != DiagnoseView.Preview;
+    }
+
     /// <summary>Shows the report in the chosen form, or the hint while there is none.</summary>
     private void Render()
     {
-        var json = _viewJson.Checked;
+        var json = _view == DiagnoseView.Json;
         var has = _document is not null;
         _copy.Enabled = has;
         _save.Enabled = has;
+        var format = json ? "JSON" : "Markdown";
+        _tips.SetToolTip(_copy, Strings.Format("gui.diag.copy.tip", Fmt.Dict(("format", format))));
+        _tips.SetToolTip(_save, Strings.Format("gui.diag.save.tip", Fmt.Dict(("format", format))));
         _text.WordWrap = !json;
         _text.ScrollBars = json ? ScrollBars.Both : ScrollBars.Vertical;
         if (_document is { } document)
         {
-            _text.Text = BuildText(document, json, Redacting, Context.Services.Reports, Strings.Current).Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal);
+            // The preview is drawn from the Markdown that Copy and Save give, so what is shown is what is copied.
+            var text = BuildText(document, json, Redacting, Context.Services.Reports, Strings.Current);
+            if (_view == DiagnoseView.Preview)
+            {
+                _preview.ShowMarkdown(text);
+            }
+            else
+            {
+                _text.Text = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal);
+            }
+
             _pii.SetTone(Redacting ? CellTone.Dim : CellTone.Accent);
             _pii.Text = Strings.Get(Redacting ? "gui.diag.pii.on" : "gui.diag.pii.off");
         }
         else
         {
-            _text.Text = _failed ? Strings.Format("gui.diag.failed", Fmt.Dict(("error", _failure ?? string.Empty))) : Strings.Get("gui.diag.empty");
+            var hint = _failed ? Strings.Format("gui.diag.failed", Fmt.Dict(("error", _failure ?? string.Empty))) : Strings.Get("gui.diag.empty");
+            if (_view == DiagnoseView.Preview)
+            {
+                _preview.ShowPlain(hint);
+            }
+            else
+            {
+                _text.Text = hint;
+            }
+
             _pii.Text = string.Empty;
         }
     }
@@ -309,7 +394,7 @@ internal sealed class DiagnosePage : PageBase
     }
 
     private string CurrentText() =>
-        _document is { } document ? BuildText(document, _viewJson.Checked, Redacting, Context.Services.Reports, Strings.Current) : string.Empty;
+        _document is { } document ? BuildText(document, _view == DiagnoseView.Json, Redacting, Context.Services.Reports, Strings.Current) : string.Empty;
 
     private void CopyReport()
     {
@@ -328,11 +413,12 @@ internal sealed class DiagnosePage : PageBase
             return;
         }
 
-        var ext = _viewJson.Checked ? "json" : "md";
+        var json = _view == DiagnoseView.Json;
+        var ext = json ? "json" : "md";
         using var dialog = new SaveFileDialog
         {
             Title = Strings.Get("gui.diag.save.title"),
-            Filter = Strings.Get(_viewJson.Checked ? "gui.diag.filter.json" : "gui.diag.filter.md"),
+            Filter = Strings.Get(json ? "gui.diag.filter.json" : "gui.diag.filter.md"),
             FileName = "pcmieru-report-" + DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + "." + ext,
             DefaultExt = ext,
             AddExtension = true,
@@ -362,11 +448,25 @@ internal sealed class DiagnosePage : PageBase
     }
 }
 
+/// <summary>The three ways to look at the report. Preview is the default; Copy and Save give Markdown in it.</summary>
+internal enum DiagnoseView
+{
+    Preview,
+    Markdown,
+    Json,
+}
+
 /// <summary>Strings of the Report page.</summary>
 internal static class DiagnoseStrings
 {
     public static readonly StringEntry[] All =
     [
+        new("gui.diag.view.preview", "プレビュー", "Preview"),
+        new("gui.diag.view.preview.tip", "読みやすく整えた表示です。コピーと保存は Markdown の文章になります", "A readable view. Copy and Save use the Markdown text"),
+        new("gui.diag.view.markdown.tip", "コピー・保存される元の文章です。相談に貼り付けるときはこれです", "The source text that is copied and saved. This is what to paste when asking for help"),
+        new("gui.diag.view.json.tip", "プログラムが読むための形式です。人に見せるなら Markdown が向いています", "A form for programs to read. Markdown suits showing it to a person better"),
+        new("gui.diag.copy.tip", "{format} の文章をクリップボードへコピーします", "Copies the {format} text to the clipboard"),
+        new("gui.diag.save.tip", "{format} の文章をファイルに保存します", "Saves the {format} text to a file"),
         new("gui.diag.intro", "PC の様子をしばらく見て、困りごとの相談に貼り付けられるレポートを作ります。このアプリから外へ送ることはありません。", "Watches the PC for a while and writes a report you can paste when asking for help. This app never sends it anywhere."),
         new("gui.diag.seconds", "観察する長さ", "Watch for"),
         new("gui.diag.sec", "{seconds} 秒", "{seconds} s"),

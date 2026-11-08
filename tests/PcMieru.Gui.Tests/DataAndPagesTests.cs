@@ -384,6 +384,31 @@ public class DataAndPagesTests
         Assert.Equal(DiagnosePage.BuildText(document, true, false, builder, Language.Ja), DiagnosePage.BuildText(document, true, false, builder, Language.En));
     }
 
+    [Fact]
+    public async Task The_preview_of_the_real_report_drops_the_Markdown_marks_and_keeps_the_text()
+    {
+        var document = await ReportAsync();
+        var builder = BuilderWith(new SpyRedactor(true));
+        foreach (var language in new[] { Language.Ja, Language.En })
+        {
+            var markdown = DiagnosePage.BuildText(document, false, true, builder, language);
+            var blocks = ReportPreview.Parse(markdown);
+            var preview = ReportPreview.PlainText(blocks);
+            Assert.Equal(1, blocks.Count(b => b.Kind == PreviewKind.Title));
+            Assert.True(blocks.Count(b => b.Kind == PreviewKind.Heading) >= 4);
+            Assert.Contains(blocks, b => b.Kind == PreviewKind.TableHeader);
+            Assert.DoesNotContain("`", preview, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n## ", "\n" + preview, StringComparison.Ordinal);
+            Assert.DoesNotContain("|---", preview, StringComparison.Ordinal);
+
+            // Nothing is lost: every plain word of the Markdown is in the preview (marks aside).
+            var words = markdown.Replace("`", string.Empty, StringComparison.Ordinal).Split([' ', '\n', '|'], StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.All(char.IsLetterOrDigit)).ToList();
+            Assert.NotEmpty(words);
+            Assert.All(words, word => Assert.Contains(word, preview, StringComparison.Ordinal));
+        }
+    }
+
     // ---- Hardware text ----
 
     [Fact]

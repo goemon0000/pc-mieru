@@ -358,6 +358,10 @@ internal static class SmokeRun
             Check("report: a report was generated", diagnose.Document is not null && diagnose.TextView.Text.Length > 100, diagnose.TextView.Text.Length + " characters");
             Check("report: it is not running any more", !diagnose.IsRunning);
             Check("report: no missing strings in the text", !SmokeText.IsPlaceholder(diagnose.TextView.Text), string.Empty);
+            var shown = diagnose.TextView.Text;
+            Check("report: the formatted preview is what opens first", diagnose.View == DiagnoseView.Preview && diagnose.PreviewView.Checked && !diagnose.MarkdownView.Checked && !diagnose.JsonView.Checked);
+            Check("report: the preview has no Markdown marks left in it", !shown.Contains("## ", StringComparison.Ordinal) && !shown.Contains('`', StringComparison.Ordinal) && !shown.Contains("|---", StringComparison.Ordinal), Excerpt(shown));
+            Check("report: Copy and Save give the Markdown text, not the preview", diagnose.ExportText.StartsWith("# ", StringComparison.Ordinal) && diagnose.ExportText.Contains("\n## ", StringComparison.Ordinal), Excerpt(diagnose.ExportText));
             if (shotsDirectory is not null)
             {
                 var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
@@ -381,6 +385,20 @@ internal static class SmokeRun
                 context.SetTheme(theme);
                 await Task.Delay(150).ConfigureAwait(true);
             }
+
+            // The other two forms: the Markdown source (what Copy gives) and JSON; the preview comes back at the end.
+            diagnose.MarkdownView.PerformClick();
+            Check("report: the Markdown view shows the source text", diagnose.View == DiagnoseView.Markdown && diagnose.MarkdownView.Checked && !diagnose.PreviewView.Checked && diagnose.TextView.Text.StartsWith("# ", StringComparison.Ordinal) && diagnose.TextView.Text.Contains("## ", StringComparison.Ordinal), Excerpt(diagnose.TextView.Text));
+            if (shotsDirectory is not null)
+            {
+                var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
+                _shots.Add(await Capture(shotsDirectory, $"{Strings.Current.ToString().ToLowerInvariant()}-{(context.Theme.IsDark ? "dark" : "light")}-diagnose-markdown{scale}.png"));
+            }
+
+            diagnose.JsonView.PerformClick();
+            Check("report: the JSON view shows JSON", diagnose.View == DiagnoseView.Json && diagnose.TextView.Text.TrimStart().StartsWith('{') && diagnose.ExportText.TrimStart().StartsWith('{'), Excerpt(diagnose.TextView.Text));
+            diagnose.PreviewView.PerformClick();
+            Check("report: back to the preview", diagnose.View == DiagnoseView.Preview && diagnose.TextView.Text.Length > 100 && !diagnose.TextView.Text.Contains("## ", StringComparison.Ordinal), Excerpt(diagnose.TextView.Text));
         }
 
         /// <summary>
@@ -424,6 +442,12 @@ internal static class SmokeRun
         /// A window that was just switched to another page may still be half repainted (an off-screen window is painted
         /// lazily), so the picture is taken again until two takes in a row agree.
         /// </summary>
+        private static string Excerpt(string text)
+        {
+            var line = text.ReplaceLineEndings(" ");
+            return line.Length <= 60 ? line : line[..60] + "...";
+        }
+
         private async Task<string> Capture(string directory, string fileName)
         {
             Directory.CreateDirectory(directory);
