@@ -226,9 +226,14 @@ internal sealed class PdhSystemSampler : IDisposable
             return Value.Unsupported<double>(ClockSource, "counter not available");
         }
 
-        if (!primed || !TryReadTotal(_frequency, out var freq) || !TryReadTotal(_performance, out var perf))
+        if (!primed)
         {
-            return Value.NotCollected<double>(ClockSource, primed ? "counter returned no data" : "no baseline yet (first sample)");
+            return Value.NotCollected<double>(ClockSource, "no baseline yet (first sample)");
+        }
+
+        if (!TryReadTotal(_frequency, out var freq, out var why) || !TryReadTotal(_performance, out var perf, out why))
+        {
+            return Value.NotCollected<double>(ClockSource, why);
         }
 
         // Task Manager's "Speed": the nominal frequency scaled by how far the cores are above or below it (boost goes past 100 %).
@@ -238,21 +243,30 @@ internal sealed class PdhSystemSampler : IDisposable
             : Value.NotCollected<double>(ClockSource, "counter returned no data");
     }
 
-    private bool TryReadTotal(nint counter, out double value)
+    private bool TryReadTotal(nint counter, out double value, out string why)
     {
         value = 0;
+        why = "counter returned no data";
         if (!_reader.Read(counter))
         {
+            why = $"counter read failed (PDH 0x{_reader.Status:X8})";
             return false;
         }
 
         for (var i = 0; i < _reader.Count; i++)
         {
-            if (_reader.TryGet(i, out _, out var v, out var cstatus) && cstatus is Pdh.CStatusValidData or Pdh.CStatusNewData)
+            if (!_reader.TryGet(i, out _, out var v, out var cstatus))
+            {
+                continue;
+            }
+
+            if (cstatus is Pdh.CStatusValidData or Pdh.CStatusNewData)
             {
                 value = v;
                 return true;
             }
+
+            why = $"counter returned no data (status 0x{cstatus:X8})";
         }
 
         return false;

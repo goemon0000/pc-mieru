@@ -42,6 +42,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
     private readonly GuardedStage<PdhSystemReading> _pdhStage = new();
     private readonly GuardedStage<IReadOnlyList<NicInfo>> _nicStage = new();
     private readonly GuardedStage<GpuReading> _gpuStage = new();
+    private readonly GuardedStage<WindowProbeResult> _windowStage = new();
 
     private byte[] _buffer = GC.AllocateUninitializedArray<byte>(InitialBufferBytes, pinned: true);
     private ProcessRates[] _rates = new ProcessRates[512];
@@ -138,6 +139,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         _ = _pdhStage.Start(RunPdhStage);
         _ = _nicStage.Start(RunNicStage);
         _ = _gpuStage.Start(() => RunGpuStage(gpuActive));
+        _ = _windowStage.Start(WindowProbe.Probe);
 
         var length = ReadProcessBuffer();
         var stamp = Stopwatch.GetTimestamp();
@@ -167,7 +169,8 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         var pdh = JoinPdh(timeout);
         var nics = JoinNics(timeout);
         var gpu = JoinGpu(timeout, gpuActive);
-        var processes = BuildProcesses(gpu);
+        var windows = JoinWindows(timeout);
+        var processes = BuildProcesses(gpu, windows);
 
         var nominal = (int)_control.EffectiveInterval.TotalMilliseconds;
         var intervalMs = _hasPrevious ? (int)Math.Max(1, Math.Round(elapsedSeconds * 1000)) : nominal;
@@ -260,6 +263,19 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         return new GpuTick(merged, reading, ValueStatus.NotCollected, null);
     }
 
+    private WindowsTick JoinWindows(TimeSpan timeout)
+    {
+        if (_windowStage.TryJoin(timeout, out var result, out var failure, out var failureStatus) && result is not null)
+        {
+            return new WindowsTick(result, ValueStatus.Ok, null);
+        }
+
+        return new WindowsTick(null, failureStatus, "window enumeration: " + failure);
+    }
+
+    /// <summary>The window part of a tick; <see cref="Result"/> is null when the enumeration failed, with the reason.</summary>
+    private sealed record WindowsTick(WindowProbeResult? Result, ValueStatus FailureStatus, string? FailureDetail);
+
     /// <summary>The GPU part of a tick: the adapters for SystemInfo and what the per-process column needs.</summary>
     private sealed record GpuTick(IReadOnlyList<GpuInfo> Gpus, GpuReading? Reading, ValueStatus FailureStatus, string? FailureDetail);
 
@@ -288,7 +304,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
             : new Value<double>(0, ValueStatus.Ok, GpuProcessSource, "no GPU engine instance for this process");
     }
 
-    private ProcessInfo[] BuildProcesses(GpuTick gpu)
+    private ProcessInfo[] BuildProcesses(GpuTick gpu, WindowsTick windows)
     {
         _createByPid.Clear();
         foreach (var p in _raw)
@@ -319,9 +335,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
                 rates.ReadPerSec,
                 rates.WritePerSec,
                 ProcessGpu(p.Pid, rates, gpu),
-                p.AllThreadsSuspended
-                    ? Value.Ok(ProcessState.Suspended, "thread wait reason")
-                    : Value.Ok(ProcessState.Running, "thread wait reason"));
+                ProcessStateRule.Decide(p.AllThreadsSuspended, p.Pid, windows.Result, windows.FailureStatus, windows.FailureDetail));
         }
 
         return result;
