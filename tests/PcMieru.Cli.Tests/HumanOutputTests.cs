@@ -406,6 +406,25 @@ public sealed class HumanOutputTests
     }
 
     [Fact]
+    public void Health_sata_temperature_attribute_shows_the_temperature_byte_not_the_packed_48_bit_number()
+    {
+        // A TOSHIBA drive at 29 degrees reports the minimum and maximum in the bytes above the current value.
+        var packed = new SmartAttribute(194, "Temperature_Celsius", 100, 100, 0, new U128(184685035549UL), false);
+        var plain = new SmartAttribute(190, "Airflow_Temperature", 64, 60, 45, new U128(36UL), false);
+        var counter = new SmartAttribute(9, "Power_On_Hours", 60, 60, 0, new U128(184685035549UL), false);
+        var health = Nvme() with { Kind = StorageHealthKind.Sata, Attributes = [packed, plain, counter] };
+
+        var text = HealthCommand.Render(Context(), new StorageHealthReport("1", [new DriveHealth(2, "Disk C", Value.Ok(health, "test"))]), elevated: false);
+
+        var row194 = Assert.Single(Lines(text), l => l.TrimStart().StartsWith("194 ", StringComparison.Ordinal));
+        Assert.EndsWith("29 °C", row194.TrimEnd(), StringComparison.Ordinal);
+        Assert.DoesNotContain("184685035549", row194, StringComparison.Ordinal);
+        Assert.EndsWith("36 °C", Assert.Single(Lines(text), l => l.TrimStart().StartsWith("190 ", StringComparison.Ordinal)).TrimEnd(), StringComparison.Ordinal);
+        Assert.EndsWith("184685035549", Assert.Single(Lines(text), l => l.TrimStart().StartsWith("9 ", StringComparison.Ordinal)).TrimEnd(), StringComparison.Ordinal);
+        Assert.Equal(184685035549UL, (ulong)packed.Raw.Value); // the stored value is untouched
+    }
+
+    [Fact]
     public void Health_with_no_drives_says_so_and_a_hostile_model_name_is_neutralised()
     {
         var empty = HealthCommand.Render(Context(), new StorageHealthReport("1", []), elevated: false);

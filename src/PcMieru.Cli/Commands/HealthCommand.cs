@@ -147,6 +147,16 @@ public sealed class HealthCommand : ICliCommand
             ("days", CliText.Num(Math.Round(value / 24), "0")));
     }
 
+    /// <summary>
+    /// The raw column. Temperature attributes (190, 194) are shown as the temperature: many drives pack the current value in
+    /// the low byte and the minimum and maximum in the bytes above, so the 48-bit number would read as 184685035549 for a
+    /// drive at 29 degrees. This is the same byte <c>StorageHealth.TemperatureC</c> uses, and the JSON keeps the full raw value.
+    /// </summary>
+    internal static string RawText(SmartAttribute attribute) =>
+        attribute.Id is 190 or 194
+            ? CliText.Num((double)(ulong)(attribute.Raw.Value & 0xFF), "0") + " °C"
+            : attribute.Raw.ToString();
+
     private static string AttributeTable(CliContext context, IReadOnlyList<SmartAttribute> attributes)
     {
         string[] headers =
@@ -165,7 +175,7 @@ public sealed class HealthCommand : ICliCommand
             a.Current.ToString(CultureInfo.InvariantCulture),
             a.Worst.ToString(CultureInfo.InvariantCulture),
             a.Threshold.ToString(CultureInfo.InvariantCulture),
-            a.Raw.ToString(),
+            RawText(a),
         }).ToList();
         var table = CliTable.Render(headers, rows, new HashSet<int> { 0, 2, 3, 4, 5 }, flexColumn: 1, consoleWidth: Math.Max(0, context.ConsoleWidth - 2));
         return string.Concat(table.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => "  " + l + "\n"));
