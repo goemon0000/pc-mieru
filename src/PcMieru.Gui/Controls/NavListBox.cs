@@ -12,6 +12,7 @@ internal sealed class NavListBox : ListBox, IThemed
         IntegralHeight = false;
         Dock = DockStyle.Left;
         TabStop = true;
+        UpdateItemHeight();
     }
 
     public void ApplyTheme(Palette palette)
@@ -21,10 +22,25 @@ internal sealed class NavListBox : ListBox, IThemed
         Invalidate();
     }
 
+    // The row height must not wait for a font change: a window whose font equals the default never raises one.
+    private void UpdateItemHeight() => ItemHeight = Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(36));
+
     protected override void OnFontChanged(EventArgs e)
     {
         base.OnFontChanged(e);
-        ItemHeight = Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(36));
+        UpdateItemHeight();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        UpdateItemHeight();
+        base.OnHandleCreated(e);
+    }
+
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        UpdateItemHeight();
     }
 
     protected override void OnDrawItem(DrawItemEventArgs e)

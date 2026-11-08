@@ -5,6 +5,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        var startedAt = DateTime.Now;
         if (!GuiArgs.TryParse(args, out var options, out var problem))
         {
             MessageBox.Show(problem, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -40,7 +41,7 @@ internal static class Program
         Strings.Current = settings.Language;
 
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = options.ForceFakes });
-        using var pump = new SnapshotPump(services.Snapshots);
+        using var pump = new SnapshotPump(services.Snapshots, settings.IntervalMs);
         using var theme = new ThemeService(settings.Theme);
         var context = new GuiContext(services, pump, theme, settings);
         using var form = new MainForm(context);
@@ -53,7 +54,7 @@ internal static class Program
 
         if (options.SmokeOutput is { } output)
         {
-            return SmokeRun.Run(form, context, output, options.ScreenshotDirectory);
+            return SmokeRun.Run(form, context, output, options.ScreenshotDirectory, options.OnScreen, options.Dpi, startedAt);
         }
 
         Application.Run(form);
@@ -67,7 +68,9 @@ internal sealed record GuiOptions(
     string? Page,
     string? SmokeOutput,
     string? ScreenshotDirectory,
-    bool ForceFakes);
+    bool ForceFakes,
+    bool OnScreen = false,
+    int Dpi = 0);
 
 /// <summary>
 /// Command line of PCMieru.exe. These switches exist for verification (smoke run, screenshots, picking a page);
@@ -83,6 +86,8 @@ internal static class GuiArgs
         string? smoke = null;
         string? shots = null;
         var fakes = false;
+        var onScreen = false;
+        var dpi = 0;
         problem = string.Empty;
         options = new GuiOptions(null, null, null, null, null, false);
 
@@ -150,13 +155,24 @@ internal static class GuiArgs
                 case "--fakes":
                     fakes = true;
                     break;
+                case "--onscreen":
+                    onScreen = true;
+                    break;
+                case "--dpi":
+                    if (!int.TryParse(Next(), out dpi) || dpi is < 100 or > 300)
+                    {
+                        problem = "--dpi must be a scale percentage from 100 to 300";
+                        return false;
+                    }
+
+                    break;
                 default:
                     problem = "unknown argument: " + args[i];
                     return false;
             }
         }
 
-        options = new GuiOptions(language, theme, page, smoke, shots, fakes);
+        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi);
         return true;
     }
 }

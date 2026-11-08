@@ -353,7 +353,7 @@ internal sealed class GraphControl : Control, IThemed
     private Font? _bold;
     private Font? _small;
 
-    private Font BoldFont => _bold != null && _bold.Size == Font.Size && _bold.Name == Font.Name
+    private Font BoldFont => _bold != null && Math.Abs(_bold.Size - (Font.Size * 1.15f)) < 0.01f && _bold.Name == Font.Name
         ? _bold
         : _bold = new Font(Font.FontFamily, Font.Size * 1.15f, FontStyle.Bold);
 

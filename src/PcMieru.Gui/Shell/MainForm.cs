@@ -78,6 +78,13 @@ internal sealed class MainForm : Form
         ApplyLanguage();
     }
 
+    private bool _noActivate;
+
+    /// <summary>Unattended runs (smoke) must not take the keyboard focus: a stray key from another program would change the page under test.</summary>
+    internal void PreventActivation() => _noActivate = true;
+
+    protected override bool ShowWithoutActivation => _noActivate;
+
     public int PageCount => _pages.Length;
 
     public PageBase? CurrentPage => _current >= 0 ? _pages[_current] : null;

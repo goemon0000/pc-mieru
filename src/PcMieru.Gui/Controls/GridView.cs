@@ -67,6 +67,7 @@ internal class GridView : ListView, IThemed
     private readonly Dictionary<int, ListViewItem> _items = [];
     private Palette? _palette;
     private Color _selectedDim = Color.Gray;
+    private int _drawSelected = -1;
     private int _lastTipRow = -2;
     private int _lastTipColumn = -2;
     private int _sortColumn = -1;
@@ -381,7 +382,10 @@ internal class GridView : ListView, IThemed
             return;
         }
 
-        var selected = (e.State & ListViewItemStates.Selected) != 0;
+        // The state flags the native control hands to a virtual owner-drawn list mark every row as selected; the
+        // control's own selection (one row at most) is the truth.
+        _drawSelected = SelectedRow;
+        var selected = e.ItemIndex == _drawSelected;
         var header = RowStyles?.Invoke(e.ItemIndex) == RowStyle.Header;
         using var back = new SolidBrush(selected ? palette.Selection : header ? palette.Window : palette.Surface);
         e.Graphics.FillRectangle(back, e.Bounds);
@@ -402,7 +406,7 @@ internal class GridView : ListView, IThemed
         }
 
         var cell = Cells(e.ItemIndex, e.ColumnIndex);
-        var selected = (e.ItemState & ListViewItemStates.Selected) != 0;
+        var selected = e.ItemIndex == _drawSelected;
         var header = RowStyles?.Invoke(e.ItemIndex) == RowStyle.Header;
         var row = GetItemRect(e.ItemIndex, ItemBoundsPortion.Entire);
         var left = row.Left;

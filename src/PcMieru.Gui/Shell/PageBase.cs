@@ -25,6 +25,9 @@ internal abstract class PageBase : UserControl
 
     public string Title => Strings.Get(TitleKey);
 
+    /// <summary>False while the page waits for its first data (services, start-up items, parts). Smoke runs wait on it before a capture.</summary>
+    public virtual bool IsReady => true;
+
     public virtual void OnActivated()
     {
     }

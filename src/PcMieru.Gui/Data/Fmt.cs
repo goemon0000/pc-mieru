@@ -75,6 +75,15 @@ internal static class Fmt
     public static string Started(ProcessKey key) =>
         key.CreateTime > 0 ? key.StartedAtUtc.ToLocalTime().ToString("G", CultureInfo.CurrentCulture) : Dash;
 
+    /// <summary>The words for an operation code ("Denied" becomes a sentence a beginner can act on).</summary>
+    public static string OperationText(PcMieru.Wire.OperationCode code) => Strings.Get("gui.op.code." + code);
+
+    /// <summary>"target: result" with the message in brackets when there is one.</summary>
+    public static string OperationLine(string target, OperationResult result) =>
+        string.IsNullOrWhiteSpace(result.Message)
+            ? Strings.Format("gui.op.result", Dict(("target", target), ("result", OperationText(result.Code))))
+            : Strings.Format("gui.op.result.detail", Dict(("target", target), ("result", OperationText(result.Code)), ("message", result.Message)));
+
     public static string Int(long value) => value.ToString("N0", CultureInfo.CurrentCulture);
 
     public static string Args(params (string Name, string Value)[] values) => string.Join(", ", values.Select(v => v.Name + "=" + v.Value));
