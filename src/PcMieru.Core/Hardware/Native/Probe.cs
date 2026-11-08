@@ -17,6 +17,9 @@ internal static class Probe
 
     public static Value<T> Ok<T>(T value, string source) => Value.Ok(value, source);
 
+    /// <summary>A value that is there, with a note on how it was obtained (for example "negotiated, not measured").</summary>
+    public static Value<T> Note<T>(T value, string source, string note) => new(value, ValueStatus.Ok, source, note);
+
     public static Value<T> FromWin32<T>(int error, string source, string what)
     {
         var detail = $"{what}: Win32 error {error}";
