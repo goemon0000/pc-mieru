@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "1",
+  "drives": [
+    {
+      "physicalDriveNumber": 0,
+      "model": "Samsung SSD 980 PRO 2TB",
+      "health": {
+        "value": {
+          "kind": "nvme",
+          "temperatureC": {
+            "value": 41,
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "percentageUsed": {
+            "value": 7,
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "availableSparePercent": {
+            "value": 100,
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "availableSpareThresholdPercent": {
+            "value": 10,
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "criticalWarning": {
+            "value": 0,
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "dataWrittenBytes": {
+            "value": "48200000000000",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "dataReadBytes": {
+            "value": "91500000000000",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "powerOnHours": {
+            "value": "2210",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "powerCycles": {
+            "value": "612",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "unsafeShutdowns": {
+            "value": "18",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "mediaErrors": {
+            "value": "0",
+            "status": "ok",
+            "source": "fake:nvme-health-log"
+          },
+          "attributes": []
+        },
+        "status": "ok",
+        "source": "fake:nvme-health-log"
+      }
+    },
+    {
+      "physicalDriveNumber": 1,
+      "model": "ST4000DM004-2CV104",
+      "health": {
+        "status": "denied",
+        "source": "fake:ata-smart",
+        "detail": "needs administrator (pcmi health --elevate)"
+      }
+    }
+  ]
+}

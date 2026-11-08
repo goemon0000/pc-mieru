@@ -1,0 +1,754 @@
+{
+  "schemaVersion": "1",
+  "collectedAtUtc": "2026-11-08T03:00:00.000Z",
+  "cpu": {
+    "value": {
+      "name": {
+        "value": "AMD Ryzen 9 7950X 16-Core Processor",
+        "status": "ok",
+        "source": "fake"
+      },
+      "vendor": {
+        "value": "AuthenticAMD",
+        "status": "ok",
+        "source": "fake"
+      },
+      "family": {
+        "value": 25,
+        "status": "ok",
+        "source": "fake"
+      },
+      "model": {
+        "value": 97,
+        "status": "ok",
+        "source": "fake"
+      },
+      "stepping": {
+        "value": 2,
+        "status": "ok",
+        "source": "fake"
+      },
+      "physicalCores": {
+        "value": 16,
+        "status": "ok",
+        "source": "fake"
+      },
+      "logicalProcessors": {
+        "value": 32,
+        "status": "ok",
+        "source": "fake"
+      },
+      "performanceCores": {
+        "status": "unsupported",
+        "source": "fake",
+        "detail": "no hybrid core types on this CPU"
+      },
+      "efficiencyCores": {
+        "status": "unsupported",
+        "source": "fake",
+        "detail": "no hybrid core types on this CPU"
+      },
+      "baseClockMhz": {
+        "value": 4500,
+        "status": "ok",
+        "source": "fake"
+      },
+      "socket": {
+        "value": "AM5",
+        "status": "ok",
+        "source": "fake"
+      },
+      "l1CacheBytes": {
+        "value": 1048576,
+        "status": "ok",
+        "source": "fake"
+      },
+      "l2CacheBytes": {
+        "value": 16777216,
+        "status": "ok",
+        "source": "fake"
+      },
+      "l3CacheBytes": {
+        "value": 67108864,
+        "status": "ok",
+        "source": "fake"
+      },
+      "instructionSets": {
+        "value": [
+          "SSE4.2",
+          "AVX",
+          "AVX2",
+          "AVX-512",
+          "AES",
+          "SHA"
+        ],
+        "status": "ok",
+        "source": "fake"
+      }
+    },
+    "status": "ok",
+    "source": "fake"
+  },
+  "memory": {
+    "value": {
+      "totalBytes": {
+        "value": 68719476736,
+        "status": "ok",
+        "source": "fake"
+      },
+      "slotsTotal": {
+        "value": 4,
+        "status": "ok",
+        "source": "fake"
+      },
+      "slotsUsed": {
+        "value": 2,
+        "status": "ok",
+        "source": "fake"
+      },
+      "maxCapacityBytes": {
+        "value": 274877906944,
+        "status": "ok",
+        "source": "fake"
+      },
+      "modules": [
+        {
+          "slot": {
+            "value": "DIMM_A2",
+            "status": "ok",
+            "source": "fake"
+          },
+          "capacityBytes": {
+            "value": 34359738368,
+            "status": "ok",
+            "source": "fake"
+          },
+          "type": {
+            "value": "ddr5",
+            "status": "ok",
+            "source": "fake"
+          },
+          "speedMtPerSec": {
+            "value": 5600,
+            "status": "ok",
+            "source": "fake"
+          },
+          "configuredSpeedMtPerSec": {
+            "value": 4800,
+            "status": "ok",
+            "source": "fake"
+          },
+          "manufacturer": {
+            "value": "Fake Memory Inc.",
+            "status": "ok",
+            "source": "fake"
+          },
+          "partNumber": {
+            "value": "FK5600-32G-01",
+            "status": "ok",
+            "source": "fake"
+          },
+          "serialNumber": {
+            "value": "00000000",
+            "status": "ok",
+            "source": "fake"
+          },
+          "ranks": {
+            "value": 2,
+            "status": "ok",
+            "source": "fake"
+          },
+          "voltageMillivolts": {
+            "value": 1100,
+            "status": "ok",
+            "source": "fake"
+          },
+          "formFactor": {
+            "value": "DIMM",
+            "status": "ok",
+            "source": "fake"
+          }
+        },
+        {
+          "slot": {
+            "value": "DIMM_B2",
+            "status": "ok",
+            "source": "fake"
+          },
+          "capacityBytes": {
+            "value": 34359738368,
+            "status": "ok",
+            "source": "fake"
+          },
+          "type": {
+            "value": "ddr5",
+            "status": "ok",
+            "source": "fake"
+          },
+          "speedMtPerSec": {
+            "value": 5600,
+            "status": "ok",
+            "source": "fake"
+          },
+          "configuredSpeedMtPerSec": {
+            "value": 4800,
+            "status": "ok",
+            "source": "fake"
+          },
+          "manufacturer": {
+            "value": "Fake Memory Inc.",
+            "status": "ok",
+            "source": "fake"
+          },
+          "partNumber": {
+            "value": "FK5600-32G-02",
+            "status": "ok",
+            "source": "fake"
+          },
+          "serialNumber": {
+            "value": "00000000",
+            "status": "ok",
+            "source": "fake"
+          },
+          "ranks": {
+            "value": 2,
+            "status": "ok",
+            "source": "fake"
+          },
+          "voltageMillivolts": {
+            "value": 1100,
+            "status": "ok",
+            "source": "fake"
+          },
+          "formFactor": {
+            "value": "DIMM",
+            "status": "ok",
+            "source": "fake"
+          }
+        }
+      ]
+    },
+    "status": "ok",
+    "source": "fake"
+  },
+  "board": {
+    "value": {
+      "manufacturer": {
+        "value": "Fake Computer Co.",
+        "status": "ok",
+        "source": "fake"
+      },
+      "product": {
+        "value": "FAKE-X670 PRO",
+        "status": "ok",
+        "source": "fake"
+      },
+      "revision": {
+        "value": "1.xx",
+        "status": "ok",
+        "source": "fake"
+      },
+      "serialNumber": {
+        "value": "SN-FAKE-0000",
+        "status": "ok",
+        "source": "fake"
+      },
+      "biosVendor": {
+        "value": "Fake BIOS Vendor",
+        "status": "ok",
+        "source": "fake"
+      },
+      "biosVersion": {
+        "value": "F31",
+        "status": "ok",
+        "source": "fake"
+      },
+      "biosDate": {
+        "value": "2025-10-01",
+        "status": "ok",
+        "source": "fake"
+      },
+      "uefiBoot": {
+        "value": true,
+        "status": "ok",
+        "source": "fake"
+      },
+      "secureBoot": {
+        "value": true,
+        "status": "ok",
+        "source": "fake"
+      },
+      "tpmPresent": {
+        "value": true,
+        "status": "ok",
+        "source": "fake"
+      },
+      "tpmVersion": {
+        "value": "2.0",
+        "status": "ok",
+        "source": "fake"
+      }
+    },
+    "status": "ok",
+    "source": "fake"
+  },
+  "gpus": {
+    "value": [
+      {
+        "name": {
+          "value": "NVIDIA GeForce RTX 5070",
+          "status": "ok",
+          "source": "fake"
+        },
+        "vendor": {
+          "value": "NVIDIA",
+          "status": "ok",
+          "source": "fake"
+        },
+        "driverVersion": {
+          "value": "999.99",
+          "status": "ok",
+          "source": "fake"
+        },
+        "driverDate": {
+          "value": "2026-10-01",
+          "status": "ok",
+          "source": "fake"
+        },
+        "pciId": {
+          "value": "PCI\\VEN_10DE&DEV_0000",
+          "status": "ok",
+          "source": "fake"
+        },
+        "luid": {
+          "value": "luid_0x00000000_0x0000d1a2",
+          "status": "ok",
+          "source": "fake"
+        },
+        "dedicatedBytes": {
+          "value": 12884901888,
+          "status": "ok",
+          "source": "fake"
+        },
+        "sharedBytes": {
+          "value": 34359738368,
+          "status": "ok",
+          "source": "fake"
+        },
+        "vbios": {
+          "value": "98.05.xx.00.01",
+          "status": "ok",
+          "source": "fake"
+        },
+        "pcieGeneration": {
+          "value": 5,
+          "status": "ok",
+          "source": "fake"
+        },
+        "pcieWidth": {
+          "value": 16,
+          "status": "ok",
+          "source": "fake"
+        },
+        "powerLimitWatts": {
+          "value": 250,
+          "status": "ok",
+          "source": "fake"
+        }
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "storage": {
+    "value": [
+      {
+        "physicalDriveNumber": 0,
+        "model": {
+          "value": "Samsung SSD 980 PRO 2TB",
+          "status": "ok",
+          "source": "fake"
+        },
+        "serialNumber": {
+          "value": "S6B0NG0R000000X",
+          "status": "ok",
+          "source": "fake"
+        },
+        "firmware": {
+          "value": "5B2QGXA7",
+          "status": "ok",
+          "source": "fake"
+        },
+        "bus": {
+          "value": "nvme",
+          "status": "ok",
+          "source": "fake"
+        },
+        "capacityBytes": {
+          "value": 2000398934016,
+          "status": "ok",
+          "source": "fake"
+        },
+        "trimSupported": {
+          "value": true,
+          "status": "ok",
+          "source": "fake"
+        },
+        "partitionStyle": {
+          "value": "GPT",
+          "status": "ok",
+          "source": "fake"
+        },
+        "volumes": [
+          {
+            "letter": "C:",
+            "label": "System",
+            "fileSystem": "NTFS",
+            "totalBytes": {
+              "value": 1999000000000,
+              "status": "ok",
+              "source": "fake"
+            },
+            "freeBytes": {
+              "value": 1100000000000,
+              "status": "ok",
+              "source": "fake"
+            }
+          }
+        ]
+      },
+      {
+        "physicalDriveNumber": 1,
+        "model": {
+          "value": "ST4000DM004-2CV104",
+          "status": "ok",
+          "source": "fake"
+        },
+        "serialNumber": {
+          "value": "ZFN00000",
+          "status": "ok",
+          "source": "fake"
+        },
+        "firmware": {
+          "value": "0001",
+          "status": "ok",
+          "source": "fake"
+        },
+        "bus": {
+          "value": "sata",
+          "status": "ok",
+          "source": "fake"
+        },
+        "capacityBytes": {
+          "value": 4000787030016,
+          "status": "ok",
+          "source": "fake"
+        },
+        "trimSupported": {
+          "value": false,
+          "status": "ok",
+          "source": "fake"
+        },
+        "partitionStyle": {
+          "value": "GPT",
+          "status": "ok",
+          "source": "fake"
+        },
+        "volumes": [
+          {
+            "letter": "D:",
+            "label": "Data",
+            "fileSystem": "NTFS",
+            "totalBytes": {
+              "value": 3999000000000,
+              "status": "ok",
+              "source": "fake"
+            },
+            "freeBytes": {
+              "value": 2000000000000,
+              "status": "ok",
+              "source": "fake"
+            }
+          }
+        ]
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "network": {
+    "value": [
+      {
+        "name": {
+          "value": "Intel(R) Ethernet Controller I225-V",
+          "status": "ok",
+          "source": "fake"
+        },
+        "kind": {
+          "value": "ethernet",
+          "status": "ok",
+          "source": "fake"
+        },
+        "linkSpeedBitsPerSec": {
+          "value": 2500000000,
+          "status": "ok",
+          "source": "fake"
+        },
+        "macAddress": {
+          "value": "00-00-5E-00-53-01",
+          "status": "ok",
+          "source": "fake"
+        },
+        "ipAddresses": {
+          "value": [
+            "192.0.2.10",
+            "fe80::1"
+          ],
+          "status": "ok",
+          "source": "fake"
+        },
+        "dnsServers": {
+          "value": [
+            "192.0.2.1"
+          ],
+          "status": "ok",
+          "source": "fake"
+        },
+        "driverVersion": {
+          "value": "1.1.4.43",
+          "status": "ok",
+          "source": "fake"
+        },
+        "ssid": {
+          "status": "unsupported",
+          "source": "fake",
+          "detail": "not a wireless adapter"
+        },
+        "wifiBand": {
+          "status": "unsupported",
+          "source": "fake",
+          "detail": "not a wireless adapter"
+        },
+        "signalPercent": {
+          "status": "unsupported",
+          "source": "fake",
+          "detail": "not a wireless adapter"
+        }
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "displays": {
+    "value": [
+      {
+        "manufacturer": {
+          "value": "Fake Display Corp.",
+          "status": "ok",
+          "source": "fake"
+        },
+        "model": {
+          "value": "FD-2790Q",
+          "status": "ok",
+          "source": "fake"
+        },
+        "manufactureYear": {
+          "value": 2024,
+          "status": "ok",
+          "source": "fake"
+        },
+        "manufactureWeek": {
+          "value": 14,
+          "status": "ok",
+          "source": "fake"
+        },
+        "physicalWidthMm": {
+          "value": 597,
+          "status": "ok",
+          "source": "fake"
+        },
+        "physicalHeightMm": {
+          "value": 336,
+          "status": "ok",
+          "source": "fake"
+        },
+        "preferredResolution": {
+          "value": "2560x1440 @ 165 Hz",
+          "status": "ok",
+          "source": "fake"
+        },
+        "currentResolution": {
+          "value": "2560x1440",
+          "status": "ok",
+          "source": "fake"
+        },
+        "refreshHz": {
+          "value": 165,
+          "status": "ok",
+          "source": "fake"
+        },
+        "hdrEnabled": {
+          "value": false,
+          "status": "ok",
+          "source": "fake"
+        },
+        "connection": {
+          "value": "displayPort",
+          "status": "ok",
+          "source": "fake"
+        },
+        "gpuName": {
+          "value": "NVIDIA GeForce RTX 5070",
+          "status": "ok",
+          "source": "fake"
+        }
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "audio": {
+    "value": [
+      {
+        "name": {
+          "value": "Speakers (Fake Audio)",
+          "status": "ok",
+          "source": "fake"
+        },
+        "direction": {
+          "value": "output",
+          "status": "ok",
+          "source": "fake"
+        },
+        "isDefault": {
+          "value": true,
+          "status": "ok",
+          "source": "fake"
+        },
+        "sampleRateHz": {
+          "value": 48000,
+          "status": "ok",
+          "source": "fake"
+        },
+        "bitsPerSample": {
+          "value": 24,
+          "status": "ok",
+          "source": "fake"
+        }
+      },
+      {
+        "name": {
+          "value": "Microphone (Fake Audio)",
+          "status": "ok",
+          "source": "fake"
+        },
+        "direction": {
+          "value": "input",
+          "status": "ok",
+          "source": "fake"
+        },
+        "isDefault": {
+          "value": true,
+          "status": "ok",
+          "source": "fake"
+        },
+        "sampleRateHz": {
+          "value": 48000,
+          "status": "ok",
+          "source": "fake"
+        },
+        "bitsPerSample": {
+          "value": 16,
+          "status": "ok",
+          "source": "fake"
+        }
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "usb": {
+    "value": [
+      {
+        "name": {
+          "value": "USB Composite Device",
+          "status": "ok",
+          "source": "fake"
+        },
+        "vendorId": {
+          "value": "046D",
+          "status": "ok",
+          "source": "fake"
+        },
+        "productId": {
+          "value": "C52B",
+          "status": "ok",
+          "source": "fake"
+        },
+        "manufacturer": {
+          "value": "Fake Peripherals",
+          "status": "ok",
+          "source": "fake"
+        },
+        "parentId": {
+          "value": "USB\\ROOT_HUB30",
+          "status": "ok",
+          "source": "fake"
+        }
+      }
+    ],
+    "status": "ok",
+    "source": "fake"
+  },
+  "battery": {
+    "status": "unsupported",
+    "source": "fake",
+    "detail": "no battery (desktop)"
+  },
+  "os": {
+    "value": {
+      "name": {
+        "value": "Windows 11 Pro",
+        "status": "ok",
+        "source": "fake"
+      },
+      "version": {
+        "value": "25H2",
+        "status": "ok",
+        "source": "fake"
+      },
+      "build": {
+        "value": "10.0.26300",
+        "status": "ok",
+        "source": "fake"
+      },
+      "architecture": {
+        "value": "x64",
+        "status": "ok",
+        "source": "fake"
+      },
+      "uptimeSec": {
+        "value": 93784,
+        "status": "ok",
+        "source": "fake"
+      },
+      "powerPlan": {
+        "value": "Balanced",
+        "status": "ok",
+        "source": "fake"
+      },
+      "virtualizationBasedSecurity": {
+        "value": true,
+        "status": "ok",
+        "source": "fake"
+      },
+      "hvci": {
+        "value": true,
+        "status": "ok",
+        "source": "fake"
+      }
+    },
+    "status": "ok",
+    "source": "fake"
+  }
+}

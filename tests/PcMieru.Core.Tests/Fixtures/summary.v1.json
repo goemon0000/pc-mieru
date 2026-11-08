@@ -1,0 +1,608 @@
+{
+  "schemaVersion": "1",
+  "takenAtUtc": "2026-11-08T03:00:00.000Z",
+  "intervalMs": 1000,
+  "system": {
+    "cpu": {
+      "logicalProcessors": 32,
+      "totalPercent": {
+        "value": 10.4,
+        "status": "ok",
+        "source": "fake:ntquery-cpu"
+      },
+      "perLogicalPercent": [
+        {
+          "value": 6.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 99.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 4.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 4.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 11.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 14.6,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 5.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.3,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 10.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 5.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.6,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 14.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 9.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 7.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 10.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 11.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        }
+      ],
+      "currentMhz": {
+        "value": 4633,
+        "status": "ok",
+        "source": "fake:ntquery-power"
+      }
+    },
+    "memory": {
+      "totalPhysicalBytes": 68719476736,
+      "availablePhysicalBytes": 41914638799,
+      "commitTotalBytes": {
+        "value": 33289793581,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "commitLimitBytes": {
+        "value": 103079215104,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "cacheBytes": {
+        "value": 9663676416,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "pagedPoolBytes": {
+        "value": 440401920,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "nonPagedPoolBytes": {
+        "value": 398458880,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      }
+    },
+    "disks": [
+      {
+        "id": "0 C:",
+        "name": "Samsung SSD 980 PRO 2TB",
+        "activePercent": {
+          "value": 7.4,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "readBytesPerSec": {
+          "value": 15476393.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "writeBytesPerSec": {
+          "value": 9015663.3,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "responseTimeMs": {
+          "value": 0.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        }
+      },
+      {
+        "id": "1 D:",
+        "name": "ST4000DM004",
+        "activePercent": {
+          "value": 2.5,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "readBytesPerSec": {
+          "value": 708792.8,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "writeBytesPerSec": {
+          "value": 856266.6,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "responseTimeMs": {
+          "value": 7.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        }
+      }
+    ],
+    "nics": [
+      {
+        "id": "eth0",
+        "name": "Intel(R) Ethernet Controller I225-V",
+        "isUp": true,
+        "sendBytesPerSec": {
+          "value": 60985.6,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "receiveBytesPerSec": {
+          "value": 201660.3,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "linkSpeedBitsPerSec": {
+          "value": 2500000000,
+          "status": "ok",
+          "source": "fake:GetIfTable2"
+        }
+      },
+      {
+        "id": "wlan0",
+        "name": "Wi-Fi",
+        "isUp": false,
+        "sendBytesPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        },
+        "receiveBytesPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        },
+        "linkSpeedBitsPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        }
+      }
+    ],
+    "gpus": [
+      {
+        "id": "luid_0x00000000_0x0000d1a2",
+        "name": "NVIDIA GeForce RTX 5070",
+        "utilizationPercent": {
+          "value": 52.7,
+          "status": "ok",
+          "source": "fake:pdh-gpu-engine"
+        },
+        "engines": [
+          {
+            "type": "3D",
+            "percent": {
+              "value": 52.7,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          },
+          {
+            "type": "Copy",
+            "percent": {
+              "value": 2.3,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          },
+          {
+            "type": "VideoEncode",
+            "percent": {
+              "value": 8.1,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          }
+        ],
+        "dedicatedUsedBytes": {
+          "value": 5368709120,
+          "status": "ok",
+          "source": "fake:pdh-gpu-memory"
+        },
+        "dedicatedTotalBytes": {
+          "value": 12884901888,
+          "status": "ok",
+          "source": "fake:dxgi"
+        },
+        "sharedUsedBytes": {
+          "value": 629145600,
+          "status": "ok",
+          "source": "fake:pdh-gpu-memory"
+        },
+        "temperatureC": {
+          "value": 60,
+          "status": "ok",
+          "source": "fake:nvml"
+        },
+        "powerWatts": {
+          "value": 180,
+          "status": "ok",
+          "source": "fake:nvml"
+        },
+        "fanPercent": {
+          "status": "unsupported",
+          "source": "fake:nvml",
+          "detail": "this board reports no fan"
+        },
+        "clockMhz": {
+          "value": 2410,
+          "status": "ok",
+          "source": "fake:nvml"
+        }
+      }
+    ],
+    "uptimeSec": 93786
+  },
+  "observations": [
+    {
+      "id": "cpu.singleCoreSaturated",
+      "severity": "notice",
+      "certainty": "candidate",
+      "messageKey": "obs.cpu.singleCore",
+      "args": {
+        "cpu": "5",
+        "total": "10.4",
+        "top": "SkyrimVR.exe, chrome.exe, chrome.exe"
+      },
+      "evidence": [
+        {
+          "metric": "cpu.total",
+          "value": "10.4",
+          "unit": "%"
+        },
+        {
+          "metric": "cpu.logical5",
+          "value": "99.5",
+          "unit": "%"
+        }
+      ],
+      "processes": [
+        "8800:134385685199999930",
+        "7200:134385687599999978",
+        "7388:134385686399999984"
+      ]
+    }
+  ],
+  "topProcesses": [
+    {
+      "key": "8800:134385685199999930",
+      "name": "SkyrimVR.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 58,
+      "handleCount": 2600,
+      "basePriority": 8,
+      "workingSetBytes": 5452595200,
+      "privateWorkingSetBytes": 4613734400,
+      "commitBytes": 5997854720,
+      "ioReadBytesTotal": "10400008192",
+      "ioWriteBytesTotal": "3120002048",
+      "cpuPercent": {
+        "value": 10.7,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 34539,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 21228,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "value": 53.2,
+        "status": "ok",
+        "source": "fake:pdh-gpu-engine"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7200:134385687599999978",
+      "name": "chrome.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 40,
+      "handleCount": 1300,
+      "basePriority": 8,
+      "workingSetBytes": 398458880,
+      "privateWorkingSetBytes": 272629760,
+      "commitBytes": 354418688,
+      "ioReadBytesTotal": "9100008192",
+      "ioWriteBytesTotal": "2080002048",
+      "cpuPercent": {
+        "value": 3.6,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 24739,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 484,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7388:134385686399999984",
+      "name": "chrome.exe",
+      "parentPid": 7200,
+      "parentKey": "7200:134385687599999978",
+      "sessionId": 1,
+      "threadCount": 19,
+      "handleCount": 540,
+      "basePriority": 8,
+      "workingSetBytes": 346030080,
+      "privateWorkingSetBytes": 230686720,
+      "commitBytes": 299892736,
+      "ioReadBytesTotal": "1080008192",
+      "ioWriteBytesTotal": "216002048",
+      "cpuPercent": {
+        "value": 3.2,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 9850,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 6016,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "10200:134385682199999985",
+      "name": "OBS64.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 41,
+      "handleCount": 1100,
+      "basePriority": 8,
+      "workingSetBytes": 272629760,
+      "privateWorkingSetBytes": 199229440,
+      "commitBytes": 258998272,
+      "ioReadBytesTotal": "2200008192",
+      "ioWriteBytesTotal": "1320002048",
+      "cpuPercent": {
+        "value": 1.7,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 33732,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 12787,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7340:134385686999999935",
+      "name": "chrome.exe",
+      "parentPid": 7200,
+      "parentKey": "7200:134385687599999978",
+      "sessionId": 1,
+      "threadCount": 17,
+      "handleCount": 500,
+      "basePriority": 8,
+      "workingSetBytes": 220200960,
+      "privateWorkingSetBytes": 146800640,
+      "commitBytes": 190840832,
+      "ioReadBytesTotal": "500008192",
+      "ioWriteBytesTotal": "1000002048",
+      "cpuPercent": {
+        "value": 1.4,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 9133,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 5086,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    }
+  ]
+}

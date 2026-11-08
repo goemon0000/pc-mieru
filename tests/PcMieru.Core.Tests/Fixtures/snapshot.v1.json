@@ -1,0 +1,1497 @@
+{
+  "schemaVersion": "1",
+  "takenAtUtc": "2026-11-08T03:00:00.000Z",
+  "windowStartUtc": "2026-11-08T02:59:59.000Z",
+  "intervalMs": 1000,
+  "system": {
+    "cpu": {
+      "logicalProcessors": 32,
+      "totalPercent": {
+        "value": 10.4,
+        "status": "ok",
+        "source": "fake:ntquery-cpu"
+      },
+      "perLogicalPercent": [
+        {
+          "value": 6.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 99.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 4.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 4.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 6.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 11.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 14.6,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 5.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 13.3,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 10.5,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 5.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.6,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 14.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.2,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 3.4,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 9.1,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 7.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 2.8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 10.7,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 11.9,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        },
+        {
+          "value": 8,
+          "status": "ok",
+          "source": "fake:ntquery-cpu"
+        }
+      ],
+      "currentMhz": {
+        "value": 4633,
+        "status": "ok",
+        "source": "fake:ntquery-power"
+      }
+    },
+    "memory": {
+      "totalPhysicalBytes": 68719476736,
+      "availablePhysicalBytes": 41914638799,
+      "commitTotalBytes": {
+        "value": 33289793581,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "commitLimitBytes": {
+        "value": 103079215104,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "cacheBytes": {
+        "value": 9663676416,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "pagedPoolBytes": {
+        "value": 440401920,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      },
+      "nonPagedPoolBytes": {
+        "value": 398458880,
+        "status": "ok",
+        "source": "fake:GetPerformanceInfo"
+      }
+    },
+    "disks": [
+      {
+        "id": "0 C:",
+        "name": "Samsung SSD 980 PRO 2TB",
+        "activePercent": {
+          "value": 7.4,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "readBytesPerSec": {
+          "value": 15476393.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "writeBytesPerSec": {
+          "value": 9015663.3,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "responseTimeMs": {
+          "value": 0.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        }
+      },
+      {
+        "id": "1 D:",
+        "name": "ST4000DM004",
+        "activePercent": {
+          "value": 2.5,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "readBytesPerSec": {
+          "value": 708792.8,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "writeBytesPerSec": {
+          "value": 856266.6,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "responseTimeMs": {
+          "value": 7.7,
+          "status": "ok",
+          "source": "fake:pdh"
+        }
+      }
+    ],
+    "nics": [
+      {
+        "id": "eth0",
+        "name": "Intel(R) Ethernet Controller I225-V",
+        "isUp": true,
+        "sendBytesPerSec": {
+          "value": 60985.6,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "receiveBytesPerSec": {
+          "value": 201660.3,
+          "status": "ok",
+          "source": "fake:pdh"
+        },
+        "linkSpeedBitsPerSec": {
+          "value": 2500000000,
+          "status": "ok",
+          "source": "fake:GetIfTable2"
+        }
+      },
+      {
+        "id": "wlan0",
+        "name": "Wi-Fi",
+        "isUp": false,
+        "sendBytesPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        },
+        "receiveBytesPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        },
+        "linkSpeedBitsPerSec": {
+          "status": "notCollected",
+          "source": "fake:GetIfTable2",
+          "detail": "link down"
+        }
+      }
+    ],
+    "gpus": [
+      {
+        "id": "luid_0x00000000_0x0000d1a2",
+        "name": "NVIDIA GeForce RTX 5070",
+        "utilizationPercent": {
+          "value": 52.7,
+          "status": "ok",
+          "source": "fake:pdh-gpu-engine"
+        },
+        "engines": [
+          {
+            "type": "3D",
+            "percent": {
+              "value": 52.7,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          },
+          {
+            "type": "Copy",
+            "percent": {
+              "value": 2.3,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          },
+          {
+            "type": "VideoEncode",
+            "percent": {
+              "value": 8.1,
+              "status": "ok",
+              "source": "fake:pdh-gpu-engine"
+            }
+          }
+        ],
+        "dedicatedUsedBytes": {
+          "value": 5368709120,
+          "status": "ok",
+          "source": "fake:pdh-gpu-memory"
+        },
+        "dedicatedTotalBytes": {
+          "value": 12884901888,
+          "status": "ok",
+          "source": "fake:dxgi"
+        },
+        "sharedUsedBytes": {
+          "value": 629145600,
+          "status": "ok",
+          "source": "fake:pdh-gpu-memory"
+        },
+        "temperatureC": {
+          "value": 60,
+          "status": "ok",
+          "source": "fake:nvml"
+        },
+        "powerWatts": {
+          "value": 180,
+          "status": "ok",
+          "source": "fake:nvml"
+        },
+        "fanPercent": {
+          "status": "unsupported",
+          "source": "fake:nvml",
+          "detail": "this board reports no fan"
+        },
+        "clockMhz": {
+          "value": 2410,
+          "status": "ok",
+          "source": "fake:nvml"
+        }
+      }
+    ],
+    "uptimeSec": 93786
+  },
+  "processes": [
+    {
+      "key": "0:134385695400000000",
+      "name": "System Idle Process",
+      "parentPid": 0,
+      "sessionId": 0,
+      "threadCount": 8,
+      "handleCount": 0,
+      "basePriority": 0,
+      "workingSetBytes": 0,
+      "privateWorkingSetBytes": 0,
+      "commitBytes": 0,
+      "ioReadBytesTotal": "8192",
+      "ioWriteBytesTotal": "2048",
+      "cpuPercent": {
+        "value": 83.98735862783793,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "4:134385694799999996",
+      "name": "System",
+      "parentPid": 0,
+      "parentKey": "0:134385695400000000",
+      "sessionId": 0,
+      "threadCount": 190,
+      "handleCount": 4200,
+      "basePriority": 8,
+      "workingSetBytes": 104857,
+      "privateWorkingSetBytes": 104857,
+      "commitBytes": 136314,
+      "ioReadBytesTotal": "8400008192",
+      "ioWriteBytesTotal": "3360002048",
+      "cpuPercent": {
+        "value": 1,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 79509,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 16165,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "124:134385694199999973",
+      "name": "Registry",
+      "parentPid": 4,
+      "parentKey": "4:134385694799999996",
+      "sessionId": 0,
+      "threadCount": 4,
+      "handleCount": 0,
+      "basePriority": 8,
+      "workingSetBytes": 62914560,
+      "privateWorkingSetBytes": 60817408,
+      "commitBytes": 79062630,
+      "ioReadBytesTotal": "8192",
+      "ioWriteBytesTotal": "2048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "580:134385693599999905",
+      "name": "smss.exe",
+      "parentPid": 4,
+      "parentKey": "4:134385694799999996",
+      "sessionId": 0,
+      "threadCount": 2,
+      "handleCount": 52,
+      "basePriority": 8,
+      "workingSetBytes": 1048576,
+      "privateWorkingSetBytes": 524288,
+      "commitBytes": 681574,
+      "ioReadBytesTotal": "208008192",
+      "ioWriteBytesTotal": "83202048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 1205,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 60,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "780:134385692999999996",
+      "name": "csrss.exe",
+      "parentPid": 580,
+      "parentKey": "580:134385693599999905",
+      "sessionId": 0,
+      "threadCount": 13,
+      "handleCount": 850,
+      "basePriority": 8,
+      "workingSetBytes": 6291456,
+      "privateWorkingSetBytes": 2202009,
+      "commitBytes": 2862612,
+      "ioReadBytesTotal": "4250008192",
+      "ioWriteBytesTotal": "1700002048",
+      "cpuPercent": {
+        "value": 0.3,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 27526,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 2553,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "denied",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance for this process"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "860:134385692399999916",
+      "name": "wininit.exe",
+      "parentPid": 580,
+      "parentKey": "580:134385693599999905",
+      "sessionId": 0,
+      "threadCount": 2,
+      "handleCount": 160,
+      "basePriority": 8,
+      "workingSetBytes": 5242880,
+      "privateWorkingSetBytes": 1258291,
+      "commitBytes": 1635778,
+      "ioReadBytesTotal": "960008192",
+      "ioWriteBytesTotal": "64002048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 895,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 784,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "940:134385691799999933",
+      "name": "services.exe",
+      "parentPid": 860,
+      "parentKey": "860:134385692399999916",
+      "sessionId": 0,
+      "threadCount": 9,
+      "handleCount": 640,
+      "basePriority": 8,
+      "workingSetBytes": 10485760,
+      "privateWorkingSetBytes": 5242880,
+      "commitBytes": 6815744,
+      "ioReadBytesTotal": "4480008192",
+      "ioWriteBytesTotal": "512002048",
+      "cpuPercent": {
+        "value": 0.1,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 22395,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 1493,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "960:134385691199999913",
+      "name": "lsass.exe",
+      "parentPid": 860,
+      "parentKey": "860:134385692399999916",
+      "sessionId": 0,
+      "threadCount": 11,
+      "handleCount": 1100,
+      "basePriority": 8,
+      "workingSetBytes": 23068672,
+      "privateWorkingSetBytes": 11534336,
+      "commitBytes": 14994636,
+      "ioReadBytesTotal": "1100008192",
+      "ioWriteBytesTotal": "1320002048",
+      "cpuPercent": {
+        "value": 0.1,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 11446,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 390,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "denied",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance for this process"
+      },
+      "state": {
+        "status": "denied",
+        "source": "fake:thread-state",
+        "detail": "protected process"
+      }
+    },
+    {
+      "key": "1100:134385690599999967",
+      "name": "svchost.exe",
+      "parentPid": 940,
+      "parentKey": "940:134385691799999933",
+      "sessionId": 0,
+      "threadCount": 20,
+      "handleCount": 1500,
+      "basePriority": 8,
+      "workingSetBytes": 41943040,
+      "privateWorkingSetBytes": 18874368,
+      "commitBytes": 24536678,
+      "ioReadBytesTotal": "3000008192",
+      "ioWriteBytesTotal": "2400002048",
+      "cpuPercent": {
+        "value": 0.4,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 45552,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 6954,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "1180:134385689999999984",
+      "name": "svchost.exe",
+      "parentPid": 940,
+      "parentKey": "940:134385691799999933",
+      "sessionId": 0,
+      "threadCount": 12,
+      "handleCount": 700,
+      "basePriority": 8,
+      "workingSetBytes": 25165824,
+      "privateWorkingSetBytes": 9437184,
+      "commitBytes": 12268339,
+      "ioReadBytesTotal": "2100008192",
+      "ioWriteBytesTotal": "1400002048",
+      "cpuPercent": {
+        "value": 0.3,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 22455,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 8083,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "1420:134385689399999938",
+      "name": "svchost.exe",
+      "parentPid": 940,
+      "parentKey": "940:134385691799999933",
+      "sessionId": 0,
+      "threadCount": 8,
+      "handleCount": 420,
+      "basePriority": 8,
+      "workingSetBytes": 18874368,
+      "privateWorkingSetBytes": 6291456,
+      "commitBytes": 8178892,
+      "ioReadBytesTotal": "1680008192",
+      "ioWriteBytesTotal": "168002048",
+      "cpuPercent": {
+        "value": 0.1,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 15778,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 3809,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "1700:134385688799999949",
+      "name": "dwm.exe",
+      "parentPid": 860,
+      "parentKey": "860:134385692399999916",
+      "sessionId": 1,
+      "threadCount": 22,
+      "handleCount": 1900,
+      "basePriority": 8,
+      "workingSetBytes": 220200960,
+      "privateWorkingSetBytes": 136314880,
+      "commitBytes": 177209344,
+      "ioReadBytesTotal": "9500008192",
+      "ioWriteBytesTotal": "1520002048",
+      "cpuPercent": {
+        "value": 1.4,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 63533,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 11210,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "value": 2.2,
+        "status": "ok",
+        "source": "fake:pdh-gpu-engine"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "5200:134385688199999941",
+      "name": "explorer.exe",
+      "parentPid": 5100,
+      "sessionId": 1,
+      "threadCount": 70,
+      "handleCount": 3400,
+      "basePriority": 8,
+      "workingSetBytes": 251658240,
+      "privateWorkingSetBytes": 146800640,
+      "commitBytes": 190840832,
+      "ioReadBytesTotal": "20400008192",
+      "ioWriteBytesTotal": "4080002048",
+      "cpuPercent": {
+        "value": 0.6,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 66648,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 27680,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7200:134385687599999978",
+      "name": "chrome.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 40,
+      "handleCount": 1300,
+      "basePriority": 8,
+      "workingSetBytes": 398458880,
+      "privateWorkingSetBytes": 272629760,
+      "commitBytes": 354418688,
+      "ioReadBytesTotal": "9100008192",
+      "ioWriteBytesTotal": "2080002048",
+      "cpuPercent": {
+        "value": 3.6,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 24739,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 484,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7340:134385686999999935",
+      "name": "chrome.exe",
+      "parentPid": 7200,
+      "parentKey": "7200:134385687599999978",
+      "sessionId": 1,
+      "threadCount": 17,
+      "handleCount": 500,
+      "basePriority": 8,
+      "workingSetBytes": 220200960,
+      "privateWorkingSetBytes": 146800640,
+      "commitBytes": 190840832,
+      "ioReadBytesTotal": "500008192",
+      "ioWriteBytesTotal": "1000002048",
+      "cpuPercent": {
+        "value": 1.4,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 9133,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 5086,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7388:134385686399999984",
+      "name": "chrome.exe",
+      "parentPid": 7200,
+      "parentKey": "7200:134385687599999978",
+      "sessionId": 1,
+      "threadCount": 19,
+      "handleCount": 540,
+      "basePriority": 8,
+      "workingSetBytes": 346030080,
+      "privateWorkingSetBytes": 230686720,
+      "commitBytes": 299892736,
+      "ioReadBytesTotal": "1080008192",
+      "ioWriteBytesTotal": "216002048",
+      "cpuPercent": {
+        "value": 3.2,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 9850,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 6016,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "7452:134385685799999920",
+      "name": "chrome.exe",
+      "parentPid": 7200,
+      "parentKey": "7200:134385687599999978",
+      "sessionId": 1,
+      "threadCount": 14,
+      "handleCount": 350,
+      "basePriority": 8,
+      "workingSetBytes": 167772160,
+      "privateWorkingSetBytes": 94371840,
+      "commitBytes": 122683392,
+      "ioReadBytesTotal": "1050008192",
+      "ioWriteBytesTotal": "280002048",
+      "cpuPercent": {
+        "value": 0.5,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 13823,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 1666,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "8800:134385685199999930",
+      "name": "SkyrimVR.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 58,
+      "handleCount": 2600,
+      "basePriority": 8,
+      "workingSetBytes": 5452595200,
+      "privateWorkingSetBytes": 4613734400,
+      "commitBytes": 5997854720,
+      "ioReadBytesTotal": "10400008192",
+      "ioWriteBytesTotal": "3120002048",
+      "cpuPercent": {
+        "value": 10.7,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 34539,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 21228,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "value": 53.2,
+        "status": "ok",
+        "source": "fake:pdh-gpu-engine"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "8900:134385684599999927",
+      "name": "vrserver.exe",
+      "parentPid": 8800,
+      "parentKey": "8800:134385685199999930",
+      "sessionId": 1,
+      "threadCount": 36,
+      "handleCount": 800,
+      "basePriority": 8,
+      "workingSetBytes": 398458880,
+      "privateWorkingSetBytes": 262144000,
+      "commitBytes": 340787200,
+      "ioReadBytesTotal": "4000008192",
+      "ioWriteBytesTotal": "1280002048",
+      "cpuPercent": {
+        "value": 1.3,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 15676,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 5687,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "9300:134385683999999915",
+      "name": "Code.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 33,
+      "handleCount": 900,
+      "basePriority": 8,
+      "workingSetBytes": 440401920,
+      "privateWorkingSetBytes": 314572800,
+      "commitBytes": 408944640,
+      "ioReadBytesTotal": "5400008192",
+      "ioWriteBytesTotal": "1800002048",
+      "cpuPercent": {
+        "value": 1.3,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 30707,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 5,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "9600:134385683399999906",
+      "name": "Discord.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 44,
+      "handleCount": 780,
+      "basePriority": 8,
+      "workingSetBytes": 346030080,
+      "privateWorkingSetBytes": 220200960,
+      "commitBytes": 286261248,
+      "ioReadBytesTotal": "5460008192",
+      "ioWriteBytesTotal": "312002048",
+      "cpuPercent": {
+        "value": 0.8,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 3318,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 4498,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "9900:134385682799999994",
+      "name": "Steam.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 38,
+      "handleCount": 700,
+      "basePriority": 8,
+      "workingSetBytes": 199229440,
+      "privateWorkingSetBytes": 125829120,
+      "commitBytes": 163577856,
+      "ioReadBytesTotal": "700008192",
+      "ioWriteBytesTotal": "560002048",
+      "cpuPercent": {
+        "value": 0.3,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 15778,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 2599,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "10200:134385682199999985",
+      "name": "OBS64.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 41,
+      "handleCount": 1100,
+      "basePriority": 8,
+      "workingSetBytes": 272629760,
+      "privateWorkingSetBytes": 199229440,
+      "commitBytes": 258998272,
+      "ioReadBytesTotal": "2200008192",
+      "ioWriteBytesTotal": "1320002048",
+      "cpuPercent": {
+        "value": 1.7,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 33732,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 12787,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "10500:134385681599999976",
+      "name": "OneDrive.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 26,
+      "handleCount": 650,
+      "basePriority": 8,
+      "workingSetBytes": 125829120,
+      "privateWorkingSetBytes": 73400320,
+      "commitBytes": 95420416,
+      "ioReadBytesTotal": "1950008192",
+      "ioWriteBytesTotal": "1040002048",
+      "cpuPercent": {
+        "value": 0.1,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 17781,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 7719,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "10800:134385680999999967",
+      "name": "RuntimeBroker.exe",
+      "parentPid": 1100,
+      "parentKey": "1100:134385690599999967",
+      "sessionId": 1,
+      "threadCount": 6,
+      "handleCount": 280,
+      "basePriority": 8,
+      "workingSetBytes": 31457280,
+      "privateWorkingSetBytes": 12582912,
+      "commitBytes": 16357785,
+      "ioReadBytesTotal": "1120008192",
+      "ioWriteBytesTotal": "560002048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 10449,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 211,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "11100:134385680399999958",
+      "name": "SearchHost.exe",
+      "parentPid": 1100,
+      "parentKey": "1100:134385690599999967",
+      "sessionId": 1,
+      "threadCount": 20,
+      "handleCount": 520,
+      "basePriority": 8,
+      "workingSetBytes": 83886080,
+      "privateWorkingSetBytes": 41943040,
+      "commitBytes": 54525952,
+      "ioReadBytesTotal": "2600008192",
+      "ioWriteBytesTotal": "208002048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 16636,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 2936,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "11800:134385679799999937",
+      "name": "python.exe",
+      "parentPid": 9300,
+      "parentKey": "9300:134385683999999915",
+      "sessionId": 1,
+      "threadCount": 5,
+      "handleCount": 110,
+      "basePriority": 8,
+      "workingSetBytes": 94371840,
+      "privateWorkingSetBytes": 62914560,
+      "commitBytes": 81788928,
+      "ioReadBytesTotal": "660008192",
+      "ioWriteBytesTotal": "88002048",
+      "cpuPercent": {
+        "value": 0.2,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 3569,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 250,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "running",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    },
+    {
+      "key": "12400:134385679199999919",
+      "name": "notepad.exe",
+      "parentPid": 5200,
+      "parentKey": "5200:134385688199999941",
+      "sessionId": 1,
+      "threadCount": 4,
+      "handleCount": 210,
+      "basePriority": 8,
+      "workingSetBytes": 26214400,
+      "privateWorkingSetBytes": 9437184,
+      "commitBytes": 12268339,
+      "ioReadBytesTotal": "1470008192",
+      "ioWriteBytesTotal": "252002048",
+      "cpuPercent": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioReadBytesPerSec": {
+        "value": 2998,
+        "status": "ok",
+        "source": "fake"
+      },
+      "ioWriteBytesPerSec": {
+        "value": 894,
+        "status": "ok",
+        "source": "fake"
+      },
+      "gpuPercent": {
+        "status": "notCollected",
+        "source": "fake:pdh-gpu-engine",
+        "detail": "no engine instance"
+      },
+      "state": {
+        "value": "notResponding",
+        "status": "ok",
+        "source": "fake:IsHungAppWindow"
+      }
+    }
+  ]
+}
