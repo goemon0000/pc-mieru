@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PCMieru.exe: the window. Runs as the logged-in user; anything that needs admin rights goes through the Helper. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>PCMieru</AssemblyName>
+    <RootNamespace>PcMieru.Gui</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- The manifest (also PerMonitorV2) is the source of truth so the setting applies before any window exists; WFO0003 only asks to move it. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ForceDesignerDpiUnaware>true</ForceDesignerDpiUnaware>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="PcMieru.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PcMieru.Gui.Tests" />
+  </ItemGroup>
+
+</Project>

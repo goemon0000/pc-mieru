@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/PcMieru.Wire/PcMieru.Wire.csproj" />
     <Project Path="src/PcMieru.Core/PcMieru.Core.csproj" />
+    <Project Path="src/PcMieru.Gui/PcMieru.Gui.csproj" />
     <Project Path="src/PcMieru.Cli/PcMieru.Cli.csproj" />
     <Project Path="src/PcMieru.Helper/PcMieru.Helper.csproj" />
     <Project Path="src/PcMieru.SensorHost/PcMieru.SensorHost.csproj" />
@@ -9,5 +10,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/PcMieru.Core.Tests/PcMieru.Core.Tests.csproj" />
     <Project Path="tests/PcMieru.Cli.Tests/PcMieru.Cli.Tests.csproj" />
+    <Project Path="tests/PcMieru.Gui.Tests/PcMieru.Gui.Tests.csproj" />
   </Folder>
 </Solution>

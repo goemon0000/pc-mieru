@@ -46,6 +46,24 @@ public class RepoGuardTests
     }
 
     [Fact]
+    public void Gui_is_a_per_monitor_dpi_windows_exe_named_PCMieru()
+    {
+        var project = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Gui", "PcMieru.Gui.csproj"));
+        Assert.Contains("<AssemblyName>PCMieru</AssemblyName>", project, StringComparison.Ordinal);
+        Assert.Contains("<OutputType>WinExe</OutputType>", project, StringComparison.Ordinal);
+        var manifest = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Gui", "app.manifest"));
+        Assert.Contains("PerMonitorV2", manifest, StringComparison.Ordinal);
+        Assert.Contains("level=\"asInvoker\"", manifest, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Cli_is_named_pcmi()
+    {
+        var project = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Cli", "PcMieru.Cli.csproj"));
+        Assert.Contains("<AssemblyName>pcmi</AssemblyName>", project, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wire_references_nothing()
     {
         var text = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Wire", "PcMieru.Wire.csproj"));
