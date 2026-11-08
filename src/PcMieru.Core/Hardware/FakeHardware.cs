@@ -299,7 +299,8 @@ public static class HardwareModule
         var sensors = new SensorHostClient();
         registry.Set<ISensorClient>(sensors);
         registry.Set<IHardwareProvider>(new RealHardwareProvider(options.Clock, sensors));
-        registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider());
+        // The Helper is registered by the Management module, which comes after this one: look it up when a read needs it, not now.
+        registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider(new HelperStorageReader(() => registry.TryGet<IHelperClient>(out var helper) ? helper : null)));
     }
 }
 
