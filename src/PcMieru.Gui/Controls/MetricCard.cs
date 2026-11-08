@@ -14,6 +14,10 @@ internal sealed class MetricCard : Control, IThemed
     private Font? _big;
     private Font? _small;
     private bool _hover;
+    private readonly ToolTip _tip = new() { ShowAlways = true };
+
+    /// <summary>The context under the value: at most this many lines.</summary>
+    private const int MaxSubLines = 2;
 
     public MetricCard()
     {
@@ -54,9 +58,12 @@ internal sealed class MetricCard : Control, IThemed
         SubText = sub;
         StateText = state;
         High = high;
-        AccessibleName = title + ": " + value + (state.Length > 0 ? ", " + state : string.Empty);
         if (changed)
         {
+            var spoken = sub.Replace('\n', ' ');
+            AccessibleName = title + ": " + value + (state.Length > 0 ? ", " + state : string.Empty);
+            AccessibleDescription = spoken;
+            _tip.SetToolTip(this, title + ": " + value + (spoken.Length > 0 ? Environment.NewLine + sub.Replace("\n", Environment.NewLine) : string.Empty));
             Invalidate();
         }
     }
@@ -86,6 +93,16 @@ internal sealed class MetricCard : Control, IThemed
         base.OnMouseLeave(e);
         _hover = false;
         Invalidate();
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (!Visible)
+        {
+            // A tip that is showing when the page is switched away would stay on screen over the next page.
+            _tip.Hide(this);
+        }
     }
 
     protected override void OnClick(EventArgs e)
@@ -160,8 +177,18 @@ internal sealed class MetricCard : Control, IThemed
 
         if (SubText.Length > 0)
         {
-            TextRenderer.DrawText(g, SubText, Small, new Rectangle(pad, y, width, Small.Height + 2), palette.TextDim, flags);
-            y += Small.Height + LogicalToDeviceUnits(6);
+            // Up to two lines, split at a line feed (spans: painting allocates nothing).
+            var rest = SubText.AsSpan();
+            for (var line = 0; line < MaxSubLines && !rest.IsEmpty; line++)
+            {
+                var cut = rest.IndexOf('\n');
+                var text = cut < 0 || line == MaxSubLines - 1 ? rest : rest[..cut];
+                TextRenderer.DrawText(g, text, Small, new Rectangle(pad, y, width, Small.Height + 2), palette.TextDim, flags);
+                y += Small.Height + LogicalToDeviceUnits(2);
+                rest = cut < 0 ? default : rest[(cut + 1)..];
+            }
+
+            y += LogicalToDeviceUnits(4);
         }
 
         var spark = new Rectangle(pad, y, width, Math.Max(Height - y - LogicalToDeviceUnits(10), 0));
@@ -180,6 +207,7 @@ internal sealed class MetricCard : Control, IThemed
         {
             _big?.Dispose();
             _small?.Dispose();
+            _tip.Dispose();
         }
 
         base.Dispose(disposing);

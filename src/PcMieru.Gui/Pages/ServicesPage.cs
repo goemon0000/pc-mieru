@@ -59,11 +59,11 @@ internal sealed class ServicesPage : PageBase
         PageLayout.Prepare(
             _grid,
             Strings.Get("gui.nav.services"),
-            (string.Empty, Px(170), HorizontalAlignment.Left),
-            (string.Empty, Px(250), HorizontalAlignment.Left),
-            (string.Empty, Px(110), HorizontalAlignment.Left),
             (string.Empty, Px(150), HorizontalAlignment.Left),
-            (string.Empty, Px(80), HorizontalAlignment.Right),
+            (string.Empty, Px(210), HorizontalAlignment.Left),
+            (string.Empty, Px(90), HorizontalAlignment.Left),
+            (string.Empty, Px(120), HorizontalAlignment.Left),
+            (string.Empty, Px(70), HorizontalAlignment.Right),
             (string.Empty, Px(420), HorizontalAlignment.Left));
         _grid.Cells = Cell;
         _grid.CellTip = CellTip;

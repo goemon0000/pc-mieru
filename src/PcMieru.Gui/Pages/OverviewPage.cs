@@ -32,6 +32,7 @@ internal sealed class OverviewPage : PageBase
     private readonly double[] _diskHistory = new double[SnapshotPump.HistoryLength];
     private readonly double[] _networkHistory = new double[SnapshotPump.HistoryLength];
 
+    private TableLayoutPanel? _lower;
     private List<TopApp> _apps = [];
     private Snapshot? _last;
     private int _ticks;
@@ -77,14 +78,17 @@ internal sealed class OverviewPage : PageBase
                 e.SuppressKeyPress = true;
             }
         };
+        _top.FillColumn = 0;
         _top.SizeChanged += (_, _) => _top.FitLastColumn();
+        _top.FontChanged += (_, _) => FitTop();
+        _top.HandleCreated += (_, _) => FitTop();
         _topHint.SetTone(CellTone.Dim);
 
         var pad = Px(16);
         var cards = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = Px(150),
+            Height = Px(182),
             ColumnCount = 5,
             RowCount = 1,
             Padding = new Padding(pad, pad, pad, 0),
@@ -111,8 +115,9 @@ internal sealed class OverviewPage : PageBase
         lower.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         lower.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.AutoSize));
+        lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Absolute, Px(200)));
         lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Percent, 100));
-        lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.AutoSize));
+        _lower = lower;
         _topTitle.Margin = new Padding(0, 0, 0, Px(6));
         _noteTitle.Margin = new Padding(Px(16), 0, 0, Px(6));
         _top.Margin = new Padding(0);
@@ -123,14 +128,32 @@ internal sealed class OverviewPage : PageBase
         lower.Controls.Add(_noteTitle, 1, 0);
         lower.Controls.Add(_top, 0, 1);
         lower.Controls.Add(_notes, 1, 1);
+        lower.SetRowSpan(_notes, 2);
         lower.Controls.Add(_topHint, 0, 2);
-        lower.SetColumnSpan(_topHint, 2);
+        _topHint.MaximumSize = new Size(Px(420), 0);
         _top.TabIndex = 5;
         _notes.TabIndex = 6;
 
         Controls.Add(lower);
         Controls.Add(cards);
         ApplyLanguage();
+    }
+
+    /// <summary>The heaviest-apps list is always five rows tall (and the notes beside it run to the bottom), so the page has no empty middle.</summary>
+    private void FitTop()
+    {
+        if (_lower is null || !_top.IsHandleCreated)
+        {
+            return;
+        }
+
+        var header = _top.VirtualListSize > 0 ? Math.Max(_top.GetItemRect(0).Top, 0) : 0;
+        header = header > 0 ? header : _top.Font.Height + Px(10);
+        var wanted = header + (_top.RowHeight * 5) + Px(4);
+        if (Math.Abs(_lower.RowStyles[1].Height - wanted) > 1)
+        {
+            _lower.RowStyles[1].Height = wanted;
+        }
     }
 
     internal MetricCard CpuCard => _cpu;
@@ -282,7 +305,7 @@ internal sealed class OverviewPage : PageBase
         }
     }
 
-    private static string Join(string first, string? second) => string.IsNullOrEmpty(second) ? first : first + " / " + second;
+    private static string Join(string first, string? second) => string.IsNullOrEmpty(second) ? first : first + "\n" + second;
 
     /// <summary>Copies the last minute into the cards' arrays (no allocation: the arrays belong to the page).</summary>
     private void FillHistory()
@@ -402,8 +425,8 @@ internal static class OverviewStrings
         new("gui.overview.card.disk", "ディスク", "Disk"),
         new("gui.overview.card.network", "ネットワーク", "Network"),
         new("gui.overview.cpu.sub", "論理プロセッサ {count} 個", "{count} logical processors"),
-        new("gui.overview.disk.sub", "読み取り {read} / 書き込み {write}", "Read {read} / Write {write}"),
-        new("gui.overview.net.sub", "送信 {send} / 受信 {receive}", "Send {send} / Receive {receive}"),
+        new("gui.overview.disk.sub", "読み取り {read}\n書き込み {write}", "Read {read}\nWrite {write}"),
+        new("gui.overview.net.sub", "送信 {send}\n受信 {receive}", "Send {send}\nReceive {receive}"),
         new("gui.overview.gpu.none", "GPU が見つかりません", "No GPU found"),
         new("gui.overview.high", "高め", "High"),
         new("gui.overview.top", "いま重いアプリ", "Heaviest apps right now"),

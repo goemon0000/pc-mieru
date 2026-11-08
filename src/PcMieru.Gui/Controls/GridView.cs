@@ -61,6 +61,7 @@ internal delegate GridCell GridCellProvider(int row, int column);
 internal class GridView : ListView, IThemed
 {
     private const int WmContextMenu = 0x007B;
+    private const int WmPaint = 0x000F;
 
     private readonly ImageList _rowHeight = new();
     private readonly ToolTip _tip = new() { ShowAlways = true };
@@ -74,8 +75,12 @@ internal class GridView : ListView, IThemed
     private bool _sortDescending;
     private bool _fitting;
 
+    /// <summary>The DPI the column widths are in. Column widths are plain pixels that nothing rescales, so a change is followed by hand.</summary>
+    private int _columnDpi;
+
     public GridView()
     {
+        _columnDpi = DeviceDpi;
         DoubleBuffered = true;
         View = View.Details;
         FullRowSelect = true;
@@ -160,7 +165,11 @@ internal class GridView : ListView, IThemed
 
     public int SelectedRow => SelectedIndices.Count > 0 ? SelectedIndices[0] : -1;
 
-    /// <summary>Makes the last column take whatever width is left, so the header never shows an undrawn strip on its right.</summary>
+    /// <summary>The column that takes the width left over (see <see cref="FitLastColumn"/>); -1 is the last one. A table of numbers lets its name column take it.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal int FillColumn { get; set; } = -1;
+
+    /// <summary>Makes one column (the last unless <see cref="FillColumn"/> says otherwise) take whatever width is left, so the header never shows an undrawn strip on its right.</summary>
     public void FitLastColumn()
     {
         if (_fitting || Columns.Count == 0 || !IsHandleCreated)
@@ -168,29 +177,104 @@ internal class GridView : ListView, IThemed
             return;
         }
 
+        var fitted = false;
         _fitting = true;
         try
         {
+            var fill = FillColumn >= 0 && FillColumn < Columns.Count ? FillColumn : Columns.Count - 1;
             var used = 0;
-            for (var i = 0; i < Columns.Count - 1; i++)
+            for (var i = 0; i < Columns.Count; i++)
             {
-                used += Columns[i].Width;
+                if (i != fill)
+                {
+                    used += Columns[i].Width;
+                }
             }
 
-            var last = Columns[^1];
-            var wanted = Math.Max(ClientSize.Width - used, MinimumLastColumn);
+            var last = Columns[fill];
+            var wanted = Math.Max(ClientSize.Width - used - VerticalBarAllowance(), FillColumn >= 0 ? Scaled(140) : MinimumFillWidth(last));
             if (last.Width != wanted)
             {
                 last.Width = wanted;
             }
+
+            fitted = used + last.Width + VerticalBarAllowance() <= ClientSize.Width;
         }
         finally
         {
             _fitting = false;
         }
+
+        if (fitted)
+        {
+            HideStaleHorizontalScroll();
+        }
     }
 
-    public int MinimumLastColumn => LogicalToDeviceUnits(60);
+    /// <summary>
+    /// The list shows a horizontal scroll bar for the moment its columns were wider than the window (a vertical bar
+    /// appearing, a DPI change), and it counts the vertical bar's width into its range even when the columns fit.
+    /// The bar costs a row's height (the last row is cut in half), so it is taken away whenever the columns fit.
+    /// </summary>
+    private void HideStaleHorizontalScroll()
+    {
+        // Reading a column width is a message to the list, which comes back here: the flag stops that.
+        if (_hidingScroll || !IsHandleCreated || (GetWindowLongPtr(Handle, GwlStyle).ToInt64() & WsHScroll) == 0)
+        {
+            return;
+        }
+
+        _hidingScroll = true;
+        try
+        {
+            if (!ColumnsOverflow())
+            {
+                ShowScrollBar(Handle, SbHorz, false);
+            }
+        }
+        finally
+        {
+            _hidingScroll = false;
+        }
+    }
+
+    private bool _hidingScroll;
+
+    private bool ColumnsOverflow()
+    {
+        var total = 0;
+        foreach (ColumnHeader column in Columns)
+        {
+            total += column.Width;
+        }
+
+        return total + VerticalBarAllowance() > ClientSize.Width;
+    }
+
+    /// <summary>
+    /// With a vertical scroll bar showing, the list counts the bar's width into the width its columns need (the client
+    /// width is already without it): columns that fill the client then still raise a horizontal bar. This much is left free.
+    /// </summary>
+    private int VerticalBarAllowance() =>
+        IsHandleCreated && (GetWindowLongPtr(Handle, GwlStyle).ToInt64() & WsVScroll) != 0
+            ? SystemInformation.GetVerticalScrollBarWidthForDpi(CurrentDpi)
+            : 0;
+
+    private const long WsVScroll = 0x00200000;
+    private const int GwlStyle = -16;
+    private const long WsHScroll = 0x00100000;
+    private const int SbHorz = 0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool ShowScrollBar(IntPtr hwnd, int bar, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)] bool show);
+
+    /// <summary>The least a column that takes the leftover width may shrink to: its own header text must stay readable.</summary>
+    private int MinimumFillWidth(ColumnHeader column) =>
+        Math.Max(Scaled(48), TextRenderer.MeasureText(column.Text, Font).Width + Scaled(14));
 
     public void ApplyTheme(Palette palette)
     {
@@ -217,24 +301,110 @@ internal class GridView : ListView, IThemed
     {
         UpdateRowHeight();
         base.OnHandleCreated(e);
+        var header = SendMessage(Handle, LvmGetHeader, IntPtr.Zero, IntPtr.Zero);
+        if (header != IntPtr.Zero)
+        {
+            _headerWindow ??= new HeaderStrip(this);
+            _headerWindow.AssignHandle(header);
+        }
+
         FitLastColumn();
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        _headerWindow?.ReleaseHandle();
+        base.OnHandleDestroyed(e);
+    }
+
+    private HeaderStrip? _headerWindow;
+
+    private const int LvmGetHeader = 0x101F;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>
+    /// The native header paints the strip right of the last column in the system colour (white in the dark theme). The
+    /// strip exists because the columns leave the vertical bar's width free (see <see cref="VerticalBarAllowance"/>);
+    /// this paints it like the rest of the header after the header has drawn itself.
+    /// </summary>
+    private sealed class HeaderStrip(GridView owner) : NativeWindow
+    {
+        private const int WmPaint = 0x000F;
+        private const int HdmGetItemCount = 0x1200;
+        private const int HdmGetItemRect = 0x1207;
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg == WmPaint && owner._palette is { } palette)
+            {
+                Fill(palette);
+            }
+        }
+
+        private void Fill(Palette palette)
+        {
+            var count = (int)SendMessage(Handle, HdmGetItemCount, IntPtr.Zero, IntPtr.Zero);
+            if (count <= 0)
+            {
+                return;
+            }
+
+            var rect = System.Runtime.InteropServices.Marshal.AllocHGlobal(16);
+            try
+            {
+                if (SendMessage(Handle, HdmGetItemRect, (IntPtr)(count - 1), rect) == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                var right = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 8);
+                var bottom = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 12);
+                var width = owner.ClientSize.Width;
+                if (right >= width)
+                {
+                    return;
+                }
+
+                using var graphics = Graphics.FromHwnd(Handle);
+                using var back = new SolidBrush(palette.Window);
+                graphics.FillRectangle(back, right, 0, width - right, bottom);
+                using var line = new Pen(palette.Border);
+                graphics.DrawLine(line, right, bottom - 1, width, bottom - 1);
+            }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(rect);
+            }
+        }
     }
 
     protected override void OnFontChanged(EventArgs e)
     {
         base.OnFontChanged(e);
         UpdateRowHeight();
+        SyncDpi();
     }
 
     protected override void OnDpiChangedAfterParent(EventArgs e)
     {
         base.OnDpiChangedAfterParent(e);
         UpdateRowHeight();
+        SyncDpi();
+    }
+
+    protected override void OnParentChanged(EventArgs e)
+    {
+        base.OnParentChanged(e);
+        SyncDpi();
     }
 
     protected override void OnClientSizeChanged(EventArgs e)
     {
         base.OnClientSizeChanged(e);
+        SyncDpi();
         FitLastColumn();
     }
 
@@ -303,12 +473,44 @@ internal class GridView : ListView, IThemed
         {
             var row = SelectedRow;
             var at = row >= 0 ? GetItemRect(row).Location : Point.Empty;
-            menu.Show(this, new Point(at.X + LogicalToDeviceUnits(24), at.Y + RowHeight));
+            menu.Show(this, new Point(at.X + Scaled(24), at.Y + RowHeight));
             return;
         }
 
         base.WndProc(ref m);
+        if (m.Msg == WmPaint)
+        {
+            BlankBelowRows();
+        }
+
+        // The list raises its own horizontal bar at moments of its choosing (after an item count or a size change): checked after every message.
+        HideStaleHorizontalScroll();
     }
+
+    /// <summary>
+    /// The themed list draws its column dividers down the empty area under the last row (two thin lines per column, a
+    /// light-blue one in the light theme), which looks like leftover rows. The area under the rows is simply plain surface.
+    /// </summary>
+    private void BlankBelowRows()
+    {
+        if (_palette is not { } palette || !IsHandleCreated || View != View.Details)
+        {
+            return;
+        }
+
+        var top = VirtualListSize > 0 ? GetItemRect(VirtualListSize - 1).Bottom : HeaderBottom();
+        var height = ClientSize.Height - top;
+        if (top < 0 || height <= 0)
+        {
+            return;
+        }
+
+        using var graphics = Graphics.FromHwnd(Handle);
+        using var back = new SolidBrush(palette.Surface);
+        graphics.FillRectangle(back, 0, top, ClientSize.Width, height);
+    }
+
+    private int HeaderBottom() => Math.Max(Font.Height + Scaled(10), RowHeight);
 
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
     {
@@ -329,13 +531,13 @@ internal class GridView : ListView, IThemed
             e.Graphics.DrawLine(line, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
             if (e.ColumnIndex < Columns.Count - 1)
             {
-                var pad = LogicalToDeviceUnits(6);
+                var pad = Scaled(6);
                 e.Graphics.DrawLine(line, e.Bounds.Right - 1, e.Bounds.Top + pad, e.Bounds.Right - 1, e.Bounds.Bottom - pad);
             }
         }
 
-        var pad8 = LogicalToDeviceUnits(8);
-        var arrow = e.ColumnIndex == _sortColumn ? LogicalToDeviceUnits(14) : 0;
+        var pad8 = Scaled(8);
+        var arrow = e.ColumnIndex == _sortColumn ? Scaled(14) : 0;
         var column = e.Header!;
         var alignment = column.TextAlign switch
         {
@@ -354,7 +556,7 @@ internal class GridView : ListView, IThemed
 
         if (arrow > 0)
         {
-            var size = LogicalToDeviceUnits(4);
+            var size = Scaled(4);
             var cx = column.TextAlign == HorizontalAlignment.Right
                 ? e.Bounds.Left + pad8 // arrow sits on the left of a right-aligned header
                 : e.Bounds.Right - pad8 - size;
@@ -388,11 +590,13 @@ internal class GridView : ListView, IThemed
         var selected = e.ItemIndex == _drawSelected;
         var header = RowStyles?.Invoke(e.ItemIndex) == RowStyle.Header;
         using var back = new SolidBrush(selected ? palette.Selection : header ? palette.Window : palette.Surface);
-        e.Graphics.FillRectangle(back, e.Bounds);
+        // Across the whole width: with a vertical bar showing, the columns stop a little short of the right edge.
+        var band = new Rectangle(e.Bounds.Left, e.Bounds.Top, Math.Max(ClientSize.Width - e.Bounds.Left, e.Bounds.Width), e.Bounds.Height);
+        e.Graphics.FillRectangle(back, band);
         if (selected)
         {
             using var mark = new SolidBrush(palette.Accent);
-            e.Graphics.FillRectangle(mark, e.Bounds.Left, e.Bounds.Top + 2, LogicalToDeviceUnits(3), e.Bounds.Height - 4);
+            e.Graphics.FillRectangle(mark, e.Bounds.Left, e.Bounds.Top + 2, Scaled(3), e.Bounds.Height - 4);
         }
     }
 
@@ -416,15 +620,15 @@ internal class GridView : ListView, IThemed
         }
 
         var width = Columns[e.ColumnIndex].Width;
-        var pad = LogicalToDeviceUnits(8);
+        var pad = Scaled(8);
         var bounds = new Rectangle(left + pad, row.Top, Math.Max(width - (pad * 2), 0), row.Height);
         if (e.ColumnIndex == 0)
         {
-            var step = LogicalToDeviceUnits(16);
+            var step = Scaled(16);
             var indent = cell.Indent * step;
             if (cell.Glyph != ExpanderGlyph.None)
             {
-                DrawGlyph(e.Graphics, new Rectangle(left + pad + indent - LogicalToDeviceUnits(2), row.Top, step, row.Height), cell.Glyph, selected ? palette.SelectionText : palette.TextDim);
+                DrawGlyph(e.Graphics, new Rectangle(left + pad + indent - Scaled(2), row.Top, step, row.Height), cell.Glyph, selected ? palette.SelectionText : palette.TextDim);
             }
 
             // Text always starts after the glyph slot, so rows with and without children line up.
@@ -464,8 +668,8 @@ internal class GridView : ListView, IThemed
     {
         var rect = GetItemRect(row, ItemBoundsPortion.Entire);
         var cell = Cells?.Invoke(row, 0) ?? default;
-        var step = LogicalToDeviceUnits(16);
-        var x = rect.Left + LogicalToDeviceUnits(8) + (cell.Indent * step) - LogicalToDeviceUnits(2);
+        var step = Scaled(16);
+        var x = rect.Left + Scaled(8) + (cell.Indent * step) - Scaled(2);
         return cell.Glyph == ExpanderGlyph.None ? Rectangle.Empty : new Rectangle(x, rect.Top, step, rect.Height);
     }
 
@@ -477,7 +681,7 @@ internal class GridView : ListView, IThemed
 
     private void DrawGlyph(Graphics g, Rectangle slot, ExpanderGlyph glyph, Color color)
     {
-        var size = LogicalToDeviceUnits(4);
+        var size = Scaled(4);
         var cx = slot.Left + (slot.Width / 2);
         var cy = slot.Top + (slot.Height / 2);
         Point[] points = glyph == ExpanderGlyph.Expanded
@@ -485,7 +689,7 @@ internal class GridView : ListView, IThemed
             : [new Point(cx - (size / 2), cy - size), new Point(cx + (size / 2), cy), new Point(cx - (size / 2), cy + size)];
         var old = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var pen = new Pen(color, Math.Max(1.5f, LogicalToDeviceUnits(1))))
+        using (var pen = new Pen(color, Math.Max(1.5f, Scaled(1))))
         {
             g.DrawLines(pen, points);
         }
@@ -517,9 +721,43 @@ internal class GridView : ListView, IThemed
         e.Item = item;
     }
 
+    /// <summary>The DPI the window is at now. The form is asked first: it is the first to learn about a change.</summary>
+    private int CurrentDpi => FindForm()?.DeviceDpi ?? DeviceDpi;
+
+    private int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
+
+    /// <summary>After a DPI change the column widths (and row height) are brought to the new scale.</summary>
+    private void SyncDpi()
+    {
+        var dpi = CurrentDpi;
+        if (dpi == _columnDpi)
+        {
+            return;
+        }
+
+        var factor = (double)dpi / _columnDpi;
+        _columnDpi = dpi;
+        _fitting = true;
+        try
+        {
+            foreach (ColumnHeader column in Columns)
+            {
+                column.Width = (int)Math.Round(column.Width * factor);
+            }
+        }
+        finally
+        {
+            _fitting = false;
+        }
+
+        UpdateRowHeight();
+        FitLastColumn();
+        Invalidate();
+    }
+
     private void UpdateRowHeight()
     {
-        RowHeight = Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(28));
+        RowHeight = Math.Max(Font.Height + Scaled(14), Scaled(28));
         // The row height of a details ListView follows its image list: a 1-pixel-wide image of the wanted height sets it.
         if (_rowHeight.ImageSize.Height != RowHeight)
         {

@@ -153,7 +153,7 @@ internal static class SmokeRun
                 if (shotsDirectory is not null)
                 {
                     var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
-                    _shots.Add(Capture(shotsDirectory, $"{language.ToString().ToLowerInvariant()}-{theme.ToString().ToLowerInvariant()}-{id}{scale}.png"));
+                    _shots.Add(await Capture(shotsDirectory, $"{language.ToString().ToLowerInvariant()}-{theme.ToString().ToLowerInvariant()}-{id}{scale}.png"));
                 }
             }
         }
@@ -260,7 +260,7 @@ internal static class SmokeRun
             if (shotsDirectory is not null)
             {
                 var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
-                _shots.Add(Capture(shotsDirectory, $"{Strings.Current.ToString().ToLowerInvariant()}-{(context.Theme.IsDark ? "dark" : "light")}-diagnose-report{scale}.png"));
+                _shots.Add(await Capture(shotsDirectory, $"{Strings.Current.ToString().ToLowerInvariant()}-{(context.Theme.IsDark ? "dark" : "light")}-diagnose-report{scale}.png"));
             }
         }
 
@@ -272,12 +272,16 @@ internal static class SmokeRun
         {
             var target = 96 * dpiPercent / 100;
             var scale = (double)target / form.DeviceDpi;
+
+            // A denser monitor has more pixels, this one does not: keep the grown window inside the work area so a
+            // picture of it is not cut off by the screen edge (the layout is rescaled by the factor, not by the size).
+            var area = Screen.FromControl(form).WorkingArea;
             var rect = new NativeRect
             {
-                Left = form.Left,
-                Top = form.Top,
-                Right = form.Left + (int)(form.Width * scale),
-                Bottom = form.Top + (int)(form.Height * scale),
+                Left = area.Left,
+                Top = area.Top,
+                Right = area.Left + Math.Min((int)(form.Width * scale), area.Width),
+                Bottom = area.Top + Math.Min((int)(form.Height * scale), area.Height),
             };
             var memory = Marshal.AllocHGlobal(Marshal.SizeOf<NativeRect>());
             try
@@ -298,49 +302,183 @@ internal static class SmokeRun
         /// The window as the user sees it, title bar and frame included: PrintWindow asks the compositor for the real
         /// content (so it also works off screen), CopyFromScreen reads the pixels when the window is on screen. This is
         /// how the dark native headers and the dark title bar are verified; DrawToBitmap paints through a different path.
+        /// A window that was just switched to another page may still be half repainted (an off-screen window is painted
+        /// lazily), so the picture is taken again until two takes in a row agree.
         /// </summary>
-        private string Capture(string directory, string fileName)
+        private async Task<string> Capture(string directory, string fileName)
         {
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, fileName);
-            GetWindowRect(form.Handle, out var window);
-            var width = window.Right - window.Left;
-            var height = window.Bottom - window.Top;
-            using var full = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            using (var graphics = Graphics.FromImage(full))
+
+            // The window is looked up again for every take: if something moves or resizes it while the page settles
+            // (the first versions cut a corner out of one picture), the two takes differ and the loop goes on.
+            Bitmap? previous = null;
+            Rectangle previousCrop = default;
+            Bitmap? current = null;
+            Rectangle currentCrop = default;
+            for (var attempt = 0; attempt < 12; attempt++)
             {
-                if (onScreen)
+                RedrawWindow(form.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
+                await Task.Delay(attempt == 0 ? 120 : 200).ConfigureAwait(true);
+                if (onScreen && !await EnsureUncovered().ConfigureAwait(true))
                 {
-                    graphics.CopyFromScreen(window.Left, window.Top, 0, 0, new Size(width, height));
+                    // Something else is drawn over the window (the owner is working on this PC): a picture now would show it.
+                    previous?.Dispose();
+                    previous = null;
+                    continue;
                 }
-                else
+
+                GetWindowRect(form.Handle, out var window);
+                var width = window.Right - window.Left;
+                var height = window.Bottom - window.Top;
+
+                // Windows 10/11 frames carry an invisible resize border; crop to the visible frame.
+                currentCrop = new Rectangle(0, 0, width, height);
+                if (DwmGetWindowAttribute(form.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) == 0 && frame.Right > frame.Left)
                 {
-                    var hdc = graphics.GetHdc();
-                    try
-                    {
-                        if (!PrintWindow(form.Handle, hdc, 2))
-                        {
-                            Check("window capture: " + fileName, false, "PrintWindow failed");
-                        }
-                    }
-                    finally
-                    {
-                        graphics.ReleaseHdc(hdc);
-                    }
+                    currentCrop = Rectangle.Intersect(currentCrop, new Rectangle(frame.Left - window.Left, frame.Top - window.Top, frame.Right - frame.Left, frame.Bottom - frame.Top));
                 }
+
+                current = Take(window, width, height, fileName);
+                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015)
+                {
+                    break;
+                }
+
+                previous?.Dispose();
+                previous = current;
+                previousCrop = currentCrop;
+                current = null;
             }
 
-            // Windows 10/11 frames carry an invisible resize border; crop to the visible frame.
-            var frame = new NativeRect();
-            var crop = new Rectangle(0, 0, width, height);
-            if (DwmGetWindowAttribute(form.Handle, 9, out frame, Marshal.SizeOf<NativeRect>()) == 0 && frame.Right > frame.Left)
+            // Settled: the last two agree, keep the newest. Never settled (live numbers kept moving): keep the last one.
+            // Never uncovered: no picture is taken, and the run says so (the PNG is not written, so a stale one cannot pass).
+            var kept = current ?? previous;
+            var crop = current is not null ? currentCrop : previousCrop;
+            if (kept is null)
             {
-                crop = Rectangle.Intersect(crop, new Rectangle(frame.Left - window.Left, frame.Top - window.Top, frame.Right - frame.Left, frame.Bottom - frame.Top));
+                Check("window capture not covered: " + fileName, false, "another window stayed on top of the app");
+                File.Delete(path);
+                return path;
             }
 
+            if (!ReferenceEquals(kept, previous))
+            {
+                previous?.Dispose();
+            }
+
+            using var full = kept;
             using var cropped = full.Clone(crop, PixelFormat.Format32bppArgb);
             cropped.Save(path, ImageFormat.Png);
             return path;
+        }
+
+        /// <summary>
+        /// True when nothing else is drawn over the window. The window is topmost but never activated, and another topmost
+        /// window (a chat, an overlay) that was used later sits above it; raise it again (still without activating) and look.
+        /// </summary>
+        private async Task<bool> EnsureUncovered()
+        {
+            for (var round = 0; round < 3; round++)
+            {
+                if (CoveredPoints() == 0)
+                {
+                    return true;
+                }
+
+                SetWindowPos(form.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // TOPMOST, NOSIZE | NOMOVE | NOACTIVATE
+                await Task.Delay(180).ConfigureAwait(true);
+            }
+
+            return CoveredPoints() == 0;
+        }
+
+        /// <summary>How many of a 5 x 4 grid of points inside the visible frame belong to some other window.</summary>
+        private int CoveredPoints()
+        {
+            if (DwmGetWindowAttribute(form.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) != 0 || frame.Right <= frame.Left)
+            {
+                GetWindowRect(form.Handle, out frame);
+            }
+
+            var covered = 0;
+            for (var gx = 0; gx < 5; gx++)
+            {
+                for (var gy = 0; gy < 4; gy++)
+                {
+                    var x = frame.Left + ((frame.Right - frame.Left) * ((gx * 2) + 1) / 10);
+                    var y = frame.Top + ((frame.Bottom - frame.Top) * ((gy * 2) + 1) / 8);
+                    var hit = WindowFromPoint(new NativePoint { X = x, Y = y });
+                    if (hit == IntPtr.Zero || GetAncestor(hit, 2) != form.Handle) // GA_ROOT
+                    {
+                        covered++;
+                    }
+                }
+            }
+
+            return covered;
+        }
+
+        private Bitmap Take(NativeRect window, int width, int height, string fileName)
+        {
+            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            using var graphics = Graphics.FromImage(bitmap);
+            if (onScreen)
+            {
+                graphics.CopyFromScreen(window.Left, window.Top, 0, 0, new Size(width, height));
+                return bitmap;
+            }
+
+            var hdc = graphics.GetHdc();
+            try
+            {
+                if (!PrintWindow(form.Handle, hdc, 2))
+                {
+                    Check("window capture: " + fileName, false, "PrintWindow failed");
+                }
+            }
+            finally
+            {
+                graphics.ReleaseHdc(hdc);
+            }
+
+            return bitmap;
+        }
+
+        /// <summary>The fraction of pixels that differ clearly: live numbers moving in the sample data stay far below it, a half painted page does not.</summary>
+        private static double Differs(Bitmap a, Bitmap b)
+        {
+            if (a.Size != b.Size)
+            {
+                return 1;
+            }
+
+            var rect = new Rectangle(Point.Empty, a.Size);
+            var da = a.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var db = b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                var bytes = Math.Abs(da.Stride) * a.Height;
+                var left = new byte[bytes];
+                var right = new byte[bytes];
+                Marshal.Copy(da.Scan0, left, 0, bytes);
+                Marshal.Copy(db.Scan0, right, 0, bytes);
+                long different = 0;
+                for (var i = 0; i < bytes; i += 4)
+                {
+                    if (Math.Abs(left[i] - right[i]) + Math.Abs(left[i + 1] - right[i + 1]) + Math.Abs(left[i + 2] - right[i + 2]) > 24)
+                    {
+                        different++;
+                    }
+                }
+
+                return (double)different / (bytes / 4);
+            }
+            finally
+            {
+                a.UnlockBits(da);
+                b.UnlockBits(db);
+            }
         }
 
         public void Write(string path, int exitCode)
@@ -369,9 +507,32 @@ internal static class SmokeRun
         public int Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+
+    private const uint RedrawAll = 0x0001 | 0x0004 | 0x0080 | 0x0100 | 0x0400; // INVALIDATE | ERASE | ALLCHILDREN | UPDATENOW | FRAME
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RedrawWindow(IntPtr hwnd, IntPtr update, IntPtr region, uint flags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -484,6 +645,28 @@ internal static class SmokeClip
                     }
                 }
 
+                // A scroll bar under a table takes a row's worth of height and cuts the last row in half. It is right
+                // when the columns really are wider than the window; it is a fault when they fit (the vertical bar's width is counted too).
+                var style = list.IsHandleCreated ? GetWindowLongPtr(list.Handle, -16).ToInt64() : 0;
+                if ((style & 0x00100000) != 0)
+                {
+                    var total = 0;
+                    foreach (ColumnHeader column in list.Columns)
+                    {
+                        total += column.Width;
+                    }
+
+                    var bar = (style & 0x00200000) != 0 ? SystemInformation.GetVerticalScrollBarWidthForDpi(list.FindForm()?.DeviceDpi ?? list.DeviceDpi) : 0;
+                    if (total + bar > list.ClientSize.Width)
+                    {
+                        break;
+                    }
+
+                    var info = new ScrollInfo { Size = (uint)Marshal.SizeOf<ScrollInfo>(), Mask = 0x17 };
+                    GetScrollInfo(list.Handle, 0, ref info);
+                    return $"{name} has a horizontal scroll bar (columns {total}px in {list.ClientSize.Width}px; range {info.Min}..{info.Max}, page {info.Page}, pos {info.Pos})";
+                }
+
                 break;
         }
 
@@ -497,6 +680,25 @@ internal static class SmokeClip
     }
 
     private static string Short(string text) => text.Length <= 28 ? text : text[..28] + "...";
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScrollInfo
+    {
+        public uint Size;
+        public uint Mask;
+        public int Min;
+        public int Max;
+        public uint Page;
+        public int Pos;
+        public int TrackPos;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref ScrollInfo info);
 }
 
 /// <summary>Collects the visible texts of a control tree and flags the ones that are "[key]" placeholders.</summary>

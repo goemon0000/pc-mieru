@@ -25,8 +25,8 @@ internal sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(LogicalToDeviceUnits(1120), LogicalToDeviceUnits(700));
         MinimumSize = new Size(LogicalToDeviceUnits(760), LogicalToDeviceUnits(480));
+        ClientSize = StartSize();
         KeyPreview = true;
 
         _nav.Width = LogicalToDeviceUnits(188);
@@ -184,11 +184,32 @@ internal sealed class MainForm : Form
         ShowPumpState();
     }
 
+    /// <summary>
+    /// The size the window opens with: the last one (gui.ini), else 1280 x 800, never larger than the screen it opens on.
+    /// Wide enough that the default process columns and the detail pane fit without a horizontal scroll bar.
+    /// </summary>
+    private Size StartSize()
+    {
+        var work = Screen.FromPoint(Cursor.Position).WorkingArea;
+        var width = LogicalToDeviceUnits(Math.Clamp(_context.Settings.GetInt("win.w", 1280), 760, 6000));
+        var height = LogicalToDeviceUnits(Math.Clamp(_context.Settings.GetInt("win.h", 800), 480, 4000));
+        var frame = SystemInformation.CaptionHeight + (SystemInformation.FrameBorderSize.Height * 2) + LogicalToDeviceUnits(24);
+        return new Size(
+            Math.Min(width, Math.Max(work.Width - LogicalToDeviceUnits(24), MinimumSize.Width)),
+            Math.Min(height, Math.Max(work.Height - frame, MinimumSize.Height)));
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         foreach (var page in _pages)
         {
             page?.SaveState();
+        }
+
+        if (WindowState == FormWindowState.Normal)
+        {
+            _context.Settings.SetInt("win.w", (int)Math.Round(ClientSize.Width * 96.0 / DeviceDpi));
+            _context.Settings.SetInt("win.h", (int)Math.Round(ClientSize.Height * 96.0 / DeviceDpi));
         }
 
         _context.Settings.Save();

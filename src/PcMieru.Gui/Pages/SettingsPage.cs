@@ -7,12 +7,12 @@ namespace PcMieru.Gui;
 internal sealed class SettingsPage : PageBase
 {
     private readonly Label _intervalLabel = new() { AutoSize = true };
-    private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsInterval", Width = 220 };
+    private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsInterval" };
     private readonly CheckBox _pause = new() { AutoSize = true, Name = "settingsPause" };
     private readonly Label _themeLabel = new() { AutoSize = true };
-    private readonly ComboBox _theme = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsTheme", Width = 220 };
+    private readonly ComboBox _theme = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsTheme" };
     private readonly Label _languageLabel = new() { AutoSize = true };
-    private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsLanguage", Width = 220 };
+    private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsLanguage" };
     private readonly CheckBox _onTop = new() { AutoSize = true, Name = "settingsOnTop" };
     private readonly Label _about = new() { AutoSize = true, Name = "settingsAbout" };
     private readonly ToneLabel _privacy = new() { AutoSize = true, Name = "settingsPrivacy" };
@@ -34,14 +34,21 @@ internal sealed class SettingsPage : PageBase
         };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        AddRow(grid, _intervalLabel, _interval);
-        AddRow(grid, new Label { AutoSize = true, Visible = false }, _pause);
-        AddRow(grid, _themeLabel, _theme);
-        AddRow(grid, _languageLabel, _language);
-        AddRow(grid, new Label { AutoSize = true, Visible = false }, _onTop);
-        _about.Margin = new Padding(0, Px(16), 0, Px(4));
+        // Explicit cells: a hidden spacer would be skipped by the automatic flow and shift every control after it.
+        foreach (var box in new[] { _interval, _theme, _language })
+        {
+            box.Width = Px(260);
+        }
+
+        AddRow(grid, _intervalLabel, _interval, 0);
+        AddWide(grid, _pause, 1);
+        AddRow(grid, _themeLabel, _theme, 2);
+        AddRow(grid, _languageLabel, _language, 3);
+        AddWide(grid, _onTop, 4);
+        _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
+        _privacy.MaximumSize = new Size(Px(640), 0);
         grid.Controls.Add(_about, 0, 5);
         grid.SetColumnSpan(_about, 2);
         grid.Controls.Add(_privacy, 0, 6);
@@ -102,7 +109,8 @@ internal sealed class SettingsPage : PageBase
 
     internal CheckBox OnTopBox => _onTop;
 
-    public override void OnActivated() => OnPumpState();
+    /// <summary>The controls are brought back in line with the live state every time the page opens (the theme or language may have been changed by a switch, a command-line option or the status bar).</summary>
+    public override void OnActivated() => Sync();
 
     public override void ApplyLanguage()
     {
@@ -116,19 +124,15 @@ internal sealed class SettingsPage : PageBase
                 _interval.Items.Add(Strings.Get("gui.interval." + choice));
             }
 
-            _interval.SelectedIndex = Math.Max(0, Array.IndexOf(GuiSettings.IntervalChoices, Context.Settings.IntervalMs));
             _pause.Text = Strings.Get("gui.settings.pause");
-            _pause.Checked = Context.Pump.Paused;
             _themeLabel.Text = Strings.Get("gui.settings.theme");
             _theme.Items.Clear();
             _theme.Items.AddRange([Strings.Get("gui.settings.theme.system"), Strings.Get("gui.settings.theme.light"), Strings.Get("gui.settings.theme.dark")]);
-            _theme.SelectedIndex = (int)Context.Theme.Mode;
             _languageLabel.Text = Strings.Get("gui.settings.language");
             _language.Items.Clear();
             _language.Items.AddRange(["日本語", "English"]);
-            _language.SelectedIndex = (int)Strings.Current;
             _onTop.Text = Strings.Get("gui.settings.ontop");
-            _onTop.Checked = Context.Settings.AlwaysOnTop;
+            ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
             _privacy.Text = Strings.Get("gui.settings.privacy");
             _interval.AccessibleName = _intervalLabel.Text;
@@ -154,6 +158,29 @@ internal sealed class SettingsPage : PageBase
         base.Dispose(disposing);
     }
 
+    private void Sync()
+    {
+        _filling = true;
+        try
+        {
+            ShowCurrent();
+        }
+        finally
+        {
+            _filling = false;
+        }
+    }
+
+    /// <summary>Puts every control on the value the app has now. The caller holds <c>_filling</c>.</summary>
+    private void ShowCurrent()
+    {
+        _interval.SelectedIndex = Math.Max(0, Array.IndexOf(GuiSettings.IntervalChoices, Context.Settings.IntervalMs));
+        _pause.Checked = Context.Pump.Paused;
+        _theme.SelectedIndex = (int)Context.Theme.Mode;
+        _language.SelectedIndex = (int)Strings.Current;
+        _onTop.Checked = Context.Settings.AlwaysOnTop;
+    }
+
     private void OnPumpState()
     {
         _filling = true;
@@ -167,14 +194,23 @@ internal sealed class SettingsPage : PageBase
         }
     }
 
-    private static void AddRow(TableLayoutPanel grid, Control label, Control field)
+    private void AddRow(TableLayoutPanel grid, Control label, Control field, int row)
     {
         label.Anchor = AnchorStyles.Left;
-        label.Margin = new Padding(0, 0, 24, 14);
+        label.Margin = new Padding(0, 0, Px(24), Px(14));
         field.Anchor = AnchorStyles.Left;
-        field.Margin = new Padding(0, 0, 0, 14);
-        grid.Controls.Add(label);
-        grid.Controls.Add(field);
+        field.Margin = new Padding(0, 0, 0, Px(14));
+        grid.Controls.Add(label, 0, row);
+        grid.Controls.Add(field, 1, row);
+    }
+
+    /// <summary>A check box on its own line, under the label column too, so the check boxes line up with the labels.</summary>
+    private void AddWide(TableLayoutPanel grid, Control control, int row)
+    {
+        control.Anchor = AnchorStyles.Left;
+        control.Margin = new Padding(0, 0, 0, Px(14));
+        grid.Controls.Add(control, 0, row);
+        grid.SetColumnSpan(control, 2);
     }
 }
 

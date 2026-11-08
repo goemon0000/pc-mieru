@@ -67,6 +67,7 @@ internal sealed class UsersPage : PageBase
         };
         _grid.DoubleClick += (_, _) => Open();
         _grid.KeyDown += OnGridKey;
+        _grid.FillColumn = 0;
         _grid.SizeChanged += (_, _) => _grid.FitLastColumn();
         _reload.MinimumSize = new Size(Px(88), Px(30));
         _reload.Click += (_, _) => RefreshNow();

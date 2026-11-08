@@ -13,14 +13,14 @@ internal sealed partial class ProcessesPage : PageBase
 
     private static readonly ColumnSpec[] Specs =
     [
-        new(ProcessColumn.Name, "gui.proc.col.name", 250, HorizontalAlignment.Left, true),
-        new(ProcessColumn.Pid, "gui.proc.col.pid", 72, HorizontalAlignment.Right, true),
-        new(ProcessColumn.Cpu, "gui.proc.col.cpu", 80, HorizontalAlignment.Right, true),
-        new(ProcessColumn.Memory, "gui.proc.col.memory", 104, HorizontalAlignment.Right, true),
-        new(ProcessColumn.IoRead, "gui.proc.col.ioread", 132, HorizontalAlignment.Right, true),
-        new(ProcessColumn.IoWrite, "gui.proc.col.iowrite", 132, HorizontalAlignment.Right, true),
-        new(ProcessColumn.Gpu, "gui.proc.col.gpu", 76, HorizontalAlignment.Right, true),
-        new(ProcessColumn.State, "gui.proc.col.state", 110, HorizontalAlignment.Left, true),
+        new(ProcessColumn.Name, "gui.proc.col.name", 176, HorizontalAlignment.Left, true),
+        new(ProcessColumn.Pid, "gui.proc.col.pid", 64, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Cpu, "gui.proc.col.cpu", 72, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Memory, "gui.proc.col.memory", 92, HorizontalAlignment.Right, true),
+        new(ProcessColumn.IoRead, "gui.proc.col.ioread", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.IoWrite, "gui.proc.col.iowrite", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Gpu, "gui.proc.col.gpu", 64, HorizontalAlignment.Right, true),
+        new(ProcessColumn.State, "gui.proc.col.state", 84, HorizontalAlignment.Left, true),
         new(ProcessColumn.Threads, "gui.proc.col.threads", 96, HorizontalAlignment.Right, false),
         new(ProcessColumn.Handles, "gui.proc.col.handles", 96, HorizontalAlignment.Right, false),
         new(ProcessColumn.WorkingSet, "gui.proc.col.workingset", 116, HorizontalAlignment.Right, false),
@@ -400,7 +400,7 @@ internal sealed partial class ProcessesPage : PageBase
         // The minimum sizes only fit once the split has a real width; set earlier they throw.
         _split.Panel1MinSize = Px(420);
         _split.Panel2MinSize = Px(250);
-        var wanted = Px(Math.Clamp(Context.Settings.GetInt("proc.split", 340), 250, 700));
+        var wanted = Px(Math.Clamp(Context.Settings.GetInt("proc.split", 290), 250, 700));
         var distance = _split.Width - wanted - _split.SplitterWidth;
         _split.SplitterDistance = Math.Clamp(distance, _split.Panel1MinSize, _split.Width - _split.Panel2MinSize - _split.SplitterWidth);
         _splitReady = true;
