@@ -1,7 +1,10 @@
 namespace PcMieru.Core.Collection;
 
-/// <summary>CPU and I/O rates of one process over the last window.</summary>
-internal readonly record struct ProcessRates(Value<double> Cpu, Value<double> ReadPerSec, Value<double> WritePerSec);
+/// <summary>
+/// CPU and I/O rates of one process over the last window. <paramref name="InBaseline"/> says the process was already there at
+/// the previous tick, so a window-based reading from another source (GPU) covers its whole life in that window.
+/// </summary>
+internal readonly record struct ProcessRates(Value<double> Cpu, Value<double> ReadPerSec, Value<double> WritePerSec, bool InBaseline = false);
 
 /// <summary>
 /// Per-process deltas, keyed by <see cref="ProcessKey"/> (PID plus creation time), so a reused PID is a new process.
@@ -70,7 +73,8 @@ internal sealed class ProcessDeltaEngine
                 output[i] = new ProcessRates(
                     Cpu(p.CpuTime - before.CpuTime, elapsedSeconds, logicalProcessors),
                     Rate(p.ReadTransferCount, before.Read, elapsedSeconds),
-                    Rate(p.WriteTransferCount, before.Write, elapsedSeconds));
+                    Rate(p.WriteTransferCount, before.Write, elapsedSeconds),
+                    InBaseline: true);
             }
         }
 
