@@ -73,6 +73,10 @@ public sealed class PcMieruServices : IDisposable
 
     public IProcessDetailsProvider ProcessDetails => _registry.Get<IProcessDetailsProvider>();
 
+    public IProcessGroupSource ProcessGroups => _registry.Get<IProcessGroupSource>();
+
+    public IProcessIconSource ProcessIcons => _registry.Get<IProcessIconSource>();
+
     public IHardwareProvider Hardware => _registry.Get<IHardwareProvider>();
 
     public IStorageHealthProvider StorageHealth => _registry.Get<IStorageHealthProvider>();

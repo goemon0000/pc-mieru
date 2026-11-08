@@ -142,10 +142,10 @@ public class ProcessTableModelTests
         var model = new ProcessTableModel { Mode = ProcessViewMode.List };
         model.Update(
             snapshot with { Processes = [Proc(1, "a", 1), Proc(2, "b", 5), Proc(3, "c", 3), Proc(4, "d", 2)] },
-            p => p.Key.Pid switch { 1 => ProcessGroup.Windows, 2 => ProcessGroup.Apps, _ => ProcessGroup.Background });
+            p => p.Key.Pid switch { 1 => ProcessGroup.Windows, 2 => ProcessGroup.App, _ => ProcessGroup.Background });
         var headers = Enumerable.Range(0, model.Count).Where(i => model[i].IsGroup).ToArray();
         Assert.Equal(3, headers.Length);
-        Assert.Equal([ProcessGroup.Apps, ProcessGroup.Background, ProcessGroup.Windows], headers.Select(i => model[i].Group));
+        Assert.Equal([ProcessGroup.App, ProcessGroup.Background, ProcessGroup.Windows], headers.Select(i => model[i].Group));
         Assert.Equal([1, 2, 1], headers.Select(i => model[i].GroupCount));
         Assert.Equal(["b", "c", "d", "a"], Names(model));
     }
@@ -157,7 +157,7 @@ public class ProcessTableModelTests
         var model = new ProcessTableModel { Mode = ProcessViewMode.List };
         model.Update(
             snapshot with { Processes = [Proc(1, "a", 1), Proc(2, "b", 5)] },
-            p => p.Key.Pid == 1 ? ProcessGroup.Windows : ProcessGroup.Apps);
+            p => p.Key.Pid == 1 ? ProcessGroup.Windows : ProcessGroup.App);
         model.Filter = "b";
         Assert.Equal(1, Enumerable.Range(0, model.Count).Count(i => model[i].IsGroup));
     }

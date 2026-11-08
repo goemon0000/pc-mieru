@@ -24,6 +24,8 @@ public class ServicesTests
         using var s = Create();
         Assert.NotNull(s.Snapshots);
         Assert.NotNull(s.ProcessDetails);
+        Assert.NotNull(s.ProcessGroups);
+        Assert.NotNull(s.ProcessIcons);
         Assert.NotNull(s.Hardware);
         Assert.NotNull(s.StorageHealth);
         Assert.NotNull(s.Sensors);

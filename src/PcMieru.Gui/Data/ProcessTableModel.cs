@@ -27,14 +27,6 @@ internal enum ProcessViewMode
     List,
 }
 
-/// <summary>The app's own grouping of the list view. It is not Task Manager's rule and the help text says so.</summary>
-internal enum ProcessGroup
-{
-    Apps,
-    Background,
-    Windows,
-}
-
 /// <summary>One row of the process list: a process (with its place in the tree) or a group header (list view).</summary>
 internal readonly record struct ProcessRow(ProcessInfo? Process, int Depth, bool HasChildren, bool Expanded, ProcessGroup Group, int GroupCount)
 {
@@ -49,7 +41,7 @@ internal readonly record struct ProcessRow(ProcessInfo? Process, int Depth, bool
 /// </summary>
 internal sealed class ProcessTableModel
 {
-    private static readonly ProcessGroup[] GroupOrder = [ProcessGroup.Apps, ProcessGroup.Background, ProcessGroup.Windows];
+    private static readonly ProcessGroup[] GroupOrder = [ProcessGroup.App, ProcessGroup.Background, ProcessGroup.Windows];
 
     private readonly HashSet<ProcessKey> _collapsed = [];
     private ProcessInfo[] _all = [];

@@ -40,6 +40,12 @@ internal struct GridCell
 
     public ExpanderGlyph Glyph;
 
+    /// <summary>First column only: leave room for a program icon before the text, whether or not it has arrived yet (rows line up).</summary>
+    public bool IconSlot;
+
+    /// <summary>First column only: the icon to draw in the slot. Null draws nothing (not known yet, or the file has none).</summary>
+    public Image? Icon;
+
     public GridCell(string text, CellTone tone = CellTone.Normal)
     {
         Text = text;
@@ -47,6 +53,8 @@ internal struct GridCell
         Bold = false;
         Indent = 0;
         Glyph = ExpanderGlyph.None;
+        IconSlot = false;
+        Icon = null;
     }
 }
 
@@ -639,6 +647,20 @@ internal class GridView : ListView, IThemed
 
             // Text always starts after the glyph slot, so rows with and without children line up.
             var shift = indent + step;
+            if (cell.IconSlot)
+            {
+                var side = Scaled(16);
+                if (cell.Icon is { } icon)
+                {
+                    var mode = e.Graphics.InterpolationMode;
+                    e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    e.Graphics.DrawImage(icon, new Rectangle(bounds.Left + shift, row.Top + ((row.Height - side) / 2), side, side));
+                    e.Graphics.InterpolationMode = mode;
+                }
+
+                shift += side + Scaled(6);
+            }
+
             bounds = new Rectangle(bounds.Left + shift, bounds.Top, Math.Max(bounds.Width - shift, 0), bounds.Height);
         }
 

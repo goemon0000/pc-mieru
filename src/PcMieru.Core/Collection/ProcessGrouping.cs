@@ -1,35 +1,8 @@
-using System.Text.Json.Serialization;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Collection;
 
-/// <summary>
-/// The process list's three groups. The rule is PC Mieru's own (SPEC 5.2) and is not claimed to match Task Manager's:
-/// a process with a window the user can see is an App; one whose image is signed and lives in the Windows folder is Windows;
-/// everything else is Background.
-/// </summary>
-[JsonConverter(typeof(CamelCaseEnumConverter<ProcessGroup>))]
-public enum ProcessGroup
-{
-    App,
-    Windows,
-    Background,
-}
-
-/// <summary>
-/// Which group a process belongs to, answered from the latest sample. <c>ProcessInfo</c> carries no group (the contract is
-/// frozen), so the list asks this service instead.
-/// </summary>
-public interface IProcessGroupSource
-{
-    /// <summary>
-    /// Ok with the group and, in Detail, the reason. NotCollected while the image of a new process is still being examined
-    /// (a second or two after it first appears; the signature check reads the file). Gone for a key that is not in the latest
-    /// sample. Missing (with the status of the failure) when the window enumeration failed, since "has a window" is then unknown.
-    /// Cheap and safe from any thread.
-    /// </summary>
-    Value<ProcessGroup> GroupOf(ProcessKey key);
-}
+// ProcessGroup and IProcessGroupSource live in Core/Contracts (the GUI, the CLI and the MCP ask for them too).
 
 /// <summary>The classification of a process that is not an App: Windows or Background, with the reason that is shown as Detail.</summary>
 internal readonly record struct GroupVerdict(ProcessGroup Group, string Why, bool Retry = false);

@@ -13,7 +13,7 @@ internal sealed partial class ProcessesPage : PageBase
 
     private static readonly ColumnSpec[] Specs =
     [
-        new(ProcessColumn.Name, "gui.proc.col.name", 176, HorizontalAlignment.Left, true),
+        new(ProcessColumn.Name, "gui.proc.col.name", 200, HorizontalAlignment.Left, true),
         new(ProcessColumn.Pid, "gui.proc.col.pid", 64, HorizontalAlignment.Right, true),
         new(ProcessColumn.Cpu, "gui.proc.col.cpu", 72, HorizontalAlignment.Right, true),
         new(ProcessColumn.Memory, "gui.proc.col.memory", 92, HorizontalAlignment.Right, true),
@@ -38,6 +38,7 @@ internal sealed partial class ProcessesPage : PageBase
     private readonly ProcessTableModel _model = new();
     private readonly ProcessClassifier _classifier;
     private readonly DetailsCache _details;
+    private readonly ProcessIconCache _icons;
     private readonly List<ColumnSpec> _visible = [];
     private readonly Dictionary<ProcessColumn, int> _widths = [];
     private readonly HashSet<ProcessColumn> _shown = [];
@@ -69,16 +70,26 @@ internal sealed partial class ProcessesPage : PageBase
     public ProcessesPage(GuiContext context)
         : base(context, "processes", "gui.nav.processes")
     {
+        var groups = context.Services.ProcessGroups;
         _classifier = context.Services.Snapshots is IFakeImplementation
-            ? ProcessClassifier.ForSampleData()
-            : new ProcessClassifier(WindowProbe.VisibleWindowPids);
+            ? ProcessClassifier.ForSampleData(groups)
+            : new ProcessClassifier(WindowProbe.VisibleWindowPids, groups);
         _details = new DetailsCache(context.Services.ProcessDetails, this);
+        _icons = new ProcessIconCache(context.Services.ProcessIcons, this);
         _details.Loaded += key =>
         {
             if (key == _selectedKey)
             {
                 ShowSelected();
             }
+
+            // The path is what the icon is looked up by, so a row whose details just arrived may now ask for its icon.
+            QueueRepaint();
+        };
+        _icons.Loaded += () =>
+        {
+            QueueRepaint();
+            ShowPaneIcon();
         };
 
         LoadColumnChoices();
@@ -165,6 +176,14 @@ internal sealed partial class ProcessesPage : PageBase
     internal ProcessKey? SelectedKey => _selectedKey;
 
     internal bool IsFrozen => _model.Frozen;
+
+    /// <summary>The processes among the first rows from the top of the view whose program icon is ready (for the smoke run).</summary>
+    internal IEnumerable<ProcessKey> KeysWithIcon(int rows = 30) =>
+        Enumerable.Range(Math.Max(_list.TopItem?.Index ?? 0, 0), Math.Min(rows, _model.Count))
+            .Where(i => i < _model.Count && _model[i].Process is { } p && IconOf(p.Key) is not null)
+            .Select(i => _model[i].Process!.Key);
+
+    internal int IconsReady(int rows = 30) => KeysWithIcon(rows).Count();
 
     internal IReadOnlyList<ProcessColumn> VisibleColumns => [.. _visible.Select(s => s.Column)];
 
@@ -320,6 +339,7 @@ internal sealed partial class ProcessesPage : PageBase
             _tips.Dispose();
             _menu.Dispose();
             _columnMenu.Dispose();
+            _icons.Dispose();
         }
 
         base.Dispose(disposing);
@@ -693,6 +713,36 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         _pane.ShowProcess(info, _details.TryGet(key), _verdict, ParentText(info));
+        ShowPaneIcon();
+    }
+
+    /// <summary>The selected process's icon in the detail pane (nothing while the path or the icon is not known yet).</summary>
+    private void ShowPaneIcon() =>
+        _pane.SetIcon(_selectedKey is { } key && _model.Find(key) is not null ? IconOf(key) : null);
+
+    /// <summary>The icon of a process's image file. Asks for the details (for the path) and then the icon; null until both are known.</summary>
+    private Image? IconOf(ProcessKey key) =>
+        _details.TryGet(key) is { } details && details.Path.TryGet(out var path) ? _icons.TryGet(path) : null;
+
+    private bool _repaintQueued;
+
+    /// <summary>Icons and details arrive in bursts (one per visible row); one repaint covers the burst.</summary>
+    private void QueueRepaint()
+    {
+        if (_repaintQueued || !IsHandleCreated || IsDisposed)
+        {
+            return;
+        }
+
+        _repaintQueued = true;
+        BeginInvoke(() =>
+        {
+            _repaintQueued = false;
+            if (!IsDisposed)
+            {
+                _list.Invalidate();
+            }
+        });
     }
 
     private string ParentText(ProcessInfo info)
@@ -738,6 +788,8 @@ internal sealed partial class ProcessesPage : PageBase
                 {
                     Indent = _model.Mode == ProcessViewMode.Tree ? line.Depth : 0,
                     Glyph = line.HasChildren ? (line.Expanded ? ExpanderGlyph.Expanded : ExpanderGlyph.Collapsed) : ExpanderGlyph.None,
+                    IconSlot = true,
+                    Icon = IconOf(p.Key),
                 };
             case ProcessColumn.Pid:
                 return new GridCell(p.Key.Pid.ToString(CultureInfo.CurrentCulture));
@@ -801,7 +853,7 @@ internal sealed partial class ProcessesPage : PageBase
 
     private static string GroupName(ProcessGroup group) => Strings.Get(group switch
     {
-        ProcessGroup.Apps => "gui.proc.group.apps",
+        ProcessGroup.App => "gui.proc.group.apps",
         ProcessGroup.Windows => "gui.proc.group.windows",
         _ => "gui.proc.group.background",
     });

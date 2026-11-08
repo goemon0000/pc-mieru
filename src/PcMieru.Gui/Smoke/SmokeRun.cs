@@ -117,9 +117,24 @@ internal static class SmokeRun
             var processes = await Open("processes").ConfigureAwait(true) as ProcessesPage;
             await Until(() => processes is { VisibleRowCount: > 0 }, 5000).ConfigureAwait(true);
             Timing["processRowsMs"] = Ms(startedAt);
-            var appRows = processes is null ? 0 : Enumerable.Range(0, processes.Model.Count).Count(i => processes.Model[i] is { IsGroup: true, Group: ProcessGroup.Apps });
+            var appRows = processes is null ? 0 : Enumerable.Range(0, processes.Model.Count).Count(i => processes.Model[i] is { IsGroup: true, Group: ProcessGroup.App });
             Check("process list has an apps group (a window is open)", appRows > 0, appRows + " group headers");
             Check("process list is filled", processes is { VisibleRowCount: > 0 }, (processes?.VisibleRowCount ?? 0) + " rows, selected " + (processes?.List.SelectedIndices.Count ?? -1) + ", row " + (processes?.List.SelectedRow ?? -2));
+
+            if (processes is not null && !context.Services.UsesFakeData)
+            {
+                // Program icons come from the collection area (path first, then the image); a real list shows at least one.
+                await Until(() => processes.IconsReady() > 0, 15000).ConfigureAwait(true);
+                Check("process list shows program icons", processes.IconsReady() > 0, processes.IconsReady() + " of the first rows");
+
+                // Selecting a row (read-only) fills the detail pane, which shows the same icon.
+                if (processes.KeysWithIcon().Select(k => (ProcessKey?)k).FirstOrDefault() is { } withIcon)
+                {
+                    processes.OnNavigatedTo(withIcon);
+                    await Until(() => processes.Pane.HasIcon, 5000).ConfigureAwait(true);
+                    Check("detail pane shows the selected process's icon", processes.Pane.HasIcon);
+                }
+            }
 
             foreach (var language in new[] { Language.Ja, Language.En })
             {
@@ -132,6 +147,14 @@ internal static class SmokeRun
                     Check($"theme applies ({pass})", form.BackColor == context.Theme.Palette.Window && context.Theme.IsDark == (theme == ThemeMode.Dark));
                     await WalkPages(language, theme).ConfigureAwait(true);
                 }
+            }
+
+            if (processes is not null && !context.Services.UsesFakeData && processes.SelectedKey is not null)
+            {
+                // After the language and theme walk the page was hidden and shown again; the icon must still be there.
+                await Open("processes").ConfigureAwait(true);
+                await Until(() => processes.Pane.HasIcon, 5000).ConfigureAwait(true);
+                Check("detail pane still shows the icon after the language and theme walk", processes.Pane.HasIcon);
             }
 
             await Behaviour().ConfigureAwait(true);

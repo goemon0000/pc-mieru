@@ -45,7 +45,9 @@ internal sealed class ProcessDetailPane : UserControl
 
     private readonly Panel _scroll = new() { Dock = DockStyle.Fill, AutoScroll = true, Name = "detailScroll" };
     private readonly TableLayoutPanel _table = new() { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Name = "detailTable" };
-    private readonly ToneLabel _title = new() { AutoSize = true, Name = "detailTitle" };
+    private readonly ToneLabel _title = new() { AutoSize = true, Name = "detailTitle", Anchor = AnchorStyles.Left };
+    private readonly PictureBox _icon = new() { Name = "detailIcon", SizeMode = PictureBoxSizeMode.Zoom, Visible = false, Anchor = AnchorStyles.Left };
+    private readonly FlowLayoutPanel _header = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Name = "detailHeader" };
     private readonly ToneLabel _empty = new() { AutoSize = true, Name = "detailEmpty" };
     private readonly ToneLabel[] _keys = new ToneLabel[RowKeys.Length];
     private readonly ToneLabel[] _values = new ToneLabel[RowKeys.Length];
@@ -59,6 +61,13 @@ internal sealed class ProcessDetailPane : UserControl
     private readonly Button _folder = new() { AutoSize = true, Name = "detailFolder" };
     private readonly Button _web = new() { AutoSize = true, Name = "detailWeb" };
     private readonly ToolTip _tip = new() { ShowAlways = true };
+
+    /// <summary>Logical pixels of the program icon beside the name, and the gap after it.</summary>
+    private const int IconSide = 32;
+
+    private const int IconGap = 10;
+
+    private bool _contentShown;
 
     private Font? _titleFont;
     private ProcessInfo? _process;
@@ -87,7 +96,13 @@ internal sealed class ProcessDetailPane : UserControl
 
         _empty.SetTone(CellTone.Dim);
         _empty.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(8));
-        _title.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(8));
+        _title.Margin = new Padding(0);
+        _header.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(8));
+        _header.Padding = new Padding(0);
+        _icon.Size = new Size(LogicalToDeviceUnits(IconSide), LogicalToDeviceUnits(IconSide));
+        _icon.Margin = new Padding(0, 0, LogicalToDeviceUnits(IconGap), 0);
+        _header.Controls.Add(_icon);
+        _header.Controls.Add(_title);
         _knownTitle.Margin = new Padding(0, LogicalToDeviceUnits(12), 0, LogicalToDeviceUnits(2));
         _knownText.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(4));
         _protect.Margin = new Padding(0, LogicalToDeviceUnits(10), 0, LogicalToDeviceUnits(4));
@@ -98,7 +113,7 @@ internal sealed class ProcessDetailPane : UserControl
 
         var row = 0;
         AddSpan(_empty, row++);
-        AddSpan(_title, row++);
+        AddSpan(_header, row++);
         for (var i = 0; i < RowKeys.Length; i++)
         {
             _table.Controls.Add(_keys[i], 0, row);
@@ -179,6 +194,7 @@ internal sealed class ProcessDetailPane : UserControl
         _verdict = null;
         _goneName = null;
         _shownKey = null;
+        _icon.Image = null;
         SetVisibility(content: false, empty: true);
         _title.Text = string.Empty;
     }
@@ -191,6 +207,7 @@ internal sealed class ProcessDetailPane : UserControl
         _verdict = null;
         _goneName = name;
         _shownKey = null;
+        _icon.Image = null;
         SetVisibility(content: false, empty: false);
         _title.Text = name;
         _empty.Text = Strings.Get("gui.proc.detail.gone");
@@ -204,6 +221,7 @@ internal sealed class ProcessDetailPane : UserControl
         if (_shownKey != process.Key)
         {
             _shownKey = process.Key;
+            _icon.Image = null;
             _cmdVisible = false;
             ApplyCommandLineState();
         }
@@ -293,6 +311,17 @@ internal sealed class ProcessDetailPane : UserControl
         Set(Row.Counts, Fmt.Int(process.ThreadCount) + " / " + Fmt.Int(process.HandleCount), CellTone.Normal, null);
     }
 
+    /// <summary>True when an icon is on screen beside the name. Only meaningful while the page is shown (the smoke run checks it there).</summary>
+    internal bool HasIcon => _icon.Visible && _icon.Image is not null;
+
+    /// <summary>The program icon beside the name. Not owned by the pane (the page's cache owns it). Null hides the slot.</summary>
+    public void SetIcon(Image? icon)
+    {
+        _icon.Image = icon;
+        // Own flag, not _title.Visible: that one reads false while the whole page is hidden, and the icon would stay hidden for good.
+        _icon.Visible = icon is not null && _contentShown;
+    }
+
     protected override void OnFontChanged(EventArgs e)
     {
         base.OnFontChanged(e);
@@ -338,6 +367,8 @@ internal sealed class ProcessDetailPane : UserControl
     {
         _empty.Visible = empty;
         _title.Visible = content;
+        _contentShown = content;
+        _icon.Visible = content && _icon.Image is not null;
         foreach (var label in _keys)
         {
             label.Visible = content;
@@ -471,10 +502,12 @@ internal sealed class ProcessDetailPane : UserControl
             label.MaximumSize = new Size(valueWidth, 0);
         }
 
-        foreach (var label in new[] { _title, _empty, _knownTitle, _knownText, _protect })
+        foreach (var label in new[] { _empty, _knownTitle, _knownText, _protect })
         {
             label.MaximumSize = new Size(inner, 0);
         }
+
+        _title.MaximumSize = new Size(Math.Max(inner - LogicalToDeviceUnits(IconSide + IconGap), LogicalToDeviceUnits(60)), 0);
 
         _cmdBox.Width = inner;
         _cmdBox.MinimumSize = new Size(inner, LogicalToDeviceUnits(84));

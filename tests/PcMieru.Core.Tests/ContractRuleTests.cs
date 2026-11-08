@@ -105,6 +105,16 @@ public class ContractRuleTests
     }
 
     [Fact]
+    public void The_group_and_icon_contracts_are_contracts_every_front_end_can_use()
+    {
+        // They started life inside the collection area; front ends program against the Contracts namespace only.
+        foreach (var type in new[] { typeof(IProcessGroupSource), typeof(IProcessIconSource), typeof(ProcessGroup) })
+        {
+            Assert.Equal("PcMieru.Core", type.Namespace);
+        }
+    }
+
+    [Fact]
     public void Value_status_zero_is_not_collected()
     {
         Assert.Equal(0, (int)ValueStatus.NotCollected);

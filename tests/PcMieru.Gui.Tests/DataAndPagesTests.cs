@@ -44,7 +44,7 @@ public class DataAndPagesTests
         });
         classifier.Refresh();
         Assert.Equal(1, reads);
-        Assert.Equal(ProcessGroup.Apps, classifier.Classify(Proc(42, "app.exe", 1)));
+        Assert.Equal(ProcessGroup.App, classifier.Classify(Proc(42, "app.exe", 1)));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class DataAndPagesTests
     {
         var classifier = new ProcessClassifier(() => [10u, 11u]);
         classifier.Refresh();
-        Assert.Equal(ProcessGroup.Apps, classifier.Classify(Proc(10, "notepad.exe", 1)));
+        Assert.Equal(ProcessGroup.App, classifier.Classify(Proc(10, "notepad.exe", 1)));
         Assert.Equal(ProcessGroup.Windows, classifier.Classify(Proc(4, "System", 1, session: 0)));
         Assert.Equal(ProcessGroup.Windows, classifier.Classify(Proc(200, "svchost.exe", 1)));
         Assert.Equal(ProcessGroup.Background, classifier.Classify(Proc(300, "helper.exe", 1)));
@@ -82,8 +82,54 @@ public class DataAndPagesTests
     {
         var classifier = ProcessClassifier.ForSampleData();
         classifier.Refresh();
-        Assert.Equal(ProcessGroup.Apps, classifier.Classify(Proc(3, "chrome.exe", 1)));
-        Assert.NotEqual(ProcessGroup.Apps, classifier.Classify(Proc(4, "chrome.exe", 1)));
+        Assert.Equal(ProcessGroup.App, classifier.Classify(Proc(3, "chrome.exe", 1)));
+        Assert.NotEqual(ProcessGroup.App, classifier.Classify(Proc(4, "chrome.exe", 1)));
+    }
+
+    private sealed class StubGroups(Func<ProcessKey, Value<ProcessGroup>> answer) : IProcessGroupSource
+    {
+        public Value<ProcessGroup> GroupOf(ProcessKey key) => answer(key);
+    }
+
+    [Fact]
+    public void Classifier_takes_the_group_sources_verdict_over_its_own_rule()
+    {
+        // Pid 300 would be "background" by the local rule and 10 would be an app; the source says the opposite.
+        var groups = new StubGroups(key => key.Pid switch
+        {
+            300 => Value.Ok(ProcessGroup.Windows, "stub"),
+            10 => Value.Ok(ProcessGroup.Background, "stub"),
+            _ => Value.Ok(ProcessGroup.App, "stub"),
+        });
+        var classifier = new ProcessClassifier(() => [10u], groups);
+        classifier.Refresh();
+        Assert.Equal(ProcessGroup.Windows, classifier.Classify(Proc(300, "helper.exe", 1)));
+        Assert.Equal(ProcessGroup.Background, classifier.Classify(Proc(10, "notepad.exe", 1)));
+        Assert.Equal(ProcessGroup.App, classifier.Classify(Proc(77, "svchost.exe", 1)));
+    }
+
+    [Fact]
+    public void While_the_source_is_still_examining_a_process_it_is_background_not_a_guess_from_its_name()
+    {
+        // A look-alike "svchost.exe" must not show as a Windows part before its signature has been checked.
+        var groups = new StubGroups(_ => Value.NotCollected<ProcessGroup>("stub", "examining"));
+        var classifier = new ProcessClassifier(() => [], groups);
+        classifier.Refresh();
+        Assert.Equal(ProcessGroup.Background, classifier.Classify(Proc(200, "svchost.exe", 1)));
+    }
+
+    [Theory]
+    [InlineData(ValueStatus.Unsupported)]
+    [InlineData(ValueStatus.Error)]
+    [InlineData(ValueStatus.Gone)]
+    public void When_the_source_cannot_answer_the_local_rule_decides(ValueStatus status)
+    {
+        var groups = new StubGroups(_ => Value.Missing<ProcessGroup>(status, "stub"));
+        var classifier = new ProcessClassifier(() => [10u], groups);
+        classifier.Refresh();
+        Assert.Equal(ProcessGroup.App, classifier.Classify(Proc(10, "notepad.exe", 1)));
+        Assert.Equal(ProcessGroup.Windows, classifier.Classify(Proc(200, "svchost.exe", 1)));
+        Assert.Equal(ProcessGroup.Background, classifier.Classify(Proc(300, "helper.exe", 1)));
     }
 
     // ---- UsersPage.BuildRows ----

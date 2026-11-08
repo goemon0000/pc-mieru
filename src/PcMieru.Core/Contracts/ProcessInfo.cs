@@ -37,6 +37,19 @@ public enum ProcessState
     Suspended,
 }
 
+/// <summary>
+/// The process list's three groups. The rule is PC Mieru's own (SPEC 5.2) and is not claimed to match Task Manager's:
+/// a process with a window the user can see is an App; one whose image is signed and lives in the Windows folder is Windows;
+/// everything else is Background. Answered by <see cref="IProcessGroupSource"/>.
+/// </summary>
+[JsonConverter(typeof(CamelCaseEnumConverter<ProcessGroup>))]
+public enum ProcessGroup
+{
+    App,
+    Windows,
+    Background,
+}
+
 /// <summary>Lazily fetched per-process facts, cached by ProcessKey.</summary>
 public sealed record ProcessDetails(
     ProcessKey Key,

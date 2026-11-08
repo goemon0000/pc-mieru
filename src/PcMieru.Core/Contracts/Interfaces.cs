@@ -7,7 +7,7 @@ namespace PcMieru.Core;
 // Boundary interfaces between the five work areas. Frozen: to extend one, add a NEW interface in your own
 // area (or an optional member with a default implementation) and tell the integration owner.
 //
-//   A Collection : ISnapshotSource, IProcessDetailsProvider
+//   A Collection : ISnapshotSource, IProcessDetailsProvider, IProcessGroupSource, IProcessIconSource
 //   C Hardware   : IHardwareProvider, IStorageHealthProvider, ISensorClient
 //   D Management : IProcessControl, IProtectionPolicy, IServiceManager, IStartupManager, ISessionProvider,
 //                  IHelperClient, ITaskLauncher
@@ -34,6 +34,36 @@ public interface IProcessDetailsProvider
 {
     /// <summary>Lazy, cached per ProcessKey. Never throws for a vanished process: the values come back as Gone.</summary>
     Task<ProcessDetails> GetAsync(ProcessKey key, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Which group a process belongs to, answered from the latest sample. <c>ProcessInfo</c> carries no group (the verdict
+/// arrives a moment after a process first appears, so a copy inside the snapshot would be stale), so the list asks this
+/// service instead. Moved here from Core/Collection so every front end can ask without a project-internal reference.
+/// </summary>
+public interface IProcessGroupSource
+{
+    /// <summary>
+    /// Ok with the group and, in Detail, the reason. NotCollected while the image of a new process is still being examined
+    /// (a second or two after it first appears; the signature check reads the file). Gone for a key that is not in the latest
+    /// sample. Missing (with the status of the failure) when the window enumeration failed, since "has a window" is then unknown.
+    /// Cheap and safe from any thread.
+    /// </summary>
+    Value<ProcessGroup> GroupOf(ProcessKey key);
+}
+
+/// <summary>
+/// The icon of a program file as PNG bytes, for the GUI's process list and detail pane (the Core contracts carry no icon,
+/// so this is a separate, optional service). Never throws: a file without an icon, a missing file or a denied read comes
+/// back as a <see cref="Value{T}"/> that says so, and the GUI shows nothing in place of the icon. Moved here from Core/Collection.
+/// </summary>
+public interface IProcessIconSource
+{
+    /// <summary>
+    /// PNG (8-bit RGBA, straight alpha) of the file's first icon, <paramref name="size"/> pixels square when the file has that
+    /// size (otherwise the nearest the icon resource offers). Cached by file path, size and write time; safe from any thread.
+    /// </summary>
+    Task<Value<byte[]>> GetPngAsync(string path, int size = 32, CancellationToken ct = default);
 }
 
 public interface IHardwareProvider
