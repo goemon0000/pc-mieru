@@ -268,6 +268,16 @@ public class McpServerTests
         Assert.NotNull(McpRun.Reply(messages, "after")["result"]);
     }
 
+    [Fact]
+    public async Task A_byte_order_mark_in_front_of_the_first_message_is_ignored_but_one_later_in_the_stream_is_not()
+    {
+        // Windows PowerShell in a UTF-8 console writes a BOM before the first line it pipes in (tools/publish.ps1 -Verify hit this).
+        var messages = await McpRun.RunAsync("\uFEFF" + McpRun.Initialize, McpRun.Initialized, McpRun.Request("t", "tools/list"), "\uFEFF" + McpRun.Request("late", "ping"));
+        Assert.NotNull(McpRun.Reply(messages, "init")["result"]);
+        Assert.NotNull(McpRun.Reply(messages, "t")["result"]);
+        Assert.Equal(-32700, (int)messages.Single(m => m["id"] is null)["error"]!["code"]!);
+    }
+
     [Theory]
     [InlineData("""{"jsonrpc":"2.0","id":true,"method":"ping"}""")]
     [InlineData("""{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}""")]

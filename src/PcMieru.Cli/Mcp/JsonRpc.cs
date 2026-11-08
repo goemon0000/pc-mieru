@@ -36,6 +36,7 @@ internal sealed class BoundedLineReader(TextReader reader, int maxChars)
     private readonly char[] _buffer = new char[4096];
     private int _pos;
     private int _len;
+    private bool _atStart = true;
 
     public async Task<InputLine> ReadAsync(CancellationToken ct)
     {
@@ -47,6 +48,17 @@ internal sealed class BoundedLineReader(TextReader reader, int maxChars)
             {
                 _len = await reader.ReadAsync(_buffer.AsMemory(), ct).ConfigureAwait(false);
                 _pos = 0;
+                if (_atStart && _len > 0)
+                {
+                    // A client that pipes through Windows PowerShell in a UTF-8 console puts a BOM in front of the first message.
+                    // RFC 8259 lets a parser ignore it; without this the first request is a parse error and the rest say "send initialize first".
+                    _atStart = false;
+                    if (_buffer[0] == '\uFEFF')
+                    {
+                        _pos = 1;
+                    }
+                }
+
                 if (_len == 0)
                 {
                     return line.Length == 0 && !tooLong ? new InputLine(null, false) : new InputLine(tooLong ? string.Empty : line.ToString(), tooLong);
