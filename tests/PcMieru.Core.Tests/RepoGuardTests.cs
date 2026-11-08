@@ -70,4 +70,41 @@ public class RepoGuardTests
         Assert.DoesNotContain("<ProjectReference", text, StringComparison.Ordinal);
         Assert.DoesNotContain("<PackageReference", text, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Every_source_that_names_an_origin_is_listed_in_NOTICE()
+    {
+        var notice = File.ReadAllText(Path.Combine(Root, "NOTICE.txt"));
+        var origin = new Regex("parts-life|pl-sensors|PartsLife", RegexOptions.IgnoreCase);
+        var named = new List<string>();
+        foreach (var path in Directory.EnumerateFiles(Path.Combine(Root, "src"), "*.*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(Root, path).Replace('\\', '/');
+            if ((!path.EndsWith(".cs", StringComparison.Ordinal) && !path.EndsWith(".csproj", StringComparison.Ordinal))
+                || rel.Contains("/obj/", StringComparison.Ordinal) || rel.Contains("/bin/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (origin.IsMatch(File.ReadAllText(path)))
+            {
+                named.Add(rel);
+            }
+        }
+
+        Assert.NotEmpty(named);
+        Assert.All(named, rel => Assert.True(notice.Contains(rel, StringComparison.Ordinal), $"{rel} names its origin but NOTICE.txt does not list it"));
+    }
+
+    [Theory]
+    [InlineData("PcMieru.Gui")]
+    [InlineData("PcMieru.Cli")]
+    public void Apps_build_SensorHost_and_copy_it_next_to_themselves(string project)
+    {
+        var text = File.ReadAllText(Path.Combine(Root, "src", project, project + ".csproj"));
+        Assert.Matches(@"<ProjectReference Include=""[^""]*PcMieru\.SensorHost\.csproj"" ReferenceOutputAssembly=""false"" />", text);
+        Assert.Contains("SensorHostNextToApp.targets", text, StringComparison.Ordinal);
+        var targets = File.ReadAllText(Path.Combine(Root, "build", "SensorHostNextToApp.targets"));
+        Assert.Contains("PCMieru.SensorHost", targets, StringComparison.Ordinal);
+    }
 }

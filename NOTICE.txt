@@ -8,9 +8,45 @@ This folder is self-contained: it carries the .NET runtime, so no separate
   Copyright (c) .NET Foundation and Contributors. MIT License.
   https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
 
-PC Mieru has no other third-party runtime dependency in this skeleton.
+PC Mieru has no other third-party runtime dependency (no NuGet package is
+shipped; every native call is a P/Invoke into a Windows system DLL, and the
+vendor GPU libraries nvml.dll and amdadlx64.dll are loaded from System32 at
+run time and are not redistributed here).
 
-Code taken from other projects is listed here, with its licence, at the moment
-it is added (the source file also names its origin in its header). Planned
-origin: goemon0000/parts-life (same owner, MIT) for the NVML / ADLX / PDH /
-NVMe-SMART readers.
+Code taken from other projects
+------------------------------
+
+Listed with its licence. Each source file also names its origin in its header.
+
+goemon0000/parts-life and the owner's pl-sensors helper
+  (MIT License, same owner as PC Mieru: Copyright (c) 2026 web-autoai.com)
+  https://github.com/goemon0000/parts-life
+
+  src/PcMieru.SensorHost/Nvml.cs
+      from src/PartsLife.Checks/Gpu/Nvml.cs
+  src/PcMieru.SensorHost/Adlx.cs
+      from src/PartsLife.Checks/Recording/Sources.Adlx.cs
+  src/PcMieru.Core/Hardware/Sensors/SensorMapping.cs
+      vendor result codes and the AMD name pairing follow Gpu/Nvml.cs and
+      Recording/Sources.Adlx.cs
+  src/PcMieru.Core/Hardware/Storage/StorageProtocol.cs
+      from src/PartsLife.Checks/Storage/StorageProtocol.cs
+  src/PcMieru.Core/Hardware/Storage/HealthParsers.cs
+      from src/PartsLife.Checks/Storage/NvmeHealth.cs and AtaSmart.cs
+  src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs
+      SATA SMART request layout, from Storage/StorageProtocol.cs and
+      StorageReader.cs
+  src/PcMieru.Wire/Privileged/StorageProtocol.cs
+      byte layouts and the read-only command whitelist, from
+      src/PartsLife.Checks/Storage/StorageProtocol.cs, trimmed for the Helper
+  src/PcMieru.Wire/Privileged/DiskOperations.cs
+      the open / retry / fallback order follows the owner's pl-sensors
+      StorageReader
+  src/PcMieru.Helper/PcMieru.Helper.csproj
+      the CheckLazyNativeModules post-link check, from the owner's pl-sensors
+      src/PartsLife.Check/PartsLife.Check.csproj
+
+Public specifications used (no code copied)
+  NVMe Base Specification (SMART / Health Information log page), the ATA SMART
+  attribute table, the EDID structure, the SMBIOS table layout, and the public
+  UEFI PNP vendor id registry.

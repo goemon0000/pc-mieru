@@ -9,3 +9,4 @@
 *.slnx text eol=lf
 *.manifest text eol=lf
 *.ico binary
+*.targets text eol=lf
