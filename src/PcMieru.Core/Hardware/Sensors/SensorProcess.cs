@@ -214,8 +214,10 @@ internal static class SensorFrameParser
             frame = parsed;
             return true;
         }
-        catch (System.Text.Json.JsonException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // The line is untrusted input: a bad date makes a converter throw FormatException, not JsonException. Whatever it throws,
+            // the line is not a reading and the read loop must carry on with the next one.
             error = "the line was not a SensorHost reading";
             return false;
         }

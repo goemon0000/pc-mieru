@@ -115,6 +115,12 @@ public sealed class SensorHostClient : ISensorClient
             _wanted = true;
             _lastAskedAt = now;
             StartIfDueLocked(now);
+            if (_missing)
+            {
+                // The launch just found the executable missing: say so now, not only on the next ask.
+                return Value.Unsupported<IReadOnlyList<GpuSensorReading>>(Src, _problem);
+            }
+
             if (Fresh(now, out var fresh))
             {
                 return fresh;
@@ -139,6 +145,12 @@ public sealed class SensorHostClient : ISensorClient
 
         lock (_gate)
         {
+            if (_disposed)
+            {
+                // Dispose woke us up: say so, instead of "not started".
+                return Value.Gone<IReadOnlyList<GpuSensorReading>>(Src, "the sensor client was shut down");
+            }
+
             var now = _nowMs();
             if (Fresh(now, out var fresh))
             {
@@ -171,6 +183,19 @@ public sealed class SensorHostClient : ISensorClient
 
                 var now = _nowMs();
                 var process = _process;
+                if (_wanted && now - _lastAskedAt >= (long)_options.IdleStopAfter.TotalMilliseconds)
+                {
+                    // Nobody has looked at GPU sensors for a while. This is not a failure and does not back off. Checked before the
+                    // "restart a dead host" branch so a host that keeps failing is not relaunched for an app that stopped asking.
+                    _wanted = false;
+                    if (process is not null)
+                    {
+                        StopLocked("stopped because nothing asked for GPU readings", false, now);
+                    }
+
+                    return;
+                }
+
                 if (process is null)
                 {
                     if (_wanted)
@@ -178,14 +203,6 @@ public sealed class SensorHostClient : ISensorClient
                         StartIfDueLocked(now);
                     }
 
-                    return;
-                }
-
-                if (_wanted && now - _lastAskedAt >= (long)_options.IdleStopAfter.TotalMilliseconds)
-                {
-                    // Nobody has looked at GPU sensors for a while. This is not a failure and does not back off.
-                    _wanted = false;
-                    StopLocked("stopped because nothing asked for GPU readings", false, now);
                     return;
                 }
 
@@ -338,6 +355,17 @@ public sealed class SensorHostClient : ISensorClient
         catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException or InvalidOperationException)
         {
             // The process went away; the watchdog notices and restarts it.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Not expected. The loop ends here, so the host will be silent and the watchdog restarts it; keep the reason for the message.
+            lock (_gate)
+            {
+                if (_process == process)
+                {
+                    _problem = "reading the SensorHost output failed: " + ex.GetType().Name;
+                }
+            }
         }
         finally
         {
