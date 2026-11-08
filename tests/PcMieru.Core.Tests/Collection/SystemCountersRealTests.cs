@@ -194,13 +194,12 @@ public sealed class SystemCountersRealTests : IDisposable
 
         var fresh = withNew.Processes.Single(p => p.Key.Pid == (uint)ping.Id).GpuPercent;
         var settled = seenTwice.Processes.Single(p => p.Key.Pid == (uint)ping.Id).GpuPercent;
-        Assert.NotEqual(ValueStatus.Ok, fresh.Status); // a process with no baseline never gets a zero it did not measure
+        var story = $"fresh = {fresh.Status} '{fresh.Detail}'; settled = {settled.Status} '{settled.Detail}' {settled.Data}";
+        Assert.True(fresh.Status != ValueStatus.Ok, story); // a process with no baseline never gets a zero it did not measure
         if (gpuWorks)
         {
-            Assert.Equal(ValueStatus.NotCollected, fresh.Status);
-            Assert.Contains("new since", fresh.Detail);
-            Assert.True(settled.IsOk, $"{settled.Status} {settled.Detail}");
-            Assert.Equal(0, settled.Data); // ping draws nothing
+            Assert.True(fresh.Status == ValueStatus.NotCollected && fresh.Detail is not null && fresh.Detail.Contains("new since", StringComparison.Ordinal), story);
+            Assert.True(settled.IsOk && settled.Data == 0, story); // ping draws nothing
         }
     }
 

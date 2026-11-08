@@ -92,19 +92,11 @@ public class EfficiencyRequestTests
 public class StartupApprovedTests : IDisposable
 {
     // Only ever a throw-away key under HKCU\Software\PcMieruTest, deleted afterwards. Never a real startup entry.
-    private const string TestRoot = @"Software\PcMieruTest";
-    private readonly string _approvedRoot = TestRoot + "\\" + Guid.NewGuid().ToString("N");
+    private readonly string _approvedRoot = TestRegistryRoot.Key + "\\" + Guid.NewGuid().ToString("N");
 
-    public void Dispose()
-    {
-        using var hkcu = Registry.CurrentUser;
-        hkcu.DeleteSubKeyTree(_approvedRoot, throwOnMissingSubKey: false);
-        using var parent = hkcu.OpenSubKey(TestRoot);
-        if (parent is { SubKeyCount: 0 })
-        {
-            hkcu.DeleteSubKey(TestRoot, throwOnMissingSubKey: false);
-        }
-    }
+    public StartupApprovedTests() => TestRegistryRoot.Take();
+
+    public void Dispose() => TestRegistryRoot.Release(_approvedRoot);
 
     private static RegistryKey Root() => Registry.CurrentUser;
 

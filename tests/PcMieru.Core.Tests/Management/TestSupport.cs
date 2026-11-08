@@ -1,7 +1,49 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Tests.Management;
+
+/// <summary>
+/// The shared parent <c>HKCU\Software\PcMieruTest</c> that every throw-away registry world lives under. xUnit runs test
+/// classes in parallel, so one world used to delete the parent ("when it looks empty") while another was creating its
+/// own key under it: the delete threw "key has subkeys", or the create failed under the other's feet. Worlds now take
+/// the parent before they create anything and give it back when they are gone, and the parent is removed only by the
+/// last one, under the same lock the takers use, so it can never be removed while somebody is about to use it.
+/// </summary>
+internal static class TestRegistryRoot
+{
+    public const string Key = @"Software\PcMieruTest";
+
+    private static readonly object Gate = new();
+    private static int _users;
+
+    public static void Take()
+    {
+        lock (Gate)
+        {
+            _users++;
+        }
+    }
+
+    public static void Release(string worldKey)
+    {
+        lock (Gate)
+        {
+            using var hkcu = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+            hkcu.DeleteSubKeyTree(worldKey, throwOnMissingSubKey: false);
+            if (--_users == 0)
+            {
+                // Only an empty parent goes. If something else (an earlier crashed run) left a key in it, it stays.
+                using var parent = hkcu.OpenSubKey(Key);
+                if (parent is { SubKeyCount: 0 })
+                {
+                    hkcu.DeleteSubKey(Key, throwOnMissingSubKey: false);
+                }
+            }
+        }
+    }
+}
 
 /// <summary>
 /// A <c>ping -n 120 127.0.0.1</c> that this test started itself. It is the only process the tests ever act on:

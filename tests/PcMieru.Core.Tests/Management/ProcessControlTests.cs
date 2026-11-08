@@ -548,6 +548,20 @@ public class ProcessControlTests : IDisposable
         Assert.True(ping.HasExited);
     }
 
+    // The image name of a process of the plan, lower case without ".exe"; "" when it is already gone.
+    private static string NameOf(ProcessKey key)
+    {
+        try
+        {
+            using var process = Process.GetProcessById((int)key.Pid);
+            return process.StartTime.ToFileTimeUtc() == key.CreateTime ? process.ProcessName.ToLowerInvariant() : string.Empty;
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+    }
+
     [Fact]
     public async Task Real_terminate_tree_ends_a_cmd_and_the_ping_it_started_and_nothing_else()
     {
@@ -564,25 +578,35 @@ public class ProcessControlTests : IDisposable
         try
         {
             var control = new ProcessControl(new ProtectionPolicy(), Store());
+
+            // cmd.exe has two children, not one: the console host (conhost.exe) is created first and ping.exe after it.
+            // So "the tree has two members" is true for a moment before ping exists (a plan taken then would leave ping
+            // running) and false afterwards. Wait for ping itself to be in the plan, then require that everything else in
+            // the plan is that console host: nothing but the tree of the process this test started.
             TerminatePlan plan = new(cmdKey, [], []);
-            for (var i = 0; i < 40 && plan.Targets.Count < 2; i++)
+            var names = new List<string>();
+            for (var i = 0; i < 80 && !names.Contains("ping"); i++)
             {
                 plan = await control.PlanTerminateTreeAsync(cmdKey);
-                if (plan.Targets.Count < 2)
+                names = [.. plan.Targets.Skip(1).Select(NameOf)];
+                if (!names.Contains("ping"))
                 {
                     await Task.Delay(100);
                 }
             }
 
-            Assert.Equal(2, plan.Targets.Count);
             Assert.Equal(cmdKey, plan.Targets[0]);
+            Assert.Single(names, "ping");
+            Assert.All(names, name => Assert.True(name is "ping" or "conhost", "unexpected member of the tree: " + name));
             Assert.Empty(plan.SkippedProtected);
-            var pingPid = plan.Targets[1].Pid;
 
             var result = await control.TerminateTreeAsync(plan);
             Assert.Equal(OperationCode.Ok, result.Code);
             Assert.True(cmd.WaitForExit(5000));
-            Assert.False(table.IsAlive(plan.Targets[1]), "ping " + pingPid);
+            foreach (var target in plan.Targets)
+            {
+                Assert.False(table.IsAlive(target), "still alive: " + target.Pid);
+            }
         }
         finally
         {

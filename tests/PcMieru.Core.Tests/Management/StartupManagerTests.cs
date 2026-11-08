@@ -14,14 +14,15 @@ namespace PcMieru.Core.Tests.Management;
 /// </summary>
 internal sealed class TempStartupWorld : IDisposable
 {
-    public const string TestRoot = @"Software\PcMieruTest";
+    public const string TestRoot = TestRegistryRoot.Key;
     public const long Now = 133_500_000_000_000_000L;
 
     private readonly string _id = Guid.NewGuid().ToString("N");
 
     public TempStartupWorld()
     {
-        Directory = Path.Combine(Path.GetTempPath(), "pcmieru-startup-" + _id);
+        TestRegistryRoot.Take();
+        Directory =Path.Combine(Path.GetTempPath(), "pcmieru-startup-" + _id);
         UserFolder = Path.Combine(Directory, "user-startup");
         CommonFolder = Path.Combine(Directory, "common-startup");
         System.IO.Directory.CreateDirectory(UserFolder);
@@ -101,15 +102,7 @@ internal sealed class TempStartupWorld : IDisposable
 
     public void Dispose()
     {
-        using (var hkcu = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64))
-        {
-            hkcu.DeleteSubKeyTree(KeyBase, throwOnMissingSubKey: false);
-            using var parent = hkcu.OpenSubKey(TestRoot);
-            if (parent is { SubKeyCount: 0 })
-            {
-                hkcu.DeleteSubKey(TestRoot, throwOnMissingSubKey: false);
-            }
-        }
+        TestRegistryRoot.Release(KeyBase);
 
         if (System.IO.Directory.Exists(Directory))
         {
