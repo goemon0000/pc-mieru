@@ -26,6 +26,7 @@ internal sealed class PerformancePage : PageBase
     private readonly List<GraphControl> _coreGraphs = [];
     private readonly List<double[]> _coreData = [];
     private readonly ToneLabel _note = new() { Dock = DockStyle.Bottom, AutoSize = false, Name = "perfNote" };
+    private readonly ToneLabel _listNote = new() { Dock = DockStyle.Bottom, AutoSize = false, Visible = false, Name = "perfListNote" };
     private readonly TableLayoutPanel _stats = new() { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 4, Name = "perfStats" };
     private readonly ToneLabel[] _captions = new ToneLabel[PerfMetrics.MaxStats];
     private readonly ToneLabel[] _values = new ToneLabel[PerfMetrics.MaxStats];
@@ -58,6 +59,8 @@ internal sealed class PerformancePage : PageBase
         _note.SetTone(CellTone.Dim);
         _note.Height = Px(28);
         _note.Padding = new Padding(pad, Px(6), pad, 0);
+        _listNote.SetTone(CellTone.Dim);
+        _listNote.Padding = new Padding(pad, Px(6), pad, 0);
         _perCore.Checked = context.Settings.GetBool(PerCoreSetting, false);
         _perCore.CheckedChanged += (_, _) =>
         {
@@ -110,6 +113,7 @@ internal sealed class PerformancePage : PageBase
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, pad), Name = "perfRight" };
         right.Controls.Add(_graphHost);
         right.Controls.Add(_coreHost);
+        right.Controls.Add(_listNote);
         right.Controls.Add(_note);
         right.Controls.Add(_stats);
         right.Controls.Add(bar);
@@ -122,6 +126,8 @@ internal sealed class PerformancePage : PageBase
     }
 
     internal SummaryListBox List => _list;
+
+    internal ToneLabel ListNote => _listNote;
 
     internal CheckBox PerCoreBox => _perCore;
 
@@ -179,6 +185,7 @@ internal sealed class PerformancePage : PageBase
 
         if (_last is { } snapshot)
         {
+            ShowListNotices(snapshot.System);
             Rebuild(PerfMetrics.Panels(snapshot.System), snapshot);
         }
     }
@@ -221,6 +228,7 @@ internal sealed class PerformancePage : PageBase
     private void OnSampled(Snapshot snapshot)
     {
         _last = snapshot;
+        ShowListNotices(snapshot.System);
         var panels = PerfMetrics.Panels(snapshot.System);
         if (!_list.HasKeys(panels.ConvertAll(p => p.Key)))
         {
@@ -238,6 +246,20 @@ internal sealed class PerformancePage : PageBase
         {
             RefreshView(snapshot);
         }
+    }
+
+    /// <summary>A list that is empty because it could not be read gets a line saying so, instead of silently having no panel.</summary>
+    private void ShowListNotices(SystemInfo system)
+    {
+        var notices = PerfMetrics.ListNotices(system);
+        var text = string.Join(Environment.NewLine, notices);
+        if (_listNote.Text != text)
+        {
+            _listNote.Text = text;
+        }
+
+        _listNote.Height = (Px(18) * Math.Max(1, notices.Count)) + Px(8);
+        _listNote.Visible = notices.Count > 0;
     }
 
     private void Rebuild(List<PerfPanel> panels, Snapshot snapshot)
@@ -517,6 +539,10 @@ internal static class PerfStrings
         new("gui.perf.percore", "プロセッサごとに分けて表示", "Show each processor separately"),
         new("gui.perf.core", "プロセッサ {n}", "Processor {n}"),
         new("gui.perf.note", "グラフの右端が最新です（直近 {count} 回の測定）", "The right edge is the latest (last {count} readings)"),
+        new("gui.perf.list.gpu", "GPU", "GPU"),
+        new("gui.perf.list.disks", "ディスク", "Disks"),
+        new("gui.perf.list.nics", "ネットワーク", "Network adapters"),
+        new("gui.perf.list.unread", "{list} を一覧に出せません（{status}）", "{list} cannot be listed ({status})"),
         new("gui.perf.total", "合計 {size}", "{size} in total"),
         new("gui.perf.link", "リンク速度 {speed}", "Link speed {speed}"),
         new("gui.fmt.temp", "{value} ℃", "{value} C"),

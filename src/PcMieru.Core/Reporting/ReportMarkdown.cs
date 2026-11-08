@@ -82,6 +82,10 @@ public static class ReportMarkdown
             w.Line("- " + w.F("report.summary.commit", ("used", Gb(commit)), ("limit", Gb(limit)), ("percent", Pct(100.0 * commit / limit))));
         }
 
+        ListNotice(w, "report.summary.list.gpu", system.Gpus.Count, system.GpusState);
+        ListNotice(w, "report.summary.list.disks", system.Disks.Count, system.DisksState);
+        ListNotice(w, "report.summary.list.nics", system.Nics.Count, system.NicsState);
+
         foreach (var gpu in system.Gpus)
         {
             var parts = new List<string>
@@ -405,6 +409,15 @@ public static class ReportMarkdown
         if (value.TryGet(out var text) && text.Length > 0)
         {
             parts.Add(format(text));
+        }
+    }
+
+    /// <summary>A list that is empty because it could not be read gets a line saying so; a list that is empty and read fine ("none") gets nothing.</summary>
+    private static void ListNotice(Writer w, string listKey, int count, Value<int> state)
+    {
+        if (ListStatus.ExplainsEmptyList(count, state))
+        {
+            w.Line("- " + w.F("report.summary.listUnread", ("list", w.T(listKey)), ("status", ListStatus.Describe(state, w.Language))));
         }
     }
 

@@ -89,7 +89,10 @@ internal static class Synth
                 disks ?? [],
                 [],
                 gpus ?? [],
-                86_400),
+                86_400,
+                Value.Ok((disks ?? []).Count, "test"),
+                Value.Ok(0, "test"),
+                Value.Ok((gpus ?? []).Count, "test")),
             processes ?? [Process(100, "worker.exe", 5)]);
     }
 

@@ -18,13 +18,20 @@ public sealed record Snapshot(
     public const string CurrentSchemaVersion = "1";
 }
 
+/// <summary>
+/// The machine-wide live numbers. <c>DisksState</c>, <c>NicsState</c> and <c>GpusState</c> say whether the matching list could be read
+/// (see <see cref="ListStatus"/>): an empty list is only "none" when its state is Ok.
+/// </summary>
 public sealed record SystemInfo(
     CpuInfo Cpu,
     MemoryInfo Memory,
     IReadOnlyList<DiskInfo> Disks,
     IReadOnlyList<NicInfo> Nics,
     IReadOnlyList<GpuInfo> Gpus,
-    long UptimeSec);
+    long UptimeSec,
+    Value<int> DisksState = default,
+    Value<int> NicsState = default,
+    Value<int> GpusState = default);
 
 /// <summary>Live CPU numbers. Static facts (model name, cache) live in the hardware model.</summary>
 public sealed record CpuInfo(

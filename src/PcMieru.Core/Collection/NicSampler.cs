@@ -26,6 +26,9 @@ internal readonly record struct NicRow(
     public bool IsUp => OperStatus == NicRowParser.OperStatusUp;
 }
 
+/// <summary>What the adapter stage yields for one tick: the adapters and what the list itself says (see <see cref="ListStatus"/>).</summary>
+internal sealed record NicReading(IReadOnlyList<NicInfo> Nics, Value<int> State);
+
 /// <summary>
 /// Reads MIB_IF_ROW2 (1352 bytes on x64/x86) at explicit offsets. The table is the kernel's own, but the offsets are the
 /// ones from netioapi.h and are checked in tests against hand-built rows and, on the real machine, against what
@@ -134,15 +137,31 @@ internal sealed partial class NicSampler
         _hasBaseline = false;
     }
 
+    /// <summary>
+    /// What the last <see cref="Sample"/> says about the list itself: Ok with the number of adapters shown (zero is a real answer),
+    /// or Error with the reason the adapter table could not be read (an empty list then is not "no adapters").
+    /// </summary>
+    public Value<int> State { get; private set; } = Value.NotCollected<int>(Source, "not sampled yet");
+
     public IReadOnlyList<NicInfo> Sample()
     {
         var stamp = Stopwatch.GetTimestamp();
-        if (!ReadTable())
+        var read = ReadTable(out var why);
+        return Finish(read, why, stamp);
+    }
+
+    /// <summary>The part of a tick after the table read: an unreadable table is an Error state with the reason, never just an empty list.</summary>
+    internal IReadOnlyList<NicInfo> Finish(bool tableRead, string why, long stamp)
+    {
+        if (!tableRead)
         {
+            State = Value.Failed<int>(Source, why);
             return [];
         }
 
-        return Build(_rows, stamp);
+        var nics = Build(_rows, stamp);
+        State = Value.Ok(nics.Count, Source);
+        return nics;
     }
 
     /// <summary>Pure part of a tick: rows plus the time they were read give the infos. Public for tests.</summary>
@@ -210,11 +229,13 @@ internal sealed partial class NicSampler
             : Value.Ok((long)Math.Min(speed, long.MaxValue), Source);
     }
 
-    private unsafe bool ReadTable()
+    private unsafe bool ReadTable(out string why)
     {
+        why = string.Empty;
         var status = GetIfTable2(out var table);
         if (status != 0 || table == 0)
         {
+            why = $"GetIfTable2 returned {status}";
             return false;
         }
 
@@ -223,6 +244,7 @@ internal sealed partial class NicSampler
             var count = *(uint*)table;
             if (count > 4096)
             {
+                why = $"GetIfTable2 returned an implausible table ({count} rows)";
                 return false;
             }
 

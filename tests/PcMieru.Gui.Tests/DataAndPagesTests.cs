@@ -462,4 +462,56 @@ public class DataAndPagesTests
         Assert.Equal(Fmt.Dash, line.Value);
         Assert.True(line.Dim);
     }
+
+    // ---- PerfMetrics: lists that could not be read ----
+
+    [Theory]
+    [InlineData(Language.En, "GPU cannot be listed (Not collected: GPU sampling is off (no GPU view is open))", "Disks cannot be listed (Failed: PDH could not be opened)", "Network adapters cannot be listed (Failed: GetIfTable2 returned 5)")]
+    [InlineData(Language.Ja, "GPU を一覧に出せません（未取得: GPU sampling is off (no GPU view is open)）", "ディスク を一覧に出せません（取得に失敗: PDH could not be opened）", "ネットワーク を一覧に出せません（取得に失敗: GetIfTable2 returned 5）")]
+    public async Task A_list_that_is_empty_because_it_could_not_be_read_gets_a_notice_with_the_status_and_the_reason(Language language, string gpu, string disks, string nics)
+    {
+        using var _ = Harness.Locale(language);
+        var system = (await Harness.FakeSnapshotAsync()).System with
+        {
+            Gpus = [],
+            Disks = [],
+            Nics = [],
+            GpusState = Value.NotCollected<int>("PDH GPU Engine", "GPU sampling is off (no GPU view is open)"),
+            DisksState = Value.Failed<int>("PDH PhysicalDisk", "PDH could not be opened"),
+            NicsState = Value.Failed<int>("GetIfTable2", "GetIfTable2 returned 5"),
+        };
+
+        var notices = PerfMetrics.ListNotices(system);
+
+        Assert.Equal([gpu, disks, nics], notices);
+    }
+
+    [Fact]
+    public async Task A_list_that_was_read_fine_or_has_entries_or_has_no_state_gets_no_notice()
+    {
+        using var _ = Harness.Locale(Language.En);
+        var fake = (await Harness.FakeSnapshotAsync()).System;
+        Assert.Empty(PerfMetrics.ListNotices(fake));
+
+        var none = fake with { Gpus = [], Disks = [], Nics = [], GpusState = Value.Ok(0, "t"), DisksState = Value.Ok(0, "t"), NicsState = Value.Ok(0, "t") };
+        Assert.Empty(PerfMetrics.ListNotices(none));
+
+        var unset = fake with { Gpus = [], Disks = [], Nics = [], GpusState = default, DisksState = default, NicsState = default };
+        Assert.Empty(PerfMetrics.ListNotices(unset));
+
+        var lateFailure = fake with { NicsState = Value.Failed<int>("GetIfTable2", "x") };
+        Assert.Empty(PerfMetrics.ListNotices(lateFailure));
+    }
+
+    [Fact]
+    public void The_performance_page_and_the_overview_cards_use_the_list_states()
+    {
+        var perf = File.ReadAllText(Path.Combine(Harness.GuiSource, "Pages", "PerformancePage.cs"));
+        var overview = File.ReadAllText(Path.Combine(Harness.GuiSource, "Pages", "OverviewPage.cs"));
+
+        Assert.Contains("PerfMetrics.ListNotices(", perf, StringComparison.Ordinal);
+        Assert.Contains("system.GpusState", overview, StringComparison.Ordinal);
+        Assert.Contains("system.DisksState", overview, StringComparison.Ordinal);
+        Assert.Contains("system.NicsState", overview, StringComparison.Ordinal);
+    }
 }

@@ -110,6 +110,27 @@ internal static class PerfMetrics
         return panels;
     }
 
+    /// <summary>
+    /// One line for each list (GPU, disks, adapters) that is empty because it could not be read, with the status and the reason.
+    /// A list that is empty and read fine ("there are none") gets no line.
+    /// </summary>
+    public static List<string> ListNotices(SystemInfo system)
+    {
+        var notices = new List<string>(3);
+        Notice(notices, "gui.perf.list.gpu", system.Gpus.Count, system.GpusState);
+        Notice(notices, "gui.perf.list.disks", system.Disks.Count, system.DisksState);
+        Notice(notices, "gui.perf.list.nics", system.Nics.Count, system.NicsState);
+        return notices;
+    }
+
+    private static void Notice(List<string> notices, string listKey, int count, Value<int> state)
+    {
+        if (ListStatus.ExplainsEmptyList(count, state))
+        {
+            notices.Add(Strings.Format("gui.perf.list.unread", Fmt.Dict(("list", Strings.Get(listKey)), ("status", ListStatus.Describe(state)))));
+        }
+    }
+
     public static GraphSpec[] Graphs(PerfKind kind) => kind switch
     {
         PerfKind.Cpu => [new("gui.perf.g.cpu", 1, 100, 1, false, [])],

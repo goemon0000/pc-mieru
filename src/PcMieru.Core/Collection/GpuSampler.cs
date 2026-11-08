@@ -147,10 +147,15 @@ internal sealed class GpuAggregator
 }
 
 /// <summary>What the GPU part of a tick yields.</summary>
-internal sealed record GpuReading(IReadOnlyList<GpuInfo> Gpus, IReadOnlyDictionary<uint, double> ProcessBusiest, bool ProcessesCollected, string? ProcessDetail)
+internal sealed record GpuReading(
+    IReadOnlyList<GpuInfo> Gpus,
+    IReadOnlyDictionary<uint, double> ProcessBusiest,
+    bool ProcessesCollected,
+    string? ProcessDetail,
+    Value<int> State)
 {
     public static GpuReading Off(IReadOnlyList<GpuInfo> gpus) =>
-        new(gpus, new Dictionary<uint, double>(), false, GpuSampler.OffDetail);
+        new(gpus, new Dictionary<uint, double>(), false, GpuSampler.OffDetail, GpuSampler.ListState(gpus, ValueStatus.NotCollected, GpuSampler.OffDetail));
 }
 
 /// <summary>
@@ -163,6 +168,7 @@ internal sealed class GpuSampler : IDisposable
 {
     private const string EngineSource = "PDH GPU Engine";
     private const string MemorySource = "PDH GPU Adapter Memory";
+    private const string AdapterSource = "DXGI";
     private const double MinWindowMs = 200;
     private static readonly TimeSpan KeepQueryWhenIdle = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromSeconds(60);
@@ -197,7 +203,7 @@ internal sealed class GpuSampler : IDisposable
         {
             var detail = _unsupported ?? "GPU counters could not be opened";
             _lastGpus = Describe(_adapters, null, primed: false, detail, ValueStatus.Unsupported);
-            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail);
+            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail, ListState(_lastGpus, ValueStatus.Unsupported, detail));
         }
 
         var primed = _baselineValid && Stopwatch.GetElapsedTime(_lastCollect).TotalMilliseconds >= MinWindowMs;
@@ -207,7 +213,7 @@ internal sealed class GpuSampler : IDisposable
             _baselineValid = false;
             var detail = $"PdhCollectQueryData 0x{status:X8}";
             _lastGpus = Describe(_adapters, null, primed: false, detail, ValueStatus.Error);
-            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail);
+            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail, ListState(_lastGpus, ValueStatus.Error, detail));
         }
 
         _lastCollect = Stopwatch.GetTimestamp();
@@ -216,7 +222,7 @@ internal sealed class GpuSampler : IDisposable
         {
             const string first = "no baseline yet (first GPU sample)";
             _lastGpus = Describe(_adapters, null, primed: false, first, ValueStatus.NotCollected);
-            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, first);
+            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, first, ListState(_lastGpus, ValueStatus.NotCollected, first));
         }
 
         _aggregator.Begin();
@@ -229,12 +235,12 @@ internal sealed class GpuSampler : IDisposable
         {
             const string unreadable = "GPU Engine counter could not be read";
             _lastGpus = Describe(_adapters, null, primed: false, unreadable, ValueStatus.Error);
-            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, unreadable);
+            return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, unreadable, ListState(_lastGpus, ValueStatus.Error, unreadable));
         }
 
         _lastGpus = Describe(_adapters, _aggregator, primed: true, null, ValueStatus.NotCollected);
         var note = _aggregator.Unrecognized > 0 ? $"{_aggregator.Unrecognized} GPU instance(s) in an unknown name format were ignored" : null;
-        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note);
+        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource));
     }
 
     public void Dispose() => CloseQuery();
@@ -359,6 +365,13 @@ internal sealed class GpuSampler : IDisposable
     }
 
     internal const string OffDetail = "GPU sampling is off (no GPU view is open)";
+
+    /// <summary>
+    /// What the GPU list itself says. Adapters that are listed make the list Ok whatever their live numbers are (those carry their own
+    /// status). An empty list is "none" only after a real sample; before that, or when the counters cannot be read, it says why.
+    /// </summary>
+    internal static Value<int> ListState(IReadOnlyList<GpuInfo> gpus, ValueStatus whenEmpty, string detail) =>
+        gpus.Count > 0 ? Value.Ok(gpus.Count, AdapterSource) : Value.Missing<int>(whenEmpty, EngineSource, detail);
 
     /// <summary>
     /// The adapters already known, with every live number replaced by one status and reason (sampling is off, the counters

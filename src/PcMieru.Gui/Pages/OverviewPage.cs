@@ -258,7 +258,7 @@ internal sealed class OverviewPage : PageBase
         var gpu = system.Gpus.OrderByDescending(g => g.UtilizationPercent.GetOr(-1)).FirstOrDefault();
         if (gpu is null)
         {
-            _gpu.Commit(Strings.Get("gui.overview.card.gpu"), Fmt.Dash, Strings.Get("gui.overview.gpu.none"), string.Empty, false);
+            _gpu.Commit(Strings.Get("gui.overview.card.gpu"), Fmt.Dash, EmptyList(system.GpusState, "gui.overview.gpu.none"), string.Empty, false);
         }
         else
         {
@@ -276,7 +276,7 @@ internal sealed class OverviewPage : PageBase
         var diskWrite = system.Disks.Sum(d => d.WriteBytesPerSec.GetOr(0));
         if (disk is null)
         {
-            _disk.Commit(Strings.Get("gui.overview.card.disk"), Fmt.Dash, Strings.Get("gui.common.na"), string.Empty, false);
+            _disk.Commit(Strings.Get("gui.overview.card.disk"), Fmt.Dash, EmptyList(system.DisksState, "gui.common.na"), string.Empty, false);
         }
         else
         {
@@ -294,7 +294,7 @@ internal sealed class OverviewPage : PageBase
         _network.Commit(
             Strings.Get("gui.overview.card.network"),
             system.Nics.Count == 0 ? Fmt.Dash : Fmt.Bytes((long)(send + receive)) + "/s",
-            system.Nics.Count == 0 ? Strings.Get("gui.common.na") : Strings.Format("gui.overview.net.sub", Fmt.Dict(("send", Fmt.Bytes((long)send) + "/s"), ("receive", Fmt.Bytes((long)receive) + "/s"))),
+            system.Nics.Count == 0 ? EmptyList(system.NicsState, "gui.common.na") : Strings.Format("gui.overview.net.sub", Fmt.Dict(("send", Fmt.Bytes((long)send) + "/s"), ("receive", Fmt.Bytes((long)receive) + "/s"))),
             string.Empty,
             false);
 
@@ -304,6 +304,10 @@ internal sealed class OverviewPage : PageBase
             SetNotes(snapshot);
         }
     }
+
+    /// <summary>What a card says when its list is empty: the status word when the list could not be read ("none" would be a lie), else the usual text.</summary>
+    private static string EmptyList(Value<int> state, string fallbackKey) =>
+        ListStatus.ExplainsEmptyList(0, state) ? Strings.Status(state.Status) : Strings.Get(fallbackKey);
 
     private static string Join(string first, string? second) => string.IsNullOrEmpty(second) ? first : first + "\n" + second;
 

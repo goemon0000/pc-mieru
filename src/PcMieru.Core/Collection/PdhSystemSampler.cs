@@ -4,7 +4,7 @@ using System.Globalization;
 namespace PcMieru.Core.Collection;
 
 /// <summary>What the always-on PDH query yields for one tick.</summary>
-internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<double> CpuMhz);
+internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<double> CpuMhz, Value<int> DisksState);
 
 /// <summary>
 /// Physical disks (<c>\PhysicalDisk(*)</c>) and the CPU clock from one PDH query that stays open. PDH computes the rates
@@ -108,7 +108,7 @@ internal sealed class PdhSystemSampler : IDisposable
         }
 
         disks.Sort(static (a, b) => string.CompareOrdinal(a.Id, b.Id));
-        return new PdhSystemReading(disks, ReadClock(primed));
+        return new PdhSystemReading(disks, ReadClock(primed), DisksState(disks.Count));
     }
 
     public void Dispose() => _query.Dispose();
@@ -288,8 +288,14 @@ internal sealed class PdhSystemSampler : IDisposable
         return model.Length == 0 ? null : model;
     }
 
-    private static PdhSystemReading Unavailable(string detail) =>
-        new([], Value.Failed<double>(ClockSource, detail));
+    internal static PdhSystemReading Unavailable(string detail) =>
+        new([], Value.Failed<double>(ClockSource, detail), Value.Failed<int>(DiskSource, detail));
+
+    /// <summary>The disk list is Ok (zero is then a real answer) unless the PhysicalDisk counters were never there to read.</summary>
+    private Value<int> DisksState(int count) =>
+        _idle == 0
+            ? Value.Unsupported<int>(DiskSource, "the PhysicalDisk counters are not available on this machine")
+            : Value.Ok(count, DiskSource);
 
     internal readonly record struct Reading(bool Present, double Value, uint CStatus)
     {

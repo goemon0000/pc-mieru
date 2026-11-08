@@ -249,6 +249,31 @@ public sealed class WindowsSnapshotSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task Every_list_of_a_real_snapshot_says_whether_it_could_be_read_and_a_list_with_entries_is_ok()
+    {
+        using var source = new WindowsSnapshotSource(static () => DateTime.UtcNow, new SamplerSettings { GpuDefaultOn = true });
+        _ = await source.SampleAsync();
+        await Task.Delay(300);
+        var system = (await source.SampleAsync()).System;
+
+        (int Count, Value<int> State, string Name)[] lists =
+        [
+            (system.Disks.Count, system.DisksState, "disks"),
+            (system.Nics.Count, system.NicsState, "nics"),
+            (system.Gpus.Count, system.GpusState, "gpus"),
+        ];
+        Assert.All(lists, l =>
+        {
+            Assert.False(ListStatus.IsUnset(l.State), l.Name + " has no state");
+            if (l.Count > 0)
+            {
+                Assert.True(l.State.IsOk, l.Name + ": " + ListStatus.Describe(l.State));
+                Assert.Equal(l.Count, l.State.Data);
+            }
+        });
+    }
+
+    [Fact]
     public async Task Uptime_matches_the_tick_count_within_a_few_seconds()
     {
         using var source = NewSource();

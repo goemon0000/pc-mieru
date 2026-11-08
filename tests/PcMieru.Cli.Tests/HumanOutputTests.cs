@@ -112,6 +112,59 @@ public sealed class HumanOutputTests
         }
     }
 
+    [Theory]
+    [InlineData(Language.En, "Failed: GetIfTable2 returned 5")]
+    [InlineData(Language.Ja, "取得に失敗: GetIfTable2 returned 5")]
+    public void Perf_says_why_a_list_is_empty_when_its_state_is_not_ok_instead_of_leaving_it_out(Language language, string expectedNics)
+    {
+        var summary = Summary();
+        summary = summary with
+        {
+            System = summary.System with
+            {
+                DisksState = Value.Failed<int>("PDH PhysicalDisk", "PDH could not be opened"),
+                NicsState = Value.Failed<int>("GetIfTable2", "GetIfTable2 returned 5"),
+                GpusState = Value.NotCollected<int>("PDH GPU Engine", "GPU sampling is off (no GPU view is open)"),
+            },
+        };
+
+        var text = PerfCommand.Render(Context(language), summary);
+
+        Assert.Contains(expectedNics, text, StringComparison.Ordinal);
+        Assert.Contains("PDH could not be opened", text, StringComparison.Ordinal);
+        Assert.Contains("GPU sampling is off", Lines(text).Single(l => l.StartsWith("GPU", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.DoesNotContain(language == Language.En ? "none found" : "見つかりません", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Perf_still_says_none_for_a_list_that_was_read_fine_and_for_a_state_nobody_filled()
+    {
+        var read = Summary();
+        read = read with { System = read.System with { DisksState = Value.Ok(0, "t"), NicsState = Value.Ok(0, "t"), GpusState = Value.Ok(0, "t") } };
+
+        foreach (var summary in new[] { read, Summary() })
+        {
+            var text = PerfCommand.Render(Context(), summary);
+
+            Assert.Contains("none found", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Error", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Not collected", Lines(text).Single(l => l.StartsWith("GPU", StringComparison.Ordinal)), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Perf_json_carries_the_three_states()
+    {
+        var summary = Summary();
+        summary = summary with { System = summary.System with { NicsState = Value.Failed<int>("GetIfTable2", "GetIfTable2 returned 5") } };
+
+        var json = System.Text.Json.Nodes.JsonNode.Parse(PcMieruJson.Serialize(summary))!["system"]!;
+
+        Assert.Equal("error", (string?)json["nicsState"]!["status"]);
+        Assert.NotNull(json["disksState"]);
+        Assert.NotNull(json["gpusState"]);
+    }
+
     [Fact]
     public void Perf_never_turns_a_missing_value_into_zero()
     {

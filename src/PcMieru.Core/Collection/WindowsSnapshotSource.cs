@@ -41,7 +41,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private readonly GpuSampler _gpu = new();
     private readonly GpuSensorCache _gpuSensors;
     private readonly GuardedStage<PdhSystemReading> _pdhStage = new();
-    private readonly GuardedStage<IReadOnlyList<NicInfo>> _nicStage = new();
+    private readonly GuardedStage<NicReading> _nicStage = new();
     private readonly GuardedStage<GpuReading> _gpuStage = new();
     private readonly GuardedStage<WindowProbeResult> _windowStage = new();
 
@@ -218,9 +218,12 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             new CpuInfo(logical, cpu.Total, cpu.PerLogical, pdh.CpuMhz),
             memory,
             pdh.Disks,
-            nics,
+            nics.Nics,
             gpu.Gpus,
-            Environment.TickCount64 / 1000);
+            Environment.TickCount64 / 1000,
+            pdh.DisksState,
+            nics.State,
+            gpu.State);
 
         var snapshot = new Snapshot(
             Snapshot.CurrentSchemaVersion,
@@ -251,7 +254,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         return sampler.Sample();
     }
 
-    private IReadOnlyList<NicInfo> RunNicStage()
+    private NicReading RunNicStage()
     {
         if (_nicReset)
         {
@@ -259,7 +262,8 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             _nic.Reset();
         }
 
-        return _nic.Sample();
+        var nics = _nic.Sample();
+        return new NicReading(nics, _nic.State);
     }
 
     private GpuReading RunGpuStage(bool active)
@@ -280,29 +284,35 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             return reading;
         }
 
-        return new PdhSystemReading([], Value.Missing<double>(failureStatus, "PDH Processor Information", failure));
+        return new PdhSystemReading(
+            [],
+            Value.Missing<double>(failureStatus, "PDH Processor Information", failure),
+            Value.Missing<int>(failureStatus, "PDH PhysicalDisk", failure));
     }
 
-    private IReadOnlyList<NicInfo> JoinNics(TimeSpan timeout) =>
-        _nicStage.TryJoin(timeout, out var nics, out _, out _) && nics is not null ? nics : [];
+    private NicReading JoinNics(TimeSpan timeout) =>
+        _nicStage.TryJoin(timeout, out var nics, out var failure, out var failureStatus) && nics is not null
+            ? nics
+            : new NicReading([], Value.Missing<int>(failureStatus, "GetIfTable2", failure));
 
     private GpuTick JoinGpu(TimeSpan timeout, bool active)
     {
         if (!_gpuStage.TryJoin(timeout, out var reading, out var failure, out var failureStatus) || reading is null)
         {
             var detail = "GPU counters: " + failure;
-            return new GpuTick(GpuSampler.Failed(_gpuKnown, failureStatus, detail), null, failureStatus, detail);
+            var failed = GpuSampler.Failed(_gpuKnown, failureStatus, detail);
+            return new GpuTick(failed, null, failureStatus, detail, GpuSampler.ListState(failed, failureStatus, detail));
         }
 
         _gpuKnown = reading.Gpus;
         if (!active)
         {
             _gpuSensors.Clear();
-            return new GpuTick(reading.Gpus, reading, ValueStatus.NotCollected, null);
+            return new GpuTick(reading.Gpus, reading, ValueStatus.NotCollected, null, reading.State);
         }
 
         var merged = GpuSensorMerge.Apply(reading.Gpus, _gpuSensors.Current());
-        return new GpuTick(merged, reading, ValueStatus.NotCollected, null);
+        return new GpuTick(merged, reading, ValueStatus.NotCollected, null, reading.State);
     }
 
     private WindowsTick JoinWindows(TimeSpan timeout)
@@ -319,7 +329,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private sealed record WindowsTick(WindowProbeResult? Result, ValueStatus FailureStatus, string? FailureDetail);
 
     /// <summary>The GPU part of a tick: the adapters for SystemInfo and what the per-process column needs.</summary>
-    private sealed record GpuTick(IReadOnlyList<GpuInfo> Gpus, GpuReading? Reading, ValueStatus FailureStatus, string? FailureDetail);
+    private sealed record GpuTick(IReadOnlyList<GpuInfo> Gpus, GpuReading? Reading, ValueStatus FailureStatus, string? FailureDetail, Value<int> State);
 
     private const string GpuProcessSource = "GPU Engine";
 

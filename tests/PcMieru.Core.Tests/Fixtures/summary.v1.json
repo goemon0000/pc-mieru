@@ -371,7 +371,22 @@
         }
       }
     ],
-    "uptimeSec": 93786
+    "uptimeSec": 93786,
+    "disksState": {
+      "value": 2,
+      "status": "ok",
+      "source": "fake"
+    },
+    "nicsState": {
+      "value": 2,
+      "status": "ok",
+      "source": "fake"
+    },
+    "gpusState": {
+      "value": 1,
+      "status": "ok",
+      "source": "fake"
+    }
   },
   "observations": [
     {

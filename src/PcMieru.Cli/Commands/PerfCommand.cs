@@ -90,10 +90,18 @@ public sealed class PerfCommand : ICliCommand
         {
             sb.Append('\n').Append(DiskTable(context, system.Disks));
         }
+        else if (ListStatus.ExplainsEmptyList(0, system.DisksState))
+        {
+            sb.Append('\n').Append(NotRead(context, "cli.perf.col.disk", system.DisksState));
+        }
 
         if (system.Nics.Count > 0)
         {
             sb.Append('\n').Append(NicTable(context, system.Nics));
+        }
+        else if (ListStatus.ExplainsEmptyList(0, system.NicsState))
+        {
+            sb.Append('\n').Append(NotRead(context, "cli.perf.col.nic", system.NicsState));
         }
 
         sb.Append('\n').Append(context.Text("cli.perf.observations")).Append('\n');
@@ -130,7 +138,11 @@ public sealed class PerfCommand : ICliCommand
 
         if (system.Gpus.Count == 0)
         {
-            lines.Add((context.Text("cli.perf.label.gpu"), context.Text("cli.perf.gpu.none")));
+            lines.Add((
+                context.Text("cli.perf.label.gpu"),
+                ListStatus.ExplainsEmptyList(0, system.GpusState)
+                    ? ListStatus.Describe(system.GpusState, context.Language)
+                    : context.Text("cli.perf.gpu.none")));
         }
 
         for (var i = 0; i < system.Gpus.Count; i++)
@@ -204,6 +216,10 @@ public sealed class PerfCommand : ICliCommand
 
         return CliText.Printable(gpu.Name) + context.Format("cli.fmt.paren", ("text", string.Join(separator, parts)));
     }
+
+    /// <summary>A list that is empty because it could not be read says so, in place of its table (an empty table would read as "none").</summary>
+    private static string NotRead(CliContext context, string labelKey, Value<int> state) =>
+        CliFormat.LabelColumn([(context.Text(labelKey), ListStatus.Describe(state, context.Language))]);
 
     private static string DiskTable(CliContext context, IReadOnlyList<DiskInfo> disks)
     {

@@ -104,6 +104,28 @@ public class ReportGoldenTests
     }
 
     [Fact]
+    public async Task The_report_says_a_list_could_not_be_read_instead_of_leaving_it_out_and_says_nothing_for_a_list_read_fine()
+    {
+        var document = await BuildAsync();
+        var system = document.Summary.System with
+        {
+            Nics = [],
+            NicsState = Value.Failed<int>("GetIfTable2", "GetIfTable2 returned 5"),
+            Disks = [],
+            DisksState = Value.Ok(0, "test"),
+        };
+        var broken = document with { Summary = document.Summary with { System = system } };
+
+        var ja = ReportMarkdown.Render(broken, Language.Ja, "0.1.0");
+        var en = ReportMarkdown.Render(broken, Language.En, "0.1.0");
+
+        Assert.Contains("ネットワーク は一覧に出せませんでした（取得に失敗: GetIfTable2 returned 5）", ja, StringComparison.Ordinal);
+        Assert.Contains("Network adapters could not be listed (Failed: GetIfTable2 returned 5)", en, StringComparison.Ordinal);
+        Assert.DoesNotContain("Disks could not be listed", en, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"\{[a-zA-Z]+\}", en);
+    }
+
+    [Fact]
     public async Task A_report_without_hardware_or_storage_still_renders_and_says_so()
     {
         var document = await BuildAsync() with { Hardware = null, Storage = null };

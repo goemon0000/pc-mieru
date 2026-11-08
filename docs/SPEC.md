@@ -38,12 +38,13 @@ PcMieru.Core.dll       UI に依存しない計測・部品情報・操作・レ
 Snapshot {
   schemaVersion: "1",
   takenAtUtc, intervalMs,
-  system: { cpu, memory, disks[], nics[], gpus[], uptimeSec },
+  system: { cpu, memory, disks[], nics[], gpus[], uptimeSec, disksState, nicsState, gpusState },
   processes: ProcessInfo[]
 }
 Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"gone"|"notCollected", source: string, detail?: string }
 ```
 
+- 一覧（`disks`・`nics`・`gpus`）は状態を持てないので、横に `disksState`・`nicsState`・`gpusState`（`Value<int>`）が付く。読めたときは ok と件数、読めなかったときはその status と理由。**空の一覧は、状態が ok のときだけ「無い」と読む。** GUI と CLI は、状態が ok でない空の一覧を空の枠にせず、その文を出す。状態が未設定（古い JSON・手で組んだ Snapshot）の一覧は何も言わない。
 - プロセスの識別は **PID＋作成時刻**（`ProcessKey`、JSON では文字列 `"<pid>:<createTime FILETIME 10進>"`）。PID だけで操作しない。
 - JSON のキーは英語で固定。単位はキー名に入れる（`workingSetBytes`、`cpuPercent`）。2^53 を超え得る値（FILETIME、128bit の NVMe カウンタ、累積の転送量）は 10 進の文字列。それ以外は number。
 - 時刻は UTC の ISO 8601（表示用）。操作のキーは ISO から作り直さない。

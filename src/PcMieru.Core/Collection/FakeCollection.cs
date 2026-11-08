@@ -174,7 +174,10 @@ public static class FakeSnapshots
                 disks,
                 nics,
                 gpus,
-                93_784 + tick),
+                93_784 + tick,
+                Value.Ok(disks.Length, Src),
+                Value.Ok(nics.Length, Src),
+                Value.Ok(gpus.Length, Src)),
             list);
     }
 
