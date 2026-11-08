@@ -71,6 +71,12 @@ public sealed class PcMieruServices : IDisposable
 
     public ISnapshotSource Snapshots => _registry.Get<ISnapshotSource>();
 
+    /// <summary>
+    /// The one loop that samples <see cref="Snapshots"/> on a beat. Nothing starts it here: the GUI does. While it runs, reports
+    /// read its history instead of sampling a second time; a front end that never starts it (pcmi, MCP) gets one-off samples as before.
+    /// </summary>
+    public SamplerLoop Sampler => _registry.Get<SamplerLoop>();
+
     public IProcessDetailsProvider ProcessDetails => _registry.Get<IProcessDetailsProvider>();
 
     public IProcessGroupSource ProcessGroups => _registry.Get<IProcessGroupSource>();
@@ -131,6 +137,12 @@ public sealed class PcMieruServices : IDisposable
 
     public void Dispose()
     {
+        // The loop reads the source, so it stops first.
+        if (_registry.TryGet<SamplerLoop>(out var loop))
+        {
+            loop!.Dispose();
+        }
+
         foreach (var item in _registry.All.OfType<IDisposable>())
         {
             item.Dispose();

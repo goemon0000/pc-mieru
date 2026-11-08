@@ -422,7 +422,7 @@ public class DataAndPagesTests
     public void Pump_slow_mode_never_makes_a_slow_choice_faster_and_never_a_fast_one_slower_than_five_seconds()
     {
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
-        using var pump = new SnapshotPump(services.Snapshots, 500);
+        using var pump = new SnapshotPump(services, 500);
         Assert.Equal(500, pump.EffectiveIntervalMs);
         pump.SetSlowMode(true);
         Assert.Equal(SnapshotPump.SlowIntervalMs, pump.EffectiveIntervalMs);
@@ -437,7 +437,7 @@ public class DataAndPagesTests
     public void Pump_reports_a_change_of_interval_pause_or_slow_mode_once_each_and_nothing_for_a_repeat()
     {
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
-        using var pump = new SnapshotPump(services.Snapshots, 1000);
+        using var pump = new SnapshotPump(services, 1000);
         var changes = 0;
         pump.StateChanged += () => changes++;
         pump.SetInterval(1000);

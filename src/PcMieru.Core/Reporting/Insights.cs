@@ -13,6 +13,7 @@ public sealed class Insights : IReadOnlyInsights
     private readonly IObservationEngine _observations;
     private readonly IReportBuilder _reports;
     private readonly TimeSpan _defaultWindow;
+    private readonly SamplerLoop? _sampler;
     private readonly SemaphoreSlim _observeGate = new(1, 1);
 
     public Insights(
@@ -22,7 +23,8 @@ public sealed class Insights : IReadOnlyInsights
         IStorageHealthProvider storage,
         IObservationEngine observations,
         IReportBuilder reports,
-        TimeSpan defaultWindow)
+        TimeSpan defaultWindow,
+        SamplerLoop? sampler = null)
     {
         _snapshots = snapshots;
         _details = details;
@@ -31,6 +33,7 @@ public sealed class Insights : IReadOnlyInsights
         _observations = observations;
         _reports = reports;
         _defaultWindow = defaultWindow;
+        _sampler = sampler;
     }
 
     public async Task<SystemSummary> GetSystemSummaryAsync(CancellationToken ct = default)
@@ -122,7 +125,7 @@ public sealed class Insights : IReadOnlyInsights
         {
             var health = await _storage.ReadAsync(false, ct).ConfigureAwait(false);
             var seconds = (int)Math.Round(duration.TotalSeconds);
-            var (_, summary) = await ObservationRun.RunAsync(_snapshots, _observations, duration, health, ct).ConfigureAwait(false);
+            var (_, summary) = await ObservationRun.RunAsync(_snapshots, _observations, duration, health, ct, _sampler).ConfigureAwait(false);
             return new DiagnoseResult(DiagnoseResult.CurrentSchemaVersion, seconds, summary);
         }
         finally

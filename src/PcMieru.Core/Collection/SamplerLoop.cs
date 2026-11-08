@@ -106,6 +106,9 @@ public sealed class SamplerLoop : IDisposable
     /// <summary>A sample failed. The loop carries on at the next beat.</summary>
     public event Action<Exception>? Failed;
 
+    /// <summary>The settings this loop follows (pause, interval, minimized). Whoever drives the loop writes them here.</summary>
+    public ISamplerControl Control => _control;
+
     public Snapshot? Latest => Volatile.Read(ref _latest);
 
     /// <summary>Oldest first, at most <see cref="HistoryLength"/> entries, a copy. Includes the no-baseline snapshots after a start or a pause.</summary>

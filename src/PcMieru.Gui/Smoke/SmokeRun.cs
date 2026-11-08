@@ -114,6 +114,12 @@ internal static class SmokeRun
             Check("sampler produced snapshots", context.Pump.Latest is not null && context.Pump.History.Count >= 2, context.Pump.History.Count + " samples");
             Check("first page shows rows", FirstHasRows(), first?.GetType().Name ?? "no page");
 
+            // One sampler: a report made while the window samples reads the loop's snapshots instead of sampling the source again.
+            // A snapshot the report took itself would not be in the loop's history.
+            var report = await context.Services.Reports.BuildAsync(new ReportOptions(DurationSec: 1, IncludeHardware: false, IncludeStorageHealth: false)).ConfigureAwait(true);
+            var fromLoop = context.Services.Sampler.History.Any(h => h.TakenAtUtc == report.Summary.TakenAtUtc);
+            Check("a report reads the sampler's history instead of sampling again", fromLoop, report.Summary.TakenAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+
             var processes = await Open("processes").ConfigureAwait(true) as ProcessesPage;
             await Until(() => processes is { VisibleRowCount: > 0 }, 5000).ConfigureAwait(true);
             Timing["processRowsMs"] = Ms(startedAt);

@@ -19,7 +19,9 @@ public static class CollectionModule
 
         if (options.ForceFakes)
         {
-            registry.Set<ISnapshotSource>(new FakeSnapshotSource(options.Clock));
+            var fake = new FakeSnapshotSource(options.Clock);
+            registry.Set<ISnapshotSource>(fake);
+            registry.Set(new SamplerLoop(fake, settings));
             registry.Set<IProcessDetailsProvider>(new FakeProcessDetailsProvider());
             registry.Set<IProcessGroupSource>(new FakeProcessGroupSource());
             registry.Set<IProcessIconSource>(new FakeProcessIconSource());
@@ -40,6 +42,7 @@ public static class CollectionModule
             verifier);
 
         registry.Set<ISnapshotSource>(source);
+        registry.Set(new SamplerLoop(source, settings));
         registry.Set<IProcessGroupSource>(source);
         registry.Set<IProcessDetailsProvider>(details);
         registry.Set<IProcessIconSource>(new ProcessIconSource());

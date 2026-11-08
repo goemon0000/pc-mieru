@@ -1,37 +1,57 @@
+using PcMieru.Core.Collection;
+
 namespace PcMieru.Gui;
 
 /// <summary>
-/// Samples on the UI thread's timer and hands the snapshot to whoever listens, on the UI thread. A tick that finds the
-/// previous sample still running is dropped, so a slow machine gets a slower list, not a growing queue.
+/// The window's view of the one sampler: Core's <see cref="SamplerLoop"/> takes the samples on its own thread, and this class
+/// hands each snapshot to whoever listens, on the UI thread. It owns no timer and never samples while the loop is running, so a
+/// report built at the same time reads the same history instead of shortening the loop's deltas. If the UI is busy the
+/// newest snapshot replaces the one that was waiting (the list gets slower, not a growing queue).
 /// The user picks the interval and may pause; the window asks for slow mode while minimized (5 s, never faster than the
-/// user's own choice). After a pause or a system sleep the baseline is reset, so the first sample afterwards shows
-/// "not collected" for rates instead of an average over the gap.
+/// user's own choice). After a pause the loop drops the baseline itself; after a system sleep this does, so the first
+/// sample afterwards shows "not collected" for rates instead of an average over the gap.
 /// </summary>
 internal sealed class SnapshotPump : IDisposable
 {
-    public const int HistoryLength = 60;
+    public const int HistoryLength = SamplerLoop.HistoryLength;
 
-    /// <summary>The interval used while minimized or hidden.</summary>
+    /// <summary>The interval used while minimized or hidden (the loop's own value).</summary>
     public const int SlowIntervalMs = 5000;
 
+    /// <summary>How long <see cref="TickAsync"/> waits for the loop before it gives up and lets the next beat show the result.</summary>
+    private static readonly TimeSpan TickTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly SamplerLoop _loop;
     private readonly ISnapshotSource _source;
-    private readonly System.Windows.Forms.Timer _timer;
+    private readonly ISamplerControl _settings;
+    private readonly Control _ui;
     private readonly List<Snapshot> _history = [];
+    private readonly List<TaskCompletionSource> _waiters = [];
     private readonly CancellationTokenSource _cancel = new();
     private int _intervalMs;
     private bool _started;
-    private bool _paused;
-    private bool _slow;
-    private bool _busy;
     private bool _powerHooked;
-    private volatile bool _resetPending;
+    private bool _disposed;
+    private Snapshot? _pending;
 
-    public SnapshotPump(ISnapshotSource source, int intervalMs = 1000)
+    public SnapshotPump(PcMieruServices services, int intervalMs = 1000)
+        : this(services.Sampler, services.Snapshots, intervalMs)
     {
+    }
+
+    public SnapshotPump(SamplerLoop loop, ISnapshotSource source, int intervalMs = 1000)
+    {
+        _loop = loop;
         _source = source;
+        _settings = loop.Control;
         _intervalMs = GuiSettings.Snap(intervalMs);
-        _timer = new System.Windows.Forms.Timer { Interval = _intervalMs };
-        _timer.Tick += async (_, _) => await TickAsync().ConfigureAwait(true);
+        _settings.Interval = TimeSpan.FromMilliseconds(_intervalMs);
+
+        // Built on the UI thread: the loop's events come from a pool thread and are posted back through this handle.
+        _ui = new Control();
+        _ = _ui.Handle;
+        _loop.Sampled += OnLoopSampled;
+        _loop.Failed += OnLoopFailed;
     }
 
     public event Action<Snapshot>? Sampled;
@@ -43,25 +63,25 @@ internal sealed class SnapshotPump : IDisposable
 
     public Snapshot? Latest { get; private set; }
 
-    /// <summary>Oldest first, at most <see cref="HistoryLength"/> entries.</summary>
+    /// <summary>Oldest first, at most <see cref="HistoryLength"/> entries. Only the UI thread reads or writes it.</summary>
     public IReadOnlyList<Snapshot> History => _history;
 
-    /// <summary>True while the timer is ticking: started, not paused.</summary>
-    public bool Running => _timer.Enabled;
+    /// <summary>True while the loop is sampling: started, not paused.</summary>
+    public bool Running => _started && !_settings.Paused && _loop.Running;
 
-    public bool Paused => _paused;
+    public bool Paused => _settings.Paused;
 
-    public bool SlowMode => _slow;
+    public bool SlowMode => _settings.Minimized;
 
     /// <summary>The interval the user chose.</summary>
     public int IntervalMs => _intervalMs;
 
     /// <summary>The interval actually in force (slow mode raises it to 5 s, never lowers it).</summary>
-    public int EffectiveIntervalMs => _slow ? Math.Max(_intervalMs, SlowIntervalMs) : _intervalMs;
+    public int EffectiveIntervalMs => (int)_settings.EffectiveInterval.TotalMilliseconds;
 
     public void Start()
     {
-        if (_started)
+        if (_started || _disposed)
         {
             return;
         }
@@ -69,19 +89,15 @@ internal sealed class SnapshotPump : IDisposable
         _started = true;
         HookPower();
         _history.Clear();
-        _source.ResetBaseline();
-        if (!_paused)
-        {
-            _timer.Interval = EffectiveIntervalMs;
-            _timer.Start();
-            _ = TickAsync();
-        }
+        _loop.Start(); // resets the baseline; a paused loop waits for the resume
     }
 
+    /// <summary>Stops delivering. The loop itself belongs to the services and stops with them.</summary>
     public void Stop()
     {
         _started = false;
-        _timer.Stop();
+        Interlocked.Exchange(ref _pending, null);
+        CompleteWaiters();
     }
 
     public void SetInterval(int intervalMs)
@@ -93,65 +109,105 @@ internal sealed class SnapshotPump : IDisposable
         }
 
         _intervalMs = snapped;
-        ApplyTimer(restartedNow: false);
+        _settings.Interval = TimeSpan.FromMilliseconds(snapped);
         StateChanged?.Invoke();
     }
 
     public void SetPaused(bool paused)
     {
-        if (_paused == paused)
+        if (_settings.Paused == paused)
         {
             return;
         }
 
-        _paused = paused;
-        if (!paused)
+        _settings.Paused = paused; // the loop drops its baseline when it sees the resume
+        if (!paused && _started)
         {
-            _source.ResetBaseline();
+            _loop.RequestSampleNow();
         }
 
-        ApplyTimer(restartedNow: !paused);
         StateChanged?.Invoke();
     }
 
     public void SetSlowMode(bool slow)
     {
-        if (_slow == slow)
+        if (_settings.Minimized == slow)
         {
             return;
         }
 
-        _slow = slow;
-        ApplyTimer(restartedNow: !slow);
+        _settings.Minimized = slow;
+        if (!slow && _started)
+        {
+            _loop.RequestSampleNow(); // back to the normal beat: show something current at once
+        }
+
         StateChanged?.Invoke();
     }
 
-    /// <summary>Takes one sample now (the timer calls this too). Continues on the caller's UI context.</summary>
+    /// <summary>
+    /// Asks for a sample now (after an action, F5) and returns once it has been delivered, on the caller's UI context.
+    /// Paused, the loop takes nothing, so one sample is taken here instead (nobody else is sampling then). Before
+    /// <see cref="Start"/> there is nothing to refresh.
+    /// </summary>
     public async Task TickAsync()
     {
-        if (_busy || _cancel.IsCancellationRequested)
+        if (!_started || _disposed || _cancel.IsCancellationRequested)
         {
             return;
         }
 
-        _busy = true;
+        if (_settings.Paused)
+        {
+            await SampleWhilePausedAsync().ConfigureAwait(true);
+            return;
+        }
+
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _waiters.Add(waiter);
+        _loop.RequestSampleNow();
         try
         {
-            if (_resetPending)
-            {
-                _resetPending = false;
-                _source.ResetBaseline();
-            }
+            await waiter.Task.WaitAsync(TickTimeout, _cancel.Token).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            // The next beat delivers it; a refresh that finds the sampler stuck must not hang the window.
+        }
+        finally
+        {
+            _waiters.Remove(waiter);
+        }
+    }
 
-            var snapshot = await _source.SampleAsync(_cancel.Token).ConfigureAwait(true);
-            Latest = snapshot;
-            _history.Add(snapshot);
-            if (_history.Count > HistoryLength)
-            {
-                _history.RemoveAt(0);
-            }
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
 
-            Sampled?.Invoke(snapshot);
+        _disposed = true;
+        _started = false;
+        _loop.Sampled -= OnLoopSampled;
+        _loop.Failed -= OnLoopFailed;
+        if (_powerHooked)
+        {
+            Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            _powerHooked = false;
+        }
+
+        _cancel.Cancel();
+        CompleteWaiters();
+        _ui.Dispose();
+        _cancel.Dispose();
+    }
+
+    private async Task SampleWhilePausedAsync()
+    {
+        try
+        {
+            Deliver(await _source.SampleAsync(_cancel.Token).ConfigureAwait(true));
         }
         catch (OperationCanceledException)
         {
@@ -160,47 +216,72 @@ internal sealed class SnapshotPump : IDisposable
         {
             Failed?.Invoke(ex);
         }
-        finally
+    }
+
+    // Pool thread. Only the newest snapshot waits for the UI thread.
+    private void OnLoopSampled(Snapshot snapshot)
+    {
+        if (Interlocked.Exchange(ref _pending, snapshot) is null)
         {
-            _busy = false;
+            Post(DeliverPending);
         }
     }
 
-    public void Dispose()
-    {
-        if (_powerHooked)
+    private void OnLoopFailed(Exception exception) =>
+        Post(() =>
         {
-            Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
-            _powerHooked = false;
-        }
+            if (_started)
+            {
+                Failed?.Invoke(exception);
+            }
 
-        _cancel.Cancel();
-        _timer.Dispose();
-        _cancel.Dispose();
+            CompleteWaiters();
+        });
+
+    private void DeliverPending()
+    {
+        if (Interlocked.Exchange(ref _pending, null) is { } snapshot && _started)
+        {
+            Deliver(snapshot);
+        }
     }
 
-    private void ApplyTimer(bool restartedNow)
+    private void Deliver(Snapshot snapshot)
     {
-        if (!_started)
+        Latest = snapshot;
+        _history.Add(snapshot);
+        if (_history.Count > HistoryLength)
         {
-            return;
+            _history.RemoveAt(0);
         }
 
-        if (_paused)
-        {
-            _timer.Stop();
-            return;
-        }
+        Sampled?.Invoke(snapshot);
+        CompleteWaiters();
+    }
 
-        _timer.Interval = EffectiveIntervalMs;
-        if (!_timer.Enabled)
+    private void CompleteWaiters()
+    {
+        foreach (var waiter in _waiters.ToArray())
         {
-            _timer.Start();
+            waiter.TrySetResult();
         }
+    }
 
-        if (restartedNow)
+    private void Post(Action action)
+    {
+        try
         {
-            _ = TickAsync();
+            if (!_disposed && _ui.IsHandleCreated && !_ui.IsDisposed)
+            {
+                _ = _ui.BeginInvoke(action);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // The window handle went away while the loop was still delivering: shutdown.
         }
     }
 
@@ -219,8 +300,8 @@ internal sealed class SnapshotPump : IDisposable
     {
         if (e.Mode == Microsoft.Win32.PowerModes.Resume && _started)
         {
-            // Runs on SystemEvents' thread; the reset itself happens on the UI thread at the next tick.
-            _resetPending = true;
+            // SystemEvents' thread. The reset only raises a flag the next sample reads, so any thread may do it.
+            _source.ResetBaseline();
         }
     }
 }

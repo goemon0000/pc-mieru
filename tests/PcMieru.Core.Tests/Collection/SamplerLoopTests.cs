@@ -12,8 +12,15 @@ internal sealed class ScriptedSource : ISnapshotSource
     private int _calls;
     private int _running;
     private int _peak;
+    private int _held;
 
     public TimeSpan Duration { get; set; }
+
+    /// <summary>While set, a call blocks until it is completed or the call is cancelled (a sampler that is stuck).</summary>
+    public TaskCompletionSource? Hold { get; set; }
+
+    /// <summary>Calls that are blocked on <see cref="Hold"/> right now.</summary>
+    public int Held => Volatile.Read(ref _held);
 
     /// <summary>Returns the exception to throw for the n-th call (1-based), or null.</summary>
     public Func<int, Exception?>? Fail { get; set; }
@@ -84,6 +91,19 @@ internal sealed class ScriptedSource : ISnapshotSource
 
         try
         {
+            if (Hold is { } hold)
+            {
+                _ = Interlocked.Increment(ref _held);
+                try
+                {
+                    await hold.Task.WaitAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _ = Interlocked.Decrement(ref _held);
+                }
+            }
+
             if (Duration > TimeSpan.Zero)
             {
                 await Task.Delay(Duration, ct).ConfigureAwait(false);

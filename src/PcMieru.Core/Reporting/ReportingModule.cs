@@ -1,3 +1,4 @@
+using PcMieru.Core.Collection;
 using PcMieru.Core.Hardware.Model;
 
 namespace PcMieru.Core.Reporting;
@@ -21,7 +22,8 @@ public static class ReportingModule
         var snapshots = registry.Get<ISnapshotSource>();
         var hardware = registry.Get<IHardwareProvider>();
         var storage = registry.Get<IStorageHealthProvider>();
-        var reports = new ReportBuilder(snapshots, engine, hardware, storage, redactor, options.Clock);
+        registry.TryGet<SamplerLoop>(out var sampler);
+        var reports = new ReportBuilder(snapshots, engine, hardware, storage, redactor, options.Clock, sampler);
         registry.Set<IReportBuilder>(reports);
         registry.Set<IReadOnlyInsights>(new Insights(
             snapshots,
@@ -30,6 +32,7 @@ public static class ReportingModule
             storage,
             engine,
             reports,
-            options.DefaultSampleWindow));
+            options.DefaultSampleWindow,
+            sampler));
     }
 }

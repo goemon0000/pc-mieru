@@ -41,7 +41,7 @@ internal static class Program
         Strings.Current = settings.Language;
 
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = options.ForceFakes });
-        using var pump = new SnapshotPump(services.Snapshots, settings.IntervalMs);
+        using var pump = new SnapshotPump(services, settings.IntervalMs);
         using var theme = new ThemeService(settings.Theme);
         var context = new GuiContext(services, pump, theme, settings);
         using var form = new MainForm(context);

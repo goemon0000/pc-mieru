@@ -16,14 +16,17 @@ public sealed class ReportBuilder : IReportBuilder
     private readonly IStorageHealthProvider _storage;
     private readonly IRedactor _redactor;
     private readonly Func<DateTime> _clock;
+    private readonly SamplerLoop? _sampler;
 
+    /// <param name="sampler">When given and running, the observation window is read from its history instead of sampling again (two samplers on one source shorten each other's deltas).</param>
     public ReportBuilder(
         ISnapshotSource snapshots,
         IObservationEngine observations,
         IHardwareProvider hardware,
         IStorageHealthProvider storage,
         IRedactor redactor,
-        Func<DateTime> clock)
+        Func<DateTime> clock,
+        SamplerLoop? sampler = null)
     {
         _snapshots = snapshots;
         _observations = observations;
@@ -31,6 +34,7 @@ public sealed class ReportBuilder : IReportBuilder
         _storage = storage;
         _redactor = redactor;
         _clock = clock;
+        _sampler = sampler;
     }
 
     public async Task<ReportDocument> BuildAsync(ReportOptions options, CancellationToken ct = default)
@@ -38,7 +42,7 @@ public sealed class ReportBuilder : IReportBuilder
         var health = options.IncludeStorageHealth ? await _storage.ReadAsync(false, ct).ConfigureAwait(false) : null;
         // The report says how long it really observed, so the number written is the clamped one.
         var seconds = Math.Clamp(options.DurationSec, 0, MaxDurationSec);
-        var (_, summary) = await ObservationRun.RunAsync(_snapshots, _observations, TimeSpan.FromSeconds(seconds), health, ct).ConfigureAwait(false);
+        var (_, summary) = await ObservationRun.RunAsync(_snapshots, _observations, TimeSpan.FromSeconds(seconds), health, ct, _sampler).ConfigureAwait(false);
         var hardware = options.IncludeHardware ? await _hardware.GetAsync(HardwareCategory.All, ct).ConfigureAwait(false) : null;
         return new ReportDocument(
             ReportDocument.CurrentSchemaVersion,

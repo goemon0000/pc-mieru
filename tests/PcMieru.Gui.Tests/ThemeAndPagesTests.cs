@@ -82,7 +82,7 @@ public class ThemeAndPagesTests
     {
         using var _ = Harness.Locale();
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
-        using var pump = new SnapshotPump(services.Snapshots);
+        using var pump = new SnapshotPump(services);
         using var theme = new ThemeService(ThemeMode.Light);
         var context = new GuiContext(services, pump, theme, new GuiSettings());
 
