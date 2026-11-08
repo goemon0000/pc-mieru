@@ -463,6 +463,8 @@ public class DataAndPagesTests
     [InlineData(10000, "10")]
     public void The_graph_span_follows_the_interval(int intervalMs, string number)
     {
+        // The strings must be registered (and the language fixed) for this to run on its own, not only after another test did it.
+        using var locale = Harness.Locale();
         var span = PerfMetrics.Span(PerfMetrics.HistorySeconds(intervalMs));
         Assert.Contains(number, span, StringComparison.Ordinal);
         var minutes = PerfMetrics.HistorySeconds(intervalMs) >= 120;
