@@ -176,3 +176,25 @@ internal static partial class Tbs
         public uint TpmImpRevision;
     }
 }
+
+internal static partial class Kernel32Errors
+{
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetThreadErrorMode(uint newMode, out uint oldMode);
+
+    /// <summary>Runs <paramref name="action"/> with the "no critical-error dialog" mode (empty card readers, dead network drives).</summary>
+    public static T Quiet<T>(Func<T> action)
+    {
+        SetThreadErrorMode(1, out var old);
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            SetThreadErrorMode(old, out _);
+        }
+    }
+}

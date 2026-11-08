@@ -386,3 +386,63 @@ internal sealed class DeviceInfoSet : IDisposable
         }
     }
 }
+
+/// <summary>Property reads by device instance handle (parents, PCI link state). Read only.</summary>
+internal static class DevInstProps
+{
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint CM_Get_DevNode_PropertyW(uint devInst, ref DevPropKey key, out uint type, byte[]? buffer, ref uint size, uint flags);
+
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint CM_Locate_DevNodeW(out uint devInst, string? deviceId, uint flags);
+
+    public static uint? Locate(string instanceId) => CM_Locate_DevNodeW(out var inst, instanceId, 0) == 0 ? inst : null;
+
+    public static uint? Parent(uint devInst) => CfgMgr.CM_Get_Parent(out var parent, devInst, 0) == 0 ? parent : null;
+
+    private static byte[]? Raw(uint devInst, DevPropKey key, out uint type)
+    {
+        uint size = 0;
+        CM_Get_DevNode_PropertyW(devInst, ref key, out type, null, ref size, 0);
+        if (size == 0)
+        {
+            return null;
+        }
+
+        var buf = new byte[size];
+        return CM_Get_DevNode_PropertyW(devInst, ref key, out type, buf, ref size, 0) == 0 ? buf : null;
+    }
+
+    public static string? GetString(uint devInst, DevPropKey key)
+    {
+        var raw = Raw(devInst, key, out var type);
+        if (raw is null || type != 0x12)
+        {
+            return null;
+        }
+
+        var s = Encoding.Unicode.GetString(raw).TrimEnd('\0').Trim();
+        return s.Length == 0 ? null : s;
+    }
+
+    public static long? GetInteger(uint devInst, DevPropKey key)
+    {
+        var raw = Raw(devInst, key, out _);
+        return raw?.Length switch
+        {
+            1 => raw[0],
+            2 => BitConverter.ToUInt16(raw, 0),
+            4 => BitConverter.ToUInt32(raw, 0),
+            8 => BitConverter.ToInt64(raw, 0),
+            _ => null,
+        };
+    }
+
+    public static string? InstanceId(uint devInst)
+    {
+        var buf = new char[400];
+        return CfgMgr.CM_Get_Device_IDW(devInst, buf, (uint)buf.Length, 0) == 0 ? new string(buf).TrimEnd('\0') : null;
+    }
+}

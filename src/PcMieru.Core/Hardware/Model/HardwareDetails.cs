@@ -88,7 +88,12 @@ public sealed record StorageDetails(
     Value<int> LogicalSectorBytes,
     Value<int> PhysicalSectorBytes,
     Value<bool> Removable,
-    IReadOnlyList<StoragePartition> Partitions);
+    IReadOnlyList<StoragePartition> Partitions,
+    Value<string> DriverVersion,
+    Value<int> PcieGeneration,
+    Value<int> PcieWidth,
+    Value<int> PcieMaxGeneration,
+    Value<int> PcieMaxWidth);
 
 public sealed record NetworkDetails(
     Value<string> Description,
