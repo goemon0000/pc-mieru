@@ -269,24 +269,3 @@ public static class SnapshotSampling
         return await source.SampleAsync(ct).ConfigureAwait(false);
     }
 }
-
-public static class CollectionModule
-{
-    /// <summary>Owner A: replace the Fakes with the real implementations here (keep the Fake for options.ForceFakes).</summary>
-    public static void Register(ServiceRegistry registry, PcMieruOptions options)
-    {
-        Strings.Register(CollectionStrings.All);
-        registry.Set<ISnapshotSource>(new FakeSnapshotSource(options.Clock));
-        registry.Set<IProcessDetailsProvider>(new FakeProcessDetailsProvider());
-    }
-}
-
-public static class CollectionStrings
-{
-    public static readonly StringEntry[] All =
-    [
-        new("collection.state.running", "実行中", "Running"),
-        new("collection.state.notResponding", "応答なし", "Not responding"),
-        new("collection.state.suspended", "中断", "Suspended"),
-    ];
-}

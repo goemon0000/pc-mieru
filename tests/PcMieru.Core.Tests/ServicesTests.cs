@@ -9,7 +9,7 @@ namespace PcMieru.Core.Tests;
 public class ServicesTests
 {
     private static PcMieruServices Create(bool redact = true) =>
-        PcMieruServices.Create(new PcMieruOptions { Redact = redact, Clock = static () => Fixture.FixedTime });
+        PcMieruServices.Create(new PcMieruOptions { Redact = redact, Clock = static () => Fixture.FixedTime, ForceFakes = true });
 
     /// <summary>
     /// Management has real implementations: a test that expects the Fake's behaviour (and must not act on this PC: end a
@@ -54,7 +54,7 @@ public class ServicesTests
     public void Configure_replaces_a_registration_after_the_modules_ran()
     {
         var replaced = new FakeHardwareProvider();
-        using var s = PcMieruServices.Create(configure: r => r.Set<IHardwareProvider>(replaced));
+        using var s = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true }, r => r.Set<IHardwareProvider>(replaced));
         Assert.Same(replaced, s.Hardware);
     }
 
