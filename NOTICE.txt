@@ -1,0 +1,16 @@
+PC Mieru - third-party notices
+==============================
+
+This folder is self-contained: it carries the .NET runtime, so no separate
+.NET installation is needed.
+
+.NET runtime and Windows Desktop runtime (WinForms)
+  Copyright (c) .NET Foundation and Contributors. MIT License.
+  https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
+
+PC Mieru has no other third-party runtime dependency in this skeleton.
+
+Code taken from other projects is listed here, with its licence, at the moment
+it is added (the source file also names its origin in its header). Planned
+origin: goemon0000/parts-life (same owner, MIT) for the NVML / ADLX / PDH /
+NVMe-SMART readers.
