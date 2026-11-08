@@ -77,6 +77,10 @@ public sealed partial class KnownProcessCatalog : IKnownProcessCatalog
     /// <summary>The ids of every entry, for tests and for the docs.</summary>
     public IReadOnlyList<string> Ids => _byName.Values.Select(e => e.Id).Distinct().Order(StringComparer.Ordinal).ToArray();
 
+    /// <summary>The path patterns of one entry as written in the data (with %Var% and *), for tests and docs.</summary>
+    public IReadOnlyList<string> PathPatterns(string id) =>
+        _byName.Values.FirstOrDefault(e => e.Id == id)?.DeclaredPaths ?? [];
+
     public KnownProcess? Match(string imageName, string? path, SignatureInfo? signature)
     {
         if (string.IsNullOrWhiteSpace(imageName))

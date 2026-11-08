@@ -154,7 +154,7 @@ public static class ReportMarkdown
                 ObservationSeverity.Notice => "report.observations.notice",
                 _ => "report.observations.info",
             });
-            w.Line($"- [{level}・{kind}] " + OneLine(Strings.Render(o, w.Language)));
+            w.Line($"- [{level} / {kind}] " + OneLine(Strings.Render(o, w.Language)));
             if (o.Evidence.Count > 0)
             {
                 var evidence = string.Join(", ", o.Evidence.Select(e => OneLine(e.Metric) + "=" + OneLine(e.Value) + (e.Unit.Length > 0 ? " " + OneLine(e.Unit) : string.Empty)));
@@ -286,7 +286,7 @@ public static class ReportMarkdown
                 Text(parts, d.Model, v => Code(v));
                 if (d.Bus.TryGet(out var bus) && bus != StorageBus.Unknown)
                 {
-                    parts.Add(bus.ToString().ToUpperInvariant());
+                    parts.Add(BusName(bus.ToString()));
                 }
 
                 if (d.CapacityBytes.TryGet(out var cap))
@@ -342,7 +342,7 @@ public static class ReportMarkdown
             }
 
             var warning = h.CriticalWarning.TryGet(out var cw) ? (cw == 0 ? w.T("report.storage.noWarning") : "0x" + cw.ToString("X2", Inv)) : "-";
-            w.Line($"| {name} | {h.Kind.ToString().ToUpperInvariant()} | {NumOrDash(h.TemperatureC, "0")} °C | {NumOrDash(h.PercentageUsed, "0")} % | {NumOrDash(h.AvailableSparePercent, "0")} % | {warning} |");
+            w.Line($"| {name} | {BusName(h.Kind.ToString())} | {NumOrDash(h.TemperatureC, "0")} °C | {NumOrDash(h.PercentageUsed, "0")} % | {NumOrDash(h.AvailableSparePercent, "0")} % | {warning} |");
         }
 
         w.Blank();
@@ -435,6 +435,10 @@ public static class ReportMarkdown
     }
 
     /// <summary>One line, no control characters: text from the machine must not be able to start a new Markdown line.</summary>
+    /// <summary>"Nvme" reads as the product name NVMe; other bus names are acronyms (SATA, USB, SCSI).</summary>
+    private static string BusName(string name) =>
+        string.Equals(name, "Nvme", StringComparison.OrdinalIgnoreCase) ? "NVMe" : name.ToUpperInvariant();
+
     public static string OneLine(string text)
     {
         var sb = new StringBuilder(text.Length);
