@@ -21,12 +21,14 @@ internal static class CliRun
         string stdin = "",
         Language language = Language.En,
         int width = 120,
-        Action<ServiceRegistry>? configure = null)
+        Action<ServiceRegistry>? configure = null,
+        string? helperDirectory = null,
+        CancellationToken ct = default)
     {
         var output = new StringWriter { NewLine = "\n" };
         var error = new StringWriter { NewLine = "\n" };
-        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language);
-        var code = await CliApp.RunAsync(args, env, CancellationToken.None);
+        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language, helperDirectory);
+        var code = await CliApp.RunAsync(args, env, ct);
         return new CliResult(code, output.ToString(), error.ToString());
     }
 }

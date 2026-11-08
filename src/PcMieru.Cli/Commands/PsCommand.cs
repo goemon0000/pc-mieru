@@ -1,4 +1,3 @@
-using System.Text;
 using PcMieru.Core;
 
 namespace PcMieru.Cli.Commands;
@@ -65,29 +64,7 @@ public sealed class PsCommand : ICliCommand
             StateText(context, r.Process),
         }).ToList();
 
-        var widths = headers.Select(CliText.Width).ToArray();
-        foreach (var row in cells)
-        {
-            for (var i = 0; i < row.Length; i++)
-            {
-                widths[i] = Math.Max(widths[i], CliText.Width(row[i]));
-            }
-        }
-
-        if (context.ConsoleWidth > 0)
-        {
-            var fixedWidth = widths.Sum() - widths[1] + (widths.Length - 1) * 2;
-            widths[1] = Math.Max(12, Math.Min(widths[1], context.ConsoleWidth - fixedWidth - 1));
-        }
-
-        var sb = new StringBuilder();
-        AppendRow(sb, headers, widths);
-        foreach (var row in cells)
-        {
-            AppendRow(sb, row, widths);
-        }
-
-        context.Out.Write(sb.ToString());
+        context.Out.Write(CliTable.Render(headers, cells.Select(c => (IReadOnlyList<string>)c).ToList(), new HashSet<int> { 0, 2, 3, 4 }, flexColumn: 1, consoleWidth: context.ConsoleWidth));
         var footer = Strings.Format(
             "cli.ps.footer",
             new Dictionary<string, string>
@@ -98,16 +75,6 @@ public sealed class PsCommand : ICliCommand
             },
             context.Language);
         context.Out.WriteLine(footer);
-    }
-
-    private static void AppendRow(StringBuilder sb, string[] row, int[] widths)
-    {
-        for (var i = 0; i < row.Length; i++)
-        {
-            var text = i == 1 ? CliText.Truncate(row[i], widths[i]) : row[i];
-            sb.Append(i == row.Length - 1 ? text : i == 1 ? CliText.PadRight(text, widths[i]) : CliText.PadLeft(text, widths[i]));
-            sb.Append(i < row.Length - 1 ? "  " : "\n");
-        }
     }
 
     private static string StateText(CliContext context, ProcessInfo p) =>

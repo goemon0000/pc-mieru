@@ -29,7 +29,8 @@ public sealed record CliEnvironment(
     TextWriter Err,
     Func<PcMieruOptions, PcMieruServices> ServicesFactory,
     int ConsoleWidth = 120,
-    Language? Language = null)
+    Language? Language = null,
+    string? HelperDirectory = null)
 {
     public static Func<PcMieruOptions, PcMieruServices> DefaultFactory { get; } = static o => PcMieruServices.Create(o);
 }
@@ -54,6 +55,10 @@ public sealed class CliContext : IDisposable
 
     public int ConsoleWidth => _env.ConsoleWidth;
 
+    /// <summary>Where the Helper's result file is made (SPEC section 8). Tests point it at a temporary folder.</summary>
+    public string HelperDirectory =>
+        _env.HelperDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru", "helper");
+
     public Language Language { get; }
 
     public CancellationToken Ct { get; }
@@ -77,6 +82,10 @@ public sealed class CliContext : IDisposable
     }
 
     public string Text(string key) => Strings.Get(key, Language);
+
+    /// <summary>Fills {name} placeholders. Values are made printable, so a process name cannot carry a control character.</summary>
+    public string Format(string key, params (string Name, string Value)[] values) =>
+        Strings.Format(key, values.ToDictionary(v => v.Name, v => CliText.Printable(v.Value)), Language);
 
     public void Dispose()
     {
