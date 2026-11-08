@@ -86,7 +86,7 @@ public static class HelperExecutor
                 return DiskOperations.NvmeHealth(request.DriveNumber!.Value);
 
             default:
-                return ActionResult.Of(OperationCode.Unsupported, MessageKeys.HelperUnexpectedExit);
+                return ActionResult.Of(OperationCode.Unsupported, MessageKeys.HelperUnexpectedExit, ("code", "op-" + request.Op));
         }
     }
 

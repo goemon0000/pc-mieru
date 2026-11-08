@@ -9,4 +9,6 @@ namespace PcMieru.Core;
 [JsonSerializable(typeof(IReadOnlyList<SessionInfo>))]
 [JsonSerializable(typeof(OperationResult))]
 [JsonSerializable(typeof(TerminatePlan))]
+[JsonSerializable(typeof(Dictionary<string, PcMieru.Core.Management.EcoRecord>))]
+[JsonSerializable(typeof(Dictionary<string, PcMieru.Core.Management.StartupUndoRecord>))]
 public partial class ManagementJsonContext : JsonSerializerContext;

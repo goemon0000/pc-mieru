@@ -121,6 +121,34 @@ public static class ProcessGuard
         }
     }
 
+    /// <summary>
+    /// Asks "may this process be acted on?" for display and for the UI to hide buttons, with query rights only. Same
+    /// rules as the operations themselves (they re-check on their own handle), and the same fail-closed outcome:
+    /// a process that cannot be opened, was replaced or already ended is Unknown, never Allowed.
+    /// </summary>
+    public static ProtectionAssessment Inspect(uint pid, long createTime, SelfIdentity self, string systemDirectory)
+    {
+        if (pid is 0 or 4)
+        {
+            return new(ProtectionOutcome.Protected, ProtectionReason.SystemProcess);
+        }
+
+        using var handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION | Native.SYNCHRONIZE, false, pid);
+        if (handle.IsInvalid)
+        {
+            return new(ProtectionOutcome.Unknown, ProtectionReason.CannotConfirm);
+        }
+
+        if (!Native.GetProcessTimes(handle, out var created, out _, out _, out _)
+            || created != createTime
+            || Native.WaitForSingleObject(handle, 0) == Native.WAIT_OBJECT_0)
+        {
+            return new(ProtectionOutcome.Unknown, ProtectionReason.CannotConfirm);
+        }
+
+        return Assess(handle, pid, self, systemDirectory);
+    }
+
     public static ActionResult Protected(ProtectionReason reason) => ActionResult.Of(OperationCode.Protected, KeyFor(reason));
 
     public static string KeyFor(ProtectionReason reason) => reason switch
@@ -318,6 +346,70 @@ public static class ProcessOperations
         }
 
         return ActionResult.Of(OperationCode.Ok, MessageKeys.EfficiencyOff);
+    }
+
+    /// <summary>
+    /// Sets the CPU affinity (in-process only, not a Helper operation). Refused for processes that span processor
+    /// groups, for an empty mask and for a mask with bits the system does not have.
+    /// </summary>
+    public static ActionResult SetAffinity(uint pid, long createTime, ulong mask, SelfIdentity self, string systemDirectory)
+    {
+        var refused = ProcessGuard.Open(pid, createTime, Native.PROCESS_SET_INFORMATION, self, systemDirectory, out var guarded);
+        if (refused is not null)
+        {
+            return refused;
+        }
+
+        using (guarded)
+        {
+            var handle = guarded!.Handle;
+            ushort groups = 0;
+            unsafe
+            {
+                // First call with room for none: ERROR_INSUFFICIENT_BUFFER tells how many groups the process spans.
+                Native.GetProcessGroupAffinity(handle, ref groups, null);
+            }
+
+            if (groups > 1)
+            {
+                return ActionResult.Of(OperationCode.Unsupported, MessageKeys.AffinityMultiGroup);
+            }
+
+            if (!Native.GetProcessAffinityMask(handle, out _, out var systemMask))
+            {
+                return FromLastError();
+            }
+
+            if (mask == 0 || (mask & ~(ulong)systemMask) != 0)
+            {
+                return ActionResult.Of(OperationCode.InvalidArguments, MessageKeys.AffinityInvalid);
+            }
+
+            return Native.SetProcessAffinityMask(handle, (nuint)mask)
+                ? ActionResult.Of(OperationCode.Ok, MessageKeys.AffinitySet)
+                : FromLastError();
+        }
+    }
+
+    /// <summary>
+    /// Reads the current affinity masks (query rights only) of exactly that process: the creation time is checked
+    /// on the same handle, so a reused PID reads as "false". For showing the state and for tests.
+    /// </summary>
+    public static bool TryQueryAffinity(uint pid, long createTime, out ulong processMask, out ulong systemMask)
+    {
+        processMask = systemMask = 0;
+        using var handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (handle.IsInvalid
+            || !Native.GetProcessTimes(handle, out var created, out _, out _, out _)
+            || created != createTime
+            || !Native.GetProcessAffinityMask(handle, out var p, out var sys))
+        {
+            return false;
+        }
+
+        processMask = p;
+        systemMask = sys;
+        return true;
     }
 
     /// <summary>Reads the current power-throttling masks of a process (query rights only). For tests and for showing the state.</summary>

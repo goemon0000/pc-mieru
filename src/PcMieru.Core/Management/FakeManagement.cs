@@ -121,8 +121,10 @@ public sealed class FakeServiceManager : IServiceManager, IFakeImplementation
     }
 }
 
-public sealed class FakeStartupManager : IStartupManager, IFakeImplementation
+public sealed class FakeStartupManager : IStartupManager, IStartupUndo, IFakeImplementation
 {
+    private readonly Dictionary<string, StartupState> _before = [];
+
     private readonly List<StartupItem> _items =
     [
         new("runHkcu:Discord", StartupProvider.RunHkcu, "Discord", "\"C:\\Users\\user\\AppData\\Local\\Discord\\Update.exe\" --processStart Discord.exe", StartupState.Enabled, true, false),
@@ -147,8 +149,23 @@ public sealed class FakeStartupManager : IStartupManager, IFakeImplementation
             return Task.FromResult(OperationResult.Fail(OperationCode.Unsupported, "this entry is list-only"));
         }
 
+        _before.TryAdd(id, _items[index].State);
         _items[index] = _items[index] with { State = enabled ? StartupState.Enabled : StartupState.Disabled };
         return Task.FromResult(OperationResult.Success((enabled ? "enabled" : "disabled") + " (fake)"));
+    }
+
+    public bool HasUndo(string id) => _before.ContainsKey(id);
+
+    public Task<OperationResult> UndoAsync(string id, CancellationToken ct = default)
+    {
+        var index = _items.FindIndex(i => i.Id == id);
+        if (index < 0 || !_before.Remove(id, out var state))
+        {
+            return Task.FromResult(OperationResult.Fail(OperationCode.NotFound, $"nothing to undo for '{id}'"));
+        }
+
+        _items[index] = _items[index] with { State = state };
+        return Task.FromResult(OperationResult.Success("undone (fake)"));
     }
 }
 
@@ -180,29 +197,31 @@ public sealed class FakeTaskLauncher : ITaskLauncher, IFakeImplementation
             : OperationResult.Success($"would run '{commandLine}'{(elevated ? " as administrator" : "")} (fake)");
 }
 
-public static class ManagementModule
+public sealed class FakeElevatedProcessActions : IElevatedProcessActions, IFakeImplementation
 {
-    /// <summary>Owner D: replace the Fakes with the real implementations here (keep the Fakes for options.ForceFakes).</summary>
-    public static void Register(ServiceRegistry registry, PcMieruOptions options)
-    {
-        Strings.Register(ManagementStrings.All);
-        var policy = new FakeProtectionPolicy();
-        registry.Set<IProtectionPolicy>(policy);
-        registry.Set<IProcessControl>(new FakeProcessControl(policy));
-        registry.Set<IServiceManager>(new FakeServiceManager());
-        registry.Set<IStartupManager>(new FakeStartupManager());
-        registry.Set<ISessionProvider>(new FakeSessionProvider());
-        registry.Set<IHelperClient>(new FakeHelperClient());
-        registry.Set<ITaskLauncher>(new FakeTaskLauncher());
-    }
+    public Task<OperationResult> TerminateAsync(ProcessKey key, CancellationToken ct = default) =>
+        Task.FromResult(OperationResult.Success($"would end {key.Pid} as administrator (fake)"));
+
+    public Task<OperationResult> SetPriorityAsync(ProcessKey key, SettablePriority priority, CancellationToken ct = default) =>
+        Task.FromResult(OperationResult.Success($"would set {key.Pid} to {priority} as administrator (fake)"));
+
+    public Task<OperationResult> SetEfficiencyModeAsync(ProcessKey key, bool enabled, CancellationToken ct = default) =>
+        Task.FromResult(OperationResult.Success($"would switch efficiency mode for {key.Pid} as administrator (fake)"));
 }
 
-public static class ManagementStrings
+public sealed class FakeProcessAffinityControl : IProcessAffinityControl, IFakeImplementation
 {
-    public static readonly StringEntry[] All =
-    [
-        new("mgmt.protected.reason", "保護されたプロセスのため操作できません", "This process is protected and cannot be changed"),
-        new("mgmt.protected.unknown", "守られているかを確かめられないため操作しません", "Cannot confirm the process is not protected, so nothing was done"),
-        new("mgmt.uac.declined", "管理者への昇格が拒否されました", "The administrator prompt was declined"),
-    ];
+    public AffinityInfo? QueryAffinity(ProcessKey key) => key.Pid is 0 or 4 ? null : new AffinityInfo(0xFFFF, 0xFFFF);
+
+    public Task<OperationResult> SetAffinityAsync(ProcessKey key, ulong mask, CancellationToken ct = default) =>
+        Task.FromResult(
+            mask == 0
+                ? OperationResult.Fail(OperationCode.InvalidArguments, "empty CPU mask")
+                : OperationResult.Success($"would set the CPU mask of {key.Pid} to 0x{mask:X} (fake)"));
+}
+
+public sealed class FakeShellActions : IShellActions, IFakeImplementation
+{
+    public Task<OperationResult> RestartExplorerAsync(CancellationToken ct = default) =>
+        Task.FromResult(OperationResult.Success("would restart Explorer (fake)"));
 }

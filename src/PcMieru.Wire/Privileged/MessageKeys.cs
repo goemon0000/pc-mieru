@@ -41,10 +41,10 @@ public static class MessageKeys
     public const string EfficiencyRolledBack = "mgmt.process.efficiency-rolled-back";
     public const string EfficiencyRollbackFailed = "mgmt.process.efficiency-rollback-failed";
 
-    /// <summary>The window got WM_CLOSE and the process ended.</summary>
+    /// <summary>{pid}: the window got WM_CLOSE and the process ended.</summary>
     public const string CloseDone = "mgmt.process.closed";
 
-    /// <summary>WM_CLOSE was delivered; the process is still running (it may be asking to save).</summary>
+    /// <summary>{pid}: WM_CLOSE was delivered; the process is still running (it may be asking to save).</summary>
     public const string CloseSent = "mgmt.process.close-sent";
 
     public const string CloseNoWindow = "mgmt.process.close-no-window";
@@ -102,7 +102,7 @@ public static class MessageKeys
     /// <summary>{name}</summary>
     public const string ServiceCannotStop = "mgmt.service.cannot-stop";
 
-    /// <summary>{name}: restart stopped it but it did not come back.</summary>
+    /// <summary>{name} {reason}: restart stopped it but it did not come back. {reason} is another message key; Core localizes it.</summary>
     public const string ServiceRestartStoppedOnly = "mgmt.service.restart-stopped-only";
 
     /// <summary>{name} {code}</summary>
@@ -123,7 +123,7 @@ public static class MessageKeys
     /// <summary>{name}</summary>
     public const string StartupAlreadyDisabled = "mgmt.startup.already-disabled";
 
-    /// <summary>{id}</summary>
+    /// <summary>{name}</summary>
     public const string StartupNotFound = "mgmt.startup.not-found";
 
     public const string StartupListOnly = "mgmt.startup.list-only";
@@ -139,7 +139,7 @@ public static class MessageKeys
     /// <summary>{name}: restored to the state before the first change.</summary>
     public const string StartupRestored = "mgmt.startup.restored";
 
-    /// <summary>{id}: nothing is recorded to undo.</summary>
+    /// <summary>{id}: nothing is recorded to undo (only Core produces this).</summary>
     public const string StartupNothingToUndo = "mgmt.startup.nothing-to-undo";
 
     // --- drives ---

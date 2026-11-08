@@ -265,6 +265,85 @@ public class ProcessOperationsTests
         }
     }
 
+    [Fact]
+    public void Inspect_says_allowed_for_our_ping_and_unknown_when_the_identity_does_not_match()
+    {
+        using var ping = new OwnPing();
+
+        Assert.Equal(ProtectionOutcome.Allowed, ProcessGuard.Inspect(ping.Pid, ping.CreateTime, Other, System32).Outcome);
+        var replaced = ProcessGuard.Inspect(ping.Pid, ping.CreateTime + 1, Other, System32);
+        Assert.Equal(ProtectionOutcome.Unknown, replaced.Outcome);
+        Assert.Equal(ProtectionOutcome.Protected, ProcessGuard.Inspect(ping.Pid, ping.CreateTime, new SelfIdentity(ping.Pid, null), System32).Outcome);
+        Assert.Equal(ProtectionReason.SystemProcess, ProcessGuard.Inspect(4, 1, Other, System32).Reason);
+    }
+
+    [Fact]
+    public void Inspect_of_a_process_that_ended_is_unknown_not_allowed()
+    {
+        uint pid;
+        long created;
+        using (var ping = new OwnPing())
+        {
+            pid = ping.Pid;
+            created = ping.CreateTime;
+            Assert.Equal(OperationCode.Ok, ProcessOperations.Terminate(pid, created, Other, System32).Code);
+        }
+
+        Assert.Equal(ProtectionOutcome.Unknown, ProcessGuard.Inspect(pid, created, Other, System32).Outcome);
+    }
+
+    [Fact]
+    public void Inspect_of_real_csrss_is_protected_or_unknown_and_never_allowed()
+    {
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("csrss"))
+        {
+            using (process)
+            {
+                var created = CreateTimeOrNull((uint)process.Id);
+                if (created is null)
+                {
+                    continue;
+                }
+
+                Assert.NotEqual(ProtectionOutcome.Allowed, ProcessGuard.Inspect((uint)process.Id, created.Value, Other, System32).Outcome);
+            }
+        }
+    }
+
+    [Fact]
+    public void Affinity_is_narrowed_and_restored_on_our_own_ping_and_bad_masks_are_refused()
+    {
+        using var ping = new OwnPing();
+        Assert.True(ProcessOperations.TryQueryAffinity(ping.Pid, ping.CreateTime, out var original, out var system));
+        Assert.NotEqual(0UL, system);
+
+        var lowest = system & (~system + 1);
+        var set = ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime, lowest, Other, System32);
+        Assert.Equal(OperationCode.Ok, set.Code);
+        Assert.Equal(MessageKeys.AffinitySet, set.MessageKey);
+        Assert.True(ProcessOperations.TryQueryAffinity(ping.Pid, ping.CreateTime, out var now, out _));
+        Assert.Equal(lowest, now);
+
+        Assert.Equal(MessageKeys.AffinityInvalid, ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime, 0, Other, System32).MessageKey);
+        Assert.Equal(OperationCode.InvalidArguments, ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime, ~system, Other, System32).Code);
+        Assert.Equal(OperationCode.Gone, ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime + 1, lowest, Other, System32).Code);
+
+        Assert.Equal(OperationCode.Ok, ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime, original, Other, System32).Code);
+        Assert.True(ProcessOperations.TryQueryAffinity(ping.Pid, ping.CreateTime, out var back, out _));
+        Assert.Equal(original, back);
+
+        // A creation time that does not match is "false", not somebody else's mask.
+        Assert.False(ProcessOperations.TryQueryAffinity(ping.Pid, ping.CreateTime + 1, out _, out _));
+    }
+
+    [Fact]
+    public void Affinity_is_refused_for_ourselves()
+    {
+        using var ping = new OwnPing();
+        var result = ProcessOperations.SetAffinity(ping.Pid, ping.CreateTime, 1, new SelfIdentity(ping.Pid, null), System32);
+        Assert.Equal(OperationCode.Protected, result.Code);
+    }
+
     private static long? CreateTimeOrNull(uint pid)
     {
         using var handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
