@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using PcMieru.Core.Collection;
 using PcMieru.Core.Hardware.Model;
 
@@ -47,5 +48,22 @@ public sealed class ReportBuilder : IReportBuilder
             summary,
             hardware,
             health is null ? null : new StorageHealthReport(StorageHealthReport.CurrentSchemaVersion, health));
+    }
+
+    /// <summary>Hidden only when asked AND the process allows it; what is written in the header is what was done.</summary>
+    public string RenderMarkdown(ReportDocument document, Language language, bool redact, string? appVersion = null)
+    {
+        var effective = redact && _redactor.Enabled;
+        // The model has no serial, MAC, IP, SSID, command line, volume label, audio or USB name in the Markdown at all
+        // (ReportMarkdown never prints them), so what is left to hide is text inside names: the final pass does that.
+        var markdown = ReportMarkdown.Render(document with { Redacted = effective }, language, appVersion);
+        return _redactor.RedactText(markdown, effective);
+    }
+
+    public JsonNode RenderJson(ReportDocument document, bool redact)
+    {
+        var effective = redact && _redactor.Enabled;
+        var node = PcMieruJson.ToNode(document with { Redacted = effective }) ?? new JsonObject();
+        return _redactor.RedactJson(node, effective) ?? node;
     }
 }

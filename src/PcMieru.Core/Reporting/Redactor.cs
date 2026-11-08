@@ -17,7 +17,10 @@ public sealed record RedactionContext(string UserName, string MachineName, strin
 /// by key name on the JSON tree (commandLine, serialNumber, macAddress, ipAddresses, dnsServers, ssid and friends) and by
 /// content on every string (profile paths in all spellings, UNC servers, MAC, IPv4/IPv6, device instance IDs, the user
 /// and PC name as whole words). It is applied to the final JSON tree or text right before output, so error texts and
-/// device IDs are covered too. There is no per-call switch: <see cref="Enabled"/> is fixed when the process starts.
+/// device IDs are covered too. A few free-text fields that a person typed (a volume label, an audio endpoint name, a
+/// USB product string) are blanked by their place in the tree, not by a global key: "label" and "name" mean other
+/// things elsewhere. <see cref="Enabled"/> is fixed when the process starts (--no-redact); the per-call overloads of
+/// <see cref="IRedactor"/> can only switch redaction off for one call, never on when the process turned it off.
 /// </summary>
 public sealed partial class SimpleRedactor : IRedactor
 {
@@ -29,6 +32,15 @@ public sealed partial class SimpleRedactor : IRedactor
         "commandLine", "serialNumber", "macAddress", "ipAddresses", "dnsServers", "ssid",
         "bssid", "uuid", "machineGuid", "productKey",
     };
+
+    /// <summary>
+    /// Blanked only at this place in the tree. A path is the dotted key names from the root; an array adds "[]" and a
+    /// Value&lt;T&gt; wrapper's own "value" is not a segment, so <c>audio[].name</c> is the friendly name of every audio
+    /// endpoint however deep the hardware tree sits in a report. The match is on the end of the path.
+    /// These are names that a person or a pairing wizard typed: a drive label ("Tatsuki's backup"), the endpoint name
+    /// Windows builds from a Bluetooth device ("Headphones (Tatsuki's AirPods)") and a USB product string.
+    /// </summary>
+    public static readonly IReadOnlyList<string> BlankedPaths = ["volumes[].label", "audio[].name", "usb[].name"];
 
     /// <summary>
     /// Version-like fields: a four-part number such as 1.2.3.4 is a firmware version here, not an IPv4 address,
@@ -69,10 +81,25 @@ public sealed partial class SimpleRedactor : IRedactor
     {
         if (Enabled && node is not null)
         {
-            Walk(node, hideIpv4: true);
+            Walk(node, hideIpv4: true, string.Empty);
         }
 
         return node;
+    }
+
+    /// <summary>True when a key at this tree path is one of <see cref="BlankedPaths"/>.</summary>
+    internal static bool IsBlankedPath(string path)
+    {
+        foreach (var blanked in BlankedPaths)
+        {
+            if (path.Equals(blanked, StringComparison.OrdinalIgnoreCase)
+                || (path.Length > blanked.Length && path.EndsWith(blanked, StringComparison.OrdinalIgnoreCase) && path[path.Length - blanked.Length - 1] == '.'))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private string Redact(string text, bool hideIpv4)
@@ -117,11 +144,12 @@ public sealed partial class SimpleRedactor : IRedactor
         return text;
     }
 
-    private void Walk(JsonNode node, bool hideIpv4)
+    private void Walk(JsonNode node, bool hideIpv4, string path)
     {
         switch (node)
         {
             case JsonObject obj:
+                var isValue = obj.ContainsKey("status");
                 foreach (var (name, child) in obj.ToList())
                 {
                     if (child is null)
@@ -129,7 +157,9 @@ public sealed partial class SimpleRedactor : IRedactor
                         continue;
                     }
 
-                    if (BlankKeys.Contains(name))
+                    // The "value" of a Value<T> is the same place as the Value<T> itself, not one level down.
+                    var childPath = isValue && name == "value" ? path : path.Length == 0 ? name : path + "." + name;
+                    if (BlankKeys.Contains(name) || IsBlankedPath(childPath))
                     {
                         if (child is JsonObject valueObject && valueObject.ContainsKey("status"))
                         {
@@ -138,8 +168,9 @@ public sealed partial class SimpleRedactor : IRedactor
                                 valueObject["value"] = Placeholder;
                             }
                         }
-                        else
+                        else if (child is not JsonValue plain || !plain.TryGetValue<string>(out var text) || text.Length > 0)
                         {
+                            // An empty label stays empty: "no label" is a fact, not a secret.
                             obj[name] = Placeholder;
                         }
                     }
@@ -149,7 +180,7 @@ public sealed partial class SimpleRedactor : IRedactor
                     }
                     else
                     {
-                        Walk(child, hideIpv4 && !VersionKeys.Contains(name));
+                        Walk(child, hideIpv4 && !VersionKeys.Contains(name), childPath);
                     }
                 }
 
@@ -165,7 +196,7 @@ public sealed partial class SimpleRedactor : IRedactor
                     }
                     else if (child is not null)
                     {
-                        Walk(child, hideIpv4);
+                        Walk(child, hideIpv4, path + "[]");
                     }
                 }
 

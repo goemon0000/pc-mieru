@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using PcMieru.Core;
 using PcMieru.Core.Hardware;
+using PcMieru.Core.Reporting;
 
 namespace PcMieru.Gui.Tests;
 
@@ -218,19 +219,40 @@ public class DataAndPagesTests
         return await services.Reports.BuildAsync(new ReportOptions(0));
     }
 
+    /// <summary>The real report builder around a spy redactor (the page asks the builder, the builder asks the redactor).</summary>
+    private static ReportBuilder BuilderWith(IRedactor redactor)
+    {
+        using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
+        return new ReportBuilder(
+            services.Get<ISnapshotSource>(),
+            services.Observations,
+            services.Get<IHardwareProvider>(),
+            services.Get<IStorageHealthProvider>(),
+            redactor,
+            static () => DateTime.UtcNow);
+    }
+
     [Fact]
     public async Task Report_marks_the_document_with_what_was_really_done()
     {
         var document = await ReportAsync();
-        var onAndEnabled = JsonNode.Parse(DiagnosePage.BuildText(document, true, true, new SpyRedactor(true), Language.En))!;
+        var onAndEnabled = JsonNode.Parse(DiagnosePage.BuildText(document, true, true, BuilderWith(new SpyRedactor(true)), Language.En))!;
         Assert.True(onAndEnabled["redacted"]!.GetValue<bool>());
 
-        var switchedOff = JsonNode.Parse(DiagnosePage.BuildText(document, true, false, new SpyRedactor(true), Language.En))!;
+        var switchedOff = JsonNode.Parse(DiagnosePage.BuildText(document, true, false, BuilderWith(new SpyRedactor(true)), Language.En))!;
         Assert.False(switchedOff["redacted"]!.GetValue<bool>());
 
         // The process was started with --no-redact: ticking the box cannot make the text "redacted".
-        var forcedOff = JsonNode.Parse(DiagnosePage.BuildText(document, true, true, new SpyRedactor(false), Language.En))!;
+        var forcedOff = JsonNode.Parse(DiagnosePage.BuildText(document, true, true, BuilderWith(new SpyRedactor(false)), Language.En))!;
         Assert.False(forcedOff["redacted"]!.GetValue<bool>());
+
+        // The Markdown header says the same thing.
+        // (the spy rewrites "PC", so compare only the head of the header line)
+        const string yes = "Redacted: yes";
+        const string no = "Redacted: no";
+        Assert.Contains(yes, DiagnosePage.BuildText(document, false, true, BuilderWith(new SpyRedactor(true)), Language.En), StringComparison.Ordinal);
+        Assert.Contains(no, DiagnosePage.BuildText(document, false, false, BuilderWith(new SpyRedactor(true)), Language.En), StringComparison.Ordinal);
+        Assert.Contains(no, DiagnosePage.BuildText(document, false, true, BuilderWith(new SpyRedactor(false)), Language.En), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -238,14 +260,16 @@ public class DataAndPagesTests
     {
         var document = await ReportAsync();
         var asked = new SpyRedactor(true);
-        DiagnosePage.BuildText(document, false, true, asked, Language.En);
-        DiagnosePage.BuildText(document, true, true, asked, Language.En);
+        var builder = BuilderWith(asked);
+        DiagnosePage.BuildText(document, false, true, builder, Language.En);
+        DiagnosePage.BuildText(document, true, true, builder, Language.En);
         Assert.Equal(1, asked.TextCalls);
         Assert.Equal(1, asked.JsonCalls);
 
         var notAsked = new SpyRedactor(true);
-        DiagnosePage.BuildText(document, false, false, notAsked, Language.En);
-        DiagnosePage.BuildText(document, true, false, notAsked, Language.En);
+        var plain = BuilderWith(notAsked);
+        DiagnosePage.BuildText(document, false, false, plain, Language.En);
+        DiagnosePage.BuildText(document, true, false, plain, Language.En);
         Assert.Equal(0, notAsked.TextCalls);
         Assert.Equal(0, notAsked.JsonCalls);
     }
@@ -254,12 +278,12 @@ public class DataAndPagesTests
     public async Task Report_markdown_follows_the_language_and_json_is_the_same_in_both()
     {
         var document = await ReportAsync();
-        var spy = new SpyRedactor(true);
-        var ja = DiagnosePage.BuildText(document, false, false, spy, Language.Ja);
-        var en = DiagnosePage.BuildText(document, false, false, spy, Language.En);
+        var builder = BuilderWith(new SpyRedactor(true));
+        var ja = DiagnosePage.BuildText(document, false, false, builder, Language.Ja);
+        var en = DiagnosePage.BuildText(document, false, false, builder, Language.En);
         Assert.NotEqual(ja, en);
         Assert.StartsWith("# ", ja, StringComparison.Ordinal);
-        Assert.Equal(DiagnosePage.BuildText(document, true, false, spy, Language.Ja), DiagnosePage.BuildText(document, true, false, spy, Language.En));
+        Assert.Equal(DiagnosePage.BuildText(document, true, false, builder, Language.Ja), DiagnosePage.BuildText(document, true, false, builder, Language.En));
     }
 
     // ---- Hardware text ----

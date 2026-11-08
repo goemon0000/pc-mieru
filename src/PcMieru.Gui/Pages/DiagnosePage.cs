@@ -173,24 +173,11 @@ internal sealed class DiagnosePage : PageBase
         base.Dispose(disposing);
     }
 
-    /// <summary>The text of the report as shown and copied. Marks the document with what was really done: a switch the user turned off must not leave "redacted" on it.</summary>
-    internal static string BuildText(ReportDocument document, bool json, bool redact, IRedactor redactor, Language language)
-    {
-        var shown = document with { Redacted = redact && redactor.Enabled };
-        if (json)
-        {
-            var node = PcMieruJson.ToNode(shown);
-            if (redact)
-            {
-                redactor.RedactJson(node);
-            }
-
-            return node?.ToJsonString(PcMieruJson.Indented) ?? string.Empty;
-        }
-
-        var markdown = ReportMarkdown.Render(shown, language);
-        return redact ? redactor.RedactText(markdown) : markdown;
-    }
+    /// <summary>The text of the report as shown and copied. The report builder renders it and marks the document with what was really done: a switch the user turned off must not leave "redacted" on it.</summary>
+    internal static string BuildText(ReportDocument document, bool json, bool redact, IReportBuilder reports, Language language) =>
+        json
+            ? reports.RenderJson(document, redact).ToJsonString(PcMieruJson.Indented)
+            : reports.RenderMarkdown(document, language, redact);
 
     private async Task ToggleAsync()
     {
@@ -302,7 +289,7 @@ internal sealed class DiagnosePage : PageBase
         _text.ScrollBars = json ? ScrollBars.Both : ScrollBars.Vertical;
         if (_document is { } document)
         {
-            _text.Text = BuildText(document, json, Redacting, Context.Services.Redactor, Strings.Current).Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal);
+            _text.Text = BuildText(document, json, Redacting, Context.Services.Reports, Strings.Current).Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal);
             _pii.SetTone(Redacting ? CellTone.Dim : CellTone.Accent);
             _pii.Text = Strings.Get(Redacting ? "gui.diag.pii.on" : "gui.diag.pii.off");
         }
@@ -322,7 +309,7 @@ internal sealed class DiagnosePage : PageBase
     }
 
     private string CurrentText() =>
-        _document is { } document ? BuildText(document, _viewJson.Checked, Redacting, Context.Services.Redactor, Strings.Current) : string.Empty;
+        _document is { } document ? BuildText(document, _viewJson.Checked, Redacting, Context.Services.Reports, Strings.Current) : string.Empty;
 
     private void CopyReport()
     {

@@ -818,7 +818,7 @@
           "volumes": [
             {
               "letter": "C:",
-              "label": "System",
+              "label": "\u003Credacted\u003E",
               "fileSystem": "NTFS",
               "totalBytes": {
                 "value": 1999000000000,
@@ -873,7 +873,7 @@
           "volumes": [
             {
               "letter": "D:",
-              "label": "Data",
+              "label": "\u003Credacted\u003E",
               "fileSystem": "NTFS",
               "totalBytes": {
                 "value": 3999000000000,
@@ -1022,7 +1022,7 @@
       "value": [
         {
           "name": {
-            "value": "Speakers (Fake Audio)",
+            "value": "\u003Credacted\u003E",
             "status": "ok",
             "source": "fake"
           },
@@ -1049,7 +1049,7 @@
         },
         {
           "name": {
-            "value": "Microphone (Fake Audio)",
+            "value": "\u003Credacted\u003E",
             "status": "ok",
             "source": "fake"
           },
@@ -1082,7 +1082,7 @@
       "value": [
         {
           "name": {
-            "value": "USB Composite Device",
+            "value": "\u003Credacted\u003E",
             "status": "ok",
             "source": "fake"
           },

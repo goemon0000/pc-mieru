@@ -140,16 +140,38 @@ public interface IKnownProcessCatalog
 
 public interface IRedactor
 {
-    /// <summary>False only when the process was started with --no-redact. There is no per-call switch.</summary>
+    /// <summary>False only when the process was started with --no-redact. The per-call overloads can only turn redaction off for one call.</summary>
     bool Enabled { get; }
 
     string RedactText(string text);
 
-    /// <summary>Redacts a whole JSON tree in place by key name and by text content. Returns the same node.</summary>
+    /// <summary>Redacts a whole JSON tree in place by key name, by tree path and by text content. Returns the same node.</summary>
     JsonNode? RedactJson(JsonNode? node);
+
+    /// <summary>
+    /// Per-call switch (a "hide personal info" check box). The text is hidden when <paramref name="redact"/> is true AND
+    /// <see cref="Enabled"/> is true: a box that is on can never override --no-redact, and a box that is off leaves the text alone.
+    /// </summary>
+    string RedactText(string text, bool redact) => redact ? RedactText(text) : text;
+
+    /// <summary>The per-call form of <see cref="RedactJson(JsonNode?)"/>; same rule as <see cref="RedactText(string, bool)"/>.</summary>
+    JsonNode? RedactJson(JsonNode? node, bool redact) => redact ? RedactJson(node) : node;
 }
 
 public interface IReportBuilder
 {
+    /// <summary>
+    /// Builds the data once. <see cref="ReportDocument.Redacted"/> here is only what this process will do when the document
+    /// is written out (<see cref="IRedactor.Enabled"/>); the Render methods below stamp what they really did.
+    /// </summary>
     Task<ReportDocument> BuildAsync(ReportOptions options, CancellationToken ct = default);
+
+    /// <summary>
+    /// The Markdown of a built document. Hidden when <paramref name="redact"/> and the process setting both allow it, and
+    /// the "Redacted" line of the header says exactly that. The same document can be rendered both ways without sampling again.
+    /// </summary>
+    string RenderMarkdown(ReportDocument document, Language language, bool redact, string? appVersion = null) => throw new NotSupportedException();
+
+    /// <summary>The JSON of a built document, same rule as <see cref="RenderMarkdown"/>; "redacted" in it is what was really done.</summary>
+    JsonNode RenderJson(ReportDocument document, bool redact) => throw new NotSupportedException();
 }

@@ -196,6 +196,87 @@ public class HardwareRedactionTests
     }
 
     [Fact]
+    public void EveryFreeTextFieldThatAPersonTypedIsBlankedAtItsPlace()
+    {
+        // "label" and "name" mean other things in other places, so these are blanked by path, not by key. A new field
+        // called "label" anywhere in the hardware model must be decided on here (add its path, or say it is fine).
+        var labels = typeof(HardwareInfo).Assembly.GetTypes()
+            .Where(t => t.Namespace == typeof(HardwareInfo).Namespace && t.IsClass)
+            .Where(t => t.GetProperty("Label") is not null)
+            .Select(t => t.Name)
+            .ToList();
+        Assert.Equal(["StorageVolume"], labels);
+
+        // Each blanked path ends in a property that really exists on the type that sits at that place in the model.
+        Assert.Equal(["audio[].name", "usb[].name", "volumes[].label"], SimpleRedactor.BlankedPaths.Order().ToArray());
+        Assert.NotNull(typeof(StorageVolume).GetProperty("Label"));
+        Assert.NotNull(typeof(AudioEndpoint).GetProperty("Name"));
+        Assert.NotNull(typeof(UsbDevice).GetProperty("Name"));
+    }
+
+    [Fact]
+    public async Task VolumeLabelsAudioNamesAndUsbNamesAreBlankedInAWholeHardwareReport()
+    {
+        var info = await new FakeHardwareProvider(static () => Fixture.FixedTime).GetAsync(HardwareCategory.All);
+        var report = new JsonObject { ["hardware"] = ToNode(info) };
+
+        var placed = new Dictionary<string, int>();
+        foreach (var (path, owner, name, child) in Properties(report, string.Empty).ToList())
+        {
+            var blanked = BlankedPathOf(path);
+            if (blanked is null)
+            {
+                continue;
+            }
+
+            if (child is JsonObject leaf && leaf.ContainsKey("status"))
+            {
+                leaf["status"] = "ok";
+                leaf["value"] = "PERSON-" + blanked;
+            }
+            else
+            {
+                owner[name] = "PERSON-" + blanked;
+            }
+
+            placed[blanked] = placed.GetValueOrDefault(blanked) + 1;
+        }
+
+        // The fake data does not fill every place; make sure the walk really found each one before trusting the result.
+        foreach (var path in SimpleRedactor.BlankedPaths)
+        {
+            Assert.True(placed.GetValueOrDefault(path) > 0, $"the sample report has nothing at '{path}' to test with");
+        }
+
+        Assert.Contains("PERSON-", report.ToJsonString(), StringComparison.Ordinal);
+        Redactor().RedactJson(report);
+        Assert.DoesNotContain("PERSON-", report.ToJsonString(), StringComparison.Ordinal);
+
+        // Every place was blanked in the Value (status kept), not removed.
+        foreach (var (path, _, _, child) in Properties(report, string.Empty).ToList())
+        {
+            if (BlankedPathOf(path) is not null)
+            {
+                var text = child is JsonObject { } leaf ? leaf["value"]?.GetValue<string>() : child.GetValue<string>();
+                Assert.Equal(SimpleRedactor.Placeholder, text);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task OtherFieldsOfTheSameRecordsAreNotBlanked()
+    {
+        var info = await new FakeHardwareProvider(static () => Fixture.FixedTime).GetAsync(HardwareCategory.All);
+        var node = ToNode(info);
+        Redactor().RedactJson(node);
+
+        var text = node.ToJsonString();
+        Assert.Contains("NTFS", text, StringComparison.Ordinal);
+        Assert.Contains(info.Cpu.Data!.Name.Data!, text, StringComparison.Ordinal);
+        Assert.Contains(info.Usb.Data![0].Manufacturer.Data!, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SerialsMacsAddressesAndSsidAreBlankedInAWholeHardwareReport()
     {
         var info = await new FakeHardwareProvider(static () => Fixture.FixedTime).GetAsync(HardwareCategory.All);
@@ -236,6 +317,45 @@ public class HardwareRedactionTests
         Assert.DoesNotContain("tatsuki", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DESKTOP-TEST", text, StringComparison.Ordinal);
     }
+
+    /// <summary>Every property of every object, with its place in the tree (arrays are "[]", the "value" of a Value is not a step).</summary>
+    private static IEnumerable<(string Path, JsonObject Owner, string Name, JsonNode Child)> Properties(JsonNode? node, string path)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                var isValue = obj.ContainsKey("status");
+                foreach (var (name, child) in obj.ToList())
+                {
+                    if (child is null)
+                    {
+                        continue;
+                    }
+
+                    var childPath = isValue && name == "value" ? path : path.Length == 0 ? name : path + "." + name;
+                    yield return (childPath, obj, name, child);
+                    foreach (var inner in Properties(child, childPath))
+                    {
+                        yield return inner;
+                    }
+                }
+
+                break;
+            case JsonArray array:
+                foreach (var item in array)
+                {
+                    foreach (var inner in Properties(item, path + "[]"))
+                    {
+                        yield return inner;
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static string? BlankedPathOf(string path) =>
+        SimpleRedactor.BlankedPaths.FirstOrDefault(p => path == p || path.EndsWith("." + p, StringComparison.Ordinal));
 
     private static JsonNode ToNode(HardwareInfo info) =>
         System.Text.Json.JsonSerializer.SerializeToNode(info, PcMieruJson.Compact)!;

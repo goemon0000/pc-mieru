@@ -424,14 +424,14 @@ internal sealed class HardwarePage : PageBase
         }
 
         var redactor = Context.Services.Redactor;
-        var tree = redact ? (redactor.RedactJson(_root.DeepClone()) as JsonObject ?? _root) : _root;
+        var tree = redact ? (redactor.RedactJson(_root.DeepClone(), redact) as JsonObject ?? _root) : _root;
         if (json)
         {
             return tree.ToJsonString(PcMieruJson.Indented);
         }
 
         var text = PartsModel.ToText(PartsModel.Build(tree));
-        return redact ? redactor.RedactText(text) : text;
+        return redactor.RedactText(text, redact);
     }
 
     private void Copy(bool json)

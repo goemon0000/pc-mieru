@@ -38,12 +38,11 @@ public sealed class ReportCommand : ICliCommand
         string text;
         if (format == "json")
         {
-            var node = services.Redactor.RedactJson(PcMieruJson.ToNode(document));
-            text = node!.ToJsonString(PcMieruJson.Indented) + "\n";
+            text = services.Reports.RenderJson(document, redact: true).ToJsonString(PcMieruJson.Indented) + "\n";
         }
         else
         {
-            text = services.Redactor.RedactText(ReportMarkdown.Render(document, context.Language, VersionCommand.CurrentVersion));
+            text = services.Reports.RenderMarkdown(document, context.Language, redact: true, VersionCommand.CurrentVersion);
         }
 
         var path = args.Get("output");

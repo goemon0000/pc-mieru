@@ -147,4 +147,104 @@ public class RedactorTests
     {
         Assert.Null(On.RedactJson(null));
     }
+
+    // ---- by place in the tree ------------------------------------------------------------------------------------
+
+    private const string Hardware = """
+        {
+          "label": "kept-global-label",
+          "name": "kept-global-name",
+          "processes": [ { "name": "kept.exe", "label": "kept" } ],
+          "cpu": { "status": "ok", "source": "wmi", "value": { "name": { "status": "ok", "source": "wmi", "value": "kept CPU" } } },
+          "storage": {
+            "status": "ok", "source": "wmi",
+            "value": [
+              { "model": { "status": "ok", "source": "wmi", "value": "kept disk" },
+                "volumes": [
+                  { "letter": "C:", "label": "Tatsuki backup", "fileSystem": "NTFS" },
+                  { "letter": "D:", "label": "", "fileSystem": "NTFS" } ] } ] },
+          "audio": {
+            "status": "ok", "source": "mmdevice",
+            "value": [
+              { "name": { "status": "ok", "source": "mmdevice", "value": "Headphones (Tatsuki's AirPods)" },
+                "direction": { "status": "ok", "source": "mmdevice", "value": "output" } },
+              { "name": { "status": "denied", "source": "mmdevice", "detail": "no access" } } ] },
+          "usb": {
+            "status": "ok", "source": "setupapi",
+            "value": [
+              { "name": { "status": "ok", "source": "setupapi", "value": "Tatsuki's phone" },
+                "manufacturer": { "status": "ok", "source": "setupapi", "value": "kept vendor" } } ] }
+        }
+        """;
+
+    [Fact]
+    public void A_volume_label_audio_name_and_usb_name_are_blanked_at_their_place_only()
+    {
+        // Once at the root, once as the "hardware" part of a report: the match is on the end of the path.
+        foreach (var wrapped in new[] { false, true })
+        {
+            var node = JsonNode.Parse(Hardware)!;
+            var root = wrapped ? new JsonObject { ["hardware"] = node } : node;
+            On.RedactJson(root);
+            var hw = wrapped ? root["hardware"]! : root;
+
+            var volumes = hw["storage"]!["value"]![0]!["volumes"]!;
+            Assert.Equal("<redacted>", volumes[0]!["label"]!.GetValue<string>());
+            Assert.Equal(string.Empty, volumes[1]!["label"]!.GetValue<string>());
+            Assert.Equal("NTFS", volumes[0]!["fileSystem"]!.GetValue<string>());
+
+            var audio = hw["audio"]!["value"]!;
+            Assert.Equal("<redacted>", audio[0]!["name"]!["value"]!.GetValue<string>());
+            Assert.Equal("ok", audio[0]!["name"]!["status"]!.GetValue<string>());
+            Assert.Equal("output", audio[0]!["direction"]!["value"]!.GetValue<string>());
+            // a name that could not be read keeps its reason
+            Assert.Equal("denied", audio[1]!["name"]!["status"]!.GetValue<string>());
+            Assert.False(audio[1]!["name"]!.AsObject().ContainsKey("value"));
+
+            var usb = hw["usb"]!["value"]![0]!;
+            Assert.Equal("<redacted>", usb["name"]!["value"]!.GetValue<string>());
+            Assert.Equal("kept vendor", usb["manufacturer"]!["value"]!.GetValue<string>());
+
+            // "label" and "name" anywhere else are other things and stay
+            Assert.Equal("kept-global-label", hw["label"]!.GetValue<string>());
+            Assert.Equal("kept-global-name", hw["name"]!.GetValue<string>());
+            Assert.Equal("kept.exe", hw["processes"]![0]!["name"]!.GetValue<string>());
+            Assert.Equal("kept", hw["processes"]![0]!["label"]!.GetValue<string>());
+            Assert.Equal("kept CPU", hw["cpu"]!["value"]!["name"]!["value"]!.GetValue<string>());
+            Assert.Equal("kept disk", hw["storage"]!["value"]![0]!["model"]!["value"]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
+    public void The_blanked_places_are_listed_in_one_place()
+    {
+        Assert.Equal(["audio[].name", "usb[].name", "volumes[].label"], SimpleRedactor.BlankedPaths.Order().ToArray());
+        Assert.True(SimpleRedactor.IsBlankedPath("storage[].volumes[].label"));
+        Assert.True(SimpleRedactor.IsBlankedPath("volumes[].label"));
+        Assert.False(SimpleRedactor.IsBlankedPath("label"));
+        Assert.False(SimpleRedactor.IsBlankedPath("storage[].label"));
+        Assert.False(SimpleRedactor.IsBlankedPath("myvolumes[].label"));
+        Assert.False(SimpleRedactor.IsBlankedPath("name"));
+        Assert.False(SimpleRedactor.IsBlankedPath("processes[].name"));
+    }
+
+    // ---- the per-call switch -------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_per_call_switch_can_turn_redaction_off_for_one_call_but_never_on_when_the_process_turned_it_off()
+    {
+        IRedactor on = On;
+        IRedactor off = Off;
+        const string text = "alice on ALICE-PC";
+
+        Assert.Equal("<user> on <host>", on.RedactText(text, redact: true));
+        Assert.Equal(text, on.RedactText(text, redact: false));
+        Assert.Equal(text, off.RedactText(text, redact: true));
+        Assert.Equal(text, off.RedactText(text, redact: false));
+
+        var node = JsonNode.Parse("""{"serialNumber":"S1"}""")!;
+        Assert.Equal("S1", on.RedactJson(node.DeepClone(), redact: false)!["serialNumber"]!.GetValue<string>());
+        Assert.Equal("<redacted>", on.RedactJson(node.DeepClone(), redact: true)!["serialNumber"]!.GetValue<string>());
+        Assert.Equal("S1", off.RedactJson(node.DeepClone(), redact: true)!["serialNumber"]!.GetValue<string>());
+    }
 }
