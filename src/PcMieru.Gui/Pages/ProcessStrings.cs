@@ -98,6 +98,7 @@ internal static class ProcessStrings
         new("gui.proc.act.copy.cmdline", "コマンドライン", "Command line"),
         new("gui.proc.act.copy.info", "情報（テキスト）", "Information (text)"),
         new("gui.proc.act.services", "サービスを表示", "Show services"),
+        new("gui.proc.act.affinity", "CPU の割り当て...", "Set CPU affinity..."),
         new("gui.proc.act.off.protected", "守られているプロセスです", "This process is protected"),
         new("gui.proc.act.off.window", "このプロセスにはウィンドウがありません", "This process has no window"),
         new("gui.proc.act.off.path", "場所を取得できません", "The location is not available"),
@@ -116,6 +117,15 @@ internal static class ProcessStrings
         new("gui.proc.result.tree.title", "ツリーごと終了の結果", "Result of ending the tree"),
         new("gui.proc.result.tree.summary", "{ok} 件を終了し、{failed} 件は終了できませんでした。", "{ok} ended, {failed} could not be ended."),
         new("gui.proc.plan.empty", "終了する対象が見つかりませんでした", "Nothing to end was found"),
+
+        new("gui.proc.affinity.title", "CPU の割り当て", "CPU affinity"),
+        new("gui.proc.affinity.msg", "このプロセスが使ってよい CPU（論理プロセッサ）を選びます。1 つは残す必要があります。", "Choose which CPUs (logical processors) this process may use. At least one must stay checked."),
+        new("gui.proc.affinity.cpu", "CPU {n}", "CPU {n}"),
+        new("gui.proc.affinity.count", "{total} 個のうち {used} 個を使います", "{used} of {total} CPUs in use"),
+        new("gui.proc.affinity.none", "1 つ以上選んでください", "Choose at least one CPU"),
+        new("gui.proc.affinity.all", "すべてに戻す", "Back to all"),
+        new("gui.proc.affinity.ok", "割り当てる", "Apply"),
+        new("gui.proc.affinity.unreadable", "このプロセスの CPU の割り当てを読み取れませんでした（終了したか、開けません）。", "The CPU assignment of this process could not be read (it ended, or it cannot be opened)."),
 
         new("gui.run.title", "新しいタスクを実行", "Run new task"),
         new("gui.run.label", "開きたいプログラム、フォルダー、文書の名前を入力してください", "Type the name of a program, folder or document to open"),

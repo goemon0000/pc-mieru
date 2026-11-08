@@ -171,6 +171,46 @@ internal sealed partial class ProcessesPage
         ShowSelected();
     }
 
+    /// <summary>
+    /// CPU assignment (SPEC 5.2, B.md 3). The dialog is a check list with one box per logical processor of the process's
+    /// group; "back to all" checks every box. A protected process is refused here before the dialog opens and again by
+    /// D's API (the protection rules are applied on the handle that is changed), and the API alone refuses an empty
+    /// mask, CPUs the system does not have and a process that spans processor groups, which is reported in words.
+    /// </summary>
+    internal async Task SetAffinitySelectedAsync()
+    {
+        if (CurrentTarget() is { } target)
+        {
+            _ = await ApplyAffinityAsync(target).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>The whole flow for one process. Returns what D's API answered, or null when nothing was asked of it (refused here, unreadable, cancelled, unchanged).</summary>
+    internal async Task<OperationResult?> ApplyAffinityAsync(ProcessInfo target)
+    {
+        if (!CheckAllowed(target, "gui.proc.act.affinity"))
+        {
+            return null;
+        }
+
+        var affinity = Context.Services.Get<IProcessAffinityControl>();
+        if (affinity.QueryAffinity(target.Key) is not { } current)
+        {
+            Dialogs.Info(FindForm(), Context.Theme, Strings.Get("gui.proc.act.affinity"), Strings.Get("gui.proc.affinity.unreadable"), Facts(target));
+            return null;
+        }
+
+        var who = target.Name + " (" + target.Key.Pid.ToString(CultureInfo.CurrentCulture) + ")";
+        if (AffinityDialog.Choose(FindForm(), Context.Theme, who, current) is not { } mask || mask == current.ProcessMask)
+        {
+            return null;
+        }
+
+        var result = await affinity.SetAffinityAsync(target.Key, mask).ConfigureAwait(true);
+        ReportResult(target, "gui.proc.act.affinity", result);
+        return result;
+    }
+
     private ProcessInfo? CurrentTarget() => _selectedKey is { } key ? _model.Find(key) : null;
 
     private IReadOnlyList<DialogFact> Facts(ProcessInfo target) =>
@@ -265,6 +305,7 @@ internal sealed partial class ProcessesPage
             ? (efficient ? "gui.proc.act.qos.off" : "gui.proc.act.qos.on")
             : (efficient ? "gui.proc.act.efficiency.off" : "gui.proc.act.efficiency.on"));
         AddItem(_menu.Items, efficiencyText, may, blocked, () => Run(() => SetEfficiencySelectedAsync(!efficient)));
+        AddItem(_menu.Items, Strings.Get("gui.proc.act.affinity"), may, blocked, () => Run(SetAffinitySelectedAsync));
 
         _menu.Items.Add(new ToolStripSeparator());
         var path = details is not null && details.Path.TryGet(out var p) ? p : null;
