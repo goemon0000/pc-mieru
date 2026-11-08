@@ -306,10 +306,7 @@ public class ServiceManagerTests
         Assert.True(ours.Count > 50, "services found: " + ours.Count);
 
         var reference = ReadGetService();
-        if (reference is null)
-        {
-            return;
-        }
+        Assert.NotNull(reference); // Windows PowerShell 5.1 must answer: a silent skip would hide a broken comparison
 
         var common = reference.Keys.Count(ours.ContainsKey);
         Assert.True(common >= reference.Count * 0.95, $"only {common} of {reference.Count} services of Get-Service are in the list");
@@ -335,6 +332,53 @@ public class ServiceManagerTests
         Assert.Equal(ServiceState.Running, ours["RpcSs"].State);
         Assert.Equal(ServiceState.Running, ours["EventLog"].State);
         Assert.NotNull(ours["RpcSs"].Pid);
+    }
+
+    [Fact]
+    public async Task Real_descriptions_are_resolved_text_and_equal_what_WMI_says_for_well_known_services()
+    {
+        var ours = (await new ServiceManager(new RecordingHelper()).ListAsync()).ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
+
+        // A description like "@%SystemRoot%\system32\x.dll,-123" must have been turned into the text it points at.
+        var unresolved = ours.Values.Where(s => s.Description.TryGet(out var d) && d.StartsWith('@')).Select(s => s.Name).ToArray();
+        Assert.True(unresolved.Length <= 5, "descriptions left as resource pointers: " + string.Join(", ", unresolved));
+        var described = ours.Values.Count(s => s.Description.IsOk);
+        Assert.True(described > ours.Count / 2, $"only {described} of {ours.Count} services have a description");
+
+        var names = new[] { "Spooler", "EventLog", "RpcSs", "Dhcp", "W32Time" };
+        var script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Service | Where-Object { $_.Name -in '"
+            + string.Join("','", names)
+            + "' } | ForEach-Object { $_.Name + '|' + ($_.Description -replace '\\s+', ' ') }";
+        var info = new ProcessStartInfo(
+            Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)))
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+        };
+        using var process = Process.Start(info)!;
+        var text = process.StandardOutput.ReadToEnd();
+        Assert.True(process.WaitForExit(60_000) && process.ExitCode == 0);
+
+        var compared = 0;
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var bar = line.IndexOf('|');
+            var name = line[..bar];
+            var wmi = line[(bar + 1)..].Trim();
+            if (wmi.Length == 0)
+            {
+                continue;
+            }
+
+            Assert.True(ours[name].Description.TryGet(out var mine), name + " has no description of ours");
+            Assert.Equal(wmi, System.Text.RegularExpressions.Regex.Replace(mine, @"\s+", " ").Trim());
+            compared++;
+        }
+
+        Assert.True(compared >= 3, "compared only " + compared);
     }
 
     private static bool StartTypeMatches(string powerShell, ServiceStartType ours) => powerShell switch
