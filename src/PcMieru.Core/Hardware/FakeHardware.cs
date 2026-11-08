@@ -1,4 +1,5 @@
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Sensors;
 
 namespace PcMieru.Core.Hardware;
 
@@ -280,13 +281,26 @@ public sealed class FakeSensorClient : ISensorClient, IFakeImplementation
 
 public static class HardwareModule
 {
-    /// <summary>Owner C: replace the Fakes with the real implementations here (keep the Fake for options.ForceFakes).</summary>
+    /// <summary>
+    /// The real implementations, or the Fakes under <c>options.ForceFakes</c>. SensorHostClient starts PCMieru.SensorHost.exe only when
+    /// the first GPU reading is asked for, and it is disposed with the services.
+    /// </summary>
     public static void Register(ServiceRegistry registry, PcMieruOptions options)
     {
         Strings.Register(HardwareStrings.All);
-        registry.Set<IHardwareProvider>(new FakeHardwareProvider(options.Clock));
-        registry.Set<IStorageHealthProvider>(new FakeStorageHealthProvider());
-        registry.Set<ISensorClient>(new FakeSensorClient());
+        if (options.ForceFakes)
+        {
+            registry.Set<IHardwareProvider>(new FakeHardwareProvider(options.Clock));
+            registry.Set<IStorageHealthProvider>(new FakeStorageHealthProvider());
+            registry.Set<ISensorClient>(new FakeSensorClient());
+            return;
+        }
+
+        var sensors = new SensorHostClient();
+        registry.Set<ISensorClient>(sensors);
+        registry.Set<IHardwareProvider>(new RealHardwareProvider(options.Clock, sensors));
+        // The Helper is registered by the Management module, which comes after this one: look it up when a read needs it, not now.
+        registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider(new HelperStorageReader(() => registry.TryGet<IHelperClient>(out var helper) ? helper : null)));
     }
 }
 
@@ -306,5 +320,11 @@ public static class HardwareStrings
         new("hw.category.battery", "バッテリー", "Battery"),
         new("hw.category.os", "OS", "OS"),
         new("hw.limit.psu", "一般の ATX 電源は型番も出力も読み取れません", "A standard ATX power supply cannot report its model or wattage"),
+        new("hw.limit.noBattery", "この PC にバッテリーはありません", "This PC has no battery"),
+        new("hw.limit.sataSmart", "SATA の詳しい健康情報は、管理者の許可をもらったときだけ読めます", "Detailed SATA health can only be read after you approve administrator access"),
+        new("hw.limit.wifiLocation", "Wi-Fi の名前は、Windows の位置情報の許可がないと読めません", "The Wi-Fi network name cannot be read without Windows location permission"),
+        new("hw.limit.usbPower", "USB 機器の消費電力は読み取れません", "USB device power draw cannot be read"),
+        new("hw.limit.linkNow", "リンク速度は今の値です。使っていないときは自動で下がります", "Link speed is the current value. It drops by itself when idle"),
+        new("hw.limit.gpuVendor", "GPU の温度や電力は NVIDIA / AMD のドライバから読みます。それ以外の GPU は対象外です", "GPU temperature and power are read from the NVIDIA / AMD driver. Other GPUs are not covered"),
     ];
 }

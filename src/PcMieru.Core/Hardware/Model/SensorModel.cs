@@ -10,7 +10,8 @@ public sealed record GpuSensorReading(
     Value<double> PowerWatts,
     Value<double> PowerLimitWatts,
     Value<double> FanPercent,
-    Value<double> ClockMhz);
+    Value<double> ClockMhz,
+    GpuSensorExtras? Extras = null);
 
 /// <summary>One stdout line of PCMieru.SensorHost (ndjson). A frame with no GPUs and a Gpus status of Unsupported is a normal answer.</summary>
 public sealed record SensorFrame(

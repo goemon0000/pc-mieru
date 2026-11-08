@@ -33,7 +33,8 @@ public sealed record StorageHealth(
     Value<U128> PowerCycles,
     Value<U128> UnsafeShutdowns,
     Value<U128> MediaErrors,
-    IReadOnlyList<SmartAttribute> Attributes);
+    IReadOnlyList<SmartAttribute> Attributes,
+    NvmeHealthDetails? Nvme = null);
 
 /// <summary>SATA SMART attribute as the drive reports it. Raw is not assumed to be a temperature or a count; UnitKnown says whether it is.</summary>
 public sealed record SmartAttribute(

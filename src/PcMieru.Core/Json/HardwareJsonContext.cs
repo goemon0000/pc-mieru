@@ -21,6 +21,8 @@ namespace PcMieru.Core;
 [JsonSerializable(typeof(IReadOnlyList<AudioEndpoint>))]
 [JsonSerializable(typeof(IReadOnlyList<UsbDevice>))]
 [JsonSerializable(typeof(IReadOnlyList<GpuSensorReading>))]
+[JsonSerializable(typeof(IReadOnlyList<double>))]
+[JsonSerializable(typeof(IReadOnlyList<string>))]
 [JsonSerializable(typeof(MemoryType))]
 [JsonSerializable(typeof(StorageBus))]
 [JsonSerializable(typeof(NetworkKind))]

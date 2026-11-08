@@ -57,7 +57,8 @@ public sealed record CpuHardware(
     Value<long> L1CacheBytes,
     Value<long> L2CacheBytes,
     Value<long> L3CacheBytes,
-    Value<IReadOnlyList<string>> InstructionSets);
+    Value<IReadOnlyList<string>> InstructionSets,
+    CpuDetails? Details = null);
 
 [JsonConverter(typeof(CamelCaseEnumConverter<MemoryType>))]
 public enum MemoryType
@@ -76,7 +77,8 @@ public sealed record MemoryHardware(
     Value<int> SlotsTotal,
     Value<int> SlotsUsed,
     Value<long> MaxCapacityBytes,
-    IReadOnlyList<MemoryModule> Modules);
+    IReadOnlyList<MemoryModule> Modules,
+    MemoryDetails? Details = null);
 
 /// <summary>Speeds are MT/s (SMBIOS Type 17). Not an SPD read: XMP/EXPO state and timings are not available.</summary>
 public sealed record MemoryModule(
@@ -90,7 +92,8 @@ public sealed record MemoryModule(
     Value<string> SerialNumber,
     Value<int> Ranks,
     Value<int> VoltageMillivolts,
-    Value<string> FormFactor);
+    Value<string> FormFactor,
+    MemoryModuleDetails? Details = null);
 
 public sealed record BoardHardware(
     Value<string> Manufacturer,
@@ -103,7 +106,8 @@ public sealed record BoardHardware(
     Value<bool> UefiBoot,
     Value<bool> SecureBoot,
     Value<bool> TpmPresent,
-    Value<string> TpmVersion);
+    Value<string> TpmVersion,
+    BoardDetails? Details = null);
 
 public sealed record GpuHardware(
     Value<string> Name,
@@ -117,7 +121,8 @@ public sealed record GpuHardware(
     Value<string> Vbios,
     Value<int> PcieGeneration,
     Value<int> PcieWidth,
-    Value<double> PowerLimitWatts);
+    Value<double> PowerLimitWatts,
+    GpuDetails? Details = null);
 
 [JsonConverter(typeof(CamelCaseEnumConverter<StorageBus>))]
 public enum StorageBus
@@ -140,7 +145,8 @@ public sealed record StorageDevice(
     Value<long> CapacityBytes,
     Value<bool> TrimSupported,
     Value<string> PartitionStyle,
-    IReadOnlyList<StorageVolume> Volumes);
+    IReadOnlyList<StorageVolume> Volumes,
+    StorageDetails? Details = null);
 
 public sealed record StorageVolume(
     string Letter,
@@ -170,7 +176,8 @@ public sealed record NetworkAdapter(
     Value<string> DriverVersion,
     Value<string> Ssid,
     Value<string> WifiBand,
-    Value<int> SignalPercent);
+    Value<int> SignalPercent,
+    NetworkDetails? Details = null);
 
 [JsonConverter(typeof(CamelCaseEnumConverter<DisplayConnection>))]
 public enum DisplayConnection
@@ -197,7 +204,8 @@ public sealed record DisplayDevice(
     Value<double> RefreshHz,
     Value<bool> HdrEnabled,
     Value<DisplayConnection> Connection,
-    Value<string> GpuName);
+    Value<string> GpuName,
+    DisplayDetails? Details = null);
 
 [JsonConverter(typeof(CamelCaseEnumConverter<AudioDirection>))]
 public enum AudioDirection
@@ -211,14 +219,16 @@ public sealed record AudioEndpoint(
     Value<AudioDirection> Direction,
     Value<bool> IsDefault,
     Value<int> SampleRateHz,
-    Value<int> BitsPerSample);
+    Value<int> BitsPerSample,
+    AudioDetails? Details = null);
 
 public sealed record UsbDevice(
     Value<string> Name,
     Value<string> VendorId,
     Value<string> ProductId,
     Value<string> Manufacturer,
-    Value<string> ParentId);
+    Value<string> ParentId,
+    UsbDeviceDetails? Details = null);
 
 /// <summary>On a desktop the whole Battery value is Unsupported ("no battery"), not zeros.</summary>
 public sealed record BatteryHardware(
@@ -227,7 +237,8 @@ public sealed record BatteryHardware(
     Value<long> DesignCapacityMilliwattHours,
     Value<long> FullChargeCapacityMilliwattHours,
     Value<double> WearPercent,
-    Value<int> CycleCount);
+    Value<int> CycleCount,
+    BatteryDetails? Details = null);
 
 public sealed record OsHardware(
     Value<string> Name,
@@ -237,4 +248,5 @@ public sealed record OsHardware(
     Value<long> UptimeSec,
     Value<string> PowerPlan,
     Value<bool> VirtualizationBasedSecurity,
-    Value<bool> Hvci);
+    Value<bool> Hvci,
+    OsDetails? Details = null);

@@ -7,6 +7,8 @@
     <AssemblyName>PCMieru.SensorHost</AssemblyName>
     <RootNamespace>PcMieru.SensorHost</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- NVML and ADLX are called through function pointers (the vendor DLLs are loaded by absolute path). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
