@@ -1,53 +1,87 @@
+using System.Text;
 using PcMieru.Core;
-using PcMieru.Core.Hardware;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.SensorHost;
 
-// Owner C: replace FakeSensorClient with the NVML/ADLX readers. The protocol stays: one SensorFrame JSON line on
-// stdout per tick, diagnostics on stderr, exit when stdin closes (the parent died) or --once was given.
+// PCMieru.SensorHost: reads GPU sensors through the vendors' own libraries (NVML, ADLX) in a process of its own, because a vendor driver
+// call can hang and must never freeze the app. Protocol: one SensorFrame JSON line on stdout every two seconds (the first one as soon as the
+// libraries are open), diagnostics on stderr, exit when stdin closes (the app is gone) or after one frame with --once.
+// Runs as the normal user. Reads only; nothing here changes a GPU setting.
+const int DefaultIntervalMs = 2000;
+
 var once = args.Contains("--once", StringComparer.Ordinal);
-var intervalMs = 1000;
+var intervalMs = DefaultIntervalMs;
 for (var i = 0; i + 1 < args.Length; i++)
 {
-    if (args[i] == "--interval-ms" && int.TryParse(args[i + 1], out var parsed) && parsed is >= 100 and <= 60000)
+    if (args[i] == "--interval-ms" && int.TryParse(args[i + 1], out var parsed) && parsed is >= 100 and <= 60_000)
     {
         intervalMs = parsed;
     }
 }
 
-using var sensors = new FakeSensorClient();
-using var cts = new CancellationTokenSource();
-var parentGone = once ? Task.CompletedTask : Task.Run(
-    async () =>
-    {
-        while (await Console.In.ReadLineAsync(cts.Token).ConfigureAwait(false) is not null)
-        {
-        }
+// An explicit UTF-8 writer: the console's default encoding would mangle non-ASCII text (a GPU name) on its way to the parent.
+using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+using var stderr = new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        await cts.CancelAsync().ConfigureAwait(false);
-    },
-    cts.Token);
-_ = parentGone;
-
-var stdout = Console.Out;
-try
+if (!once)
 {
-    do
+    // The parent closing our input is the "you may stop" signal. Exit the whole process: the main thread may be stuck inside a vendor driver
+    // call, and waiting for it would keep this process (and the driver) alive.
+    var watcher = new Thread(() =>
     {
-        var gpus = await sensors.ReadGpuAsync(cts.Token).ConfigureAwait(false);
-        var frame = new SensorFrame(SensorFrame.CurrentSchemaVersion, DateTime.UtcNow, gpus);
-        await stdout.WriteLineAsync(PcMieruJson.Serialize(frame)).ConfigureAwait(false);
-        await stdout.FlushAsync(cts.Token).ConfigureAwait(false);
-        if (once)
+        try
         {
-            break;
+            while (Console.In.ReadLine() is not null)
+            {
+            }
+        }
+        catch (IOException)
+        {
         }
 
-        await Task.Delay(intervalMs, cts.Token).ConfigureAwait(false);
+        Environment.Exit(0);
+    })
+    {
+        IsBackground = true,
+        Name = "parent-watch",
+    };
+    watcher.Start();
+}
+
+var sampler = new GpuSampler(line => stderr.WriteLine("sensorhost " + line));
+var next = Environment.TickCount64;
+do
+{
+    Value<IReadOnlyList<GpuSensorReading>> gpus;
+    try
+    {
+        gpus = sampler.Sample();
     }
-    while (true);
+    catch (Exception ex) when (ex is not OutOfMemoryException)
+    {
+        stderr.WriteLine("sensorhost reading failed: " + ex.GetType().Name);
+        gpus = Value.Failed<IReadOnlyList<GpuSensorReading>>("sensorhost", "reading the GPU sensors failed (" + ex.GetType().Name + ")");
+    }
+
+    var frame = new SensorFrame(SensorFrame.CurrentSchemaVersion, DateTime.UtcNow, gpus);
+    stdout.WriteLine(PcMieruJson.Serialize(frame));
+    if (once)
+    {
+        break;
+    }
+
+    // A fixed cadence: a slow reading does not push every later frame back.
+    next += intervalMs;
+    var wait = next - Environment.TickCount64;
+    if (wait > 0)
+    {
+        Thread.Sleep((int)wait);
+    }
+    else
+    {
+        next = Environment.TickCount64;
+    }
 }
-catch (OperationCanceledException)
-{
-}
+while (true);
 
 return 0;

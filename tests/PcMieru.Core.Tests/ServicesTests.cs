@@ -9,7 +9,7 @@ namespace PcMieru.Core.Tests;
 public class ServicesTests
 {
     private static PcMieruServices Create(bool redact = true) =>
-        PcMieruServices.Create(new PcMieruOptions { Redact = redact, Clock = static () => Fixture.FixedTime });
+        PcMieruServices.Create(new PcMieruOptions { Redact = redact, Clock = static () => Fixture.FixedTime, ForceFakes = true });
 
     [Fact]
     public void Every_boundary_interface_resolves_after_create()

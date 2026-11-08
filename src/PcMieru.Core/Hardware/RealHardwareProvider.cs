@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using PcMieru.Core.Hardware.Collectors;
 using PcMieru.Core.Hardware.Model;
 using PcMieru.Core.Hardware.Native;
+using PcMieru.Core.Hardware.Sensors;
 using PcMieru.Core.Hardware.Smbios;
 
 namespace PcMieru.Core.Hardware;
@@ -10,8 +11,10 @@ namespace PcMieru.Core.Hardware;
 /// Real <see cref="IHardwareProvider"/>. Each category is collected once and cached until <see cref="Invalidate"/>, because most of it
 /// (SMBIOS, EDID, driver data) cannot change while the app runs. A category that was not asked for is reported as NotCollected.
 /// Nothing here needs administrator rights.
+/// GPU facts are collected once; what only the vendor's library knows (VBIOS, power limit) is merged in on every call from
+/// <paramref name="sensors"/>, so a sensor host that was slow to start does not leave "unknown" in place for the rest of the session.
 /// </summary>
-public sealed class RealHardwareProvider(Func<DateTime>? clock = null) : IHardwareProvider
+public sealed class RealHardwareProvider(Func<DateTime>? clock = null, ISensorClient? sensors = null) : IHardwareProvider
 {
     private readonly Func<DateTime> _clock = clock ?? (static () => DateTime.UtcNow);
     private readonly ConcurrentDictionary<HardwareCategory, object> _cache = new();
@@ -22,6 +25,9 @@ public sealed class RealHardwareProvider(Func<DateTime>? clock = null) : IHardwa
     private (DeviceGuardState? State, int HResult)? _deviceGuard;
 
     private static readonly TimeSpan LiveLifetime = TimeSpan.FromSeconds(5);
+
+    // The client has its own limit (4 s for the first reading); this one only keeps a misbehaving client from holding up the whole report.
+    private static readonly TimeSpan SensorWait = TimeSpan.FromSeconds(5);
 
     public async Task<HardwareInfo> GetAsync(HardwareCategory category, CancellationToken ct = default)
     {
@@ -43,7 +49,8 @@ public sealed class RealHardwareProvider(Func<DateTime>? clock = null) : IHardwa
         var cpu = Run(HardwareCategory.Cpu, () => CpuCollector.Collect(Smbios().Table));
         var memory = Run(HardwareCategory.Memory, () => MemoryCollector.Collect(Smbios().Table, Smbios().Error));
         var board = Run(HardwareCategory.Board, () => BoardCollector.Collect(Smbios().Table, Smbios().Error));
-        var gpus = Run(HardwareCategory.Gpu, GpuCollector.Collect);
+        var collectedGpus = Run(HardwareCategory.Gpu, GpuCollector.Collect);
+        var gpus = Want(HardwareCategory.Gpu) && sensors is not null ? WithSensors(collectedGpus, sensors, ct) : collectedGpus;
         var storage = Run(HardwareCategory.Storage, StorageCollector.Collect);
         var network = Run(HardwareCategory.Network, NetworkCollector.Collect);
         var displays = Run(HardwareCategory.Display, () => DisplayCollector.Collect());
@@ -82,6 +89,33 @@ public sealed class RealHardwareProvider(Func<DateTime>? clock = null) : IHardwa
         {
             _deviceGuard = null;
         }
+    }
+
+    private static async Task<Value<IReadOnlyList<GpuHardware>>> WithSensors(Task<Value<IReadOnlyList<GpuHardware>>> collected, ISensorClient sensors, CancellationToken ct)
+    {
+        var gpus = await collected.ConfigureAwait(false);
+        if (gpus.Status != ValueStatus.Ok)
+        {
+            return gpus;
+        }
+
+        Value<IReadOnlyList<GpuSensorReading>> readings;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(SensorWait);
+        try
+        {
+            readings = await sensors.ReadGpuAsync(limit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            readings = Value.Missing<IReadOnlyList<GpuSensorReading>>(ValueStatus.Timeout, "sensorhost", "the sensor host did not answer in time");
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+        {
+            readings = Value.Failed<IReadOnlyList<GpuSensorReading>>("sensorhost", "reading the sensor host failed: " + ex.GetType().Name);
+        }
+
+        return GpuSensorMerge.Apply(gpus, readings);
     }
 
     private Value<T> Live<T>(HardwareCategory category, Func<Value<T>> collect)
