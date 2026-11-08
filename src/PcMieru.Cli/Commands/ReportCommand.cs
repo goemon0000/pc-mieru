@@ -43,7 +43,7 @@ public sealed class ReportCommand : ICliCommand
         }
         else
         {
-            text = services.Redactor.RedactText(ReportMarkdown.Render(document, context.Language));
+            text = services.Redactor.RedactText(ReportMarkdown.Render(document, context.Language, VersionCommand.CurrentVersion));
         }
 
         var path = args.Get("output");

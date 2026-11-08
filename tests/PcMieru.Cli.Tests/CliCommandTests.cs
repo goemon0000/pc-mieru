@@ -96,6 +96,14 @@ public class CliCommandTests
     [InlineData("report", "--duration", "99m")]
     [InlineData("mcp", "extra")]
     [InlineData("mcp", "--redact-never")]
+    [InlineData("kill")]
+    [InlineData("priority")]
+    [InlineData("eco")]
+    [InlineData("startup")]
+    [InlineData("services")]
+    [InlineData("run")]
+    [InlineData("watch", "--interval", "10ms")]
+    [InlineData("watch", "--count", "0")]
     public async Task A_bad_command_line_exits_2_and_prints_the_syntax_on_stderr(params string[] args)
     {
         var r = await CliRun.RunAsync(args);
@@ -110,22 +118,6 @@ public class CliCommandTests
         var r = await CliRun.RunAsync(["ps", "--help"]);
         Assert.Equal(0, r.ExitCode);
         Assert.StartsWith("pcmi ps", r.Out, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("watch")]
-    [InlineData("kill")]
-    [InlineData("priority")]
-    [InlineData("eco")]
-    [InlineData("startup")]
-    [InlineData("services")]
-    [InlineData("run")]
-    public async Task A_command_still_waiting_for_its_owner_fails_with_1_and_says_so(string name)
-    {
-        var r = await CliRun.RunAsync([name]);
-        Assert.Equal(1, r.ExitCode);
-        Assert.Equal(string.Empty, r.Out);
-        Assert.Contains(name, r.Err, StringComparison.Ordinal);
     }
 
     [Fact]

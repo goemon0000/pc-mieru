@@ -1,4 +1,3 @@
-using System.Text;
 using PcMieru.Core;
 
 namespace PcMieru.Cli.Commands;
@@ -45,6 +44,22 @@ public sealed class PsCommand : ICliCommand
     private static void Render(CliContext context, ProcessList list, bool tree)
     {
         var rows = tree ? Tree(list.Processes) : list.Processes.Select(p => (Process: p, Depth: 0)).ToList();
+        context.Out.Write(RenderTable(context, rows));
+        var footer = Strings.Format(
+            "cli.ps.footer",
+            new Dictionary<string, string>
+            {
+                ["shown"] = list.Processes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["total"] = list.TotalProcesses.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["sort"] = list.Sort.ToString().ToLowerInvariant(),
+            },
+            context.Language);
+        context.Out.WriteLine(footer);
+    }
+
+    /// <summary>The process table shared by <c>ps</c> and <c>perf</c>. Depth indents the name (the tree view).</summary>
+    internal static string RenderTable(CliContext context, IReadOnlyList<(ProcessInfo Process, int Depth)> rows)
+    {
         string[] headers =
         [
             context.Text("cli.col.pid"),
@@ -65,49 +80,7 @@ public sealed class PsCommand : ICliCommand
             StateText(context, r.Process),
         }).ToList();
 
-        var widths = headers.Select(CliText.Width).ToArray();
-        foreach (var row in cells)
-        {
-            for (var i = 0; i < row.Length; i++)
-            {
-                widths[i] = Math.Max(widths[i], CliText.Width(row[i]));
-            }
-        }
-
-        if (context.ConsoleWidth > 0)
-        {
-            var fixedWidth = widths.Sum() - widths[1] + (widths.Length - 1) * 2;
-            widths[1] = Math.Max(12, Math.Min(widths[1], context.ConsoleWidth - fixedWidth - 1));
-        }
-
-        var sb = new StringBuilder();
-        AppendRow(sb, headers, widths);
-        foreach (var row in cells)
-        {
-            AppendRow(sb, row, widths);
-        }
-
-        context.Out.Write(sb.ToString());
-        var footer = Strings.Format(
-            "cli.ps.footer",
-            new Dictionary<string, string>
-            {
-                ["shown"] = list.Processes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["total"] = list.TotalProcesses.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["sort"] = list.Sort.ToString().ToLowerInvariant(),
-            },
-            context.Language);
-        context.Out.WriteLine(footer);
-    }
-
-    private static void AppendRow(StringBuilder sb, string[] row, int[] widths)
-    {
-        for (var i = 0; i < row.Length; i++)
-        {
-            var text = i == 1 ? CliText.Truncate(row[i], widths[i]) : row[i];
-            sb.Append(i == row.Length - 1 ? text : i == 1 ? CliText.PadRight(text, widths[i]) : CliText.PadLeft(text, widths[i]));
-            sb.Append(i < row.Length - 1 ? "  " : "\n");
-        }
+        return CliTable.Render(headers, cells.Select(c => (IReadOnlyList<string>)c).ToList(), new HashSet<int> { 0, 2, 3, 4 }, flexColumn: 1, consoleWidth: context.ConsoleWidth);
     }
 
     private static string StateText(CliContext context, ProcessInfo p) =>

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using PcMieru.Cli.Mcp;
+using PcMieru.Core.Hardware.Model;
 using PcMieru.Core.Reporting;
 
 namespace PcMieru.Cli.Tests;
@@ -461,6 +462,128 @@ public class McpServerTests
     }
 
     [Fact]
+    public async Task A_cancel_that_follows_its_call_on_the_very_next_line_is_never_lost()
+    {
+        // Everything is in the input from the start: the reader sees the cancel right after the call, before the call has run.
+        using var services = McpRun.Services();
+        var stub = new StubInsights(services.Insights)
+        {
+            OnList = async (query, ct) =>
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return Samples.List();
+            },
+        };
+        var sink = new LineSink();
+        var input = string.Join(
+            "\n",
+            McpRun.Initialize,
+            McpRun.Call("slow", "list_processes"),
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"slow"}}""",
+            McpRun.Request("after", "ping"))
+            + "\n";
+
+        await new McpServer(stub, services.Redactor, "9.9.9").RunAsync(new StringReader(input), sink, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.NotNull(McpRun.Reply(sink.Messages, "after")["result"]);
+        Assert.DoesNotContain(sink.Messages, m => m["id"]?.ToJsonString() == "\"slow\"");
+    }
+
+    [Fact]
+    public async Task A_call_that_runs_past_the_timeout_is_stopped_and_answered_as_a_tool_error()
+    {
+        using var services = McpRun.Services();
+        var stub = new StubInsights(services.Insights)
+        {
+            OnList = async (query, ct) =>
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return Samples.List();
+            },
+        };
+        var sink = new LineSink();
+        var input = string.Join("\n", McpRun.Initialize, McpRun.Call("slow", "list_processes"), McpRun.Request("after", "ping")) + "\n";
+
+        await new McpServer(stub, services.Redactor, "9.9.9", TimeSpan.FromMilliseconds(200))
+            .RunAsync(new StringReader(input), sink, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        var result = McpRun.Reply(sink.Messages, "slow")["result"]!;
+        Assert.True((bool)result["isError"]!);
+        Assert.Contains("too long", (string)result["content"]![0]!["text"]!, StringComparison.Ordinal);
+        Assert.NotNull(McpRun.Reply(sink.Messages, "after")["result"]);
+    }
+
+    [Fact]
+    public async Task A_timed_out_observation_gives_the_gate_back()
+    {
+        using var services = McpRun.Services();
+        var calls = 0;
+        var stub = new StubInsights(services.Insights)
+        {
+            OnList = async (query, ct) =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    await Task.Delay(Timeout.Infinite, ct);
+                }
+
+                return Samples.List(Samples.Process(1, "second.exe"));
+            },
+        };
+        var input = new LiveInput();
+        var sink = new LineSink();
+        var run = new McpServer(stub, services.Redactor, "9.9.9", TimeSpan.FromMilliseconds(200)).RunAsync(input, sink, CancellationToken.None);
+        input.Send(McpRun.Initialize);
+        input.Send(McpRun.Call("first", "list_processes"));
+        await sink.WaitForLinesAsync(2);
+        input.Send(McpRun.Call("second", "list_processes"));
+        await sink.WaitForLinesAsync(3);
+        input.Finish();
+        await run.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.True((bool)McpRun.Reply(sink.Messages, "first")["result"]!["isError"]!);
+        Assert.False((bool)McpRun.Reply(sink.Messages, "second")["result"]!["isError"]!);
+    }
+
+    [Fact]
+    public async Task A_result_over_the_size_limit_becomes_a_tool_error_that_says_how_to_narrow_it()
+    {
+        using var services = McpRun.Services();
+        var stub = new StubInsights(services.Insights)
+        {
+            OnList = (_, _) => Task.FromResult(Samples.List(
+                Enumerable.Range(1, 200).Select(i => Samples.Process((uint)i, new string('x', 6000) + ".exe")).ToArray())),
+        };
+
+        var messages = await McpRun.RunAsync(stub, services.Redactor, McpRun.Initialize, McpRun.Call("big", "list_processes", """{"top":200}"""));
+
+        var result = McpRun.Reply(messages, "big")["result"]!;
+        Assert.True((bool)result["isError"]!);
+        Assert.Contains("too large", (string)result["content"]![0]!["text"]!, StringComparison.Ordinal);
+        Assert.True(result["content"]![0]!["text"]!.ToJsonString().Length < 1000);
+    }
+
+    [Fact]
+    public async Task A_denied_storage_health_is_returned_as_it_is_without_asking_for_administrator_rights()
+    {
+        using var services = McpRun.Services();
+        var denied = Value.Denied<StorageHealth>("test", "access is denied");
+        var stub = new StubInsights(services.Insights)
+        {
+            OnStorage = _ => Task.FromResult(new StorageHealthReport(StorageHealthReport.CurrentSchemaVersion, [new DriveHealth(0, "Test Drive", denied)])),
+        };
+
+        var messages = await McpRun.RunAsync(stub, services.Redactor, McpRun.Initialize, McpRun.Call("h", "get_storage_health"));
+
+        var result = McpRun.Reply(messages, "h")["result"]!;
+        Assert.False((bool)result["isError"]!);
+        var health = result["structuredContent"]!["drives"]![0]!["health"]!;
+        Assert.Equal("denied", (string?)health["status"]);
+        Assert.Null(health["value"]);
+    }
+
+    [Fact]
     public async Task A_failing_insight_becomes_a_tool_error_not_a_dead_server()
     {
         using var services = McpRun.Services();
@@ -473,7 +596,7 @@ public class McpServerTests
     [Fact]
     public async Task A_newline_in_a_process_name_stays_on_one_line_and_arrives_intact()
     {
-        const string name = "evil\nname\r\n{\"jsonrpc\":\"2.0\"}\u2028end.exe";
+        const string name = "evil\nname\r\n{\"jsonrpc\":\"2.0\"}\u2028\u2029\u0085end.exe";
         using var services = McpRun.Services();
         var stub = new StubInsights(services.Insights) { OnList = (_, _) => Task.FromResult(Samples.List(Samples.Process(9, name))) };
         var sink = new LineSink();
@@ -484,6 +607,11 @@ public class McpServerTests
 
         var lines = sink.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(2, lines.Length);
+        // Line splitters of other languages also break at these; none may appear raw on the wire.
+        Assert.DoesNotContain('\r', sink.Text);
+        Assert.DoesNotContain((char)0x2028, sink.Text);
+        Assert.DoesNotContain((char)0x2029, sink.Text);
+        Assert.DoesNotContain('\u0085', sink.Text);
         var result = McpRun.Reply(sink.Messages, "c")["result"]!;
         Assert.Equal(name, (string?)result["structuredContent"]!["processes"]![0]!["name"]);
         var echoed = JsonNode.Parse((string)result["content"]![0]!["text"]!)!;

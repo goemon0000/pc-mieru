@@ -21,12 +21,14 @@ internal static class CliRun
         string stdin = "",
         Language language = Language.En,
         int width = 120,
-        Action<ServiceRegistry>? configure = null)
+        Action<ServiceRegistry>? configure = null,
+        string? helperDirectory = null,
+        CancellationToken ct = default)
     {
         var output = new StringWriter { NewLine = "\n" };
         var error = new StringWriter { NewLine = "\n" };
-        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language);
-        var code = await CliApp.RunAsync(args, env, CancellationToken.None);
+        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language, helperDirectory);
+        var code = await CliApp.RunAsync(args, env, ct);
         return new CliResult(code, output.ToString(), error.ToString());
     }
 }
@@ -96,6 +98,11 @@ internal sealed class StubInsights(IReadOnlyInsights inner) : DelegatingInsights
     public Func<ProcessQuery, CancellationToken, Task<ProcessList>>? OnList { get; set; }
 
     public Func<uint, CancellationToken, Task<ProcessDetail?>>? OnProcess { get; set; }
+
+    public Func<CancellationToken, Task<StorageHealthReport>>? OnStorage { get; set; }
+
+    public override Task<StorageHealthReport> GetStorageHealthAsync(CancellationToken ct = default) =>
+        OnStorage is null ? base.GetStorageHealthAsync(ct) : OnStorage(ct);
 
     public override Task<ProcessList> ListProcessesAsync(ProcessQuery query, CancellationToken ct = default) =>
         OnList is null ? base.ListProcessesAsync(query, ct) : OnList(query, ct);
