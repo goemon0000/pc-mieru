@@ -123,8 +123,6 @@ internal sealed class UsersPage : PageBase
             _grid.Columns[i].Text = Strings.Get("gui.users.col." + keys[i]);
         }
 
-        _hint.SetTone(CellTone.Dim);
-        _hint.Text = Strings.Get("gui.users.hint");
         UpdateFooter();
         _grid.Invalidate();
     }
@@ -193,6 +191,12 @@ internal sealed class UsersPage : PageBase
             long memory = 0;
             foreach (var p in list)
             {
+                if (p.Key.Pid == 0)
+                {
+                    // "System Idle Process" is the CPU time nobody used: it is not the system's load, so it is not added.
+                    continue;
+                }
+
                 if (p.CpuPercent.TryGet(out var c))
                 {
                     cpu += c;
@@ -273,6 +277,8 @@ internal sealed class UsersPage : PageBase
         _partial.SetTone(CellTone.Accent);
         _partial.Text = _anyPartial ? Strings.Get("gui.users.partial") : string.Empty;
         _partial.Margin = new Padding(0, 0, _anyPartial ? Px(16) : 0, 0);
+        _hint.SetTone(CellTone.Dim);
+        _hint.Text = Strings.Get("gui.users.hint") + (_rows.Any(r => r.IsSession && r.Visible && r.CpuPartial) ? " " + Strings.Get("gui.users.asterisk") : string.Empty);
     }
 
     private void Toggle(int row)
@@ -361,7 +367,7 @@ internal sealed class UsersPage : PageBase
                 Glyph = r.ProcessCount == 0 ? ExpanderGlyph.None : _expanded.Contains(r.Session.SessionId) ? ExpanderGlyph.Expanded : ExpanderGlyph.Collapsed,
             },
             SessionColumn => new GridCell(r.Session.SessionId.ToString(CultureInfo.CurrentCulture) + (r.Session.SessionId == _ownSession ? " " + Strings.Get("gui.users.you") : string.Empty)),
-            StateColumn => new GridCell(Strings.Get(StateKey(r.Session.State)), r.Session.State == SessionConnectState.Active ? CellTone.Normal : CellTone.Dim),
+            StateColumn => new GridCell(Strings.Get(r.Session.UserName.Length == 0 ? "gui.users.state.system" : StateKey(r.Session.State)), r.Session.State == SessionConnectState.Active ? CellTone.Normal : CellTone.Dim),
             CpuColumn => !r.Visible
                 ? new GridCell(Fmt.Dash, CellTone.Dim)
                 : new GridCell(r.Cpu.ToString("0.0", CultureInfo.CurrentCulture) + " %" + (r.CpuPartial ? " *" : string.Empty), r.Cpu >= 50 ? CellTone.Accent : CellTone.Normal),
@@ -405,6 +411,8 @@ internal static class UsersStrings
         new("gui.users.partial", "一部のみ表示: ほかのユーザーのプロセスは、管理者でないと見えないことがあります。", "Partial only: other users' processes may be hidden unless you are an administrator."),
         new("gui.users.invisible.tip", "このユーザーのプロセスは見えません（権限がないためです）。0 ではありません", "This user's processes are not visible (no permission). It is not zero"),
         new("gui.users.cpupartial.tip", "一部のプロセスの CPU を取得できなかったため、合計は足りない可能性があります", "The CPU of some processes could not be read, so the total may be short"),
+        new("gui.users.asterisk", "* は読めなかった分があります。", "* means some values could not be read."),
+        new("gui.users.state.system", "システム用", "For the system"),
         new("gui.users.state.active", "使用中", "Active"),
         new("gui.users.state.connected", "接続中", "Connected"),
         new("gui.users.state.disconnected", "切断", "Disconnected"),

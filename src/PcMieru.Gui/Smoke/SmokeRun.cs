@@ -98,17 +98,27 @@ internal static class SmokeRun
             }
 
             // First data on the page the app opens on.
-            var overview = form.CurrentPage as OverviewPage;
-            await Until(() => overview is { Apps.Count: > 0 }, 6000).ConfigureAwait(true);
+            // "--page" may have opened another page first; the check follows whichever page it is.
+            var first = form.CurrentPage;
+            bool FirstHasRows() => first switch
+            {
+                OverviewPage o => o.Apps.Count > 0,
+                ProcessesPage p => p.VisibleRowCount > 0,
+                { } other => other.IsReady,
+                _ => false,
+            };
+            await Until(FirstHasRows, 6000).ConfigureAwait(true);
             Timing["firstRowsMs"] = Ms(startedAt);
             Timing["sinceProcessStartMs"] = Math.Round((DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds);
             await Until(() => context.Pump.History.Count >= 2, 5000).ConfigureAwait(true);
             Check("sampler produced snapshots", context.Pump.Latest is not null && context.Pump.History.Count >= 2, context.Pump.History.Count + " samples");
-            Check("first page shows rows", overview is { Apps.Count: > 0 }, (overview?.Apps.Count ?? 0) + " apps");
+            Check("first page shows rows", FirstHasRows(), first?.GetType().Name ?? "no page");
 
             var processes = await Open("processes").ConfigureAwait(true) as ProcessesPage;
             await Until(() => processes is { VisibleRowCount: > 0 }, 5000).ConfigureAwait(true);
             Timing["processRowsMs"] = Ms(startedAt);
+            var appRows = processes is null ? 0 : Enumerable.Range(0, processes.Model.Count).Count(i => processes.Model[i] is { IsGroup: true, Group: ProcessGroup.Apps });
+            Check("process list has an apps group (a window is open)", appRows > 0, appRows + " group headers");
             Check("process list is filled", processes is { VisibleRowCount: > 0 }, (processes?.VisibleRowCount ?? 0) + " rows, selected " + (processes?.List.SelectedIndices.Count ?? -1) + ", row " + (processes?.List.SelectedRow ?? -2));
 
             foreach (var language in new[] { Language.Ja, Language.En })
@@ -261,6 +271,24 @@ internal static class SmokeRun
             {
                 var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
                 _shots.Add(await Capture(shotsDirectory, $"{Strings.Current.ToString().ToLowerInvariant()}-{(context.Theme.IsDark ? "dark" : "light")}-diagnose-report{scale}.png"));
+
+                // The same document again in the other language and theme (the page renders it again on a change), then back.
+                var language = Strings.Current;
+                var theme = context.Theme.IsDark ? ThemeMode.Dark : ThemeMode.Light;
+                var otherLanguage = language == Language.Ja ? Language.En : Language.Ja;
+                var otherTheme = theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark;
+                var before = diagnose.TextView.Text;
+                var stateBefore = diagnose.StateText;
+                context.SetLanguage(otherLanguage);
+                context.SetTheme(otherTheme);
+                await Task.Delay(250).ConfigureAwait(true);
+                var rendered = diagnose.TextView.Text;
+                Check("report: the text follows the language", rendered.Length > 100 && !string.Equals(rendered, before, StringComparison.Ordinal) && !SmokeText.IsPlaceholder(rendered), before.Length + " -> " + rendered.Length + " characters");
+                Check("report: the line under the text follows the language", diagnose.StateText.Length > 0 && !string.Equals(diagnose.StateText, stateBefore, StringComparison.Ordinal) && !SmokeText.IsPlaceholder(diagnose.StateText), stateBefore + " -> " + diagnose.StateText);
+                _shots.Add(await Capture(shotsDirectory, $"{otherLanguage.ToString().ToLowerInvariant()}-{(otherTheme == ThemeMode.Dark ? "dark" : "light")}-diagnose-report{scale}.png"));
+                context.SetLanguage(language);
+                context.SetTheme(theme);
+                await Task.Delay(150).ConfigureAwait(true);
             }
         }
 

@@ -183,15 +183,35 @@ internal static class PartsModel
 
         foreach (var (key, value) in node.Props)
         {
-            if (value is JsonArray array && array.Any(e => e is JsonObject))
-            {
-                continue;
-            }
-
-            rows.Add(Row(node.CategoryKey, key, value, source));
+            AddRow(rows, node.CategoryKey, key, value, source, nested: false);
         }
 
         return rows;
+    }
+
+    /// <summary>
+    /// A value becomes one row. A record without a status of its own (the model's "details") is opened: its members become
+    /// rows of the same part, marked as details so they fold away. Lists of parts are the tree's children, not rows.
+    /// </summary>
+    private static void AddRow(List<PartsRow> rows, string category, string key, JsonNode? value, string source, bool nested)
+    {
+        if (value is JsonArray array && array.Any(e => e is JsonObject))
+        {
+            return;
+        }
+
+        if (value is JsonObject record && !record.ContainsKey("status"))
+        {
+            foreach (var (innerKey, innerValue) in record)
+            {
+                AddRow(rows, category, innerKey, innerValue, source, nested: true);
+            }
+
+            return;
+        }
+
+        var row = Row(category, key, value, source);
+        rows.Add(nested && !row.Expert ? row with { Expert = true } : row);
     }
 
     /// <summary>The whole tree as plain text for pasting. Missing values say why; nothing is left blank.</summary>

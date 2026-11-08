@@ -75,7 +75,8 @@ internal sealed class ProcessClassifier
 
     private readonly Func<HashSet<uint>> _windows;
     private HashSet<uint> _windowPids = [];
-    private int _age = int.MaxValue;
+    private bool _loaded;
+    private int _age;
 
     public ProcessClassifier(Func<HashSet<uint>> windows) => _windows = windows;
 
@@ -86,8 +87,10 @@ internal sealed class ProcessClassifier
     /// <summary>Re-reads the window list. Called once per sample; reads only every <paramref name="every"/>th call.</summary>
     public void Refresh(int every = 2)
     {
-        if (++_age >= every)
+        // The first call always reads (the group of every process depends on it); then every n-th call.
+        if (!_loaded || ++_age >= every)
         {
+            _loaded = true;
             _age = 0;
             _windowPids = _windows();
         }

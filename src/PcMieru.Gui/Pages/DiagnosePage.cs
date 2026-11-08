@@ -37,6 +37,9 @@ internal sealed class DiagnosePage : PageBase
     private DateTime _startedUtc;
     private int _total;
     private bool _failed;
+
+    /// <summary>How the last run ended. The line under the text is built from it, so it follows a change of language.</summary>
+    private Outcome _outcome;
     private string? _failure;
 
     public DiagnosePage(GuiContext context)
@@ -105,6 +108,9 @@ internal sealed class DiagnosePage : PageBase
 
     internal ReportDocument? Document => _document;
 
+    /// <summary>The line under the text (progress or how the run ended).</summary>
+    internal string StateText => _state.Text;
+
     internal bool IsRunning => _running is not null;
 
     /// <summary>The seconds chosen in the selector.</summary>
@@ -129,6 +135,15 @@ internal sealed class DiagnosePage : PageBase
         _durationLabel.Text = Strings.Get("gui.diag.seconds");
         FillDurations(Seconds);
         _start.Text = Strings.Get(_running is null ? "gui.diag.start" : "gui.diag.cancel");
+        if (_running is null)
+        {
+            ShowOutcome();
+        }
+        else
+        {
+            ShowProgress();
+        }
+
         _redact.Text = Strings.Get("gui.diag.redact");
         _tips.SetToolTip(_redact, Strings.Get(Context.Services.Redactor.Enabled ? "gui.diag.redact.tip" : "gui.diag.redact.off"));
         _copy.Text = Strings.Get("gui.common.copy");
@@ -191,21 +206,22 @@ internal sealed class DiagnosePage : PageBase
         _startedUtc = DateTime.UtcNow;
         _failed = false;
         _failure = null;
+        _outcome = Outcome.None;
         SetBusy(true);
         try
         {
             _document = await Context.Services.Reports.BuildAsync(new ReportOptions(_total), cancel.Token).ConfigureAwait(true);
-            _state.Text = Strings.Format("gui.diag.done", Fmt.Dict(("seconds", _document.DurationSec.ToString(CultureInfo.CurrentCulture))));
+            _outcome = Outcome.Done;
         }
         catch (OperationCanceledException)
         {
-            _state.Text = Strings.Get("gui.diag.cancelled");
+            _outcome = Outcome.Cancelled;
         }
         catch (Exception ex)
         {
             _failed = true;
             _failure = ex.Message;
-            _state.Text = Strings.Format("gui.diag.failed", Fmt.Dict(("error", ex.Message)));
+            _outcome = Outcome.Failed;
         }
         finally
         {
@@ -213,7 +229,24 @@ internal sealed class DiagnosePage : PageBase
             SetBusy(false);
         }
 
+        ShowOutcome();
         Render();
+    }
+
+    private void ShowOutcome() => _state.Text = _outcome switch
+    {
+        Outcome.Done when _document is not null => Strings.Format("gui.diag.done", Fmt.Dict(("seconds", _document.DurationSec.ToString(CultureInfo.CurrentCulture)))),
+        Outcome.Cancelled => Strings.Get("gui.diag.cancelled"),
+        Outcome.Failed => Strings.Format("gui.diag.failed", Fmt.Dict(("error", _failure ?? string.Empty))),
+        _ => string.Empty,
+    };
+
+    private enum Outcome
+    {
+        None,
+        Done,
+        Cancelled,
+        Failed,
     }
 
     private void SetBusy(bool busy)

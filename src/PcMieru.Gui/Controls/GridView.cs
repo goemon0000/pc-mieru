@@ -537,8 +537,10 @@ internal class GridView : ListView, IThemed
         }
 
         var pad8 = Scaled(8);
-        var arrow = e.ColumnIndex == _sortColumn ? Scaled(14) : 0;
         var column = e.Header!;
+        var rightAligned = column.TextAlign == HorizontalAlignment.Right;
+        // A right-aligned header keeps its text over the numbers; its arrow goes right next to the text, on the left of it.
+        var arrow = e.ColumnIndex == _sortColumn && !rightAligned ? Scaled(14) : 0;
         var alignment = column.TextAlign switch
         {
             HorizontalAlignment.Right => TextFormatFlags.Right,
@@ -554,12 +556,16 @@ internal class GridView : ListView, IThemed
             palette.TextDim,
             alignment | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
 
-        if (arrow > 0)
+        if (e.ColumnIndex == _sortColumn)
         {
             var size = Scaled(4);
-            var cx = column.TextAlign == HorizontalAlignment.Right
-                ? e.Bounds.Left + pad8 // arrow sits on the left of a right-aligned header
-                : e.Bounds.Right - pad8 - size;
+            var cx = e.Bounds.Right - pad8 - size;
+            if (rightAligned)
+            {
+                var textWidth = TextRenderer.MeasureText(e.Graphics, column.Text, Font, new Size(int.MaxValue, e.Bounds.Height), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
+                cx = Math.Max(e.Bounds.Right - pad8 - textWidth - Scaled(8), e.Bounds.Left + size + 2);
+            }
+
             var cy = e.Bounds.Top + (e.Bounds.Height / 2);
             Point[] points = _sortDescending
                 ? [new Point(cx - size, cy - (size / 2)), new Point(cx + size, cy - (size / 2)), new Point(cx, cy + (size / 2) + 1)]
