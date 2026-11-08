@@ -9,7 +9,7 @@ namespace PcMieru.Core.Collection;
 /// system-wide counters, with deltas against the previous tick (SPEC 4). Calls are serialized; the work runs on the
 /// thread pool so a slow counter never blocks the caller's thread.
 /// </summary>
-public sealed class WindowsSnapshotSource : ISnapshotSource
+public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
 {
     private const int InitialBufferBytes = 1 << 20;
     private const int MaxBufferBytes = 256 << 20;
@@ -32,6 +32,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
     private readonly Dictionary<uint, long> _createByPid = new(512);
     private readonly ProcessDeltaEngine _deltas = new();
     private readonly SystemCpuSampler _cpu = new();
+    private readonly ProcessGrouper _grouper;
 
     // Everything that goes through PDH or a provider runs as a guarded stage next to the kernel query: a hung counter
     // costs that one part of the snapshot (reported as a timeout), never the whole tick.
@@ -65,8 +66,15 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
     /// replaced). Null or returning null means "no sensor client": the GPU sensor fields say Unsupported.
     /// </param>
     public WindowsSnapshotSource(Func<DateTime> clock, ISamplerControl? control = null, Func<ISensorClient?>? sensors = null)
+        : this(clock, control, sensors, new SignatureVerifier())
+    {
+    }
+
+    /// <param name="verifier">Shared with the details provider so a file is hashed once for both (grouping looks at Windows-folder files).</param>
+    internal WindowsSnapshotSource(Func<DateTime> clock, ISamplerControl? control, Func<ISensorClient?>? sensors, SignatureVerifier verifier)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _grouper = new ProcessGrouper(new WindowsFolderClassifier(verifier.Verify).Classify);
         _control = control ?? new SamplerSettings();
         _gpuSensors = new GpuSensorCache(sensors ?? (static () => null));
 
@@ -104,6 +112,12 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
 
     public void ResetBaseline() => _resetRequested = true;
 
+    /// <inheritdoc />
+    public Value<ProcessGroup> GroupOf(ProcessKey key) => _grouper.GroupOf(key);
+
+    /// <summary>Waits until every process in the latest sample has had its Windows-or-Background check run (for tests and one-shot tools).</summary>
+    internal bool WaitForGroups(TimeSpan timeout) => _grouper.WaitForIdle(timeout);
+
     public async Task<Snapshot> SampleAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -129,6 +143,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         // Wait (briefly) for a running sample so nothing it uses is freed under it.
         var entered = _gate.Wait(TimeSpan.FromSeconds(2));
         _disposed = true;
+        _grouper.Dispose();
         if (entered)
         {
             _gate.Release();
@@ -220,6 +235,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource
         _lastTakenAt = takenAt;
         _hasPrevious = true;
         _latestProcesses = processes;
+        _grouper.Update(processes, windows.Result, windows.FailureStatus, windows.FailureDetail);
         return snapshot;
     }
 

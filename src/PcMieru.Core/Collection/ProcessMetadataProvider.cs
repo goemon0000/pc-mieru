@@ -81,7 +81,13 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
     /// image file and confirms the identity of a process this user is not allowed to open.
     /// </param>
     public ProcessMetadataProvider(Func<IKnownProcessCatalog?>? catalog = null, Func<ProcessKey, string?>? nameOf = null)
-        : this(new SystemFactReader(nameOf), new SignatureVerifier().Verify, new ServiceMap(), catalog ?? (static () => null), nameOf ?? (static _ => null), DefaultSignatureBudget)
+        : this(catalog, nameOf, new SignatureVerifier())
+    {
+    }
+
+    /// <param name="verifier">Shared with the process grouper so each file is hashed once for both.</param>
+    internal ProcessMetadataProvider(Func<IKnownProcessCatalog?>? catalog, Func<ProcessKey, string?>? nameOf, SignatureVerifier verifier)
+        : this(new SystemFactReader(nameOf), verifier.Verify, new ServiceMap(), catalog ?? (static () => null), nameOf ?? (static _ => null), DefaultSignatureBudget)
     {
     }
 
