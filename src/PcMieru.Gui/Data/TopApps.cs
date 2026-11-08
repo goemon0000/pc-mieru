@@ -3,10 +3,18 @@ namespace PcMieru.Gui;
 /// <summary>One line of the Overview's "heavy apps" list: every process of one product added together.</summary>
 internal sealed record TopApp(string Name, double Cpu, long MemoryBytes, int ProcessCount, ProcessKey Heaviest);
 
+/// <summary>What the Overview's "heavy apps" list is ordered by. One basis at a time, so the order can be read off the numbers.</summary>
+internal enum TopRank
+{
+    Cpu,
+    Memory,
+}
+
 /// <summary>
 /// The five heaviest apps right now, by product name. Processes are first grouped by image name (cheap), the heaviest
 /// groups get their product name looked up, and groups of the same product are merged (the many processes of one browser
-/// become one line). "Heavy" is the share of the PC used: CPU share plus memory share, so an idle PC still ranks by memory.
+/// become one line). The list is ordered by CPU or by memory, as asked; the other number only breaks ties, so an idle PC
+/// still ranks by memory and two apps with the same CPU share keep a stable order.
 /// </summary>
 internal static class TopApps
 {
@@ -26,19 +34,21 @@ internal static class TopApps
     internal static bool IsGenericProduct(string? product) =>
         product is null || product.Contains("Windows", StringComparison.OrdinalIgnoreCase) && product.Contains("Operating System", StringComparison.OrdinalIgnoreCase);
 
-    public static List<TopApp> Compute(IReadOnlyList<ProcessInfo> processes, long totalPhysicalBytes, Func<ProcessKey, string?> product, int count = 5)
+    public static List<TopApp> Compute(IReadOnlyList<ProcessInfo> processes, Func<ProcessKey, string?> product, int count = 5, TopRank rank = TopRank.Cpu)
     {
-        var total = Math.Max(1, totalPhysicalBytes);
-        var groups = processes
-            .Where(p => p.Key.Pid != 0 && !KernelNames.Contains(p.Name))
-            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(g =>
-            {
-                var heaviest = g.OrderByDescending(p => p.CpuPercent.GetOr(0)).ThenByDescending(p => p.PrivateWorkingSetBytes).First();
-                return (Name: g.Key, Cpu: g.Sum(p => p.CpuPercent.GetOr(0)), Memory: g.Sum(p => p.PrivateWorkingSetBytes), Count: g.Count(), Heaviest: heaviest.Key);
-            })
-            .OrderByDescending(g => Score(g.Cpu, g.Memory, total))
-            .ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+        var groups = Order(
+            processes
+                .Where(p => p.Key.Pid != 0 && !KernelNames.Contains(p.Name))
+                .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var heaviest = g.OrderByDescending(p => p.CpuPercent.GetOr(0)).ThenByDescending(p => p.PrivateWorkingSetBytes).First();
+                    return (Name: g.Key, Cpu: g.Sum(p => p.CpuPercent.GetOr(0)), Memory: g.Sum(p => p.PrivateWorkingSetBytes), Count: g.Count(), Heaviest: heaviest.Key);
+                }),
+            rank,
+            g => g.Cpu,
+            g => g.Memory,
+            g => g.Name)
             .Take(Candidates);
 
         var merged = new Dictionary<string, TopApp>(StringComparer.OrdinalIgnoreCase);
@@ -47,7 +57,7 @@ internal static class TopApps
             var name = product(g.Heaviest) is { Length: > 0 } p && !IsGenericProduct(p) ? p : DisplayName(g.Name);
             if (merged.TryGetValue(name, out var existing))
             {
-                var better = Score(g.Cpu, g.Memory, total) > Score(existing.Cpu, existing.MemoryBytes, total) ? g.Heaviest : existing.Heaviest;
+                var better = Heavier(g.Cpu, g.Memory, existing.Cpu, existing.MemoryBytes, rank) ? g.Heaviest : existing.Heaviest;
                 merged[name] = existing with { Cpu = existing.Cpu + g.Cpu, MemoryBytes = existing.MemoryBytes + g.Memory, ProcessCount = existing.ProcessCount + g.Count, Heaviest = better };
             }
             else
@@ -56,14 +66,19 @@ internal static class TopApps
             }
         }
 
-        return merged.Values
-            .OrderByDescending(a => Score(a.Cpu, a.MemoryBytes, total))
-            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+        return Order(merged.Values, rank, a => a.Cpu, a => a.MemoryBytes, a => a.Name)
             .Take(count)
             .ToList();
     }
 
-    private static double Score(double cpuPercent, long memoryBytes, long totalBytes) => (cpuPercent / 100.0) + ((double)memoryBytes / totalBytes);
+    private static IOrderedEnumerable<T> Order<T>(IEnumerable<T> items, TopRank rank, Func<T, double> cpu, Func<T, long> memory, Func<T, string> name) =>
+        (rank == TopRank.Memory ? items.OrderByDescending(memory).ThenByDescending(cpu) : items.OrderByDescending(cpu).ThenByDescending(memory))
+        .ThenBy(name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True when the first pair is the heavier one on the chosen basis (the other number breaks a tie).</summary>
+    private static bool Heavier(double cpuA, long memoryA, double cpuB, long memoryB, TopRank rank) => rank == TopRank.Memory
+        ? memoryA > memoryB || (memoryA == memoryB && cpuA > cpuB)
+        : cpuA > cpuB || (cpuA == cpuB && memoryA > memoryB);
 
     /// <summary>"chrome.exe" becomes "chrome" when no product name is known.</summary>
     public static string DisplayName(string imageName) =>

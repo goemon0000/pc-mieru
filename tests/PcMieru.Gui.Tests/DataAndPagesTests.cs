@@ -197,7 +197,7 @@ public class DataAndPagesTests
             Proc(90, "Memory Compression", 0, 4L << 30, 0),
             Proc(100, "chrome.exe", 5, 1L << 30),
         };
-        var apps = TopApps.Compute(processes, 16L << 30, _ => null);
+        var apps = TopApps.Compute(processes, _ => null);
         Assert.Equal(["chrome"], apps.Select(a => a.Name).ToArray());
     }
 
@@ -205,7 +205,7 @@ public class DataAndPagesTests
     public void Top_apps_merge_processes_of_one_product_into_one_line()
     {
         var processes = new[] { Proc(1, "chrome.exe", 4, 100), Proc(2, "chrome.exe", 1, 100), Proc(3, "chromium-helper.exe", 1, 100), Proc(4, "other.exe", 0, 10) };
-        var apps = TopApps.Compute(processes, 1000, key => key.Pid <= 3 ? "Chrome" : null);
+        var apps = TopApps.Compute(processes, key => key.Pid <= 3 ? "Chrome" : null);
         Assert.Equal(["Chrome", "other"], apps.Select(a => a.Name).ToArray());
         Assert.Equal(3, apps[0].ProcessCount);
         Assert.Equal(300, apps[0].MemoryBytes);
@@ -216,16 +216,67 @@ public class DataAndPagesTests
     public void Top_apps_do_not_merge_everything_that_carries_the_windows_product_name()
     {
         var processes = new[] { Proc(1, "svchost.exe", 2, 100), Proc(2, "explorer.exe", 1, 100) };
-        var apps = TopApps.Compute(processes, 1000, _ => "Microsoft® Windows® Operating System");
+        var apps = TopApps.Compute(processes, _ => "Microsoft® Windows® Operating System");
         Assert.Equal(["explorer", "svchost"], apps.Select(a => a.Name).Order().ToArray());
     }
 
     [Fact]
-    public void Top_apps_take_the_count_asked_for_ranked_by_cpu_share_plus_memory_share()
+    public void Top_apps_take_the_count_asked_for_ranked_by_cpu()
     {
         var processes = Enumerable.Range(1, 8).Select(i => Proc((uint)i, "app" + i + ".exe", i, 0)).ToArray();
-        var apps = TopApps.Compute(processes, 1000, _ => null, count: 3);
+        var apps = TopApps.Compute(processes, _ => null, count: 3);
         Assert.Equal(["app8", "app7", "app6"], apps.Select(a => a.Name).ToArray());
+    }
+
+    [Fact]
+    public void Top_apps_rank_by_one_basis_and_the_other_number_only_breaks_ties()
+    {
+        var processes = new[]
+        {
+            Proc(1, "busy.exe", 40, 100),
+            Proc(2, "big.exe", 2, 900),
+            Proc(3, "tie-small.exe", 2, 300),
+            Proc(4, "quiet.exe", 0, 500),
+        };
+
+        Assert.Equal(["busy", "big", "tie-small", "quiet"], TopApps.Compute(processes, _ => null, count: 4, rank: TopRank.Cpu).Select(a => a.Name).ToArray());
+        Assert.Equal(["big", "quiet", "tie-small", "busy"], TopApps.Compute(processes, _ => null, count: 4, rank: TopRank.Memory).Select(a => a.Name).ToArray());
+    }
+
+    [Fact]
+    public void Top_apps_on_an_idle_pc_still_rank_by_memory_under_the_cpu_order()
+    {
+        var processes = new[] { Proc(1, "small.exe", 0, 100), Proc(2, "large.exe", 0, 900) };
+        Assert.Equal(["large", "small"], TopApps.Compute(processes, _ => null).Select(a => a.Name).ToArray());
+    }
+
+    // ---- Overview insights ----
+
+    [Fact]
+    public void Every_observation_the_engine_can_raise_has_a_headline_and_a_page_to_open()
+    {
+        var keys = ReportingStrings.All.Select(e => e.Key).Where(k => k.StartsWith("obs.", StringComparison.Ordinal)).ToArray();
+        Assert.True(keys.Length > 10, "only " + keys.Length + " observation keys were found; the scan is probably broken");
+        var pages = PageCatalog.All.Select(p => p.Id).ToHashSet();
+        using var _ = Harness.Locale();
+        foreach (var key in keys)
+        {
+            var observation = new Observation("test", ObservationSeverity.Info, ObservationCertainty.Fact, key, new Dictionary<string, string>(), [], []);
+            var guide = ObservationGuide.For(observation);
+            Assert.True(guide is not null, key + " has no headline on the Overview: add it to ObservationGuide (otherwise the insight shows without a link)");
+            Assert.Contains(guide.PageId, pages);
+            foreach (var language in new[] { Language.Ja, Language.En })
+            {
+                Assert.NotEqual("[" + guide.HeadlineKey + "]", Strings.Get(guide.HeadlineKey, language));
+            }
+        }
+    }
+
+    [Fact]
+    public void An_observation_the_overview_has_no_wording_for_is_still_shown_without_a_link()
+    {
+        var unknown = new Observation("test", ObservationSeverity.Info, ObservationCertainty.Fact, "obs.future.rule", new Dictionary<string, string>(), [], []);
+        Assert.Null(ObservationGuide.For(unknown));
     }
 
     [Theory]

@@ -213,6 +213,13 @@ internal static class SmokeRun
             return page;
         }
 
+        /// <summary>True when the numbers never go up from one to the next (and there are at least two: one number proves no order).</summary>
+        private static bool Descending(IEnumerable<double> values)
+        {
+            var list = values.ToArray();
+            return list.Length >= 2 && list.Zip(list.Skip(1)).All(p => p.First >= p.Second);
+        }
+
         private static async Task Until(Func<bool> condition, int timeoutMs)
         {
             var watch = Stopwatch.StartNew();
@@ -229,6 +236,12 @@ internal static class SmokeRun
             {
                 Check("overview: cards carry values", overview.CpuCard.ValueText != Fmt.Dash && overview.MemoryCard.ValueText != Fmt.Dash, overview.CpuCard.ValueText + " / " + overview.MemoryCard.ValueText);
                 Check("overview: heavy apps are listed", overview.Apps.Count is > 0 and <= 5, overview.Apps.Count + " apps");
+                overview.RankMemoryButton.PerformClick();
+                Check("overview: memory order ranks the list by memory", overview.RankMemoryButton.Checked && !overview.RankCpuButton.Checked && Descending(overview.Apps.Select(a => (double)a.MemoryBytes)), string.Join(", ", overview.Apps.Select(a => a.Name + " " + a.MemoryBytes)));
+                overview.RankCpuButton.PerformClick();
+                Check("overview: CPU order ranks the list by CPU", overview.RankCpuButton.Checked && !overview.RankMemoryButton.Checked && Descending(overview.Apps.Select(a => a.Cpu)), string.Join(", ", overview.Apps.Select(a => a.Name + " " + a.Cpu.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))));
+                var notes = overview.Notes.Items.Cast<WrapItem>().ToArray();
+                Check("overview: an insight with a headline offers a link to a page", notes.All(n => n.Headline.Length == 0 || (n.LinkText.Length > 0 && n.Open is not null)), notes.Length + " rows, " + notes.Count(n => n.Headline.Length > 0) + " with a headline");
             }
 
             if (await Open("performance").ConfigureAwait(true) is PerformancePage performance)
