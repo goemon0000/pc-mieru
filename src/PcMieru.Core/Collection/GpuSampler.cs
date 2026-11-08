@@ -227,13 +227,14 @@ internal sealed class GpuSampler : IDisposable
 
         _aggregator.Begin();
         var engineOk = ReadInto(_engine, (n, v, s) => _aggregator.AddEngine(n, v, s));
+        var engineStatus = _reader.Status;
         _ = ReadInto(_dedicated, (n, v, s) => _aggregator.AddAdapterMemory(n, v, s, dedicated: true));
         _ = ReadInto(_shared, (n, v, s) => _aggregator.AddAdapterMemory(n, v, s, dedicated: false));
         _aggregator.Finish();
 
         if (!engineOk)
         {
-            const string unreadable = "GPU Engine counter could not be read";
+            var unreadable = $"GPU Engine counter could not be read (PDH 0x{engineStatus:X8})";
             _lastGpus = Describe(_adapters, null, primed: false, unreadable, ValueStatus.Error);
             return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, unreadable, ListState(_lastGpus, ValueStatus.Error, unreadable));
         }
