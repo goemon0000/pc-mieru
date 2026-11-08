@@ -566,6 +566,11 @@ internal static class PerfStrings
         new("gui.perf.s.shared", "共有メモリ", "Shared memory"),
         new("gui.perf.s.temp", "温度", "Temperature"),
         new("gui.perf.s.power", "消費電力", "Power"),
+        new("gui.perf.s.power.driver", "消費電力（ドライバーの報告値）", "Power (driver report)"),
+        new(
+            "gui.perf.s.power.driver.tip",
+            "AMD のドライバーが報告する GPU の電力です。チップが実際に使っている電力とは限りません。",
+            "The GPU power the AMD driver reports. It may not be the power the chip really draws."),
         new("gui.perf.s.fan", "ファン", "Fan"),
         new("gui.perf.s.clock", "クロック", "Clock"),
         new("gui.perf.s.engine", "処理 {type}", "Engine {type}"),

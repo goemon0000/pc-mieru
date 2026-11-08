@@ -163,7 +163,7 @@ internal sealed class GpuSampler
             A,
             live.PowerW.Number,
             live.PowerW.Code,
-            live.PowerIsBoardTotal ? "adlx:GPUTotalBoardPower" : "adlx:GPUPower",
+            live.PowerIsBoardTotal ? "adlx:GPUTotalBoardPower" : GpuPowerSource.DriverReport,
             0,
             2000,
             live.PowerIsBoardTotal ? "power of the whole board" : "the AMD driver's GPU power value; the board total is not reported");

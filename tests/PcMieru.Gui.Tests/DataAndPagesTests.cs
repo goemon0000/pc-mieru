@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using PcMieru.Core;
 using PcMieru.Core.Hardware;
+using PcMieru.Core.Hardware.Sensors;
 using PcMieru.Core.Reporting;
 
 namespace PcMieru.Gui.Tests;
@@ -403,5 +404,62 @@ public class DataAndPagesTests
         Assert.Equal(3, changes);
         Assert.True(pump.Paused);
         Assert.False(pump.Running);
+    }
+
+    // ---- PerfMetrics: the AMD driver's GPU power ----
+
+    private static async Task<(Snapshot Snapshot, PerfPanel Panel)> SnapshotWithGpuPowerAsync(Value<double> power)
+    {
+        var snapshot = await Harness.FakeSnapshotAsync();
+        var gpus = snapshot.System.Gpus.Select(g => g with { PowerWatts = power }).ToArray();
+        var changed = snapshot with { System = snapshot.System with { Gpus = gpus } };
+        return (changed, new PerfPanel(PerfKind.Gpu, gpus[0].Id, gpus[0].Name));
+    }
+
+    [Theory]
+    [InlineData(Language.En, "Power (driver report)", "may not be the power the chip really draws")]
+    [InlineData(Language.Ja, "消費電力（ドライバーの報告値）", "実際に使っている電力とは限りません")]
+    public async Task The_amd_drivers_gpu_power_is_shown_in_the_gpu_fact_list_with_its_note_and_nowhere_else(Language language, string caption, string note)
+    {
+        using var _ = Harness.Locale(language);
+        var (snapshot, panel) = await SnapshotWithGpuPowerAsync(Value.Ok(17.3, GpuPowerSource.DriverReport));
+
+        var power = PerfMetrics.Stats(panel, snapshot, PerfFacts.Empty).Single(l => l.Value == "17.3 W");
+        Assert.Equal(caption, power.Label);
+        Assert.Contains(note, power.Tip, StringComparison.Ordinal);
+        Assert.False(power.Dim);
+
+        // The list on the left and the big number of the graph never carry it.
+        var system = snapshot.System;
+        Assert.DoesNotContain("17.3", PerfMetrics.Headline(panel, system), StringComparison.Ordinal);
+        Assert.DoesNotContain("17.3", PerfMetrics.Detail(panel, system, PerfFacts.Empty), StringComparison.Ordinal);
+        Assert.All(PerfMetrics.Panels(system), p =>
+        {
+            Assert.DoesNotContain("17.3", PerfMetrics.Headline(p, system), StringComparison.Ordinal);
+            Assert.DoesNotContain("17.3", PerfMetrics.Detail(p, system, PerfFacts.Empty), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task A_measured_gpu_power_stays_a_plain_power_line()
+    {
+        using var _ = Harness.Locale(Language.En);
+        foreach (var source in new[] { "nvml:nvmlDeviceGetPowerUsage", "adlx:GPUTotalBoardPower" })
+        {
+            var (snapshot, panel) = await SnapshotWithGpuPowerAsync(Value.Ok(17.3, source));
+            var power = PerfMetrics.Stats(panel, snapshot, PerfFacts.Empty).Single(l => l.Value == "17.3 W");
+            Assert.Equal("Power", power.Label);
+            Assert.DoesNotContain("driver", power.Tip ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task A_gpu_power_that_could_not_be_read_is_a_dim_dash_with_the_reason_whatever_its_source()
+    {
+        using var _ = Harness.Locale(Language.En);
+        var (snapshot, panel) = await SnapshotWithGpuPowerAsync(Value.Unsupported<double>(GpuPowerSource.DriverReport, "not supported by this GPU"));
+        var line = PerfMetrics.Stats(panel, snapshot, PerfFacts.Empty).Single(l => l.Label == "Power");
+        Assert.Equal(Fmt.Dash, line.Value);
+        Assert.True(line.Dim);
     }
 }

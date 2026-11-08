@@ -1,5 +1,6 @@
 using System.Globalization;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Sensors;
 
 namespace PcMieru.Gui;
 
@@ -229,7 +230,7 @@ internal static class PerfMetrics
                 lines.Add(Dedicated(gpu));
                 lines.Add(Line("gui.perf.s.shared", gpu.SharedUsedBytes, Fmt.Bytes));
                 lines.Add(Line("gui.perf.s.temp", gpu.TemperatureC, v => Strings.Format("gui.fmt.temp", Fmt.Dict(("value", v.ToString("0", CultureInfo.CurrentCulture))))));
-                lines.Add(Line("gui.perf.s.power", gpu.PowerWatts, v => v.ToString("0.0", CultureInfo.CurrentCulture) + " W"));
+                lines.Add(GpuPower(gpu.PowerWatts));
                 lines.Add(Line("gui.perf.s.fan", gpu.FanPercent, v => v.ToString("0", CultureInfo.CurrentCulture) + " %"));
                 lines.Add(Line("gui.perf.s.clock", gpu.ClockMhz, v => v.ToString("0", CultureInfo.CurrentCulture) + " MHz"));
                 foreach (var engine in gpu.Engines.OrderBy(e => e.Type, StringComparer.OrdinalIgnoreCase).Take(MaxEngines))
@@ -305,6 +306,26 @@ internal static class PerfMetrics
         value.TryGet(out var v)
             ? new StatLine(Strings.Get(labelKey), format(v), SourceTip(value), false)
             : new StatLine(Strings.Get(labelKey), Fmt.Dash, Fmt.MissingTip(value), true);
+
+    /// <summary>
+    /// A measured power (NVIDIA, an AMD board total) is a plain line. What the AMD driver reports as "GPU power" is only shown here,
+    /// in the GPU's own fact list (never in the list on the left or the headline), with its caption saying so and the note as the tip.
+    /// </summary>
+    private static StatLine GpuPower(Value<double> power)
+    {
+        if (!GpuPowerSource.IsDriverReport(power))
+        {
+            return Line("gui.perf.s.power", power, Watts);
+        }
+
+        return new StatLine(
+            Strings.Get("gui.perf.s.power.driver"),
+            Watts(power.Data),
+            Strings.Get("gui.perf.s.power.driver.tip") + " " + SourceTip(power),
+            false);
+    }
+
+    private static string Watts(double value) => value.ToString("0.0", CultureInfo.CurrentCulture) + " W";
 
     private static StatLine Commit(MemoryInfo memory)
     {

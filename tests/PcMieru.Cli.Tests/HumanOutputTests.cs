@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using PcMieru.Cli.Commands;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Sensors;
 
 namespace PcMieru.Cli.Tests;
 
@@ -94,6 +95,21 @@ public sealed class HumanOutputTests
         Assert.Contains("1d 2h 3m", text, StringComparison.Ordinal);
         Assert.DoesNotContain("12.3400", text, StringComparison.Ordinal);
         Assert.DoesNotContain("69.0", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Perf_summary_leaves_out_the_gpu_power_the_amd_driver_only_reports()
+    {
+        // The driver's "GPU power" for an AMD integrated GPU is not a measurement; no summary line carries it.
+        var driverOnly = Gpu("AMD Radeon(TM) Graphics") with { PowerWatts = Value.Ok(17.3, GpuPowerSource.DriverReport) };
+
+        foreach (var language in new[] { Language.En, Language.Ja })
+        {
+            var text = PerfCommand.Render(Context(language), Summary(gpus: [driverOnly]));
+
+            Assert.Contains("AMD Radeon", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("17.3", text, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
