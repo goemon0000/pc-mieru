@@ -441,44 +441,170 @@ public sealed class HumanOutputTests
     }
 
     [Fact]
-    public async Task Every_field_of_the_hardware_model_has_a_plain_name_in_both_languages()
+    public void Every_field_of_the_hardware_model_has_a_plain_name_so_nothing_shows_up_as_camelCase()
     {
-        var r = await CliRun.RunAsync(["hw", "--json"]);
+        // Walks the model types themselves (not one sample), so a field added to a record later fails here
+        // until it has a name in CliLabels. Details records hung off the model are covered the same way.
         var names = new SortedSet<string>(StringComparer.Ordinal);
+        Collect(typeof(HardwareInfo), names, new HashSet<Type>());
+        names.ExceptWith(["schemaVersion", "collectedAtUtc", "cpu", "memory", "board", "gpus", "storage", "network", "displays", "audio", "usb", "battery", "os"]);
 
-        void Walk(JsonNode? node)
-        {
-            switch (node)
-            {
-                case JsonObject obj:
-                    foreach (var (key, child) in obj)
-                    {
-                        if (key is not ("value" or "status" or "source" or "detail" or "schemaVersion" or "collectedAtUtc") && child is not JsonObject { Count: 0 })
-                        {
-                            names.Add(key);
-                        }
-
-                        Walk(child);
-                    }
-
-                    break;
-                case JsonArray array:
-                    foreach (var item in array)
-                    {
-                        Walk(item);
-                    }
-
-                    break;
-            }
-        }
-
-        Walk(JsonNode.Parse(r.Out));
-        names.ExceptWith(["cpu", "memory", "board", "gpus", "storage", "network", "displays", "audio", "usb", "battery", "os"]);
-
-        Assert.True(names.Count > 60, "expected the fake hardware to cover most fields, got " + names.Count);
+        Assert.True(names.Count > 60, "expected the model to have many fields, found " + names.Count);
         var missing = names.Where(n => !CliLabels.Has(n)).ToArray();
         Assert.True(missing.Length == 0, "add a label to CliLabels for: " + string.Join(", ", missing));
         Assert.All(names, n => Assert.NotEqual(n, CliLabels.Label(n, Language.En)));
+        Assert.All(names, n => Assert.NotEqual(CliLabels.Label(n, Language.En), "[cli.field." + n + "]"));
+    }
+
+    private static void Collect(Type type, ISet<string> names, ISet<Type> seen)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        if (type.IsGenericType)
+        {
+            // Value<T>, IReadOnlyList<T>: the name belongs to the property, the shape to the type argument.
+            foreach (var argument in type.GetGenericArguments())
+            {
+                Collect(argument, names, seen);
+            }
+
+            return;
+        }
+
+        if (type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(DateTime) || type == typeof(U128) || type.Namespace?.StartsWith("PcMieru", StringComparison.Ordinal) != true)
+        {
+            return;
+        }
+
+        if (!seen.Add(type))
+        {
+            return;
+        }
+
+        foreach (var property in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            names.Add(char.ToLowerInvariant(property.Name[0]) + property.Name[1..]);
+            Collect(property.PropertyType, names, seen);
+        }
+    }
+
+    private static JsonObject HwJson(string json) => JsonNode.Parse(json)!.AsObject();
+
+    private const string DetailsJson = """
+        {
+          "cpu": { "status": "ok", "source": "t", "value": {
+            "name": { "status": "ok", "source": "t", "value": "Test CPU" },
+            "physicalCores": { "status": "ok", "source": "t", "value": 8 },
+            "details": {
+              "currentClockMhz": { "status": "ok", "source": "t", "value": 4500 },
+              "threadsPerCore": { "status": "ok", "source": "t", "value": 2 },
+              "caches": [
+                { "level": 1, "type": "instruction", "sizeBytes": 32768, "associativity": 8, "lineSizeBytes": 64, "instances": 8 }
+              ]
+            }
+          } },
+          "display": { "status": "notCollected", "source": "t" }
+        }
+        """;
+
+    [Fact]
+    public void Hw_leaves_the_details_blocks_out_unless_asked_and_says_how_to_get_them()
+    {
+        var plain = HwCommand.Render(Context(), HwJson(DetailsJson), details: false);
+        var full = HwCommand.Render(Context(), HwJson(DetailsJson), details: true);
+
+        Assert.Contains("  Name: Test CPU\n", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("Current clock", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("Details", plain.Split("Add --details")[0], StringComparison.Ordinal);
+        Assert.EndsWith("Add --details to show the fine print (--json always includes everything)\n", plain, StringComparison.Ordinal);
+        Assert.Equal(1, plain.Split("--details").Length - 1);
+
+        Assert.Contains("  Details\n    Current clock: 4500 MHz\n    Threads per core: 2\n", full, StringComparison.Ordinal);
+        Assert.Contains("    Cache 1\n      Level: 1\n      Type: Instruction\n      Size: 32.0 KB\n      Associativity: 8\n      Line size: 64 B\n      Instances: 8\n", full, StringComparison.Ordinal);
+        Assert.DoesNotContain("--details", full, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hw_prints_no_hint_when_there_were_no_details_to_hide()
+    {
+        var text = HwCommand.Render(Context(), HwJson("""{ "cpu": { "status": "ok", "source": "t", "value": { "name": { "status": "ok", "source": "t", "value": "X" } } } }"""), details: false);
+
+        Assert.Equal("[CPU]\n  Name: X\n", text);
+    }
+
+    [Fact]
+    public void Hw_shows_an_empty_memory_socket_as_empty_not_as_a_module_with_unknown_properties()
+    {
+        var json = """
+            { "memory": { "status": "ok", "source": "t", "value": {
+              "modules": [
+                { "slot": { "status": "ok", "source": "t", "value": "DIMM 0" }, "capacityBytes": { "status": "ok", "source": "t", "value": 0 },
+                  "type": { "status": "unsupported", "source": "t" } },
+                { "slot": { "status": "ok", "source": "t", "value": "DIMM 1" }, "capacityBytes": { "status": "ok", "source": "t", "value": 34359738368 },
+                  "type": { "status": "ok", "source": "t", "value": "ddr5" } },
+                { "slot": { "status": "ok", "source": "t", "value": "DIMM 2" }, "capacityBytes": { "status": "unsupported", "source": "t" } }
+              ] } } }
+            """;
+        var text = HwCommand.Render(Context(), HwJson(json), details: false);
+
+        Assert.Contains("  Memory module 1: DIMM 0 (empty slot)\n", text, StringComparison.Ordinal);
+        Assert.Contains("  Memory module 2\n    Slot: DIMM 1\n    Capacity: 32.0 GB\n    Type: DDR5\n", text, StringComparison.Ordinal);
+
+        // A capacity that could not be read is not "empty": it stays a module, with the reason.
+        Assert.Contains("  Memory module 3\n    Slot: DIMM 2\n    Capacity: Unsupported\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hw_shows_an_empty_string_as_none_and_translates_known_words_only()
+    {
+        var json = """
+            { "storage": { "status": "ok", "source": "t", "value": [
+              { "label": { "status": "ok", "source": "t", "value": "" },
+                "kind": { "status": "ok", "source": "t", "value": "ethernet" },
+                "type": { "status": "ok", "source": "t", "value": "Basic data" },
+                "bitsPerSample": { "status": "ok", "source": "t", "value": 16 },
+                "dataWidthBits": { "status": "ok", "source": "t", "value": 64 },
+                "maxLuminanceNits": { "status": "ok", "source": "t", "value": 400 },
+                "diagonalInches": { "status": "ok", "source": "t", "value": 27 } }
+            ] } }
+            """;
+        var en = HwCommand.Render(Context(), HwJson(json), details: false);
+        var ja = HwCommand.Render(Context(Language.Ja), HwJson(json), details: false);
+
+        Assert.Contains("    Label: none\n", en, StringComparison.Ordinal);
+        Assert.Contains("    Kind: Ethernet\n", en, StringComparison.Ordinal);
+        Assert.Contains("    Type: Basic data\n", en, StringComparison.Ordinal);
+        Assert.Contains("    Data width: 64 bit\n", en, StringComparison.Ordinal);
+        Assert.Contains("    Max luminance: 400 nit\n", en, StringComparison.Ordinal);
+        Assert.Contains("    Diagonal size: 27 inch\n", en, StringComparison.Ordinal);
+        Assert.Contains("    ラベル: なし\n", ja, StringComparison.Ordinal);
+        Assert.Contains("    種類: 有線 LAN\n", ja, StringComparison.Ordinal);
+        Assert.Contains("    対角のサイズ: 27 インチ\n", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_for_a_sata_drive_leaves_out_the_rows_it_can_never_have_but_nvme_keeps_every_row()
+    {
+        Value<T> Gone<T>() => Value.Unsupported<T>("test");
+        var sata = Nvme() with
+        {
+            Kind = StorageHealthKind.Sata,
+            PercentageUsed = Gone<double>(),
+            AvailableSparePercent = Gone<double>(),
+            AvailableSpareThresholdPercent = Gone<double>(),
+            CriticalWarning = Gone<int>(),
+            DataWrittenBytes = Gone<U128>(),
+            DataReadBytes = Gone<U128>(),
+        };
+        var nvme = sata with { Kind = StorageHealthKind.Nvme };
+        var sataText = HealthCommand.Render(Context(), new StorageHealthReport("1", [new DriveHealth(0, "S", Value.Ok(sata, "test"))]), elevated: false);
+        var nvmeText = HealthCommand.Render(Context(), new StorageHealthReport("1", [new DriveHealth(0, "N", Value.Ok(nvme, "test"))]), elevated: false);
+
+        Assert.DoesNotContain("Unsupported", sataText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Life used", sataText, StringComparison.Ordinal);
+        Assert.Contains("Temperature", sataText, StringComparison.Ordinal);
+        Assert.Contains("Power-on time", sataText, StringComparison.Ordinal);
+        // Life used, spare area (its threshold is folded into the same row), critical warning, written, read.
+        Assert.Equal(5, Lines(nvmeText).Count(l => l.Contains("Unsupported", StringComparison.Ordinal)));
     }
 
     [Fact]

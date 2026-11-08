@@ -110,6 +110,14 @@ public sealed class HealthCommand : ICliCommand
             (context.Text("cli.health.media"), CliFormat.OrStatus(context, health.MediaErrors, v => v.ToString())),
         };
 
+        // A SATA drive has no wear counter or data-written total: those rows would only say "Unsupported" four times.
+        // NVMe keeps every row, so a counter that should be there but is not stays visible.
+        if (health.Kind == StorageHealthKind.Sata)
+        {
+            var unsupported = Strings.Status(ValueStatus.Unsupported, context.Language);
+            lines.RemoveAll(l => l.Item2 == unsupported);
+        }
+
         sb.Append(CliFormat.LabelColumn(lines, "  "));
         if (health.Attributes.Count > 0)
         {

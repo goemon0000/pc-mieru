@@ -108,14 +108,129 @@ public static class CliLabels
         ("powerPlan", "電源プラン", "Power plan"),
         ("virtualizationBasedSecurity", "仮想化ベースのセキュリティ", "Virtualization-based security"),
         ("hvci", "メモリ整合性（HVCI）", "Memory integrity (HVCI)"),
+
+        // The "details" blocks (shown by `pcmi hw --details`).
+        ("details", "詳細", "Details"),
+        ("maxClockMhz", "最大クロック", "Max clock"),
+        ("currentClockMhz", "いまのクロック", "Current clock"),
+        ("threadsPerCore", "コアあたりのスレッド数", "Threads per core"),
+        ("numaNodes", "NUMA ノード数", "NUMA nodes"),
+        ("processorGroups", "プロセッサグループ数", "Processor groups"),
+        ("virtualizationFirmwareEnabled", "仮想化（BIOS で有効）", "Virtualization enabled in firmware"),
+        ("hypervisorPresent", "ハイパーバイザー", "Hypervisor present"),
+        ("caches", "キャッシュ", "Cache"),
+        ("level", "レベル", "Level"),
+        ("sizeBytes", "サイズ", "Size"),
+        ("associativity", "連想度", "Associativity"),
+        ("lineSizeBytes", "ラインサイズ", "Line size"),
+        ("instances", "個数", "Instances"),
+        ("availableBytes", "いま使えるメモリ", "Available now"),
+        ("eccType", "ECC", "ECC"),
+        ("location", "場所", "Location"),
+        ("arrayCount", "メモリ配列の数", "Memory arrays"),
+        ("bankLocator", "バンクの位置", "Bank"),
+        ("dataWidthBits", "データ幅", "Data width"),
+        ("totalWidthBits", "全体の幅", "Total width"),
+        ("minVoltageMillivolts", "最小電圧", "Minimum voltage"),
+        ("maxVoltageMillivolts", "最大電圧", "Maximum voltage"),
+        ("configuredVoltageMillivolts", "動作電圧", "Configured voltage"),
+        ("memoryTechnology", "メモリ技術", "Memory technology"),
+        ("system", "システム", "System"),
+        ("chassis", "筐体", "Chassis"),
+        ("skuNumber", "SKU", "SKU"),
+        ("smbiosVersion", "SMBIOS の版", "SMBIOS version"),
+        ("biosRomSizeBytes", "BIOS ROM のサイズ", "BIOS ROM size"),
+        ("biosRelease", "BIOS のリリース", "BIOS release"),
+        ("subsystemId", "サブシステム ID", "Subsystem ID"),
+        ("driverProvider", "ドライバーの提供元", "Driver provider"),
+        ("dedicatedSystemBytes", "専用システムメモリ", "Dedicated system memory"),
+        ("pciLocation", "PCI の場所", "PCI location"),
+        ("pciBusId", "PCI バス ID", "PCI bus ID"),
+        ("pcieMaxGeneration", "PCIe の最大世代", "PCIe max generation"),
+        ("pcieMaxWidth", "PCIe の最大レーン数", "PCIe max lanes"),
+        ("powerLimitMinWatts", "電力の上限（最小）", "Power limit (min)"),
+        ("powerLimitMaxWatts", "電力の上限（最大）", "Power limit (max)"),
+        ("powerLimitDefaultWatts", "電力の上限（既定）", "Power limit (default)"),
+        ("fanRpm", "ファンの回転数", "Fan speed"),
+        ("memoryClockMhz", "メモリのクロック", "Memory clock"),
+        ("utilizationPercent", "使用率", "Utilization"),
+        ("memoryUsedBytes", "使用中のメモリ", "Memory in use"),
+        ("memoryTotalBytes", "メモリの合計", "Memory total"),
+        ("mediaType", "メディアの種類", "Media type"),
+        ("logicalSectorBytes", "論理セクターのサイズ", "Logical sector size"),
+        ("physicalSectorBytes", "物理セクターのサイズ", "Physical sector size"),
+        ("removable", "取り外し可能", "Removable"),
+        ("partitions", "パーティション", "Partition"),
+        ("number", "番号", "Number"),
+        ("startBytes", "開始位置", "Start"),
+        ("lengthBytes", "長さ", "Length"),
+        ("style", "形式", "Style"),
+        ("description", "説明", "Description"),
+        ("isUp", "リンクが上がっている", "Link is up"),
+        ("mtu", "MTU", "MTU"),
+        ("dhcp", "DHCP", "DHCP"),
+        ("wifiStandard", "Wi-Fi の規格", "Wi-Fi standard"),
+        ("transmitRateBitsPerSec", "送信のリンク速度", "Transmit link rate"),
+        ("receiveRateBitsPerSec", "受信のリンク速度", "Receive link rate"),
+        ("pnpId", "PnP ID", "PnP ID"),
+        ("productCode", "製品コード", "Product code"),
+        ("edidVersion", "EDID の版", "EDID version"),
+        ("edidChecksumOk", "EDID のチェックサムが正しい", "EDID checksum valid"),
+        ("edidExtensionBlocks", "EDID の拡張ブロック数", "EDID extension blocks"),
+        ("diagonalInches", "対角のサイズ", "Diagonal size"),
+        ("inputType", "入力の種類", "Input type"),
+        ("bitsPerColor", "色の深さ", "Bits per color"),
+        ("monitorName", "モニター名", "Monitor name"),
+        ("minVerticalRefreshHz", "最小のリフレッシュレート", "Min refresh rate"),
+        ("maxVerticalRefreshHz", "最大のリフレッシュレート", "Max refresh rate"),
+        ("hdrSupported", "HDR 対応", "HDR supported"),
+        ("hdrStaticMetadata", "HDR 静的メタデータ", "HDR static metadata"),
+        ("maxLuminanceNits", "最大の輝度", "Max luminance"),
+        ("state", "状態", "State"),
+        ("status", "状態", "Status"),
+        ("adapter", "アダプター", "Adapter"),
+        ("channels", "チャンネル数", "Channels"),
+        ("class", "クラス", "Class"),
+        ("service", "サービス", "Service"),
+        ("depth", "USB の階層", "Depth in the USB tree"),
+        ("chemistry", "電池の種類", "Chemistry"),
+        ("remainingMinutes", "残り時間", "Time remaining"),
+        ("edition", "エディション", "Edition"),
+        ("displayVersion", "表示用のバージョン", "Display version"),
+        ("ubr", "更新ビルド番号（UBR）", "Update build revision (UBR)"),
+        ("bootTimeUtc", "起動した時刻（UTC）", "Boot time (UTC)"),
+        ("locale", "言語設定", "Locale"),
+    ];
+
+    // Words that come back from the model as English text; shown translated when known, as they are when not.
+    private static readonly (string Word, string Ja, string En)[] Words =
+    [
+        ("instruction", "命令", "Instruction"),
+        ("data", "データ", "Data"),
+        ("unified", "共用", "Unified"),
+        ("ethernet", "有線 LAN", "Ethernet"),
+        ("output", "出力", "Output"),
+        ("input", "入力", "Input"),
+        ("active", "使える状態", "Active"),
+        ("discrete", "単体の GPU", "Discrete"),
+        ("integrated", "CPU 内蔵の GPU", "Integrated"),
     ];
 
     private static readonly Dictionary<string, (string Ja, string En)> ByField =
         Table.ToDictionary(t => t.Field, t => (t.Ja, t.En), StringComparer.Ordinal);
 
-    public static IEnumerable<StringEntry> Entries => Table.Select(t => new StringEntry("cli.field." + t.Field, t.Ja, t.En));
+    private static readonly Dictionary<string, (string Ja, string En)> ByWord =
+        Words.ToDictionary(t => t.Word, t => (t.Ja, t.En), StringComparer.Ordinal);
+
+    public static IEnumerable<StringEntry> Entries =>
+        Table.Select(t => new StringEntry("cli.field." + t.Field, t.Ja, t.En))
+            .Concat(Words.Select(t => new StringEntry("cli.word." + t.Word, t.Ja, t.En)));
 
     public static bool Has(string field) => ByField.ContainsKey(field);
+
+    /// <summary>The translation of a word the model returns as text (case-insensitive), or null when it is not one we know.</summary>
+    public static string? Word(string text, Language language) =>
+        ByWord.TryGetValue(text.ToLowerInvariant(), out var word) ? (language == Language.Ja ? word.Ja : word.En) : null;
 
     /// <summary>The plain-language name, or the field's own name when none is registered.</summary>
     public static string Label(string field, Language language) =>
