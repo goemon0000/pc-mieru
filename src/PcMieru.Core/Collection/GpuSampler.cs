@@ -186,8 +186,9 @@ internal sealed class GpuSampler : IDisposable
     private string? _unsupported;
     private bool _baselineValid;
     private IReadOnlyList<GpuInfo> _lastGpus = [];
+    private IReadOnlyList<GpuInfo> _primedGpus = [];
 
-    /// <summary>Forget the baseline (resume after a pause or sleep).</summary>
+    /// <summary>Forget the baseline (resume after a pause or sleep). The learned adapter list is kept.</summary>
     public void Reset() => _baselineValid = false;
 
     public GpuReading Sample(bool active)
@@ -202,7 +203,7 @@ internal sealed class GpuSampler : IDisposable
         if (!EnsureQuery())
         {
             var detail = _unsupported ?? "GPU counters could not be opened";
-            _lastGpus = Describe(_adapters, null, primed: false, detail, ValueStatus.Unsupported);
+            _lastGpus = Interim(_primedGpus, _adapters, ValueStatus.Unsupported, detail);
             return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail, ListState(_lastGpus, ValueStatus.Unsupported, detail));
         }
 
@@ -212,7 +213,7 @@ internal sealed class GpuSampler : IDisposable
         {
             _baselineValid = false;
             var detail = $"PdhCollectQueryData 0x{status:X8}";
-            _lastGpus = Describe(_adapters, null, primed: false, detail, ValueStatus.Error);
+            _lastGpus = Interim(_primedGpus, _adapters, ValueStatus.Error, detail);
             return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, detail, ListState(_lastGpus, ValueStatus.Error, detail));
         }
 
@@ -221,7 +222,7 @@ internal sealed class GpuSampler : IDisposable
         if (!primed)
         {
             const string first = "no baseline yet (first GPU sample)";
-            _lastGpus = Describe(_adapters, null, primed: false, first, ValueStatus.NotCollected);
+            _lastGpus = Interim(_primedGpus, _adapters, ValueStatus.NotCollected, first);
             return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, first, ListState(_lastGpus, ValueStatus.NotCollected, first));
         }
 
@@ -235,11 +236,11 @@ internal sealed class GpuSampler : IDisposable
         if (!engineOk)
         {
             var unreadable = $"GPU Engine counter could not be read (PDH 0x{engineStatus:X8})";
-            _lastGpus = Describe(_adapters, null, primed: false, unreadable, ValueStatus.Error);
+            _lastGpus = Interim(_primedGpus, _adapters, ValueStatus.Error, unreadable);
             return new GpuReading(_lastGpus, new Dictionary<uint, double>(), false, unreadable, ListState(_lastGpus, ValueStatus.Error, unreadable));
         }
 
-        _lastGpus = Describe(_adapters, _aggregator, primed: true, null, ValueStatus.NotCollected);
+        _lastGpus = _primedGpus = Describe(_adapters, _aggregator, primed: true, null, ValueStatus.NotCollected);
         var note = _aggregator.Unrecognized > 0 ? $"{_aggregator.Unrecognized} GPU instance(s) in an unknown name format were ignored" : null;
         return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource));
     }
@@ -297,6 +298,24 @@ internal sealed class GpuSampler : IDisposable
 
         return result;
     }
+
+    /// <summary>
+    /// The GPU list to show on a tick with no fresh PDH data (counters not open, a collect error, the first sample before a
+    /// baseline). Once a primed sample has learned the real adapters, that list is reused with every live number replaced by
+    /// the failure reason, rather than re-listing every DXGI adapter: a phantom second DXGI entry for a card (distinct LUID,
+    /// no engine and no memory instance, so dropped once primed) would otherwise flicker back in and show a 3rd GPU. A real
+    /// adapter always has a memory instance, so it is never in a phantom's shoes and is never dropped. Before anything has
+    /// primed there is nothing better than what DXGI reports, so the full list is shown (names now, numbers once primed).
+    /// Pure so the behaviour can be tested without PDH.
+    /// </summary>
+    internal static IReadOnlyList<GpuInfo> Interim(
+        IReadOnlyList<GpuInfo> lastPrimed,
+        IReadOnlyList<GpuAdapter> adapters,
+        ValueStatus status,
+        string detail) =>
+        lastPrimed.Count > 0
+            ? Failed(lastPrimed, status, detail)
+            : Describe(adapters, null, primed: false, detail, status);
 
     private static GpuInfo Info(string id, string name, long dedicatedTotal, GpuAggregator? data, GpuAdapterUsage? usage, bool primed, string? missingDetail, ValueStatus missingStatus)
     {

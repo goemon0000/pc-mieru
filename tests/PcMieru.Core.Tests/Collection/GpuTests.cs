@@ -451,6 +451,39 @@ public sealed class GpuDescribeTests
         Assert.Equal(ValueStatus.Timeout, gpu.SharedUsedBytes.Status);
         Assert.Empty(gpu.Engines);
     }
+
+    [Fact]
+    public void After_priming_a_cold_or_error_tick_keeps_the_real_adapters_and_does_not_bring_back_the_phantom()
+    {
+        // A primed sample learns the one real adapter; the phantom Duplicate (distinct LUID, no engine, no memory) is dropped.
+        var data = Data(a =>
+        {
+            a.AddEngine(GpuNames.Engine(10, Real.Luid, 0, 0, "3D"), 60, Valid);
+            a.AddAdapterMemory(GpuNames.Adapter(Real.Luid), 1 * GiB, Valid, dedicated: true);
+        });
+        var primed = GpuSampler.Describe([Real, Duplicate, Software], data, primed: true, null, ValueStatus.NotCollected);
+        Assert.Single(primed);
+
+        // A later PdhCollectQueryData error must not re-list every DXGI adapter (which still holds the phantom): the list stays at 1.
+        var onError = GpuSampler.Interim(primed, [Real, Duplicate, Software], ValueStatus.Error, "PdhCollectQueryData 0x800007D2");
+
+        var gpu = Assert.Single(onError);
+        Assert.Equal(Real.Id, gpu.Id);
+        Assert.Equal(ValueStatus.Error, gpu.UtilizationPercent.Status);
+        Assert.Equal("PdhCollectQueryData 0x800007D2", gpu.UtilizationPercent.Detail);
+        Assert.True(gpu.DedicatedTotalBytes.IsOk); // name and total are facts, kept
+        Assert.Empty(gpu.Engines);
+    }
+
+    [Fact]
+    public void Before_anything_has_primed_the_interim_list_is_still_the_full_dxgi_list()
+    {
+        // With nothing learned yet, the phantom cannot be told from the real adapter, so both show (software still dropped).
+        var interim = GpuSampler.Interim([], [Real, Duplicate, Software], ValueStatus.NotCollected, "no baseline yet (first GPU sample)");
+
+        Assert.Equal(2, interim.Count);
+        Assert.All(interim, g => Assert.Equal(ValueStatus.NotCollected, g.UtilizationPercent.Status));
+    }
 }
 
 public sealed class GpuSensorMergeTests
