@@ -43,6 +43,13 @@ public static class CliStrings
         new("cli.ps.footer", "{shown} / {total} 件（{sort} 順）", "{shown} of {total} (sorted by {sort})"),
         new("cli.hw.category", "カテゴリ", "category"),
         new("cli.value.notAvailable", "-", "-"),
+        new("cli.fmt.duration.dhm", "{d} 日 {h} 時間 {m} 分", "{d}d {h}h {m}m"),
+        new("cli.fmt.duration.hm", "{h} 時間 {m} 分", "{h}h {m}m"),
+        new("cli.fmt.duration.m", "{m} 分", "{m}m"),
+        new("cli.fmt.yes", "はい", "yes"),
+        new("cli.fmt.no", "いいえ", "no"),
+        new("cli.fmt.paren", "（{text}）", " ({text})"),
+        .. CliLabels.Entries,
     ];
 }
 

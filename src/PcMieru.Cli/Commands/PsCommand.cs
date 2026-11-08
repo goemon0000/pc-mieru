@@ -44,6 +44,22 @@ public sealed class PsCommand : ICliCommand
     private static void Render(CliContext context, ProcessList list, bool tree)
     {
         var rows = tree ? Tree(list.Processes) : list.Processes.Select(p => (Process: p, Depth: 0)).ToList();
+        context.Out.Write(RenderTable(context, rows));
+        var footer = Strings.Format(
+            "cli.ps.footer",
+            new Dictionary<string, string>
+            {
+                ["shown"] = list.Processes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["total"] = list.TotalProcesses.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["sort"] = list.Sort.ToString().ToLowerInvariant(),
+            },
+            context.Language);
+        context.Out.WriteLine(footer);
+    }
+
+    /// <summary>The process table shared by <c>ps</c> and <c>perf</c>. Depth indents the name (the tree view).</summary>
+    internal static string RenderTable(CliContext context, IReadOnlyList<(ProcessInfo Process, int Depth)> rows)
+    {
         string[] headers =
         [
             context.Text("cli.col.pid"),
@@ -64,17 +80,7 @@ public sealed class PsCommand : ICliCommand
             StateText(context, r.Process),
         }).ToList();
 
-        context.Out.Write(CliTable.Render(headers, cells.Select(c => (IReadOnlyList<string>)c).ToList(), new HashSet<int> { 0, 2, 3, 4 }, flexColumn: 1, consoleWidth: context.ConsoleWidth));
-        var footer = Strings.Format(
-            "cli.ps.footer",
-            new Dictionary<string, string>
-            {
-                ["shown"] = list.Processes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["total"] = list.TotalProcesses.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["sort"] = list.Sort.ToString().ToLowerInvariant(),
-            },
-            context.Language);
-        context.Out.WriteLine(footer);
+        return CliTable.Render(headers, cells.Select(c => (IReadOnlyList<string>)c).ToList(), new HashSet<int> { 0, 2, 3, 4 }, flexColumn: 1, consoleWidth: context.ConsoleWidth);
     }
 
     private static string StateText(CliContext context, ProcessInfo p) =>
