@@ -28,6 +28,8 @@ internal sealed unsafe class ProcessHandle : IDisposable
     private const int StatusInvalidInfoClass = unchecked((int)0xC0000003);
     private const int StatusInvalidParameter = unchecked((int)0xC000000D);
     private const int StatusNotSupported = unchecked((int)0xC00000BB);
+    private const int StatusNotFound = unchecked((int)0xC0000225);
+    private const int StatusPartialCopy = unchecked((int)0x8000000D);
 
     private nint _handle;
 
@@ -129,6 +131,10 @@ internal sealed unsafe class ProcessHandle : IDisposable
         {
             StatusAccessDenied or StatusProcessIsProtected => Value.Denied<T>(source, $"{what} is not readable for this process (protected or another user's)"),
             StatusInvalidInfoClass or StatusInvalidParameter or StatusNotSupported => Value.Unsupported<T>(source, $"{what} is not available on this Windows version"),
+            // System, Registry, Memory Compression and Secure System have no user-mode environment block to read.
+            StatusNotFound => Value.Unsupported<T>(source, $"{what} does not exist: this process has no user-mode environment (it is owned by the kernel)"),
+            // The memory of an isolated (virtualization-protected) process cannot be read from outside it.
+            StatusPartialCopy => Value.Denied<T>(source, $"{what} is not readable: the process memory is protected"),
             _ => Value.Failed<T>(source, $"{what}: NTSTATUS 0x{status:X8}"),
         };
     }

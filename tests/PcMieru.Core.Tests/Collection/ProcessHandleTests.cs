@@ -167,6 +167,24 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void The_System_process_has_no_command_line_and_that_is_not_reported_as_a_failure()
+    {
+        var outcome = ProcessHandle.Open(ProcessKeyOf(4), out var opened, out _);
+        if (outcome != OpenOutcome.Opened)
+        {
+            Assert.Equal(OpenOutcome.Denied, outcome); // a non-elevated run cannot open it; the denied path is covered elsewhere
+            return;
+        }
+
+        using var handle = opened!;
+        var commandLine = handle.ReadCommandLine();
+        output.WriteLine($"System command line: {commandLine.Status} {commandLine.Data} {commandLine.Detail}");
+
+        // It has no user-mode environment block: "does not exist" (Unsupported) or "cannot be read" (Denied), never a fault.
+        Assert.True(commandLine.Status is ValueStatus.Unsupported or ValueStatus.Denied, $"{commandLine.Status}: {commandLine.Detail}");
+    }
+
+    [Fact]
     public void A_process_by_pid_alone_still_has_an_image_path()
     {
         var path = ProcessImagePath.Resolve((uint)Environment.ProcessId);
