@@ -99,6 +99,11 @@ internal sealed class StubInsights(IReadOnlyInsights inner) : DelegatingInsights
 
     public Func<uint, CancellationToken, Task<ProcessDetail?>>? OnProcess { get; set; }
 
+    public Func<CancellationToken, Task<StorageHealthReport>>? OnStorage { get; set; }
+
+    public override Task<StorageHealthReport> GetStorageHealthAsync(CancellationToken ct = default) =>
+        OnStorage is null ? base.GetStorageHealthAsync(ct) : OnStorage(ct);
+
     public override Task<ProcessList> ListProcessesAsync(ProcessQuery query, CancellationToken ct = default) =>
         OnList is null ? base.ListProcessesAsync(query, ct) : OnList(query, ct);
 
