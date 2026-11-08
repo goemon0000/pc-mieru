@@ -80,6 +80,33 @@ public class SensorFrameParserTests
     }
 
     [Fact]
+    public void The_temperature_limit_travels_in_the_frame_with_its_status()
+    {
+        var line = SensorFixtures.FrameLine(
+            SensorFixtures.Reading("luid_a", extras: SensorFixtures.Extras(slowdownC: 88)),
+            SensorFixtures.Reading("luid_b", extras: SensorFixtures.Extras(slowdownC: null)));
+
+        Assert.True(SensorFrameParser.TryParse(line, out var frame, out var error), error);
+        var gpus = frame!.Gpus.Data!;
+        Assert.Equal(88, gpus[0].Extras!.TemperatureLimitC.Data);
+        Assert.Equal(ValueStatus.Unsupported, gpus[1].Extras!.TemperatureLimitC.Status);
+    }
+
+    [Fact]
+    public void A_frame_from_a_host_that_predates_the_limit_leaves_it_not_collected()
+    {
+        var line = SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a", extras: SensorFixtures.Extras()));
+        const string key = ",\"temperatureLimitC\":";
+        var start = line.IndexOf(key, StringComparison.Ordinal);
+        Assert.True(start > 0, "the field is in the frame");
+        var end = line.IndexOf('}', start) + 1;
+        var old = line.Remove(start, end - start);
+
+        Assert.True(SensorFrameParser.TryParse(old, out var frame, out var error), error);
+        Assert.Equal(ValueStatus.NotCollected, frame!.Gpus.Data![0].Extras!.TemperatureLimitC.Status);
+    }
+
+    [Fact]
     public void ARealisticFrameIsFarBelowTheLineCap()
     {
         var line = SensorFixtures.FrameLine(

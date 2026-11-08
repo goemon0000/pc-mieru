@@ -129,6 +129,31 @@ public class ObservationRulesTests
     }
 
     [Fact]
+    public void The_limit_the_vendor_api_put_on_the_snapshot_is_used_with_no_limit_source_registered()
+    {
+        var gpu = Gpu("gpu0", 100, temperature: 87) with { TemperatureLimitC = Value.Ok(90.0, "test") };
+
+        var found = Assert.Single(new ObservationEngine().Evaluate(Input(Snap(0, gpus: [gpu]))));
+
+        Assert.Equal("gpu.temperatureHigh:gpu0", found.Id);
+        Assert.Equal("90", found.Args["limit"]);
+    }
+
+    [Fact]
+    public void The_limit_on_the_snapshot_wins_over_a_registered_source_and_the_registered_one_is_the_fallback()
+    {
+        var reported = Gpu("gpu0", 100, temperature: 87) with { TemperatureLimitC = Value.Ok(90.0, "test") };
+        var winner = Assert.Single(new ObservationEngine(new FixedLimits(120)).Evaluate(Input(Snap(0, gpus: [reported]))));
+        Assert.Equal("90", winner.Args["limit"]);
+
+        var fallback = Assert.Single(new ObservationEngine(new FixedLimits(90)).Evaluate(Input(Snap(0, gpus: [Gpu("gpu0", 100, temperature: 87)]))));
+        Assert.Equal("90", fallback.Args["limit"]);
+
+        var unsupported = Gpu("gpu0", 100, temperature: 99) with { TemperatureLimitC = Value.Unsupported<double>("test", "no limit") };
+        Assert.Empty(new ObservationEngine().Evaluate(Input(Snap(0, gpus: [unsupported])))); // nothing known: silent, never a guessed limit
+    }
+
+    [Fact]
     public void A_gpu_with_room_to_spare_or_without_a_known_limit_is_silent()
     {
         Assert.Empty(new ObservationEngine(new FixedLimits(90)).Evaluate(Input(Snap(0, gpus: [Gpu("gpu0", 100, 84.9)]))));

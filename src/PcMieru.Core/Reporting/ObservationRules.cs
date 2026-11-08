@@ -425,7 +425,17 @@ public static class ObservationRules
     {
         foreach (var gpu in snapshot.System.Gpus)
         {
-            if (gpu.TemperatureC.TryGet(out var temperature) && limits.LimitC(gpu.Id) is { } limit)
+            if (!gpu.TemperatureC.TryGet(out var temperature))
+            {
+                continue;
+            }
+
+            // The number the vendor API gave on the snapshot comes first; the registered source is the fallback.
+            if (gpu.TemperatureLimitC.TryGet(out var reported))
+            {
+                yield return new GpuThermalReading(gpu.Id, gpu.Name, temperature, reported);
+            }
+            else if (limits.LimitC(gpu.Id) is { } limit)
             {
                 yield return new GpuThermalReading(gpu.Id, gpu.Name, temperature, limit);
             }

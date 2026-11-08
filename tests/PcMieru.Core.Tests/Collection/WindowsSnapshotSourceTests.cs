@@ -76,6 +76,16 @@ public sealed class WindowsSnapshotSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task The_cpu_temperature_is_unsupported_with_a_reason_never_a_number()
+    {
+        using var source = NewSource();
+        var snap = await source.SampleAsync();
+
+        Assert.Equal(ValueStatus.Unsupported, snap.System.Cpu.TemperatureC.Status);
+        Assert.Contains("kernel driver", snap.System.Cpu.TemperatureC.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_first_sample_has_no_rates_and_the_second_has_them()
     {
         using var source = NewSource();

@@ -482,7 +482,7 @@ internal static class GpuSensorMerge
                 var status = sensors.IsOk ? ValueStatus.Error : sensors.Status;
                 var detail = sensors.IsOk ? "the sensor client returned no data" : sensors.Detail;
                 Value<double> same() => Value.Missing<double>(status, sensors.Source, detail);
-                result[i] = gpu with { TemperatureC = same(), PowerWatts = same(), FanPercent = same(), ClockMhz = same() };
+                result[i] = gpu with { TemperatureC = same(), PowerWatts = same(), FanPercent = same(), ClockMhz = same(), TemperatureLimitC = same() };
                 continue;
             }
 
@@ -490,7 +490,7 @@ internal static class GpuSensorMerge
             if (match is null)
             {
                 Value<double> none() => Value.Unsupported<double>(sensors.Source, "no sensor reading for this adapter");
-                result[i] = gpu with { TemperatureC = none(), PowerWatts = none(), FanPercent = none(), ClockMhz = none() };
+                result[i] = gpu with { TemperatureC = none(), PowerWatts = none(), FanPercent = none(), ClockMhz = none(), TemperatureLimitC = none() };
                 continue;
             }
 
@@ -500,6 +500,7 @@ internal static class GpuSensorMerge
                 PowerWatts = match.PowerWatts,
                 FanPercent = match.FanPercent,
                 ClockMhz = match.ClockMhz,
+                TemperatureLimitC = match.Extras?.TemperatureLimitC ?? Value.NotCollected<double>("none"),
             };
         }
 

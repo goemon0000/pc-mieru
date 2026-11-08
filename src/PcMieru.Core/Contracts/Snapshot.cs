@@ -38,7 +38,14 @@ public sealed record CpuInfo(
     int LogicalProcessors,
     Value<double> TotalPercent,
     IReadOnlyList<Value<double>> PerLogicalPercent,
-    Value<double> CurrentMhz);
+    Value<double> CurrentMhz)
+{
+    /// <summary>
+    /// The CPU package temperature. Reading it needs a kernel driver, which PC Mieru does not install, so the real sampler says
+    /// Unsupported; NotCollected is what a source that never asked leaves. Never a guess.
+    /// </summary>
+    public Value<double> TemperatureC { get; init; } = Value.NotCollected<double>("none");
+}
 
 public sealed record MemoryInfo(
     long TotalPhysicalBytes,
@@ -77,6 +84,13 @@ public sealed record GpuInfo(
     Value<double> TemperatureC,
     Value<double> PowerWatts,
     Value<double> FanPercent,
-    Value<double> ClockMhz);
+    Value<double> ClockMhz)
+{
+    /// <summary>
+    /// The temperature at which the vendor API says the GPU starts to slow down (NVML slowdown threshold). NotCollected when
+    /// nothing was asked, Unsupported (with the reason) when the API gives none. Never a guessed number.
+    /// </summary>
+    public Value<double> TemperatureLimitC { get; init; } = Value.NotCollected<double>("none");
+}
 
 public sealed record GpuEngineInfo(string Type, Value<double> Percent);

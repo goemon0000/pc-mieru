@@ -15,7 +15,8 @@ internal static class SensorFixtures
         double? limitMax = 300,
         double? limitDefault = 250,
         int? gen = 5,
-        int? width = 16)
+        int? width = 16,
+        double? slowdownC = 88)
     {
         return new GpuSensorExtras(
             Vbios: vbios is null ? Value.Unsupported<string>(Src, "none") : Value.Ok(vbios, Src),
@@ -32,7 +33,10 @@ internal static class SensorFixtures
             UtilizationPercent: Value.Unsupported<double>(Src, "none"),
             MemoryUsedBytes: Value.Unsupported<long>(Src, "none"),
             MemoryTotalBytes: Value.Unsupported<long>(Src, "none"),
-            PciBusId: pciBusId);
+            PciBusId: pciBusId)
+        {
+            TemperatureLimitC = slowdownC is null ? Value.Unsupported<double>(Src, "none") : Value.Ok(slowdownC.Value, Src),
+        };
     }
 
     public static GpuSensorReading Reading(string id, string name = "NVIDIA GeForce RTX 5070", double temp = 40, double? limit = 262.5, GpuSensorExtras? extras = null)

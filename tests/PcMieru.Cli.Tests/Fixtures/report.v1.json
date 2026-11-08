@@ -61,6 +61,10 @@
           "value": 3600,
           "status": "ok",
           "source": "test"
+        },
+        "temperatureC": {
+          "status": "notCollected",
+          "source": "none"
         }
       },
       "memory": {
@@ -181,6 +185,10 @@
           "clockMhz": {
             "status": "notCollected",
             "source": "test"
+          },
+          "temperatureLimitC": {
+            "status": "notCollected",
+            "source": "none"
           }
         }
       ],

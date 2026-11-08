@@ -141,7 +141,10 @@ internal sealed class GpuSampler
             UtilizationPercent: SensorMapping.Number(A, live.UtilizationPercent.Number, live.UtilizationPercent.Code, "nvml:nvmlDeviceGetUtilizationRates", 0, 100),
             MemoryUsedBytes: SensorMapping.Bytes(A, live.MemoryUsedBytes.Number, live.MemoryUsedBytes.Code, "nvml:nvmlDeviceGetMemoryInfo"),
             MemoryTotalBytes: SensorMapping.Bytes(A, live.MemoryTotalBytes.Number, live.MemoryTotalBytes.Code, "nvml:nvmlDeviceGetMemoryInfo"),
-            PciBusId: slot.PciBusId);
+            PciBusId: slot.PciBusId)
+        {
+            TemperatureLimitC = SensorMapping.NumberNote(A, fixedValues.TemperatureSlowdownC.Number, fixedValues.TemperatureSlowdownC.Code, "nvml:nvmlDeviceGetTemperatureThreshold", 0, 200, "the temperature at which the driver starts to slow the GPU down"),
+        };
 
         return new GpuSensorReading(
             slot.Id,
@@ -183,7 +186,10 @@ internal sealed class GpuSampler
             UtilizationPercent: Value.Unsupported<double>(None, "usage is read from the Windows counters for AMD GPUs"),
             MemoryUsedBytes: Value.Unsupported<long>(None, "memory use is read from the Windows counters for AMD GPUs"),
             MemoryTotalBytes: Value.Unsupported<long>(None, "memory size is read from the Windows counters for AMD GPUs"),
-            PciBusId: slot.PciBusId);
+            PciBusId: slot.PciBusId)
+        {
+            TemperatureLimitC = Value.Unsupported<double>(None, "ADLX monitoring does not give the temperature limit"),
+        };
 
         return new GpuSensorReading(
             slot.Id,
@@ -206,7 +212,8 @@ internal sealed class GpuSampler
 
         var read = nvml.ReadStatic(index);
         if (Settled(read.Vbios.Code) && Settled(read.PcieMaxGeneration.Code) && Settled(read.PcieMaxWidth.Code)
-            && Settled(read.PowerLimitMinW.Code) && Settled(read.PowerLimitMaxW.Code) && Settled(read.PowerLimitDefaultW.Code))
+            && Settled(read.PowerLimitMinW.Code) && Settled(read.PowerLimitMaxW.Code) && Settled(read.PowerLimitDefaultW.Code)
+            && Settled(read.TemperatureSlowdownC.Code))
         {
             _nvmlStatic[index] = read;
         }

@@ -16,6 +16,10 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private const int MaxAttempts = 8;
     private const int MaxInternedNames = 4096;
 
+    private static readonly Value<double> NoCpuTemperature = Value.Unsupported<double>(
+        "none",
+        "the CPU package temperature needs a kernel driver, which PC Mieru does not install");
+
     /// <summary>How long a tick waits for each counter stage. The first tick also pays for opening PDH and DXGI.</summary>
     private static readonly TimeSpan StageTimeout = TimeSpan.FromSeconds(3);
 
@@ -215,7 +219,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         var nominal = (int)_control.EffectiveInterval.TotalMilliseconds;
         var intervalMs = _hasPrevious ? (int)Math.Max(1, Math.Round(elapsedSeconds * 1000)) : nominal;
         var system = new SystemInfo(
-            new CpuInfo(logical, cpu.Total, cpu.PerLogical, pdh.CpuMhz),
+            new CpuInfo(logical, cpu.Total, cpu.PerLogical, pdh.CpuMhz) { TemperatureC = NoCpuTemperature },
             memory,
             pdh.Disks,
             nics.Nics,

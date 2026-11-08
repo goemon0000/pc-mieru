@@ -554,6 +554,30 @@ public sealed class GpuSensorMergeTests
     }
 
     [Fact]
+    public void The_vendor_temperature_limit_reaches_the_gpu_and_is_never_guessed_when_it_is_missing()
+    {
+        var gpu = Gpu("luid_0x00000000_0x000166ca", "NVIDIA GeForce RTX 5070");
+        var extras = new GpuSensorExtras(
+            Value.Ok("v", "NVML"), Value.Ok("d", "NVML"), Value.Ok(5, "NVML"), Value.Ok(16, "NVML"), Value.Ok(5, "NVML"), Value.Ok(16, "NVML"),
+            Value.Ok(100.0, "NVML"), Value.Ok(300.0, "NVML"), Value.Ok(250.0, "NVML"), Value.Unsupported<double>("NVML"), Value.Ok(1.0, "NVML"),
+            Value.Ok(1.0, "NVML"), Value.Ok(1L, "NVML"), Value.Ok(2L, "NVML"))
+        {
+            TemperatureLimitC = Value.Ok(88.0, "NVML"),
+        };
+
+        var withLimit = Assert.Single(GpuSensorMerge.Apply([gpu], Ok(Reading(gpu.Id, gpu.Name) with { Extras = extras })));
+        var withoutExtras = Assert.Single(GpuSensorMerge.Apply([gpu], Ok(Reading(gpu.Id, gpu.Name))));
+        var other = Assert.Single(GpuSensorMerge.Apply([Gpu("luid_other", "AMD Radeon(TM) Graphics")], Ok(Reading(gpu.Id, gpu.Name))));
+        var failed = Assert.Single(GpuSensorMerge.Apply([gpu], Value.Missing<IReadOnlyList<GpuSensorReading>>(ValueStatus.Timeout, "SensorHost", "slow")));
+
+        Assert.Equal(88.0, withLimit.TemperatureLimitC.Data);
+        Assert.Equal(ValueStatus.NotCollected, withoutExtras.TemperatureLimitC.Status);
+        Assert.Equal(ValueStatus.Unsupported, other.TemperatureLimitC.Status);
+        Assert.Equal(ValueStatus.Timeout, failed.TemperatureLimitC.Status);
+        Assert.Equal("slow", failed.TemperatureLimitC.Detail);
+    }
+
+    [Fact]
     public void No_adapters_is_returned_as_it_is()
     {
         IReadOnlyList<GpuInfo> none = [];

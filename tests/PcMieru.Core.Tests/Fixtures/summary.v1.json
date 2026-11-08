@@ -176,6 +176,10 @@
         "value": 4633,
         "status": "ok",
         "source": "fake:ntquery-power"
+      },
+      "temperatureC": {
+        "status": "notCollected",
+        "source": "none"
       }
     },
     "memory": {
@@ -368,6 +372,10 @@
           "value": 2410,
           "status": "ok",
           "source": "fake:nvml"
+        },
+        "temperatureLimitC": {
+          "status": "notCollected",
+          "source": "none"
         }
       }
     ],

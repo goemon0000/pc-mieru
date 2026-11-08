@@ -31,7 +31,8 @@ internal sealed record NvmlStatic(
     VendorNumber PcieMaxWidth,
     VendorNumber PowerLimitMinW,
     VendorNumber PowerLimitMaxW,
-    VendorNumber PowerLimitDefaultW);
+    VendorNumber PowerLimitDefaultW,
+    VendorNumber TemperatureSlowdownC);
 
 /// <summary>
 /// Reads NVIDIA GPUs through nvml.dll, which the NVIDIA driver installs. No administrator rights are needed. Only reading functions are
@@ -46,6 +47,7 @@ internal sealed unsafe class NvmlReader
     private readonly delegate* unmanaged<IntPtr, byte*, uint, int> _name;
     private readonly delegate* unmanaged<IntPtr, byte*, int> _pci;
     private readonly delegate* unmanaged<IntPtr, int, uint*, int> _temperature;
+    private readonly delegate* unmanaged<IntPtr, int, uint*, int> _temperatureThreshold;
     private readonly delegate* unmanaged<IntPtr, int, uint*, int> _clock;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _power;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _enforcedLimit;
@@ -68,6 +70,7 @@ internal sealed unsafe class NvmlReader
         _name = (delegate* unmanaged<IntPtr, byte*, uint, int>)NativeLibrary.GetExport(lib, "nvmlDeviceGetName");
         _pci = (delegate* unmanaged<IntPtr, byte*, int>)NativeLibrary.GetExport(lib, "nvmlDeviceGetPciInfo_v3");
         _temperature = (delegate* unmanaged<IntPtr, int, uint*, int>)Optional(lib, "nvmlDeviceGetTemperature");
+        _temperatureThreshold = (delegate* unmanaged<IntPtr, int, uint*, int>)Optional(lib, "nvmlDeviceGetTemperatureThreshold");
         _clock = (delegate* unmanaged<IntPtr, int, uint*, int>)Optional(lib, "nvmlDeviceGetClockInfo");
         _power = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetPowerUsage");
         _enforcedLimit = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetEnforcedPowerLimit");
@@ -175,7 +178,7 @@ internal sealed unsafe class NvmlReader
         if (rc != 0)
         {
             var failed = VendorNumber.Failed(rc);
-            return new NvmlStatic(VendorText.Failed(rc), failed, failed, failed, failed, failed);
+            return new NvmlStatic(VendorText.Failed(rc), failed, failed, failed, failed, failed, failed);
         }
 
         VendorText vbios;
@@ -210,7 +213,8 @@ internal sealed unsafe class NvmlReader
             Uint(_pcieMaxWidth, h),
             min,
             max,
-            Uint(_defaultLimit, h, 1000.0));
+            Uint(_defaultLimit, h, 1000.0),
+            WithArgument(_temperatureThreshold, h, 1)); // NVML_TEMPERATURE_THRESHOLD_SLOWDOWN
     }
 
     public NvmlLive ReadLive(int index)

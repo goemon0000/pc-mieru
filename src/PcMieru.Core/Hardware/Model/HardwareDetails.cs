@@ -79,7 +79,11 @@ public sealed record GpuSensorExtras(
     Value<double> UtilizationPercent,
     Value<long> MemoryUsedBytes,
     Value<long> MemoryTotalBytes,
-    string? PciBusId = null);
+    string? PciBusId = null)
+{
+    /// <summary>The slowdown temperature the vendor API reports (NVML). NotCollected from a SensorHost that predates the field.</summary>
+    public Value<double> TemperatureLimitC { get; init; } = Value.NotCollected<double>("none");
+}
 
 public sealed record StoragePartition(int Number, long StartBytes, long LengthBytes, string Type, string Style);
 
