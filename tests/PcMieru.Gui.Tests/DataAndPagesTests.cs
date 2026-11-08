@@ -443,6 +443,16 @@ public class DataAndPagesTests
         Assert.Contains("mtu", keys);
     }
 
+    [Fact]
+    public void The_sample_source_is_said_as_sample_data_and_a_real_source_keeps_its_name()
+    {
+        var sample = PartsModel.SourceText(PartsModel.SampleSource);
+        Assert.Equal(Strings.Get("gui.hw.src.sample"), sample);
+        Assert.DoesNotContain("fake", sample, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("wmi:Win32_Processor", PartsModel.SourceText("wmi:Win32_Processor"));
+        Assert.Equal(Fmt.Dash, PartsModel.SourceText(string.Empty));
+    }
+
     // ---- Services / settings / pump ----
 
     private static ServiceInfo Service(ServiceState state, ServiceStartType start) =>

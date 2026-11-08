@@ -271,12 +271,29 @@ internal static class SmokeRun
             if (await Open("users").ConfigureAwait(true) is UsersPage users)
             {
                 Check("users: sessions are listed", users.Rows.Count > 0, users.Rows.Count + " rows");
+                var ownSession = (uint)System.Diagnostics.Process.GetCurrentProcess().SessionId;
+                var ownRow = users.Rows.ToList().FindIndex(r => r.IsSession && r.Session.SessionId == ownSession && r.Session.UserName.Length > 0);
+                if (ownRow >= 0)
+                {
+                    var own = users.Rows[ownRow].Session.UserName;
+                    Check("users: the signed-in user's own row is marked", users.NameTextOf(ownRow) == Strings.Format("gui.users.you", Fmt.Dict(("name", own))), users.NameTextOf(ownRow));
+                    var marked = Enumerable.Range(0, users.Rows.Count).Count(i => users.Rows[i].IsSession && users.NameTextOf(i) != (users.Rows[i].Session.UserName.Length > 0 ? users.Rows[i].Session.UserName : Strings.Get("gui.users.system")));
+                    Check("users: only that one row is marked", marked == 1, marked + " rows marked");
+                }
             }
 
             if (await Open("hardware").ConfigureAwait(true) is HardwarePage hardware)
             {
                 Check("hardware: all categories are in the tree", hardware.Nodes.Count == 11, hardware.Nodes.Count + " categories");
                 Check("hardware: properties are listed", hardware.LineCount > 0, hardware.LineCount + " lines");
+                Check("hardware: the source is not a column (item, value, status)", hardware.Grid.Columns.Count == 3, hardware.Grid.Columns.Count + " columns");
+                var sampleName = Strings.Get("gui.hw.src.sample");
+                Check("hardware: the sample data's source is said as sample data", PartsModel.SourceText(PartsModel.SampleSource) == sampleName && !PartsModel.SourceText(PartsModel.SampleSource).Contains("fake", StringComparison.Ordinal), PartsModel.SourceText(PartsModel.SampleSource));
+                hardware.Grid.SelectRow(0);
+                var origin = hardware.RowAt(0) is { } first ? HardwarePage.Origin(first) : string.Empty;
+                var tip = hardware.Grid.CellTip?.Invoke(0, 1) ?? string.Empty;
+                Check("hardware: a row's source is in its tip", origin.Length > 0 && tip.Contains(origin, StringComparison.Ordinal) && !tip.Contains("fake", StringComparison.Ordinal), tip);
+                Check("hardware: the selected row's source is in the line under the list", hardware.HintText == origin, hardware.HintText);
             }
 
             if (await Open("settings").ConfigureAwait(true) is SettingsPage settings)

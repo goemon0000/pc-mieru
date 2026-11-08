@@ -163,7 +163,8 @@ internal static class HardwareStrings
         new("gui.hw.col.item", "項目", "Item"),
         new("gui.hw.col.value", "値", "Value"),
         new("gui.hw.col.status", "状態", "Status"),
-        new("gui.hw.col.source", "取得元", "Source"),
+        new("gui.hw.src", "取得元: {source}", "Source: {source}"),
+        new("gui.hw.src.sample", "サンプルデータ", "Sample data"),
         new("gui.hw.expert", "詳細情報（{count} 項目）", "More details ({count})"),
         new("gui.hw.tree", "PC の構成", "PC components"),
         new("gui.hw.copy.text", "PC 全体をテキストでコピー", "Copy whole PC as text"),
@@ -175,7 +176,7 @@ internal static class HardwareStrings
         new("gui.hw.copied.redacted", "コピーしました（個人情報は伏せています）", "Copied (personal info is hidden)"),
         new("gui.hw.copied.plain", "コピーしました（個人情報は伏せていません）", "Copied (personal info is not hidden)"),
         new("gui.hw.stamp", "取得 {time}", "Read {time}"),
-        new("gui.hw.hint", "読めなかった項目は「-」です。理由は、その行にマウスを置くと出ます", "Items that could not be read show a dash. Hover over the row to see why"),
+        new("gui.hw.hint", "「-」は読めなかった項目です。行を選ぶか、マウスを置くと、理由と取得元が出ます", "A dash means it could not be read. Select a row to see the reason and source"),
         new("gui.hw.tip", "{status}（取得元: {source}）", "{status} (source: {source})"),
         new("gui.hw.tip.detail", "{status}: {detail}（取得元: {source}）", "{status}: {detail} (source: {source})"),
     ];
