@@ -33,6 +33,25 @@ internal abstract class PageBase : UserControl
     {
     }
 
+    /// <summary>F5. The default takes a fresh sample; pages that read something slower (hardware, services) override it.</summary>
+    public virtual void RefreshNow() => _ = Context.Pump.TickAsync();
+
+    /// <summary>Ctrl+F. Returns true if the page has a search box and focused it.</summary>
+    public virtual bool FocusSearch() => false;
+
+    /// <summary>Del. Returns true if the page took the key (the Processes page asks to end the selected process).</summary>
+    public virtual bool HandleDelete() => false;
+
+    /// <summary>Another page asked to be shown, optionally on one process (the Overview's top list, the Users page).</summary>
+    public virtual void OnNavigatedTo(ProcessKey? process)
+    {
+    }
+
+    /// <summary>Called once as the window closes: write widths, view mode and the like into the settings.</summary>
+    public virtual void SaveState()
+    {
+    }
+
     public abstract void ApplyLanguage();
 
     /// <summary>Marks a handler as UI-thread work that must not take the window down: the failure goes to the status bar.</summary>

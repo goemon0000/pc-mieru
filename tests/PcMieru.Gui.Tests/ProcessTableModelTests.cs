@@ -2,13 +2,13 @@ namespace PcMieru.Gui.Tests;
 
 public class ProcessTableModelTests
 {
-    private static ProcessInfo Proc(uint pid, string name, double? cpu, int threads = 1) =>
+    private static ProcessInfo Proc(uint pid, string name, double? cpu, int threads = 1, uint parent = 0, uint session = 1) =>
         new(
             new ProcessKey(pid, 1000 + pid),
             name,
-            0,
-            null,
-            1,
+            parent,
+            parent == 0 ? null : new ProcessKey(parent, 1000 + parent),
+            session,
             threads,
             0,
             8,
@@ -23,15 +23,20 @@ public class ProcessTableModelTests
             Value.NotCollected<double>("t"),
             Value.Ok(ProcessState.Running, "t"));
 
-    private static async Task<ProcessTableModel> ModelAsync(params ProcessInfo[] processes)
+    private static async Task<ProcessTableModel> ModelAsync(params ProcessInfo[] processes) =>
+        await ModelAsync(ProcessViewMode.List, processes);
+
+    private static async Task<ProcessTableModel> ModelAsync(ProcessViewMode mode, params ProcessInfo[] processes)
     {
         var snapshot = await Harness.FakeSnapshotAsync();
-        var model = new ProcessTableModel();
+        var model = new ProcessTableModel { Mode = mode };
         model.Update(snapshot with { Processes = processes });
         return model;
     }
 
-    private static string[] Names(ProcessTableModel model) => Enumerable.Range(0, model.Count).Select(i => model[i].Name).ToArray();
+    /// <summary>Names of the process rows in order; group headers are left out.</summary>
+    private static string[] Names(ProcessTableModel model) =>
+        Enumerable.Range(0, model.Count).Select(i => model[i].Process?.Name).OfType<string>().ToArray();
 
     [Fact]
     public async Task Starts_sorted_by_cpu_high_first()
@@ -80,12 +85,13 @@ public class ProcessTableModelTests
         model.Filter = "  CHR ";
         Assert.Equal(["Chrome.exe"], Names(model));
         Assert.Equal(3, model.TotalCount);
+        Assert.Equal(1, model.ShownProcesses);
         model.Filter = "300";
         Assert.Equal(["svchost.exe"], Names(model));
         model.Filter = "30";
         Assert.Empty(Names(model));
         model.Filter = string.Empty;
-        Assert.Equal(3, model.Count);
+        Assert.Equal(3, model.ShownProcesses);
     }
 
     [Fact]
@@ -94,10 +100,12 @@ public class ProcessTableModelTests
         var reused = Proc(7, "new", 1) with { Key = new ProcessKey(7, 9999) };
         var model = await ModelAsync(Proc(7, "old", 5), Proc(8, "other", 1));
         var oldKey = new ProcessKey(7, 1007);
-        Assert.Equal(0, model.IndexOf(oldKey));
+        Assert.True(model.IndexOf(oldKey) >= 0);
         model.Update((await Harness.FakeSnapshotAsync()) with { Processes = [reused, Proc(8, "other", 1)] });
         Assert.Equal(-1, model.IndexOf(oldKey));
-        Assert.Equal(0, model.IndexOf(reused.Key));
+        Assert.True(model.IndexOf(reused.Key) >= 0);
+        Assert.Null(model.Find(oldKey));
+        Assert.Equal("new", model.Find(reused.Key)?.Name);
     }
 
     [Fact]
@@ -111,15 +119,123 @@ public class ProcessTableModelTests
     }
 
     [Fact]
-    public async Task Works_on_the_fake_snapshot_for_every_column()
+    public async Task Works_on_the_fake_snapshot_for_every_column_and_both_modes()
     {
         var snapshot = await Harness.FakeSnapshotAsync();
-        var model = new ProcessTableModel();
-        model.Update(snapshot);
-        foreach (var column in Enum.GetValues<ProcessColumn>())
+        foreach (var mode in Enum.GetValues<ProcessViewMode>())
         {
-            model.SortBy(column);
-            Assert.Equal(snapshot.Processes.Count, model.Count);
+            var model = new ProcessTableModel { Mode = mode };
+            model.Update(snapshot);
+            foreach (var column in Enum.GetValues<ProcessColumn>())
+            {
+                model.SortBy(column);
+                Assert.Equal(snapshot.Processes.Count, model.ShownProcesses);
+                Assert.Equal(snapshot.Processes.Count, Enumerable.Range(0, model.Count).Count(i => model[i].Process is not null));
+            }
         }
+    }
+
+    [Fact]
+    public async Task List_mode_puts_a_header_before_each_group_in_a_fixed_order()
+    {
+        var snapshot = await Harness.FakeSnapshotAsync();
+        var model = new ProcessTableModel { Mode = ProcessViewMode.List };
+        model.Update(
+            snapshot with { Processes = [Proc(1, "a", 1), Proc(2, "b", 5), Proc(3, "c", 3), Proc(4, "d", 2)] },
+            p => p.Key.Pid switch { 1 => ProcessGroup.Windows, 2 => ProcessGroup.Apps, _ => ProcessGroup.Background });
+        var headers = Enumerable.Range(0, model.Count).Where(i => model[i].IsGroup).ToArray();
+        Assert.Equal(3, headers.Length);
+        Assert.Equal([ProcessGroup.Apps, ProcessGroup.Background, ProcessGroup.Windows], headers.Select(i => model[i].Group));
+        Assert.Equal([1, 2, 1], headers.Select(i => model[i].GroupCount));
+        Assert.Equal(["b", "c", "d", "a"], Names(model));
+    }
+
+    [Fact]
+    public async Task A_group_with_no_matching_process_has_no_header()
+    {
+        var snapshot = await Harness.FakeSnapshotAsync();
+        var model = new ProcessTableModel { Mode = ProcessViewMode.List };
+        model.Update(
+            snapshot with { Processes = [Proc(1, "a", 1), Proc(2, "b", 5)] },
+            p => p.Key.Pid == 1 ? ProcessGroup.Windows : ProcessGroup.Apps);
+        model.Filter = "b";
+        Assert.Equal(1, Enumerable.Range(0, model.Count).Count(i => model[i].IsGroup));
+    }
+
+    [Fact]
+    public async Task Tree_mode_nests_children_under_their_parent_and_collapses()
+    {
+        var model = await ModelAsync(ProcessViewMode.Tree, Proc(1, "root", 1), Proc(2, "kid", 9, parent: 1), Proc(3, "grandkid", 1, parent: 2), Proc(4, "other", 5));
+        var rows = Enumerable.Range(0, model.Count).Select(i => model[i]).ToList();
+        Assert.Equal(["other", "root", "kid", "grandkid"], rows.Select(r => r.Process!.Name));
+        Assert.Equal([0, 0, 1, 2], rows.Select(r => r.Depth));
+        Assert.True(rows[1].HasChildren && rows[1].Expanded);
+
+        model.ToggleExpanded(new ProcessKey(1, 1001));
+        Assert.Equal(["other", "root"], Names(model));
+        Assert.False(model[1].Expanded);
+        model.ToggleExpanded(new ProcessKey(1, 1001));
+        Assert.Equal(4, model.Count);
+    }
+
+    [Fact]
+    public async Task Tree_filter_keeps_the_path_to_a_match_visible()
+    {
+        var model = await ModelAsync(ProcessViewMode.Tree, Proc(1, "root", 1), Proc(2, "kid", 9, parent: 1), Proc(3, "needle", 1, parent: 2), Proc(4, "other", 5));
+        model.Filter = "needle";
+        Assert.Equal(["root", "kid", "needle"], Names(model));
+    }
+
+    [Fact]
+    public async Task A_parent_that_is_gone_or_a_cycle_does_not_hang_or_lose_rows()
+    {
+        var a = Proc(1, "a", 1, parent: 2);
+        var b = Proc(2, "b", 1, parent: 1);
+        var orphan = Proc(3, "orphan", 1, parent: 99);
+        var model = await ModelAsync(ProcessViewMode.Tree, a, b, orphan);
+        Assert.Contains("orphan", Names(model));
+        Assert.True(model.Count >= 1);
+    }
+
+    [Fact]
+    public async Task While_frozen_the_rows_keep_their_place_but_the_numbers_update()
+    {
+        var model = await ModelAsync(Proc(1, "a", 50), Proc(2, "b", 10));
+        Assert.Equal(["a", "b"], Names(model));
+        model.Frozen = true;
+        model.Update((await Harness.FakeSnapshotAsync()) with { Processes = [Proc(1, "a", 1), Proc(2, "b", 80)] });
+        Assert.Equal(["a", "b"], Names(model));
+        Assert.Equal(80, model.Find(new ProcessKey(2, 1002))!.CpuPercent.GetOr(0));
+        model.Resort();
+        Assert.Equal(["b", "a"], Names(model));
+    }
+
+    [Fact]
+    public async Task A_new_process_goes_to_the_end_while_frozen_instead_of_pushing_rows_down()
+    {
+        var model = await ModelAsync(Proc(1, "a", 50), Proc(2, "b", 10));
+        model.Frozen = true;
+        model.Update((await Harness.FakeSnapshotAsync()) with { Processes = [Proc(1, "a", 50), Proc(2, "b", 10), Proc(3, "fresh", 99)] });
+        Assert.Equal(["a", "b", "fresh"], Names(model));
+    }
+
+    [Fact]
+    public async Task Unfrozen_the_next_sample_sorts_again()
+    {
+        var model = await ModelAsync(Proc(1, "a", 50), Proc(2, "b", 10));
+        model.Frozen = true;
+        model.Update((await Harness.FakeSnapshotAsync()) with { Processes = [Proc(1, "a", 1), Proc(2, "b", 80)] });
+        model.Frozen = false;
+        model.Update((await Harness.FakeSnapshotAsync()) with { Processes = [Proc(1, "a", 1), Proc(2, "b", 80)] });
+        Assert.Equal(["b", "a"], Names(model));
+    }
+
+    [Fact]
+    public async Task Clicking_a_header_sorts_even_while_frozen()
+    {
+        var model = await ModelAsync(Proc(1, "b", 50), Proc(2, "a", 10));
+        model.Frozen = true;
+        model.SortBy(ProcessColumn.Name);
+        Assert.Equal(["a", "b"], Names(model));
     }
 }

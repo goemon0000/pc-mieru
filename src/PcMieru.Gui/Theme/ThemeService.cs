@@ -122,6 +122,20 @@ internal sealed class ThemeService : IDisposable
             case NumericUpDown or ComboBox:
                 control.BackColor = palette.Surface;
                 control.ForeColor = palette.Text;
+                if (control is ComboBox)
+                {
+                    ApplyNativeTheme(control, combo: true);
+                }
+
+                break;
+            case SplitContainer split:
+                // The splitter bar takes the container's colour; the two panels get the window colour back.
+                split.BackColor = palette.Border;
+                split.ForeColor = palette.Text;
+                split.Panel1.BackColor = palette.Window;
+                split.Panel2.BackColor = palette.Window;
+                split.Panel1.ForeColor = palette.Text;
+                split.Panel2.ForeColor = palette.Text;
                 break;
             default:
                 // Reading BackColor and writing it back would freeze the ambient colour of the first theme that was applied.
@@ -145,16 +159,45 @@ internal sealed class ThemeService : IDisposable
 
         foreach (Control child in control.Controls)
         {
+            if (child is SplitterPanel)
+            {
+                // Painted by the SplitContainer case above; the children of the panel are still ours to paint.
+                foreach (Control inner in child.Controls)
+                {
+                    ApplyTo(inner, palette, topLevel: false);
+                }
+
+                continue;
+            }
+
             ApplyTo(child, palette, topLevel: false);
         }
     }
 
+    /// <summary>Colours a context menu or any ToolStrip: a renderer that reads the palette, so dark mode is not half native.</summary>
+    public void StyleMenu(ToolStrip strip)
+    {
+        var palette = Palette;
+        strip.Renderer = new ToolStripProfessionalRenderer(new PaletteColors(palette)) { RoundedEdges = false };
+        strip.BackColor = palette.Surface;
+        strip.ForeColor = palette.Text;
+        foreach (ToolStripItem item in strip.Items)
+        {
+            item.ForeColor = item.Enabled ? palette.Text : palette.TextDim;
+            item.BackColor = palette.Surface;
+            if (item is ToolStripMenuItem { HasDropDownItems: true } parent)
+            {
+                StyleMenu(parent.DropDown);
+            }
+        }
+    }
+
     /// <summary>Native theming needs a window handle; a page that has never been shown gets it when the handle appears.</summary>
-    private void ApplyNativeTheme(Control control)
+    private void ApplyNativeTheme(Control control, bool combo = false)
     {
         if (control.IsHandleCreated)
         {
-            NativeTheme.SetControlTheme(control.Handle, IsDark);
+            NativeTheme.SetControlTheme(control.Handle, IsDark, combo);
             return;
         }
 
@@ -164,7 +207,7 @@ internal sealed class ThemeService : IDisposable
         }
 
         _hooked.Add(control, this);
-        control.HandleCreated += (_, _) => NativeTheme.SetControlTheme(control.Handle, IsDark);
+        control.HandleCreated += (_, _) => NativeTheme.SetControlTheme(control.Handle, IsDark, combo);
     }
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
@@ -205,12 +248,52 @@ internal static class NativeTheme
         _ = DwmSetWindowAttribute(handle, DwmUseImmersiveDarkMode, ref value, sizeof(int));
     }
 
-    public static void SetControlTheme(IntPtr handle, bool dark) =>
-        _ = SetWindowTheme(handle, dark ? "DarkMode_Explorer" : "Explorer", null);
+    public static void SetControlTheme(IntPtr handle, bool dark, bool combo = false) =>
+        _ = SetWindowTheme(handle, dark ? (combo ? "DarkMode_CFD" : "DarkMode_Explorer") : (combo ? "CFD" : "Explorer"), null);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hwnd, string? subAppName, string? subIdList);
+}
+
+/// <summary>Menu colours taken from the palette (a ToolStrip does not follow DarkMode_Explorer).</summary>
+internal sealed class PaletteColors : ProfessionalColorTable
+{
+    private readonly Palette _p;
+
+    public PaletteColors(Palette palette)
+    {
+        _p = palette;
+        UseSystemColors = false;
+    }
+
+    public override Color ToolStripDropDownBackground => _p.Surface;
+
+    public override Color MenuBorder => _p.Border;
+
+    public override Color MenuItemBorder => _p.Selection;
+
+    public override Color MenuItemSelected => _p.Selection;
+
+    public override Color MenuItemSelectedGradientBegin => _p.Selection;
+
+    public override Color MenuItemSelectedGradientEnd => _p.Selection;
+
+    public override Color ImageMarginGradientBegin => _p.Surface;
+
+    public override Color ImageMarginGradientMiddle => _p.Surface;
+
+    public override Color ImageMarginGradientEnd => _p.Surface;
+
+    public override Color SeparatorDark => _p.Border;
+
+    public override Color SeparatorLight => _p.Border;
+
+    public override Color CheckBackground => _p.Selection;
+
+    public override Color CheckSelectedBackground => _p.Selection;
+
+    public override Color CheckPressedBackground => _p.Selection;
 }

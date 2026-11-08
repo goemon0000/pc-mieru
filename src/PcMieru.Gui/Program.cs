@@ -13,8 +13,17 @@ internal static class Program
 
         Strings.Register(GuiStrings.All);
         ApplicationConfiguration.Initialize();
+        // A smoke run records an exception for its verdict instead of waiting on a message box nobody can click.
         Application.ThreadException += (_, e) =>
+        {
+            if (options.SmokeOutput is not null)
+            {
+                SmokeRun.UnhandledErrors.Enqueue(e.Exception.ToString());
+                return;
+            }
+
             MessageBox.Show(e.Exception.Message, Strings.Get("core.app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        };
 
         // A smoke run never reads or writes the user's settings file.
         var settings = options.SmokeOutput is null ? GuiSettings.Load(GuiSettings.DefaultPath) : new GuiSettings();

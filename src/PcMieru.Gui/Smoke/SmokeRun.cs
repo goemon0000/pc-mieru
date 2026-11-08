@@ -14,6 +14,9 @@ internal static class SmokeRun
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(60);
 
+    /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
+    public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
+
     public static int Run(MainForm form, GuiContext context, string outputPath, string? shotsDirectory)
     {
         var checks = new JsonArray();
@@ -55,6 +58,8 @@ internal static class SmokeRun
         };
 
         Application.Run(form);
+        Check("no unhandled exception on the UI thread", UnhandledErrors.IsEmpty, string.Join(" || ", UnhandledErrors.Take(3)));
+        exitCode = checks.All(c => (bool)c!["ok"]!) ? exitCode : Math.Max(exitCode, 1);
         Write(outputPath, form, context, checks, shots, exitCode);
         return exitCode;
     }
@@ -135,7 +140,8 @@ internal static class SmokeTheme
     {
         foreach (Control child in root.Controls)
         {
-            if (child is Label or Panel && (child.BackColor != palette.Window || child.ForeColor != palette.Text))
+            var expectedText = child is ToneLabel tone ? tone.ExpectedColor(palette) : palette.Text;
+            if (child is Label or Panel && (child.BackColor != palette.Window || child.ForeColor != expectedText))
             {
                 yield return $"{child.GetType().Name}:{child.Name}";
             }

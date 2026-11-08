@@ -3,34 +3,19 @@ namespace PcMieru.Gui;
 /// <summary>Every "gui." string, ja and en side by side. Registered once at start-up (Program.cs).</summary>
 internal static class GuiStrings
 {
-    public static readonly StringEntry[] All =
+    private static readonly StringEntry[] Legacy =
     [
         new("gui.nav.label", "ナビゲーション", "Navigation"),
         new("gui.nav.processes", "プロセス", "Processes"),
         new("gui.nav.performance", "パフォーマンス", "Performance"),
-        new("gui.nav.hardware", "パーツ情報", "Hardware"),
         new("gui.nav.services", "サービス", "Services"),
         new("gui.nav.startup", "スタートアップ", "Start-up"),
-        new("gui.nav.diagnose", "診断", "Diagnosis"),
         new("gui.nav.settings", "設定", "Settings"),
 
         new("gui.status.updated", "更新 {time}", "Updated {time}"),
         new("gui.status.failed", "失敗しました: {error}", "Failed: {error}"),
         new("gui.fmt.uptime", "{days} 日 {time}", "{days} d {time}"),
 
-        new("gui.proc.col.name", "名前", "Name"),
-        new("gui.proc.col.pid", "PID", "PID"),
-        new("gui.proc.col.cpu", "CPU", "CPU"),
-        new("gui.proc.col.memory", "メモリ", "Memory"),
-        new("gui.proc.col.io", "ディスク I/O", "Disk I/O"),
-        new("gui.proc.col.gpu", "GPU", "GPU"),
-        new("gui.proc.col.threads", "スレッド", "Threads"),
-        new("gui.proc.col.state", "状態", "Status"),
-        new("gui.proc.filter", "絞り込み", "Filter"),
-        new("gui.proc.count", "{shown} / {total} 件", "{shown} of {total}"),
-        new("gui.proc.state.running", "実行中", "Running"),
-        new("gui.proc.state.notresponding", "応答なし", "Not responding"),
-        new("gui.proc.state.suspended", "中断", "Suspended"),
 
         new("gui.perf.col.metric", "項目", "Item"),
         new("gui.perf.col.value", "値", "Value"),
@@ -98,4 +83,6 @@ internal static class GuiStrings
         new("gui.settings.theme.dark", "ダーク", "Dark"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
     ];
+
+    public static readonly StringEntry[] All = [.. Legacy, .. ChromeStrings.All, .. ProcessStrings.All];
 }
