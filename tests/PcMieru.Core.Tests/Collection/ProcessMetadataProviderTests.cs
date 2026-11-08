@@ -50,13 +50,29 @@ public sealed class ProcessMetadataProviderTests(ITestOutputHelper output)
         Func<IKnownProcessCatalog?>? catalog = null,
         Func<ProcessKey, string?>? nameOf = null,
         ServiceMap? services = null,
-        TimeSpan? budget = null) => new(
-        reader,
-        verify ?? (_ => Value.Ok(Signed, "test")),
-        services ?? new ServiceMap(() => new Dictionary<uint, string[]>(), TimeSpan.FromHours(1)),
-        catalog ?? (() => null),
-        nameOf ?? (_ => null),
-        budget ?? TimeSpan.FromSeconds(5));
+        TimeSpan? budget = null)
+    {
+        // Like the real verifier: a finished check is remembered by file, and Peek answers from that memory only.
+        var inner = verify ?? (_ => Value.Ok(Signed, "test"));
+        var remembered = new System.Collections.Concurrent.ConcurrentDictionary<string, Value<SignatureInfo>>();
+        return new(
+            reader,
+            file =>
+            {
+                var result = inner(file);
+                if (result.IsOk)
+                {
+                    remembered[file] = result;
+                }
+
+                return result;
+            },
+            services ?? new ServiceMap(() => new Dictionary<uint, string[]>(), TimeSpan.FromHours(1)),
+            catalog ?? (() => null),
+            nameOf ?? (_ => null),
+            budget ?? TimeSpan.FromSeconds(5),
+            file => remembered.TryGetValue(file, out var known) ? known : (Value<SignatureInfo>?)null);
+    }
 
     [Fact]
     public async Task Stable_facts_are_read_once_and_then_served_from_the_cache()
@@ -257,6 +273,114 @@ public sealed class ProcessMetadataProviderTests(ITestOutputHelper output)
 
         Assert.Equal(["Alpha", "Beta"], hosting.ServiceNames.ToArray());
         Assert.Empty(plain.ServiceNames);
+    }
+
+    private sealed class NoCacheProvider : IProcessDetailsProvider
+    {
+        public Task<ProcessDetails> GetAsync(ProcessKey key, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void A_provider_that_keeps_no_cache_peeks_null_for_every_key_in_order()
+    {
+        IProcessDetailsProvider provider = new NoCacheProvider();
+
+        var peeked = provider.PeekMany([Key(1), Key(2), Key(3)]);
+
+        Assert.Equal(3, peeked.Count);
+        Assert.All(peeked, Assert.Null);
+    }
+
+    [Fact]
+    public async Task Peeking_an_unknown_process_gives_null_at_once_and_starts_the_read_so_a_later_peek_finds_it()
+    {
+        var release = new ManualResetEventSlim(false);
+        var reader = new FakeReader { Stable = key => { release.Wait(5000); return Facts($@"C:\Test\peek{key.Pid}.exe"); } };
+        var provider = Make(reader);
+
+        var clock = Stopwatch.StartNew();
+        var first = provider.PeekMany([Key(300)]);
+        Assert.True(clock.ElapsedMilliseconds < 1000, "PeekMany waited for the read");
+        Assert.Null(Assert.Single(first));
+
+        release.Set();
+        ProcessDetails? found = null;
+        var deadline = Stopwatch.StartNew();
+        while (found is null && deadline.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            found = provider.PeekMany([Key(300)])[0];
+            await Task.Delay(20);
+        }
+
+        Assert.NotNull(found);
+        Assert.Equal(@"C:\Test\peek300.exe", found.Path.Data);
+        Assert.Equal(1, reader.Reads); // the peeks joined one read, none started a second
+    }
+
+    [Fact]
+    public async Task Peeking_a_cached_process_returns_its_facts_without_reading_again_and_keeps_the_order()
+    {
+        var reader = new FakeReader();
+        var provider = Make(reader);
+        _ = await provider.GetAsync(Key(11));
+        _ = await provider.GetAsync(Key(13));
+        var before = reader.Reads;
+
+        var peeked = provider.PeekMany([Key(13), Key(12), Key(11)]);
+
+        Assert.Equal(3, peeked.Count);
+        Assert.Equal(Key(13), peeked[0]!.Key);
+        Assert.Null(peeked[1]); // never asked before: null now, read started in the background
+        Assert.Equal(Key(11), peeked[2]!.Key);
+        Assert.Equal("Product", peeked[0]!.Product.Data);
+        Assert.True(peeked[2]!.Signature.IsOk, peeked[2]!.Signature.Status + " " + peeked[2]!.Signature.Detail);
+        Assert.Equal(SignatureState.SignedEmbedded, peeked[2]!.Signature.Data!.State);
+        Assert.True(reader.Reads <= before + 1, "the two cached keys cost no read; only the unknown one may be read");
+    }
+
+    [Fact]
+    public async Task Peeking_does_not_wait_for_a_signature_check_and_shows_it_as_not_collected_until_it_finishes()
+    {
+        var release = new ManualResetEventSlim(false);
+        var provider = Make(new FakeReader(), verify: _ => { release.Wait(10_000); return Value.Ok(Signed, "test"); });
+        _ = provider.PeekMany([Key(40)]);
+        ProcessDetails? early = null;
+        var deadline = Stopwatch.StartNew();
+        while (early is null && deadline.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            early = provider.PeekMany([Key(40)])[0];
+            await Task.Delay(20);
+        }
+
+        Assert.NotNull(early);
+        Assert.Equal(ValueStatus.NotCollected, early.Signature.Status);
+        Assert.Equal(ValueStatus.Ok, early.Path.Status);
+
+        release.Set();
+        Value<SignatureInfo> later = early.Signature;
+        deadline.Restart();
+        while (!later.IsOk && deadline.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            later = provider.PeekMany([Key(40)])[0]!.Signature;
+            await Task.Delay(20);
+        }
+
+        Assert.True(later.IsOk, later.Detail);
+    }
+
+    [Fact]
+    public async Task Peeking_a_process_that_was_found_gone_says_Gone_and_after_Dispose_everything_is_null()
+    {
+        var reader = new FakeReader { Stable = key => StableFacts.AllGone("test", "gone") };
+        var provider = Make(reader);
+        _ = await provider.GetAsync(Key(50));
+
+        var gone = Assert.Single(provider.PeekMany([Key(50)]));
+        Assert.Equal(ValueStatus.Gone, gone!.Path.Status);
+        Assert.Equal(ValueStatus.Gone, gone.EfficiencyMode.Status);
+
+        provider.Dispose();
+        Assert.Null(Assert.Single(provider.PeekMany([Key(50)])));
     }
 
     [Fact]

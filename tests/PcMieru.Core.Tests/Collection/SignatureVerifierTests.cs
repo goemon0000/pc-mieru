@@ -116,6 +116,22 @@ public sealed class SignatureVerifierTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Peek_knows_only_what_was_already_verified_and_verifies_nothing_itself()
+    {
+        var verifier = new SignatureVerifier();
+        var path = System32("kernel32.dll");
+
+        Assert.Null(verifier.Peek(path));
+        Assert.Equal(0, verifier.Verifications);
+
+        var verified = verifier.Verify(path);
+
+        Assert.Equal(verified, verifier.Peek(path));
+        Assert.Null(verifier.Peek(Path.Combine(Path.GetTempPath(), "pcmieru-no-such-file.exe")));
+        Assert.Equal(1, verifier.Verifications);
+    }
+
+    [Fact]
     public void The_same_file_is_verified_once()
     {
         var verifier = new SignatureVerifier();

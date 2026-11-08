@@ -56,6 +56,7 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
 
     private readonly IFactReader _reader;
     private readonly Func<string, Value<SignatureInfo>> _verify;
+    private readonly Func<string, Value<SignatureInfo>?>? _peekVerified;
     private readonly ServiceMap _services;
     private readonly Func<IKnownProcessCatalog?> _catalog;
     private readonly Func<ProcessKey, string?> _nameOf;
@@ -87,7 +88,7 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
 
     /// <param name="verifier">Shared with the process grouper so each file is hashed once for both.</param>
     internal ProcessMetadataProvider(Func<IKnownProcessCatalog?>? catalog, Func<ProcessKey, string?>? nameOf, SignatureVerifier verifier)
-        : this(new SystemFactReader(nameOf), verifier.Verify, new ServiceMap(), catalog ?? (static () => null), nameOf ?? (static _ => null), DefaultSignatureBudget)
+        : this(new SystemFactReader(nameOf), verifier.Verify, new ServiceMap(), catalog ?? (static () => null), nameOf ?? (static _ => null), DefaultSignatureBudget, verifier.Peek)
     {
     }
 
@@ -97,9 +98,11 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
         ServiceMap services,
         Func<IKnownProcessCatalog?> catalog,
         Func<ProcessKey, string?> nameOf,
-        TimeSpan signatureBudget)
+        TimeSpan signatureBudget,
+        Func<string, Value<SignatureInfo>?>? peekVerified = null)
     {
         _reader = reader;
+        _peekVerified = peekVerified;
         _verify = verify;
         _services = services;
         _catalog = catalog;
@@ -130,6 +133,55 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
         var signature = await SignatureAsync(stable, ct).ConfigureAwait(false);
         var services = SafeServices(key);
         return Compose(key, stable, efficiency, signature, services);
+    }
+
+    /// <summary>
+    /// What is already known, without waiting: a process whose stable facts are cached comes back composed from them (the
+    /// efficiency mode and the service names are read now, both are one cheap call; the signature is the finished check of
+    /// its file, or NotCollected while that check still runs). A process not cached yet is null, and its read is started in
+    /// the background so a later call finds it. The reads share the same three-at-a-time gate as <see cref="GetAsync"/>.
+    /// </summary>
+    public IReadOnlyList<ProcessDetails?> PeekMany(IReadOnlyList<ProcessKey> keys)
+    {
+        var result = new ProcessDetails?[keys.Count];
+        if (_disposed)
+        {
+            return result;
+        }
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            var key = keys[i];
+            if (!_cache.TryGetValue(key, out var stable))
+            {
+                StartRead(key);
+                continue;
+            }
+
+            if (stable.IsGone)
+            {
+                result[i] = Compose(key, stable, Value.Gone<bool>(EfficiencySource, "the process has exited"), Value.Gone<SignatureInfo>(SignatureVerifier.Source, "the process has exited"), []);
+                continue;
+            }
+
+            result[i] = Compose(key, stable, SafeEfficiency(key), PeekSignature(stable), SafeServices(key));
+        }
+
+        return result;
+    }
+
+    /// <summary>Starts the shared read for <paramref name="key"/> and does not wait for it or look at how it ends.</summary>
+    private void StartRead(ProcessKey key)
+    {
+        try
+        {
+            var read = _reading.GetOrAdd(key, k => new Lazy<Task<StableFacts>>(() => Task.Run(() => ReadStableLimitedAsync(k)), LazyThreadSafetyMode.ExecutionAndPublication));
+            _ = read.Value.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Nothing to report: the caller asked for what is cached, and a failed start leaves the entry null.
+        }
     }
 
     public void Dispose() => _disposed = true;
@@ -303,25 +355,65 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
     {
         if (!stable.Path.IsOk || string.IsNullOrEmpty(stable.Path.Data))
         {
-            var why = stable.Path.Status switch
-            {
-                ValueStatus.Unsupported => ValueStatus.Unsupported,
-                ValueStatus.Denied => ValueStatus.Denied,
-                _ => ValueStatus.Error,
-            };
-            return Value.Missing<SignatureInfo>(why, SignatureVerifier.Source, "the image file is not known, so it cannot be checked");
+            return NoImageSignature(stable);
         }
 
-        var path = stable.Path.Data;
-        var work = _signing.GetOrAdd(path, p => new Lazy<Task<Value<SignatureInfo>>>(() => Task.Run(() => VerifyLimitedAsync(p)), LazyThreadSafetyMode.ExecutionAndPublication));
+        var work = SigningTask(stable.Path.Data);
         try
         {
-            return await work.Value.WaitAsync(_signatureBudget, ct).ConfigureAwait(false);
+            return await work.WaitAsync(_signatureBudget, ct).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
             return Value.Missing<SignatureInfo>(ValueStatus.Timeout, SignatureVerifier.Source, "the signature check is still running; ask again in a moment");
         }
+    }
+
+    /// <summary>The finished signature check of the image, or NotCollected while it still runs (the check is started if nobody has).</summary>
+    private Value<SignatureInfo> PeekSignature(StableFacts stable)
+    {
+        if (!stable.Path.IsOk || string.IsNullOrEmpty(stable.Path.Data))
+        {
+            return NoImageSignature(stable);
+        }
+
+        if (PeekVerified(stable.Path.Data) is { } known)
+        {
+            return known;
+        }
+
+        var work = SigningTask(stable.Path.Data);
+        return work.IsCompletedSuccessfully
+            ? work.Result
+            : Value.NotCollected<SignatureInfo>(SignatureVerifier.Source, "the signature check is still running; ask again in a moment");
+    }
+
+    // A finished check leaves _signing at once (the verifier remembers the answer by file version), so the answer is looked
+    // for there, not in the task table.
+    private Value<SignatureInfo>? PeekVerified(string path)
+    {
+        try
+        {
+            return _peekVerified?.Invoke(path);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    private Task<Value<SignatureInfo>> SigningTask(string path) =>
+        _signing.GetOrAdd(path, p => new Lazy<Task<Value<SignatureInfo>>>(() => Task.Run(() => VerifyLimitedAsync(p)), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    private static Value<SignatureInfo> NoImageSignature(StableFacts stable)
+    {
+        var why = stable.Path.Status switch
+        {
+            ValueStatus.Unsupported => ValueStatus.Unsupported,
+            ValueStatus.Denied => ValueStatus.Denied,
+            _ => ValueStatus.Error,
+        };
+        return Value.Missing<SignatureInfo>(why, SignatureVerifier.Source, "the image file is not known, so it cannot be checked");
     }
 
     private async Task<Value<SignatureInfo>> VerifyLimitedAsync(string path)

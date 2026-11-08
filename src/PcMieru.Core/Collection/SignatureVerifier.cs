@@ -41,6 +41,13 @@ internal sealed unsafe class SignatureVerifier
 
     private int _verifications;
 
+    /// <summary>
+    /// The remembered answer for the file as it is on disk now, or null when it has not been verified (or the file changed or
+    /// cannot be examined). Never verifies anything, so it is cheap enough for a caller that must not wait.
+    /// </summary>
+    public Value<SignatureInfo>? Peek(string path) =>
+        FileStamp.TryRead(path, out _) is { } stamp && _cache.TryGetValue(stamp, out var cached) ? cached : null;
+
     public Value<SignatureInfo> Verify(string path)
     {
         var read = FileStamp.TryRead(path, out var problem);

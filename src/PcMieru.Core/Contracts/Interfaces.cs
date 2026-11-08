@@ -34,6 +34,13 @@ public interface IProcessDetailsProvider
 {
     /// <summary>Lazy, cached per ProcessKey. Never throws for a vanished process: the values come back as Gone.</summary>
     Task<ProcessDetails> GetAsync(ProcessKey key, CancellationToken ct = default);
+
+    /// <summary>
+    /// Only what is cached right now (null for the rest, in the order of <paramref name="keys"/>), and starts the rest in the
+    /// background so a later call finds it. Never blocks. The default answers null for everything, for a provider that keeps no
+    /// cache. Lets a list show a product or user column without one <see cref="GetAsync"/> call per row.
+    /// </summary>
+    IReadOnlyList<ProcessDetails?> PeekMany(IReadOnlyList<ProcessKey> keys) => new ProcessDetails?[keys.Count];
 }
 
 /// <summary>
