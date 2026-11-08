@@ -189,6 +189,14 @@ public sealed class HwCommand : ICliCommand
                 return;
             }
 
+            // The Wi-Fi fields of a wired adapter are in the JSON with a reason; the text view would only print "Unsupported" four times per cable.
+            if (node is JsonObject { } notWireless && IsValue(notWireless)
+                && notWireless["status"]?.GetValue<string>() == "unsupported"
+                && notWireless["detail"]?.GetValue<string>() == NetworkAdapter.NotWirelessReason)
+            {
+                return;
+            }
+
             var label = CliLabels.Label(field, context.Language);
             switch (node)
             {

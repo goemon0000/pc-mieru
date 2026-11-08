@@ -106,7 +106,7 @@ internal static class NetworkBuilder
 {
     private const string Src = "iphlpapi:GetAdaptersAddresses";
     private const string WlanSrc = "wlanapi:WlanQueryInterface";
-    private const string NotWireless = "not a wireless adapter";
+    private const string NotWireless = NetworkAdapter.NotWirelessReason;
     private const ulong UnknownSpeed = ulong.MaxValue;
     private const int ErrorServiceNotActive = 1062;
 

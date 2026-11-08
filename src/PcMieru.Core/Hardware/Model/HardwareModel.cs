@@ -177,7 +177,14 @@ public sealed record NetworkAdapter(
     Value<string> Ssid,
     Value<string> WifiBand,
     Value<int> SignalPercent,
-    NetworkDetails? Details = null);
+    NetworkDetails? Details = null)
+{
+    /// <summary>
+    /// The reason on the Wi-Fi fields (SSID, band, signal, standard) of an adapter that is not wireless. Those fields stay in
+    /// the JSON as Unsupported with this reason; the text and window views leave them out instead of printing "Unsupported" per cable.
+    /// </summary>
+    public const string NotWirelessReason = "not a wireless adapter";
+}
 
 [JsonConverter(typeof(CamelCaseEnumConverter<DisplayConnection>))]
 public enum DisplayConnection

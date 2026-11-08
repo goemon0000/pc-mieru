@@ -368,6 +368,30 @@ public class DataAndPagesTests
         Assert.False(Assert.Single(rows, r => r.Key == "name").Expert);
     }
 
+    [Fact]
+    public void Parts_leave_the_Wi_Fi_rows_out_of_a_wired_adapter_and_keep_other_missing_values()
+    {
+        var root = JsonNode.Parse(
+            """
+            {"network":{"status":"ok","source":"t","value":[
+              {"name":{"status":"ok","value":"Cable","source":"t"},
+               "ssid":{"status":"unsupported","source":"t","detail":"not a wireless adapter"},
+               "signalPercent":{"status":"unsupported","source":"t","detail":"not a wireless adapter"},
+               "driverVersion":{"status":"unsupported","source":"t","detail":"no driver key"},
+               "details":{"wifiStandard":{"status":"unsupported","source":"t","detail":"not a wireless adapter"},
+                          "mtu":{"status":"ok","value":1500,"source":"t"}}}]}}
+            """)!.AsObject();
+        var adapter = PartsModel.Find(PartsModel.Build(root), "network.0")!;
+
+        var keys = PartsModel.Rows(adapter).Select(r => r.Key).ToArray();
+
+        Assert.DoesNotContain("ssid", keys);
+        Assert.DoesNotContain("signalPercent", keys);
+        Assert.DoesNotContain("wifiStandard", keys);
+        Assert.Contains("driverVersion", keys);
+        Assert.Contains("mtu", keys);
+    }
+
     // ---- Services / settings / pump ----
 
     private static ServiceInfo Service(ServiceState state, ServiceStartType start) =>

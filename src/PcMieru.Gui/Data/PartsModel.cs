@@ -210,6 +210,14 @@ internal static class PartsModel
             return;
         }
 
+        // The Wi-Fi fields of a wired adapter are in the JSON with a reason; a row that only says "Unsupported" per cable is noise.
+        if (value is JsonObject notWireless
+            && notWireless["status"]?.GetValue<string>() == "unsupported"
+            && notWireless["detail"]?.GetValue<string>() == PcMieru.Core.Hardware.Model.NetworkAdapter.NotWirelessReason)
+        {
+            return;
+        }
+
         var row = Row(category, key, value, source);
         rows.Add(nested && !row.Expert ? row with { Expert = true } : row);
     }

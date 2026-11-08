@@ -612,6 +612,47 @@ public sealed class HumanOutputTests
     }
 
     [Fact]
+    public void Hw_leaves_the_Wi_Fi_rows_out_of_a_wired_adapter_but_keeps_them_on_a_wireless_one()
+    {
+        var wired = new JsonObject
+        {
+            ["status"] = "unsupported",
+            ["source"] = "t",
+            ["detail"] = NetworkAdapter.NotWirelessReason,
+        };
+        var json = new JsonObject
+        {
+            ["network"] = new JsonObject
+            {
+                ["status"] = "ok",
+                ["source"] = "t",
+                ["value"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["name"] = new JsonObject { ["status"] = "ok", ["source"] = "t", ["value"] = "Cable" },
+                        ["ssid"] = wired.DeepClone(),
+                        ["wifiBand"] = wired.DeepClone(),
+                        ["signalPercent"] = wired.DeepClone(),
+                    },
+                    new JsonObject
+                    {
+                        ["name"] = new JsonObject { ["status"] = "ok", ["source"] = "t", ["value"] = "Radio" },
+                        ["ssid"] = new JsonObject { ["status"] = "unsupported", ["source"] = "t", ["detail"] = "not connected" },
+                    }),
+            },
+        };
+
+        var text = HwCommand.Render(Context(), json, details: true);
+        var cable = text.Split("Network 2")[0];
+
+        Assert.Contains("Name: Cable", cable, StringComparison.Ordinal);
+        Assert.DoesNotContain("SSID", cable, StringComparison.Ordinal);
+        Assert.DoesNotContain("Wi-Fi band", cable, StringComparison.Ordinal);
+        Assert.DoesNotContain("Signal", cable, StringComparison.Ordinal);
+        Assert.Contains("SSID: Unsupported", text.Split("Network 2")[1], StringComparison.Ordinal); // a missing value on a real radio still says so
+    }
+
+    [Fact]
     public void Hw_prints_no_hint_when_there_were_no_details_to_hide()
     {
         var text = HwCommand.Render(Context(), HwJson("""{ "cpu": { "status": "ok", "source": "t", "value": { "name": { "status": "ok", "source": "t", "value": "X" } } } }"""), details: false);

@@ -141,9 +141,9 @@ public static class FakeHardwareData
             L("192.0.2.10", "fe80::1"),
             L("192.0.2.1"),
             V("1.1.4.43"),
-            Value.Unsupported<string>(Src, "not a wireless adapter"),
-            Value.Unsupported<string>(Src, "not a wireless adapter"),
-            Value.Unsupported<int>(Src, "not a wireless adapter")),
+            Value.Unsupported<string>(Src, NetworkAdapter.NotWirelessReason),
+            Value.Unsupported<string>(Src, NetworkAdapter.NotWirelessReason),
+            Value.Unsupported<int>(Src, NetworkAdapter.NotWirelessReason)),
     ];
 
     private static IReadOnlyList<DisplayDevice> Displays() =>
