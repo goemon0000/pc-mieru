@@ -15,7 +15,7 @@ internal sealed class HardwarePage : PageBase
     private const int LabelColumn = 0;
     private const int ValueColumn = 1;
     private const int StatusColumn = 2;
-    private const int SourceColumn = 3;
+    private const int HintLength = 72;
 
     private readonly TreeView _tree = new() { Name = "partsTree" };
     private readonly GridView _grid = new() { Name = "partsGrid" };
@@ -62,13 +62,14 @@ internal sealed class HardwarePage : PageBase
             Strings.Get("gui.nav.hardware"),
             (string.Empty, Px(210), HorizontalAlignment.Left),
             (string.Empty, Px(380), HorizontalAlignment.Left),
-            (string.Empty, Px(110), HorizontalAlignment.Left),
-            (string.Empty, Px(120), HorizontalAlignment.Left));
+            (string.Empty, Px(130), HorizontalAlignment.Left));
+        _grid.FillColumn = ValueColumn;
         _grid.Cells = Cell;
         _grid.RowStyles = row => row >= 0 && row < _lines.Count && _lines[row].Row is null ? RowStyle.Header : RowStyle.Normal;
         _grid.CellTip = CellTip;
         _grid.ExpanderClicked += ToggleExpert;
         _grid.KeyDown += OnGridKey;
+        _grid.SelectedIndexChanged += (_, _) => UpdateHint();
         _grid.SizeChanged += (_, _) => _grid.FitLastColumn();
 
         _reload.MinimumSize = new Size(Px(88), Px(30));
@@ -116,6 +117,9 @@ internal sealed class HardwarePage : PageBase
 
     internal int LineCount => _lines.Count;
 
+    /// <summary>The line under the list (the general hint, or the selected row's source or reason).</summary>
+    internal string HintText => _hint.Text;
+
     internal PartsRow? RowAt(int index) => index >= 0 && index < _lines.Count ? _lines[index].Row : null;
 
     public override bool IsReady => _loaded;
@@ -143,14 +147,14 @@ internal sealed class HardwarePage : PageBase
         _tips.SetToolTip(_copyJson, Strings.Get("gui.hw.copy.tip"));
         _tree.AccessibleName = Strings.Get("gui.hw.tree");
         _grid.AccessibleName = Strings.Get("gui.nav.hardware");
-        string[] keys = ["item", "value", "status", "source"];
+        string[] keys = ["item", "value", "status"];
         for (var i = 0; i < keys.Length && i < _grid.Columns.Count; i++)
         {
             _grid.Columns[i].Text = Strings.Get("gui.hw.col." + keys[i]);
         }
 
         _hint.SetTone(CellTone.Dim);
-        _hint.Text = Strings.Get("gui.hw.hint");
+        UpdateHint();
         UpdateStamp();
         if (_loaded)
         {
@@ -316,6 +320,7 @@ internal sealed class HardwarePage : PageBase
 
         _grid.VirtualListSize = _lines.Count;
         _grid.Invalidate();
+        UpdateHint();
     }
 
     private void ToggleExpert(int row)
@@ -367,13 +372,13 @@ internal sealed class HardwarePage : PageBase
                 : new GridCell(string.Empty);
         }
 
+        // The status column is for what could not be read: a value that was read has nothing to explain, so its cell stays empty.
         var ok = r.Status == ValueStatus.Ok;
         return column switch
         {
             LabelColumn => new GridCell(r.Label, CellTone.Dim),
             ValueColumn => new GridCell(r.Text, ok ? CellTone.Normal : CellTone.Dim),
-            StatusColumn => new GridCell(PartsModel.StatusText(r.Status), CellTone.Dim),
-            SourceColumn => new GridCell(r.Source, CellTone.Dim),
+            StatusColumn => ok ? new GridCell(string.Empty) : new GridCell(PartsModel.StatusText(r.Status)),
             _ => new GridCell(string.Empty),
         };
     }
@@ -390,14 +395,33 @@ internal sealed class HardwarePage : PageBase
             return Reason(r);
         }
 
-        return column == ValueColumn && r.Text.Length > 40 ? r.Text : null;
+        // Where a value came from is a detail, not a column: it is under the pointer, and in the line under the list for the selected row.
+        return column == ValueColumn && r.Text.Length > 40 ? r.Text + Environment.NewLine + Origin(r) : Origin(r);
+    }
+
+    /// <summary>"Source: WMI". The sample data's own name for itself ("fake") is shown as what it is.</summary>
+    internal static string Origin(PartsRow row) =>
+        Strings.Format("gui.hw.src", Fmt.Dict(("source", PartsModel.SourceText(row.Source))));
+
+    /// <summary>The line under the list: the general hint, or for the selected row where it came from (or why it could not be read).</summary>
+    private void UpdateHint()
+    {
+        var row = _grid.SelectedRow;
+        if (row < 0 || row >= _lines.Count || _lines[row].Row is not { } r)
+        {
+            _hint.Text = Strings.Get("gui.hw.hint");
+            return;
+        }
+
+        var text = r.Status == ValueStatus.Ok ? Origin(r) : Reason(r);
+        _hint.Text = text.Length > HintLength ? text[..(HintLength - 1)] + "…" : text;
     }
 
     /// <summary>Why a value is missing: its status, the reason the reader gave, and where it looked.</summary>
     internal static string Reason(PartsRow row)
     {
         var status = PartsModel.StatusText(row.Status);
-        var source = row.Source.Length > 0 ? row.Source : "-";
+        var source = PartsModel.SourceText(row.Source);
         return string.IsNullOrWhiteSpace(row.Detail)
             ? Strings.Format("gui.hw.tip", Fmt.Dict(("status", status), ("source", source)))
             : Strings.Format("gui.hw.tip.detail", Fmt.Dict(("status", status), ("detail", row.Detail), ("source", source)));

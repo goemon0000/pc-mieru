@@ -1,5 +1,24 @@
 namespace PcMieru.Gui;
 
+/// <summary>How large the text is. Small is the size Windows gives message boxes; Normal is a step above it and the default.</summary>
+internal enum TextSize
+{
+    Small,
+    Normal,
+    Large,
+}
+
+internal static class TextSizes
+{
+    /// <summary>The body font size in points for a choice, counted from the size Windows uses for its own dialogs.</summary>
+    public static float Points(TextSize size, float systemPoints) => size switch
+    {
+        TextSize.Small => systemPoints,
+        TextSize.Large => systemPoints + 3f,
+        _ => systemPoints + 1f,
+    };
+}
+
 /// <summary>
 /// Per-user choices, kept as "key=value" lines under %LOCALAPPDATA%\PCMieru\gui.ini. Anything unreadable falls back to
 /// the defaults: a broken settings file must never stop the window from opening. A store with no path keeps
@@ -29,6 +48,8 @@ internal sealed class GuiSettings
     }
 
     public bool AlwaysOnTop { get; set; }
+
+    public TextSize TextSize { get; set; } = TextSize.Normal;
 
     /// <summary>Whether the sampler is paused. Not remembered across runs: opening the app should always show live numbers.</summary>
     public bool Paused { get; set; }
@@ -116,6 +137,9 @@ internal sealed class GuiSettings
             case "alwaysontop":
                 AlwaysOnTop = value == "1";
                 break;
+            case "textsize" when Enum.TryParse<TextSize>(value, ignoreCase: true, out var textSize) && Enum.IsDefined(textSize):
+                TextSize = textSize;
+                break;
             default:
                 if (!IsReserved(key))
                 {
@@ -134,6 +158,7 @@ internal sealed class GuiSettings
             $"theme={Theme.ToString().ToLowerInvariant()}",
             $"interval={IntervalMs}",
             $"alwaysontop={(AlwaysOnTop ? 1 : 0)}",
+            $"textsize={TextSize.ToString().ToLowerInvariant()}",
         };
         foreach (var pair in _extra.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
@@ -160,5 +185,5 @@ internal sealed class GuiSettings
         }
     }
 
-    private static bool IsReserved(string key) => key is "language" or "theme" or "interval" or "alwaysontop";
+    private static bool IsReserved(string key) => key is "language" or "theme" or "interval" or "alwaysontop" or "textsize";
 }

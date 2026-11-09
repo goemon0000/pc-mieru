@@ -247,6 +247,13 @@ internal static class PartsModel
 
     public static string SourceOf(JsonObject? value) => value?["source"]?.GetValue<string>() ?? string.Empty;
 
+    /// <summary>The name of the sample data's source in the model (every value of a --fakes run says it).</summary>
+    internal const string SampleSource = "fake";
+
+    /// <summary>A source for a person to read: the sample data says what it is; any other source keeps its technical name ("-" when there is none).</summary>
+    public static string SourceText(string source) =>
+        source.Length == 0 ? Fmt.Dash : string.Equals(source, SampleSource, StringComparison.Ordinal) ? Strings.Get("gui.hw.src.sample") : source;
+
     /// <summary>The text of a grid cell for a key and a JSON value: units from the key's name, enums by name, lists joined.</summary>
     public static string Format(string key, JsonNode? node)
     {

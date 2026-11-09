@@ -11,10 +11,11 @@ namespace PcMieru.Gui;
 /// </summary>
 internal sealed class ServicesPage : PageBase
 {
-    private const int NameColumn = 0;
-    private const int DisplayColumn = 1;
-    private const int StateColumn = 2;
-    private const int StartColumn = 3;
+    // The name people know first (the display name), then what it is doing and how it starts; the internal name comes after.
+    private const int DisplayColumn = 0;
+    private const int StateColumn = 1;
+    private const int StartColumn = 2;
+    private const int NameColumn = 3;
     private const int PidColumn = 4;
     private const int DescriptionColumn = 5;
 
@@ -59,10 +60,10 @@ internal sealed class ServicesPage : PageBase
         PageLayout.Prepare(
             _grid,
             Strings.Get("gui.nav.services"),
+            (string.Empty, Px(230), HorizontalAlignment.Left),
+            (string.Empty, Px(100), HorizontalAlignment.Left),
+            (string.Empty, Px(170), HorizontalAlignment.Left),
             (string.Empty, Px(150), HorizontalAlignment.Left),
-            (string.Empty, Px(210), HorizontalAlignment.Left),
-            (string.Empty, Px(90), HorizontalAlignment.Left),
-            (string.Empty, Px(120), HorizontalAlignment.Left),
             (string.Empty, Px(70), HorizontalAlignment.Right),
             (string.Empty, Px(420), HorizontalAlignment.Left));
         _grid.Cells = Cell;
@@ -125,8 +126,8 @@ internal sealed class ServicesPage : PageBase
         Controls.Add(_grid);
         Controls.Add(PageLayout.Footer("serviceFooter", pad, _count, _hint));
         Controls.Add(PageLayout.Bar("serviceBar", pad, [_filterLabel, _filter], [_start, _stop, _restart, _reload]));
-        _table.SetSort(NameColumn, false);
-        _grid.SetSort(NameColumn, false);
+        _table.SetSort(DisplayColumn, false);
+        _grid.SetSort(DisplayColumn, false);
         ApplyLanguage();
         UpdateButtons();
     }
@@ -200,7 +201,7 @@ internal sealed class ServicesPage : PageBase
         _grid.AccessibleName = Strings.Get("gui.nav.services");
         _tips.SetToolTip(_filter, Strings.Get("gui.svc.filter.tip"));
         _tips.SetToolTip(_reload, Strings.Get("gui.svc.reload.tip"));
-        string[] keys = ["name", "display", "state", "start", "pid", "desc"];
+        string[] keys = ["display", "state", "start", "name", "pid", "desc"];
         for (var i = 0; i < keys.Length && i < _grid.Columns.Count; i++)
         {
             _grid.Columns[i].Text = Strings.Get("gui.svc.col." + keys[i]);
@@ -251,6 +252,16 @@ internal sealed class ServicesPage : PageBase
         finally
         {
             _busy = false;
+        }
+    }
+
+    /// <summary>A list that arrived before the window existed (the page was the one the app opened on) is put on screen now, not at the next refresh.</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_loaded)
+        {
+            Reload();
         }
     }
 
@@ -345,7 +356,7 @@ internal sealed class ServicesPage : PageBase
                 return new GridCell(Strings.Get("gui.svc.start." + s.StartType.ToString().ToLowerInvariant()), s.StartType == ServiceStartType.Disabled ? CellTone.Dim : CellTone.Normal);
             case PidColumn:
                 return s.Pid is { } pid && pid != 0
-                    ? new GridCell(pid.ToString(CultureInfo.CurrentCulture))
+                    ? new GridCell(pid.ToString(CultureInfo.CurrentCulture)) { Link = true } // a click opens the process (see OverPid)
                     : new GridCell(Fmt.Dash, CellTone.Dim);
             case DescriptionColumn:
                 return s.Description.TryGet(out var text) ? new GridCell(text) : new GridCell(Fmt.Dash, CellTone.Dim);
@@ -559,7 +570,7 @@ internal static class ServiceStrings
         new("gui.svc.col.name", "名前", "Name"),
         new("gui.svc.col.display", "表示名", "Display name"),
         new("gui.svc.col.state", "状態", "Status"),
-        new("gui.svc.col.start", "開始の種類", "Start type"),
+        new("gui.svc.col.start", "スタートアップの種類", "Startup type"),
         new("gui.svc.col.pid", "PID", "PID"),
         new("gui.svc.col.desc", "説明", "Description"),
         new("gui.svc.filter", "検索", "Search"),
@@ -569,15 +580,15 @@ internal static class ServiceStrings
         new("gui.svc.hint", "サービスは Windows が裏で動かしている部品です。止めると、ほかの機能が動かなくなることがあります。", "Services are parts Windows runs in the background. Stopping one can make other features stop working."),
         new("gui.svc.pid.tip", "クリックで、このサービスのプロセスを表示します", "Click to show this service's process"),
         new("gui.svc.noprocess", "このサービスのプロセスは、いまの一覧に見つかりません", "This service's process is not in the current list"),
-        new("gui.svc.act.start", "開始", "Start"),
-        new("gui.svc.act.stop", "停止", "Stop"),
-        new("gui.svc.act.restart", "再起動", "Restart"),
+        new("gui.svc.act.start", "サービスを開始", "Start service"),
+        new("gui.svc.act.stop", "サービスを停止", "Stop service"),
+        new("gui.svc.act.restart", "サービスを再起動", "Restart service"),
         new("gui.svc.act.start.tip", "選んだサービスを開始します", "Start the selected service"),
         new("gui.svc.act.stop.tip", "選んだサービスを停止します", "Stop the selected service"),
         new("gui.svc.act.restart.tip", "選んだサービスを止めて、もう一度開始します", "Stop the selected service and start it again"),
         new("gui.svc.act.showprocess", "プロセスを表示", "Show process"),
         new("gui.svc.act.copy", "名前をコピー", "Copy name"),
-        new("gui.svc.off.disabled", "開始の種類が「無効」のため、開始できません", "Its start type is Disabled, so it cannot be started"),
+        new("gui.svc.off.disabled", "スタートアップの種類が「無効」のため、開始できません", "Its startup type is Disabled, so it cannot be started"),
         new("gui.svc.off.running", "すでに動いています", "It is already running"),
         new("gui.svc.off.stopped", "いまは止まっているため選べません", "It is not running, so this is not available"),
         new("gui.svc.confirm.start.title", "サービスを開始しますか", "Start this service?"),

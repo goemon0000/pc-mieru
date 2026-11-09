@@ -91,7 +91,7 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
    - HKLM の書き換えは Helper。
 5. **サービス**: 名前・表示名・状態・起動の種類・PID・説明。開始／停止／再起動は Helper（依存関係を表示して確認）。`*_PENDING`・checkpoint/wait hint を待ち、要求の成功と RUNNING/STOPPED への到達を分けて出す。途中失敗は「どこまで行ったか」を出す（自動で戻せるとは言わない）。起動の種類の変更は v1.x。
 6. **ユーザー**: セッションの一覧（ユーザー名・状態は WTS）。CPU・メモリは Snapshot の SessionId で集計。行を開くとそのセッションのプロセス。他ユーザーのプロセスが見えない場合は「一部だけ」と書く。切断・サインアウトは v1.x。
-7. **PCの部品**: §7。左に部品の木、右に表。上に「型番・容量・接続・今の値」、下に専門項目を折り畳み。各項目に取得元。コピー（テキスト／JSON）。
+7. **PCの構成**（旧称「PCの部品」。画面の名前は 2026-11 に変えた）: §7。左に部品の木、右に表。上に「型番・容量・接続・今の値」、下に専門項目を折り畳み。各項目に取得元。コピー（テキスト／JSON）。
 8. **診断レポート**: 観測時間（10 秒既定）を選んで「作る」→ Markdown（AI に貼る用）と JSON。伏せ字の切替（既定オン、§9）。コピー・保存。AI への送信機能は持たない。
 
 - テーマ: ライト／ダーク／Windows に従う。高 DPI（PerMonitorV2）。キーボードだけで全部操作できる（Del＝終了の確認、Ctrl+F＝検索、F5＝今すぐ更新、Space＝一時停止）。
@@ -129,7 +129,7 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
 - NVMe: 最小限のアクセス（0）と共有 Read/Write で開き `StorageDeviceProtocolSpecificProperty`（ProtocolTypeNvme・NVMeDataTypeLogPage・Health log 0x02）。返りの descriptor・offset・長さを確かめる。denied・unsupported・error を分ける。書き込み量＝Data Units×512,000 バイト（128bit は文字列）。寿命の使用率は 100 超もあり得る（clamp しない）。
 - SATA SMART: Helper の固定の読み取り要求だけ（パーツぐらしの PartsLife.Check の解析を写す）。属性の raw を共通の温度・回数と決めつけない。
 - Wi-Fi の SSID が取れないのは位置情報の同意のことがある→「プライバシー設定で拒否」と出し、Helper で迂回しない。
-- 部品情報は「PCの部品」タブを開いたとき・CLI の `hw` のときに集める。キャッシュし、機器の変化（`WM_DEVICECHANGE`）で取り直す。WMI は毎秒呼ばない。
+- 部品情報は「PCの構成」タブを開いたとき・CLI の `hw` のときに集める。キャッシュし、機器の変化（`WM_DEVICECHANGE`）で取り直す。WMI は毎秒呼ばない。
 - 各項目に取得元と状態。
 - 温度（CPU・マザー）は v1.x で LHM＋PawnIO を**任意の追加機能**として検討（PawnIO 自体もドライバで、導入に管理者が要る。既定では入れない）。
 

@@ -28,6 +28,19 @@ public class FmtAndArgsTests
         Assert.Equal(expected, Fmt.Bytes(bytes));
     }
 
+    [Theory]
+    [InlineData(0L, "0 MB")]
+    [InlineData(-5L, "0 MB")]
+    [InlineData(2_200_000L, "2.1 MB")]
+    [InlineData(94_371_840L, "90.0 MB")]
+    [InlineData(272_629_760L, "260 MB")]
+    [InlineData(6_815_744_000L, "6,500 MB")]
+    public void Megabytes_keep_the_unit_and_group_the_digits(long bytes, string expected)
+    {
+        using var locale = Harness.Locale();
+        Assert.Equal(expected, Fmt.Megabytes(bytes));
+    }
+
     [Fact]
     public void Rate_adds_read_and_write_and_survives_one_side_missing_or_negative()
     {

@@ -41,10 +41,9 @@ internal static class PageLayout
     /// <summary>The thin line under a list: a count on the left, a hint in the dim tone next to it.</summary>
     public static FlowLayoutPanel Footer(string name, int pad, Label count, ToneLabel hint)
     {
-        var footer = new FlowLayoutPanel
+        var footer = new FooterPanel(pad)
         {
             Dock = DockStyle.Bottom,
-            Height = pad * 8 / 3,
             WrapContents = false,
             Padding = new Padding(pad, pad * 7 / 12, pad, 0),
             Name = name,
@@ -53,6 +52,26 @@ internal static class PageLayout
         footer.Controls.Add(count);
         footer.Controls.Add(hint);
         return footer;
+    }
+
+    /// <summary>The line under a list. Its height follows the font, so a larger text size is not cut off.</summary>
+    private sealed class FooterPanel : FlowLayoutPanel
+    {
+        private readonly int _pad;
+
+        public FooterPanel(int pad)
+        {
+            _pad = pad;
+            Height = MinimumHeight();
+        }
+
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            Height = MinimumHeight();
+        }
+
+        private int MinimumHeight() => Math.Max(_pad * 8 / 3, Font.Height + (_pad * 7 / 12) + (_pad * 2 / 3));
     }
 
     /// <summary>Common settings of a simple virtual list.</summary>

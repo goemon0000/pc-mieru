@@ -187,6 +187,16 @@ internal sealed class StartupPage : PageBase
         Reload();
     }
 
+    /// <summary>A list that arrived before the window existed (the page was the one the app opened on) is put on screen now, not at the next refresh.</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_loaded)
+        {
+            Reload();
+        }
+    }
+
     private void Reload()
     {
         if (!IsHandleCreated)
@@ -352,11 +362,11 @@ internal static class StartupStrings
     public static readonly StringEntry[] All =
     [
         new("gui.startup.col.name", "名前", "Name"),
-        new("gui.startup.col.provider", "登録の場所", "Where it is registered"),
+        new("gui.startup.col.provider", "登録元", "Registered in"),
         new("gui.startup.col.state", "状態", "Status"),
-        new("gui.startup.col.command", "起動するもの", "What it starts"),
+        new("gui.startup.col.command", "起動コマンド", "Start command"),
         new("gui.startup.filter", "検索", "Search"),
-        new("gui.startup.filter.tip", "名前や起動するものの一部で絞り込みます（Ctrl+F）", "Filter by part of the name or of what it starts (Ctrl+F)"),
+        new("gui.startup.filter.tip", "名前や起動コマンドの一部で探します（Ctrl+F）", "Search by part of the name or of the start command (Ctrl+F)"),
         new("gui.startup.reload.tip", "一覧を読み直します（F5）", "Read the list again (F5)"),
         new("gui.startup.count", "{shown} / {total} 件", "{shown} of {total}"),
         new("gui.startup.hint", "Windows と一緒に起動するものの一覧です。RunOnce とグループポリシーによる起動は、ここには出ません。", "Things that start with Windows. Run-once entries and Group Policy start-up are not shown here."),
@@ -364,8 +374,8 @@ internal static class StartupStrings
         new("gui.startup.listonly.tip", "この項目は一覧に表示するだけで、ここから有効・無効は切り替えられません", "This item is only listed; it cannot be switched on or off from here"),
         new("gui.startup.unknown.tip", "有効か無効かを確かめられませんでした", "Could not tell whether it is on or off"),
         new("gui.startup.needshelper", "切り替えには管理者の確認が要ります", "Switching it needs administrator approval"),
-        new("gui.startup.act.enable", "有効にする", "Turn on"),
-        new("gui.startup.act.disable", "無効にする", "Turn off"),
+        new("gui.startup.act.enable", "起動時に有効にする", "Start with Windows"),
+        new("gui.startup.act.disable", "起動時に無効にする", "Do not start with Windows"),
         new("gui.startup.act.none", "切り替える項目を選んでください", "Select an item to switch"),
         new("gui.startup.act.tip", "選んだ項目の起動を切り替えます。アプリは消えません", "Switches whether the selected item starts. The app itself is not removed"),
         new("gui.startup.act.helper", "管理者の確認画面が出ます。PC 全体の設定を切り替えるためです", "A Windows approval prompt appears, because this changes a setting for the whole PC"),

@@ -41,6 +41,7 @@ internal sealed class PerformancePage : PageBase
     private bool _factsRequested;
     private bool _rebuilding;
     private bool _layingOut;
+    private int _scaleMs;
     private string? _wanted;
 
     public PerformancePage(GuiContext context)
@@ -59,6 +60,8 @@ internal sealed class PerformancePage : PageBase
         _note.SetTone(CellTone.Dim);
         _note.Height = Px(28);
         _note.Padding = new Padding(pad, Px(6), pad, 0);
+        _note.SizeChanged += (_, _) => FitNote();
+        _note.FontChanged += (_, _) => FitNote();
         _listNote.SetTone(CellTone.Dim);
         _listNote.Padding = new Padding(pad, Px(6), pad, 0);
         _perCore.Checked = context.Settings.GetBool(PerCoreSetting, false);
@@ -177,7 +180,12 @@ internal sealed class PerformancePage : PageBase
     {
         _perCore.Text = Strings.Get("gui.perf.percore");
         _list.AccessibleName = Strings.Get("gui.nav.performance");
-        _note.Text = Strings.Format("gui.perf.note", Fmt.Dict(("count", SnapshotPump.HistoryLength.ToString(System.Globalization.CultureInfo.CurrentCulture))));
+        UpdateTimeScale(force: true);
+        for (var g = 0; g < _graphs.Length; g++)
+        {
+            _graphs[g].EmptyText = Strings.Get("gui.perf.collecting");
+        }
+
         for (var i = 0; i < _coreGraphs.Count; i++)
         {
             _coreGraphs[i].Title = Strings.Format("gui.perf.core", Fmt.Dict(("n", i.ToString(System.Globalization.CultureInfo.CurrentCulture))));
@@ -302,6 +310,51 @@ internal sealed class PerformancePage : PageBase
         }
     }
 
+    /// <summary>
+    /// Says how far back the graphs reach: the left edge is "N s ago" (the readings a graph holds times the time between them),
+    /// the right edge "now". Follows the interval in force, so a slower setting does not leave a wrong "60 s" on the axis.
+    /// </summary>
+    private void UpdateTimeScale(bool force = false)
+    {
+        var interval = _last?.IntervalMs is > 0 ? _last.IntervalMs : Context.Pump.EffectiveIntervalMs;
+        if (interval <= 0 || (!force && interval == _scaleMs))
+        {
+            return;
+        }
+
+        _scaleMs = interval;
+        var now = Strings.Get("gui.perf.now");
+        var ago = Strings.Format("gui.perf.ago", Fmt.Dict(("span", PerfMetrics.Span(PerfMetrics.HistorySeconds(interval)))));
+        for (var g = 0; g < _graphs.Length; g++)
+        {
+            _graphs[g].TimeStartText = ago;
+            _graphs[g].TimeEndText = now;
+        }
+
+        _note.Text = Strings.Format("gui.perf.note", Fmt.Dict(("now", now), ("ago", ago), ("interval", PerfMetrics.Span(interval / 1000.0)), ("count", SnapshotPump.HistoryLength.ToString(System.Globalization.CultureInfo.CurrentCulture))));
+        FitNote();
+    }
+
+    /// <summary>The note under the graphs (smoke run and tests read it).</summary>
+    internal string NoteText => _note.Text;
+
+    /// <summary>Gives the note the height its wrapped text needs at the current width and text size, so a longer language or a larger font does not cut it off.</summary>
+    private void FitNote()
+    {
+        var width = _note.ClientSize.Width - _note.Padding.Horizontal;
+        if (width <= 0 || _note.Text.Length == 0)
+        {
+            return;
+        }
+
+        var text = TextRenderer.MeasureText(_note.Text, _note.Font, new Size(width, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Height;
+        var height = Math.Max(Px(28), text + _note.Padding.Vertical + Px(4));
+        if (_note.Height != height)
+        {
+            _note.Height = height;
+        }
+    }
+
     private bool ShowingCores => _perCore.Checked && _current is { Kind: PerfKind.Cpu } && _last is { System.Cpu.PerLogicalPercent.Count: > 0 };
 
     /// <summary>Everything that depends on which panel is selected and not on the numbers: titles, axes, which graph is visible.</summary>
@@ -348,6 +401,7 @@ internal sealed class PerformancePage : PageBase
         var history = Context.Pump.History;
         var count = Math.Min(history.Count, SnapshotPump.HistoryLength);
         var offset = history.Count - count;
+        UpdateTimeScale();
         var headline = PerfMetrics.Headline(panel, snapshot.System);
         _detail.Text = PerfMetrics.Detail(panel, snapshot.System, _facts);
         _perCore.Enabled = snapshot.System.Cpu.PerLogicalPercent.Count > 0;
@@ -536,9 +590,14 @@ internal static class PerfStrings
         new("gui.perf.cpu", "CPU", "CPU"),
         new("gui.perf.memory", "メモリ", "Memory"),
         new("gui.perf.disk", "ディスク {name}", "Disk {name}"),
-        new("gui.perf.percore", "プロセッサごとに分けて表示", "Show each processor separately"),
-        new("gui.perf.core", "プロセッサ {n}", "Processor {n}"),
-        new("gui.perf.note", "グラフの右端が最新です（直近 {count} 回の測定）", "The right edge is the latest (last {count} readings)"),
+        new("gui.perf.percore", "論理CPUごとに表示", "Show each logical CPU separately"),
+        new("gui.perf.core", "論理CPU {n}", "Logical CPU {n}"),
+        new("gui.perf.note", "グラフの右端が「{now}」、左端が「{ago}」です（{interval}ごとに測った直近 {count} 回分）", "The right edge is \"{now}\" and the left edge is \"{ago}\" (the last {count} readings, one every {interval})"),
+        new("gui.perf.now", "現在", "Now"),
+        new("gui.perf.ago", "{span}前", "{span} ago"),
+        new("gui.perf.span.sec", "{n} 秒", "{n} s"),
+        new("gui.perf.span.min", "{n} 分", "{n} min"),
+        new("gui.perf.collecting", "データ収集中…", "Collecting data…"),
         new("gui.perf.list.gpu", "GPU", "GPU"),
         new("gui.perf.list.disks", "ディスク", "Disks"),
         new("gui.perf.list.nics", "ネットワーク", "Network adapters"),
@@ -560,10 +619,10 @@ internal static class PerfStrings
         new("gui.perf.receive", "受信", "Receive"),
 
         new("gui.perf.s.usage", "使用率", "Usage"),
-        new("gui.perf.s.speed", "いまの速度", "Current speed"),
-        new("gui.perf.s.logical", "プロセッサ数（論理）", "Logical processors"),
+        new("gui.perf.s.speed", "現在のクロック", "Current clock"),
+        new("gui.perf.s.logical", "論理CPU数", "Logical CPUs"),
         new("gui.perf.s.cores", "コア数", "Cores"),
-        new("gui.perf.s.base", "基本の速度", "Base speed"),
+        new("gui.perf.s.base", "基本クロック", "Base clock"),
         new("gui.perf.s.l1", "L1 キャッシュ", "L1 cache"),
         new("gui.perf.s.l2", "L2 キャッシュ", "L2 cache"),
         new("gui.perf.s.l3", "L3 キャッシュ", "L3 cache"),

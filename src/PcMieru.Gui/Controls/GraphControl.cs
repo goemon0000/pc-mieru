@@ -116,6 +116,9 @@ internal sealed class GraphControl : Control, IThemed
     private string _title = string.Empty;
     private string _valueText = string.Empty;
     private string _detailText = string.Empty;
+    private string _timeStart = string.Empty;
+    private string _timeEnd = string.Empty;
+    private string _emptyText = string.Empty;
 
     public GraphControl()
     {
@@ -145,6 +148,68 @@ internal sealed class GraphControl : Control, IThemed
             _title = value;
             AccessibleName = value;
             Invalidate();
+        }
+    }
+
+    /// <summary>What the left edge of the time axis means ("60 s ago"). Empty (with <see cref="TimeEndText"/>) draws no time axis.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal string TimeStartText
+    {
+        get => _timeStart;
+        set
+        {
+            if (_timeStart != value)
+            {
+                _timeStart = value;
+                Invalidate();
+            }
+        }
+    }
+
+    /// <summary>What the right edge of the time axis means ("now").</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal string TimeEndText
+    {
+        get => _timeEnd;
+        set
+        {
+            if (_timeEnd != value)
+            {
+                _timeEnd = value;
+                Invalidate();
+            }
+        }
+    }
+
+    /// <summary>Said in the middle of the plot while no reading has arrived yet ("Collecting data..."), so an empty box is not mistaken for a broken one.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal string EmptyText
+    {
+        get => _emptyText;
+        set
+        {
+            if (_emptyText != value)
+            {
+                _emptyText = value;
+                Invalidate();
+            }
+        }
+    }
+
+    /// <summary>True while there is nothing to draw because no reading has arrived (not when a reading arrived and said "not available").</summary>
+    internal bool Collecting
+    {
+        get
+        {
+            for (var s = 0; s < _counts.Length; s++)
+            {
+                if (_values[s] is not null && _counts[s] >= 2)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 
@@ -246,10 +311,16 @@ internal sealed class GraphControl : Control, IThemed
         }
 
         var legendHeight = _names[1].Length > 0 ? SmallFont.Height + LogicalToDeviceUnits(4) : 0;
-        var plot = new Rectangle(pad, top, Math.Max(Width - (pad * 2), 0), Math.Max(Height - top - pad - legendHeight, 0));
+        var timeAxis = _timeStart.Length > 0 || _timeEnd.Length > 0;
+        var axisHeight = timeAxis ? SmallFont.Height + LogicalToDeviceUnits(2) : 0;
+        var plot = new Rectangle(pad, top, Math.Max(Width - (pad * 2), 0), Math.Max(Height - top - pad - legendHeight - axisHeight, 0));
         if (plot.Width > 4 && plot.Height > 4)
         {
             DrawPlot(g, plot, palette);
+            if (timeAxis)
+            {
+                DrawTimeAxis(g, new Rectangle(plot.Left, plot.Bottom + 1, plot.Width, axisHeight), palette);
+            }
         }
 
         if (legendHeight > 0)
@@ -306,14 +377,31 @@ internal sealed class GraphControl : Control, IThemed
 
         if (AxisFormatter is { } format)
         {
-            TextRenderer.DrawText(
-                g,
-                format(max),
-                SmallFont,
-                new Rectangle(plot.Left + 2, plot.Top + 1, plot.Width, SmallFont.Height),
-                palette.TextDim,
-                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+            // The top, the middle and the bottom line say what they are: a graph with only its maximum labelled hides where zero is.
+            var line = SmallFont.Height;
+            var flags = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+            TextRenderer.DrawText(g, format(max), SmallFont, new Rectangle(plot.Left + 2, plot.Top + 1, plot.Width, line), palette.TextDim, flags);
+            if (plot.Height >= line * 4)
+            {
+                var middle = plot.Top + ((plot.Height - 1) * 2 / 4);
+                TextRenderer.DrawText(g, format(max / 2), SmallFont, new Rectangle(plot.Left + 2, middle - line, plot.Width, line), palette.TextDim, flags);
+                TextRenderer.DrawText(g, format(0), SmallFont, new Rectangle(plot.Left + 2, plot.Bottom - 1 - line, plot.Width, line), palette.TextDim, flags);
+            }
         }
+
+        if (_emptyText.Length > 0 && Collecting)
+        {
+            TextRenderer.DrawText(g, _emptyText, Font, plot, palette.TextDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        }
+    }
+
+    /// <summary>The time axis under the plot: how long ago the left edge is, and "now" at the right edge where the newest reading is.</summary>
+    private void DrawTimeAxis(Graphics g, Rectangle area, Palette palette)
+    {
+        var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis;
+        var half = Math.Max((area.Width / 2) - 4, 0);
+        TextRenderer.DrawText(g, _timeStart, SmallFont, new Rectangle(area.Left + 2, area.Top, half, area.Height), palette.TextDim, flags | TextFormatFlags.Left);
+        TextRenderer.DrawText(g, _timeEnd, SmallFont, new Rectangle(area.Right - 2 - half, area.Top, half, area.Height), palette.TextDim, flags | TextFormatFlags.Right);
     }
 
     private void DrawLegend(Graphics g, Rectangle area, Palette palette)

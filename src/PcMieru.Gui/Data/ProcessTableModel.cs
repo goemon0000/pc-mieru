@@ -8,6 +8,7 @@ internal enum ProcessColumn
     Pid,
     Cpu,
     Memory,
+    Disk,
     IoRead,
     IoWrite,
     Gpu,
@@ -25,6 +26,7 @@ internal enum ProcessViewMode
 {
     Tree,
     List,
+    Flat,
 }
 
 /// <summary>One row of the process list: a process (with its place in the tree) or a group header (list view).</summary>
@@ -204,7 +206,12 @@ internal sealed class ProcessTableModel
         var keepOrder = Frozen && !_forceSort && previous.Count > 0;
         _forceSort = false;
         var matches = Matching();
-        _rows = _mode == ProcessViewMode.Tree ? BuildTree(matches, keepOrder) : BuildList(matches, keepOrder);
+        _rows = _mode switch
+        {
+            ProcessViewMode.Tree => BuildTree(matches, keepOrder),
+            ProcessViewMode.Flat => BuildFlat(matches, keepOrder),
+            _ => BuildList(matches, keepOrder),
+        };
         ShownProcesses = matches.Count;
     }
 
@@ -245,6 +252,20 @@ internal sealed class ProcessTableModel
         }
 
         return [.. rows];
+    }
+
+    /// <summary>One list for everything, no group headers: the way to find the heaviest process overall.</summary>
+    private ProcessRow[] BuildFlat(HashSet<ProcessKey> matches, bool keepOrder)
+    {
+        var members = _all.Where(p => matches.Contains(p.Key)).ToList();
+        members.Sort(Comparer(keepOrder));
+        var rows = new ProcessRow[members.Count];
+        for (var i = 0; i < rows.Length; i++)
+        {
+            rows[i] = new ProcessRow(members[i], 0, false, false, ProcessGroup.Background, 0);
+        }
+
+        return rows;
     }
 
     private ProcessRow[] BuildTree(HashSet<ProcessKey> matches, bool keepOrder)
@@ -359,6 +380,7 @@ internal sealed class ProcessTableModel
             ProcessColumn.Pid => a.Key.Pid.CompareTo(b.Key.Pid),
             ProcessColumn.Cpu => Number(a.CpuPercent).CompareTo(Number(b.CpuPercent)),
             ProcessColumn.Memory => a.PrivateWorkingSetBytes.CompareTo(b.PrivateWorkingSetBytes),
+            ProcessColumn.Disk => DiskRate(a).CompareTo(DiskRate(b)),
             ProcessColumn.IoRead => Number(a.IoReadBytesPerSec).CompareTo(Number(b.IoReadBytesPerSec)),
             ProcessColumn.IoWrite => Number(a.IoWriteBytesPerSec).CompareTo(Number(b.IoWriteBytesPerSec)),
             ProcessColumn.Gpu => Number(a.GpuPercent).CompareTo(Number(b.GpuPercent)),
@@ -385,6 +407,7 @@ internal sealed class ProcessTableModel
     {
         ProcessColumn.Cpu => !p.CpuPercent.IsOk,
         ProcessColumn.Gpu => !p.GpuPercent.IsOk,
+        ProcessColumn.Disk => !p.IoReadBytesPerSec.IsOk && !p.IoWriteBytesPerSec.IsOk,
         ProcessColumn.IoRead => !p.IoReadBytesPerSec.IsOk,
         ProcessColumn.IoWrite => !p.IoWriteBytesPerSec.IsOk,
         ProcessColumn.State => !p.State.IsOk,
@@ -392,6 +415,9 @@ internal sealed class ProcessTableModel
     };
 
     private static double Number(Value<double> value) => value.TryGet(out var v) ? v : 0;
+
+    /// <summary>Read plus write of the process itself (the Disk column). A side that was not collected counts as nothing.</summary>
+    internal static double DiskRate(ProcessInfo p) => Number(p.IoReadBytesPerSec) + Number(p.IoWriteBytesPerSec);
 
     private static int StateRank(ProcessInfo p) => p.State.TryGet(out var s) ? (int)s : 0;
 }

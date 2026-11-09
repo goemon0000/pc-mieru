@@ -38,6 +38,11 @@ internal static class Program
             settings.Theme = themeMode;
         }
 
+        if (options.TextSize is { } size)
+        {
+            settings.TextSize = size;
+        }
+
         Strings.Current = settings.Language;
 
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = options.ForceFakes });
@@ -70,7 +75,8 @@ internal sealed record GuiOptions(
     string? ScreenshotDirectory,
     bool ForceFakes,
     bool OnScreen = false,
-    int Dpi = 0);
+    int Dpi = 0,
+    TextSize? TextSize = null);
 
 /// <summary>
 /// Command line of PCMieru.exe. These switches exist for verification (smoke run, screenshots, picking a page);
@@ -88,6 +94,7 @@ internal static class GuiArgs
         var fakes = false;
         var onScreen = false;
         var dpi = 0;
+        TextSize? textSize = null;
         problem = string.Empty;
         options = new GuiOptions(null, null, null, null, null, false);
 
@@ -158,6 +165,21 @@ internal static class GuiArgs
                 case "--onscreen":
                     onScreen = true;
                     break;
+                case "--textsize":
+                    textSize = Next()?.ToLowerInvariant() switch
+                    {
+                        "small" => TextSize.Small,
+                        "normal" => TextSize.Normal,
+                        "large" => TextSize.Large,
+                        _ => null,
+                    };
+                    if (textSize is null)
+                    {
+                        problem = "--textsize must be small, normal or large";
+                        return false;
+                    }
+
+                    break;
                 case "--dpi":
                     if (!int.TryParse(Next(), out dpi) || dpi is < 100 or > 300)
                     {
@@ -172,7 +194,7 @@ internal static class GuiArgs
             }
         }
 
-        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi);
+        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize);
         return true;
     }
 }

@@ -45,6 +45,39 @@ public class ProcessTableModelTests
         Assert.Equal(["high", "mid", "low"], Names(model));
     }
 
+    private static ProcessInfo WithDisk(ProcessInfo p, double? read, double? write) =>
+        p with
+        {
+            IoReadBytesPerSec = read is { } r ? Value.Ok(r, "t") : Value.NotCollected<double>("t"),
+            IoWriteBytesPerSec = write is { } w ? Value.Ok(w, "t") : Value.NotCollected<double>("t"),
+        };
+
+    [Fact]
+    public async Task The_disk_column_ranks_by_read_plus_write_and_an_uncollected_one_goes_last()
+    {
+        var model = await ModelAsync(
+            WithDisk(Proc(1, "reader", 1), 900, null),
+            WithDisk(Proc(2, "both", 1), 500, 600),
+            WithDisk(Proc(3, "unknown", 1), null, null),
+            WithDisk(Proc(4, "writer", 1), null, 100));
+        model.SortBy(ProcessColumn.Disk);
+        Assert.Equal(["both", "reader", "writer", "unknown"], Names(model));
+        model.SortBy(ProcessColumn.Disk);
+        Assert.Equal("unknown", Names(model)[^1]);
+    }
+
+    [Fact]
+    public async Task The_flat_view_ranks_every_process_in_one_list_with_no_group_headers()
+    {
+        var processes = new[] { Proc(1, "a", 5), Proc(2, "b", 50), Proc(3, "c", 20), Proc(4, "d", 1) };
+        var grouped = await ModelAsync(ProcessViewMode.List, processes);
+        var flat = await ModelAsync(ProcessViewMode.Flat, processes);
+        Assert.Equal(["b", "c", "a", "d"], Names(flat));
+        Assert.Equal(processes.Length, flat.Count);
+        Assert.DoesNotContain(Enumerable.Range(0, flat.Count), i => flat[i].IsGroup);
+        Assert.Contains(Enumerable.Range(0, grouped.Count), i => grouped[i].IsGroup);
+    }
+
     [Fact]
     public async Task Same_column_again_flips_and_a_new_text_column_starts_ascending()
     {

@@ -197,7 +197,7 @@ public class DataAndPagesTests
             Proc(90, "Memory Compression", 0, 4L << 30, 0),
             Proc(100, "chrome.exe", 5, 1L << 30),
         };
-        var apps = TopApps.Compute(processes, 16L << 30, _ => null);
+        var apps = TopApps.Compute(processes, _ => null);
         Assert.Equal(["chrome"], apps.Select(a => a.Name).ToArray());
     }
 
@@ -205,7 +205,7 @@ public class DataAndPagesTests
     public void Top_apps_merge_processes_of_one_product_into_one_line()
     {
         var processes = new[] { Proc(1, "chrome.exe", 4, 100), Proc(2, "chrome.exe", 1, 100), Proc(3, "chromium-helper.exe", 1, 100), Proc(4, "other.exe", 0, 10) };
-        var apps = TopApps.Compute(processes, 1000, key => key.Pid <= 3 ? "Chrome" : null);
+        var apps = TopApps.Compute(processes, key => key.Pid <= 3 ? "Chrome" : null);
         Assert.Equal(["Chrome", "other"], apps.Select(a => a.Name).ToArray());
         Assert.Equal(3, apps[0].ProcessCount);
         Assert.Equal(300, apps[0].MemoryBytes);
@@ -216,16 +216,67 @@ public class DataAndPagesTests
     public void Top_apps_do_not_merge_everything_that_carries_the_windows_product_name()
     {
         var processes = new[] { Proc(1, "svchost.exe", 2, 100), Proc(2, "explorer.exe", 1, 100) };
-        var apps = TopApps.Compute(processes, 1000, _ => "Microsoft® Windows® Operating System");
+        var apps = TopApps.Compute(processes, _ => "Microsoft® Windows® Operating System");
         Assert.Equal(["explorer", "svchost"], apps.Select(a => a.Name).Order().ToArray());
     }
 
     [Fact]
-    public void Top_apps_take_the_count_asked_for_ranked_by_cpu_share_plus_memory_share()
+    public void Top_apps_take_the_count_asked_for_ranked_by_cpu()
     {
         var processes = Enumerable.Range(1, 8).Select(i => Proc((uint)i, "app" + i + ".exe", i, 0)).ToArray();
-        var apps = TopApps.Compute(processes, 1000, _ => null, count: 3);
+        var apps = TopApps.Compute(processes, _ => null, count: 3);
         Assert.Equal(["app8", "app7", "app6"], apps.Select(a => a.Name).ToArray());
+    }
+
+    [Fact]
+    public void Top_apps_rank_by_one_basis_and_the_other_number_only_breaks_ties()
+    {
+        var processes = new[]
+        {
+            Proc(1, "busy.exe", 40, 100),
+            Proc(2, "big.exe", 2, 900),
+            Proc(3, "tie-small.exe", 2, 300),
+            Proc(4, "quiet.exe", 0, 500),
+        };
+
+        Assert.Equal(["busy", "big", "tie-small", "quiet"], TopApps.Compute(processes, _ => null, count: 4, rank: TopRank.Cpu).Select(a => a.Name).ToArray());
+        Assert.Equal(["big", "quiet", "tie-small", "busy"], TopApps.Compute(processes, _ => null, count: 4, rank: TopRank.Memory).Select(a => a.Name).ToArray());
+    }
+
+    [Fact]
+    public void Top_apps_on_an_idle_pc_still_rank_by_memory_under_the_cpu_order()
+    {
+        var processes = new[] { Proc(1, "small.exe", 0, 100), Proc(2, "large.exe", 0, 900) };
+        Assert.Equal(["large", "small"], TopApps.Compute(processes, _ => null).Select(a => a.Name).ToArray());
+    }
+
+    // ---- Overview insights ----
+
+    [Fact]
+    public void Every_observation_the_engine_can_raise_has_a_headline_and_a_page_to_open()
+    {
+        var keys = ReportingStrings.All.Select(e => e.Key).Where(k => k.StartsWith("obs.", StringComparison.Ordinal)).ToArray();
+        Assert.True(keys.Length > 10, "only " + keys.Length + " observation keys were found; the scan is probably broken");
+        var pages = PageCatalog.All.Select(p => p.Id).ToHashSet();
+        using var _ = Harness.Locale();
+        foreach (var key in keys)
+        {
+            var observation = new Observation("test", ObservationSeverity.Info, ObservationCertainty.Fact, key, new Dictionary<string, string>(), [], []);
+            var guide = ObservationGuide.For(observation);
+            Assert.True(guide is not null, key + " has no headline on the Overview: add it to ObservationGuide (otherwise the insight shows without a link)");
+            Assert.Contains(guide.PageId, pages);
+            foreach (var language in new[] { Language.Ja, Language.En })
+            {
+                Assert.NotEqual("[" + guide.HeadlineKey + "]", Strings.Get(guide.HeadlineKey, language));
+            }
+        }
+    }
+
+    [Fact]
+    public void An_observation_the_overview_has_no_wording_for_is_still_shown_without_a_link()
+    {
+        var unknown = new Observation("test", ObservationSeverity.Info, ObservationCertainty.Fact, "obs.future.rule", new Dictionary<string, string>(), [], []);
+        Assert.Null(ObservationGuide.For(unknown));
     }
 
     [Theory]
@@ -333,6 +384,31 @@ public class DataAndPagesTests
         Assert.Equal(DiagnosePage.BuildText(document, true, false, builder, Language.Ja), DiagnosePage.BuildText(document, true, false, builder, Language.En));
     }
 
+    [Fact]
+    public async Task The_preview_of_the_real_report_drops_the_Markdown_marks_and_keeps_the_text()
+    {
+        var document = await ReportAsync();
+        var builder = BuilderWith(new SpyRedactor(true));
+        foreach (var language in new[] { Language.Ja, Language.En })
+        {
+            var markdown = DiagnosePage.BuildText(document, false, true, builder, language);
+            var blocks = ReportPreview.Parse(markdown);
+            var preview = ReportPreview.PlainText(blocks);
+            Assert.Equal(1, blocks.Count(b => b.Kind == PreviewKind.Title));
+            Assert.True(blocks.Count(b => b.Kind == PreviewKind.Heading) >= 4);
+            Assert.Contains(blocks, b => b.Kind == PreviewKind.TableHeader);
+            Assert.DoesNotContain("`", preview, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n## ", "\n" + preview, StringComparison.Ordinal);
+            Assert.DoesNotContain("|---", preview, StringComparison.Ordinal);
+
+            // Nothing is lost: every plain word of the Markdown is in the preview (marks aside).
+            var words = markdown.Replace("`", string.Empty, StringComparison.Ordinal).Split([' ', '\n', '|'], StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.All(char.IsLetterOrDigit)).ToList();
+            Assert.NotEmpty(words);
+            Assert.All(words, word => Assert.Contains(word, preview, StringComparison.Ordinal));
+        }
+    }
+
     // ---- Hardware text ----
 
     [Fact]
@@ -390,6 +466,45 @@ public class DataAndPagesTests
         Assert.DoesNotContain("wifiStandard", keys);
         Assert.Contains("driverVersion", keys);
         Assert.Contains("mtu", keys);
+    }
+
+    [Fact]
+    public void The_sample_source_is_said_as_sample_data_and_a_real_source_keeps_its_name()
+    {
+        var sample = PartsModel.SourceText(PartsModel.SampleSource);
+        Assert.Equal(Strings.Get("gui.hw.src.sample"), sample);
+        Assert.DoesNotContain("fake", sample, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("wmi:Win32_Processor", PartsModel.SourceText("wmi:Win32_Processor"));
+        Assert.Equal(Fmt.Dash, PartsModel.SourceText(string.Empty));
+    }
+
+    // ---- Performance graphs ----
+
+    [Theory]
+    [InlineData(500, "30")]
+    [InlineData(1000, "60")]
+    [InlineData(2000, "2")]
+    [InlineData(5000, "5")]
+    [InlineData(10000, "10")]
+    public void The_graph_span_follows_the_interval(int intervalMs, string number)
+    {
+        // The strings must be registered (and the language fixed) for this to run on its own, not only after another test did it.
+        using var locale = Harness.Locale();
+        var span = PerfMetrics.Span(PerfMetrics.HistorySeconds(intervalMs));
+        Assert.Contains(number, span, StringComparison.Ordinal);
+        var minutes = PerfMetrics.HistorySeconds(intervalMs) >= 120;
+        Assert.Equal(minutes, span.Contains(Strings.Format("gui.perf.span.min", Fmt.Dict(("n", number))), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_graph_with_no_readings_is_collecting_and_one_with_a_line_is_not()
+    {
+        using var graph = new GraphControl();
+        Assert.True(graph.Collecting);
+        graph.SetSeries(0, new double[SnapshotPump.HistoryLength], 1);
+        Assert.True(graph.Collecting);
+        graph.SetSeries(0, new double[SnapshotPump.HistoryLength], 2);
+        Assert.False(graph.Collecting);
     }
 
     // ---- Services / settings / pump ----

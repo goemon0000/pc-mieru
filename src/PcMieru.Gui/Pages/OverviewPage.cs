@@ -22,6 +22,9 @@ internal sealed class OverviewPage : PageBase
     private readonly MetricCard _network = new() { Name = "cardNetwork" };
     private readonly SectionLabel _topTitle = new() { Name = "overviewTopTitle" };
     private readonly SectionLabel _noteTitle = new() { Name = "overviewNoteTitle" };
+    private readonly FlowLayoutPanel _topHeader = new() { Name = "overviewTopHeader", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false };
+    private readonly ToggleButton _rankCpu = new() { Name = "overviewRankCpu" };
+    private readonly ToggleButton _rankMemory = new() { Name = "overviewRankMemory" };
     private readonly GridView _top = new() { Name = "overviewTop" };
     private readonly WrapListBox _notes = new() { Name = "overviewNotes" };
     private readonly ToneLabel _topHint = new() { AutoSize = true, Name = "overviewTopHint" };
@@ -36,10 +39,14 @@ internal sealed class OverviewPage : PageBase
     private List<TopApp> _apps = [];
     private Snapshot? _last;
     private int _ticks;
+    private TopRank _rank;
 
     public OverviewPage(GuiContext context)
         : base(context, "overview", "gui.nav.overview")
     {
+        _rank = context.Settings.GetInt("overview.rank", 0) == 1 ? TopRank.Memory : TopRank.Cpu;
+        _rankCpu.Click += (_, _) => SetRank(TopRank.Cpu);
+        _rankMemory.Click += (_, _) => SetRank(TopRank.Memory);
         _details = new DetailsCache(context.Services.ProcessDetails, this);
         _details.Loaded += _ =>
         {
@@ -82,7 +89,17 @@ internal sealed class OverviewPage : PageBase
         _top.SizeChanged += (_, _) => _top.FitLastColumn();
         _top.FontChanged += (_, _) => FitTop();
         _top.HandleCreated += (_, _) => FitTop();
+        _top.ColumnClick += (_, e) =>
+        {
+            if (e.Column is 1 or 2)
+            {
+                SetRank(e.Column == 1 ? TopRank.Cpu : TopRank.Memory);
+            }
+        };
         _topHint.SetTone(CellTone.Dim);
+        _notes.SizeChanged += (_, _) => FitNotes();
+        _notes.FontChanged += (_, _) => FitNotes();
+        _topHeader.SizeChanged += (_, _) => FitNotes();
 
         var pad = Px(16);
         var cards = new TableLayoutPanel
@@ -118,21 +135,38 @@ internal sealed class OverviewPage : PageBase
         lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Absolute, Px(200)));
         lower.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Percent, 100));
         _lower = lower;
-        _topTitle.Margin = new Padding(0, 0, 0, Px(6));
+        lower.SizeChanged += (_, _) => FitNotes();
+        _topTitle.Margin = new Padding(0, 0, Px(12), 0);
+        _topTitle.Anchor = AnchorStyles.Left;
+        foreach (var toggle in new[] { _rankCpu, _rankMemory })
+        {
+            toggle.Margin = new Padding(0, 0, Px(4), 0);
+            toggle.Padding = new Padding(Px(6), 0, Px(6), 0);
+            toggle.Anchor = AnchorStyles.Left;
+        }
+
+        _topHeader.Margin = new Padding(0, 0, 0, Px(6));
+        _topHeader.Controls.Add(_topTitle);
+        _topHeader.Controls.Add(_rankCpu);
+        _topHeader.Controls.Add(_rankMemory);
         _noteTitle.Margin = new Padding(Px(16), 0, 0, Px(6));
+        _noteTitle.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
         _top.Margin = new Padding(0);
-        _notes.Dock = DockStyle.Fill;
+        // The insights box is as tall as its rows need (never shorter than the apps list beside it): no empty box under a short list.
+        _notes.Dock = DockStyle.Top;
         _notes.Margin = new Padding(Px(16), 0, 0, 0);
         _topHint.Margin = new Padding(0, Px(6), 0, 0);
-        lower.Controls.Add(_topTitle, 0, 0);
+        lower.Controls.Add(_topHeader, 0, 0);
         lower.Controls.Add(_noteTitle, 1, 0);
         lower.Controls.Add(_top, 0, 1);
         lower.Controls.Add(_notes, 1, 1);
         lower.SetRowSpan(_notes, 2);
         lower.Controls.Add(_topHint, 0, 2);
         _topHint.MaximumSize = new Size(Px(420), 0);
-        _top.TabIndex = 5;
-        _notes.TabIndex = 6;
+        _rankCpu.TabIndex = 5;
+        _rankMemory.TabIndex = 6;
+        _top.TabIndex = 7;
+        _notes.TabIndex = 8;
 
         Controls.Add(lower);
         Controls.Add(cards);
@@ -168,6 +202,10 @@ internal sealed class OverviewPage : PageBase
 
     internal IReadOnlyList<TopApp> Apps => _apps;
 
+    internal ToggleButton RankCpuButton => _rankCpu;
+
+    internal ToggleButton RankMemoryButton => _rankMemory;
+
     internal WrapListBox Notes => _notes;
 
     public override void OnActivated()
@@ -182,11 +220,14 @@ internal sealed class OverviewPage : PageBase
 
     public override void OnDeactivated() => Context.Pump.Sampled -= OnSampled;
 
+    public override void SaveState() => Context.Settings.SetInt("overview.rank", _rank == TopRank.Memory ? 1 : 0);
+
     public override void ApplyLanguage()
     {
         _topTitle.Text = Strings.Get("gui.overview.top");
         _noteTitle.Text = Strings.Get("gui.overview.notes");
-        _topHint.Text = Strings.Get("gui.overview.top.hint");
+        _rankCpu.Text = Strings.Get("gui.overview.rank.cpu");
+        _rankMemory.Text = Strings.Get("gui.overview.rank.memory");
         _top.AccessibleName = Strings.Get("gui.overview.top");
         _notes.AccessibleName = Strings.Get("gui.overview.notes");
         string[] keys = ["name", "cpu", "memory"];
@@ -195,6 +236,7 @@ internal sealed class OverviewPage : PageBase
             _top.Columns[i].Text = Strings.Get("gui.overview.col." + keys[i]);
         }
 
+        ShowRank();
         if (_last is not null)
         {
             Fill(_last, evaluate: true);
@@ -205,6 +247,52 @@ internal sealed class OverviewPage : PageBase
         }
 
         _top.Invalidate();
+    }
+
+    private void SetRank(TopRank rank)
+    {
+        if (_rank == rank)
+        {
+            return;
+        }
+
+        _rank = rank;
+        ShowRank();
+        if (_last is not null)
+        {
+            UpdateTop(_last);
+        }
+    }
+
+    /// <summary>The chosen order shows in three places: the pressed button, the arrow on the column it ranks by, and the sentence under the list.</summary>
+    private void ShowRank()
+    {
+        _rankCpu.Checked = _rank == TopRank.Cpu;
+        _rankMemory.Checked = _rank == TopRank.Memory;
+        _top.SetSort(_rank == TopRank.Cpu ? 1 : 2, descending: true);
+        _topHint.Text = Strings.Get(_rank == TopRank.Cpu ? "gui.overview.top.hint.cpu" : "gui.overview.top.hint.memory");
+    }
+
+    /// <summary>The insights box takes the height its rows need, between the height of the apps list (so the two line up) and the room there is.</summary>
+    private void FitNotes()
+    {
+        if (_lower is null || !_notes.IsHandleCreated)
+        {
+            return;
+        }
+
+        var rows = _lower.GetRowHeights();
+        if (rows.Length < 3 || rows[1] <= 0)
+        {
+            return;
+        }
+
+        var room = rows[1] + rows[2];
+        var wanted = Math.Clamp(_notes.ContentHeight() + 2, rows[1], Math.Max(room, rows[1]));
+        if (_notes.Height != wanted)
+        {
+            _notes.Height = wanted;
+        }
     }
 
     protected override void Dispose(bool disposing)
@@ -367,8 +455,8 @@ internal sealed class OverviewPage : PageBase
     {
         _apps = TopApps.Compute(
             snapshot.Processes,
-            snapshot.System.Memory.TotalPhysicalBytes,
-            key => _details.TryGet(key) is { } d && d.Product.TryGet(out var product) ? product : null);
+            key => _details.TryGet(key) is { } d && d.Product.TryGet(out var product) ? product : null,
+            rank: _rank);
         if (_top.VirtualListSize != _apps.Count)
         {
             _top.VirtualListSize = _apps.Count;
@@ -399,24 +487,60 @@ internal sealed class OverviewPage : PageBase
 
     private void SetNotes(Snapshot? snapshot)
     {
-        if (snapshot is null)
-        {
-            _notes.SetItems([new WrapItem(string.Empty, Strings.Get("gui.overview.notes.none"), false)]);
-            return;
-        }
-
-        var observations = Context.Services.Observations.Evaluate(new ObservationInput(snapshot, Context.Pump.History));
+        var observations = snapshot is null
+            ? []
+            : Context.Services.Observations.Evaluate(new ObservationInput(snapshot, Context.Pump.History));
         if (observations.Count == 0)
         {
             _notes.SetItems([new WrapItem(string.Empty, Strings.Get("gui.overview.notes.none"), false)]);
+            FitNotes();
             return;
         }
 
-        _notes.SetItems([.. observations.Select(o => new WrapItem(
-            Strings.Get("gui.overview.certainty." + o.Certainty.ToString().ToLowerInvariant()),
-            Strings.Render(o),
-            o.Certainty == ObservationCertainty.Fact))]);
+        _notes.SetItems([.. observations.Select(NoteItem)]);
+        FitNotes();
     }
+
+    /// <summary>
+    /// One insight as conclusion, evidence, next step: a short bold sentence, then the measured text the rule produced,
+    /// then a link to the page where the cause can be looked at. An observation this page has no wording for keeps the
+    /// plain tag-and-text row (nothing is dropped).
+    /// </summary>
+    private WrapItem NoteItem(Observation observation)
+    {
+        var tag = Strings.Get("gui.overview.certainty." + observation.Certainty.ToString().ToLowerInvariant());
+        var text = Strings.Render(observation);
+        var firm = observation.Certainty == ObservationCertainty.Fact;
+        if (ObservationGuide.For(observation) is not { } guide)
+        {
+            return new WrapItem(tag, text, firm);
+        }
+
+        var process = guide.PageId == "processes" && observation.Processes.Count > 0 ? observation.Processes[0] : (ProcessKey?)null;
+        return new WrapItem(
+            tag,
+            text,
+            firm,
+            Strings.Get(guide.HeadlineKey),
+            Strings.Format("gui.overview.more", Fmt.Dict(("page", Strings.Get("gui.nav." + guide.PageId)))),
+            () => Context.Navigate(guide.PageId, process, guide.Panel));
+    }
+}
+
+/// <summary>Where an observation is best looked at, and the one-line conclusion that goes above its measured text.</summary>
+internal sealed record ObservationGuide(string HeadlineKey, string PageId, string? Panel)
+{
+    /// <summary>Null for an observation without wording here (a newer rule): it is shown as it is, without a link.</summary>
+    public static ObservationGuide? For(Observation observation) => observation.MessageKey switch
+    {
+        "obs.cpu.singleCore" => new ObservationGuide("gui.overview.why.cpu", "performance", "cpu"),
+        "obs.memory.processDominant" => new ObservationGuide("gui.overview.why.memoryApp", "processes", null),
+        var key when key.StartsWith("obs.memory.", StringComparison.Ordinal) => new ObservationGuide("gui.overview.why.memory", "performance", "memory"),
+        var key when key.StartsWith("obs.disk.", StringComparison.Ordinal) => new ObservationGuide("gui.overview.why.disk", "performance", "disk"),
+        "obs.gpu.temperatureHigh" => new ObservationGuide("gui.overview.why.gpu", "performance", "gpu"),
+        var key when key.StartsWith("obs.storage.", StringComparison.Ordinal) => new ObservationGuide("gui.overview.why.storage", "hardware", null),
+        _ => null,
+    };
 }
 
 internal static class OverviewStrings
@@ -426,21 +550,31 @@ internal static class OverviewStrings
         new("gui.overview.card.cpu", "CPU", "CPU"),
         new("gui.overview.card.memory", "メモリ", "Memory"),
         new("gui.overview.card.gpu", "GPU", "GPU"),
-        new("gui.overview.card.disk", "ディスク", "Disk"),
-        new("gui.overview.card.network", "ネットワーク", "Network"),
+        new("gui.overview.card.disk", "ディスクの稼働率", "Disk activity"),
+        new("gui.overview.card.network", "ネットワーク（送受信合計）", "Network (send + receive)"),
         new("gui.overview.cpu.sub", "論理プロセッサ {count} 個", "{count} logical processors"),
         new("gui.overview.disk.sub", "読み取り {read}\n書き込み {write}", "Read {read}\nWrite {write}"),
         new("gui.overview.net.sub", "送信 {send}\n受信 {receive}", "Send {send}\nReceive {receive}"),
         new("gui.overview.gpu.none", "GPU が見つかりません", "No GPU found"),
         new("gui.overview.high", "高め", "High"),
         new("gui.overview.top", "いま重いアプリ", "Heaviest apps right now"),
-        new("gui.overview.top.hint", "同じアプリのプロセスは 1 行にまとめています。CPU とメモリの両方を見て並べています。", "Processes of the same app are added into one line, ranked by CPU and memory together."),
+        new("gui.overview.top.hint.cpu", "同じアプリのプロセスは 1 行にまとめ、CPU 使用率が高い順に 5 件を表示しています。", "Processes of the same app are added into one line. The 5 apps using the most CPU are shown."),
+        new("gui.overview.top.hint.memory", "同じアプリのプロセスは 1 行にまとめ、メモリ使用量が多い順に 5 件を表示しています。", "Processes of the same app are added into one line. The 5 apps using the most memory are shown."),
+        new("gui.overview.rank.cpu", "CPU順", "By CPU"),
+        new("gui.overview.rank.memory", "メモリ順", "By memory"),
         new("gui.overview.top.tip", "ダブルクリックで、プロセスの一覧を開きます", "Double-click to open it in the process list"),
         new("gui.overview.col.name", "アプリ", "App"),
         new("gui.overview.col.cpu", "CPU", "CPU"),
         new("gui.overview.col.memory", "メモリ", "Memory"),
         new("gui.overview.notes", "気づいたこと", "What stands out"),
         new("gui.overview.notes.none", "いまのところ、目立った点はありません", "Nothing stands out right now"),
+        new("gui.overview.more", "詳しく見る（{page}）", "See details ({page})"),
+        new("gui.overview.why.cpu", "CPU の 1 つの論理 CPU に負荷が集中しているようです", "The load looks concentrated on one logical CPU"),
+        new("gui.overview.why.memoryApp", "1 つのアプリがメモリの多くを使っています", "One app is using much of the memory"),
+        new("gui.overview.why.memory", "メモリに余裕がなくなってきています", "Memory is getting tight"),
+        new("gui.overview.why.disk", "ディスクがしばらく忙しい状態です", "The disk has been busy for a while"),
+        new("gui.overview.why.gpu", "GPU の温度が高めです", "The GPU is running hot"),
+        new("gui.overview.why.storage", "ストレージが注意を知らせています", "A storage device is reporting a warning"),
         new("gui.overview.certainty.fact", "[事実]", "[Fact]"),
         new("gui.overview.certainty.candidate", "[可能性]", "[Possible]"),
     ];

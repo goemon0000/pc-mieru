@@ -292,6 +292,14 @@ internal static class PerfMetrics
 
     private const int MaxEngines = 12;
 
+    /// <summary>A length of time for a person: seconds up to two minutes ("60 s", "0.5 s"), minutes after ("5 min").</summary>
+    public static string Span(double seconds) => seconds < 120
+        ? Strings.Format("gui.perf.span.sec", Fmt.Dict(("n", seconds.ToString("0.#", CultureInfo.CurrentCulture))))
+        : Strings.Format("gui.perf.span.min", Fmt.Dict(("n", (seconds / 60).ToString("0.#", CultureInfo.CurrentCulture))));
+
+    /// <summary>How far back the left edge of a graph is: the number of readings it holds times the time between them.</summary>
+    public static double HistorySeconds(int intervalMs) => SnapshotPump.HistoryLength * Math.Max(intervalMs, 0) / 1000.0;
+
     public static string Ghz(double mhz) => (mhz / 1000).ToString("0.00", CultureInfo.CurrentCulture) + " GHz";
 
     /// <summary>The adapter's negotiated link speed ("1 Gbps"). What the adapter agreed with the other end, not a measurement.</summary>

@@ -351,7 +351,8 @@ internal sealed class UsersPage : PageBase
             return column switch
             {
                 UserColumn => new GridCell(p.Name) { Indent = 1 },
-                SessionColumn => new GridCell(p.Key.Pid.ToString(CultureInfo.CurrentCulture), CellTone.Dim),
+                // A process row's number is its PID, not a session: say so, or it reads as a session number under that heading.
+                SessionColumn => new GridCell(Strings.Format("gui.users.pid", Fmt.Dict(("pid", p.Key.Pid.ToString(CultureInfo.CurrentCulture)))), CellTone.Dim),
                 CpuColumn => p.CpuPercent.TryGet(out var cpu) ? new GridCell(cpu.ToString("0.0", CultureInfo.CurrentCulture) + " %") : new GridCell(Fmt.Dash, CellTone.Dim),
                 MemoryColumn => new GridCell(Fmt.Bytes(p.PrivateWorkingSetBytes)),
                 _ => new GridCell(string.Empty),
@@ -361,12 +362,13 @@ internal sealed class UsersPage : PageBase
         var name = r.Session.UserName.Length > 0 ? r.Session.UserName : Strings.Get("gui.users.system");
         return column switch
         {
-            UserColumn => new GridCell(name)
+            // The mark is on the name: "which one is me" is asked of the user, not of the session number.
+            UserColumn => new GridCell(IsOwn(r) ? Strings.Format("gui.users.you", Fmt.Dict(("name", name))) : name)
             {
                 Bold = true,
                 Glyph = r.ProcessCount == 0 ? ExpanderGlyph.None : _expanded.Contains(r.Session.SessionId) ? ExpanderGlyph.Expanded : ExpanderGlyph.Collapsed,
             },
-            SessionColumn => new GridCell(r.Session.SessionId.ToString(CultureInfo.CurrentCulture) + (r.Session.SessionId == _ownSession ? " " + Strings.Get("gui.users.you") : string.Empty)),
+            SessionColumn => new GridCell(r.Session.SessionId.ToString(CultureInfo.CurrentCulture)),
             StateColumn => new GridCell(Strings.Get(r.Session.UserName.Length == 0 ? "gui.users.state.system" : StateKey(r.Session.State)), r.Session.State == SessionConnectState.Active ? CellTone.Normal : CellTone.Dim),
             CpuColumn => !r.Visible
                 ? new GridCell(Fmt.Dash, CellTone.Dim)
@@ -376,6 +378,12 @@ internal sealed class UsersPage : PageBase
             _ => default,
         };
     }
+
+    /// <summary>The session this program runs in is the signed-in user's own (never the system's, which has no user name).</summary>
+    private bool IsOwn(UserRow row) => row.Session.SessionId == _ownSession && row.Session.UserName.Length > 0;
+
+    /// <summary>The name text of a session row (the marker is part of it), for the smoke run to check.</summary>
+    internal string NameTextOf(int row) => Cell(row, UserColumn).Text;
 
     private string? CellTip(int row, int column)
     {
@@ -404,10 +412,11 @@ internal static class UsersStrings
         new("gui.users.col.cpu", "CPU", "CPU"),
         new("gui.users.col.memory", "メモリ", "Memory"),
         new("gui.users.col.count", "プロセス数", "Processes"),
-        new("gui.users.system", "システム（ユーザーなし）", "System (no user)"),
-        new("gui.users.you", "（自分）", "(you)"),
+        new("gui.users.system", "システムのプロセス", "System processes"),
+        new("gui.users.you", "{name}（自分）", "{name} (you)"),
+        new("gui.users.pid", "PID {pid}", "PID {pid}"),
         new("gui.users.count", "{count} 件のセッション", "{count} sessions"),
-        new("gui.users.hint", "行を開くと、そのセッションのプロセスが見えます。", "Open a row to see that session's processes."),
+        new("gui.users.hint", "左の ＞ を押すと、そのセッションのプロセスが見えます。CPU とメモリは、そのユーザーのプロセスの合計です。", "Press the > on the left to see that session's processes. CPU and memory are the totals of that user's processes."),
         new("gui.users.partial", "一部のみ表示: ほかのユーザーのプロセスは、管理者でないと見えないことがあります。", "Partial only: other users' processes may be hidden unless you are an administrator."),
         new("gui.users.invisible.tip", "このユーザーのプロセスは見えません（権限がないためです）。0 ではありません", "This user's processes are not visible (no permission). It is not zero"),
         new("gui.users.cpupartial.tip", "一部のプロセスの CPU を取得できなかったため、合計は足りない可能性があります", "The CPU of some processes could not be read, so the total may be short"),

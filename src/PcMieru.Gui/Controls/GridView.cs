@@ -46,6 +46,15 @@ internal struct GridCell
     /// <summary>First column only: the icon to draw in the slot. Null draws nothing (not known yet, or the file has none).</summary>
     public Image? Icon;
 
+    /// <summary>
+    /// A load cue: how far (0 to 1) a quiet bar tinted in the accent colour fills the cell behind the text. 0 draws nothing.
+    /// It only helps the eye find the heavy rows; the number is always in the text, so nothing depends on seeing the bar.
+    /// </summary>
+    public double Bar;
+
+    /// <summary>A cell that opens something when it is clicked: drawn underlined in the accent colour, so the colour is not the only sign.</summary>
+    public bool Link;
+
     public GridCell(string text, CellTone tone = CellTone.Normal)
     {
         Text = text;
@@ -55,6 +64,8 @@ internal struct GridCell
         Glyph = ExpanderGlyph.None;
         IconSlot = false;
         Icon = null;
+        Bar = 0;
+        Link = false;
     }
 }
 
@@ -83,8 +94,13 @@ internal class GridView : ListView, IThemed
     private bool _sortDescending;
     private bool _fitting;
 
-    /// <summary>The DPI the column widths are in. Column widths are plain pixels that nothing rescales, so a change is followed by hand.</summary>
+    /// <summary>The font size column widths are written for: widths in the code are logical pixels at this size.</summary>
+    public const float DesignPoints = 9f;
+
+    /// <summary>The DPI and the font size the column widths are in. Column widths are plain pixels that nothing rescales, so a change is followed by hand.</summary>
     private int _columnDpi;
+
+    private float _columnPoints = DesignPoints;
 
     public GridView()
     {
@@ -300,6 +316,7 @@ internal class GridView : ListView, IThemed
             _tip.Dispose();
             _rowHeight.Dispose();
             _bold?.Dispose();
+            _underline?.Dispose();
         }
 
         base.Dispose(disposing);
@@ -636,6 +653,11 @@ internal class GridView : ListView, IThemed
         var width = Columns[e.ColumnIndex].Width;
         var pad = Scaled(8);
         var bounds = new Rectangle(left + pad, row.Top, Math.Max(width - (pad * 2), 0), row.Height);
+        if (cell.Bar > 0 && !header)
+        {
+            DrawBar(e.Graphics, palette, new Rectangle(left, row.Top, width, row.Height), cell.Bar, selected);
+        }
+
         if (e.ColumnIndex == 0)
         {
             var step = Scaled(16);
@@ -664,7 +686,8 @@ internal class GridView : ListView, IThemed
             bounds = new Rectangle(bounds.Left + shift, bounds.Top, Math.Max(bounds.Width - shift, 0), bounds.Height);
         }
 
-        var color = cell.Tone switch
+        var tone = cell.Link ? CellTone.Accent : cell.Tone;
+        var color = tone switch
         {
             CellTone.Dim => selected ? _selectedDim : palette.TextDim,
             CellTone.Accent => selected ? palette.SelectionText : palette.Accent,
@@ -676,7 +699,7 @@ internal class GridView : ListView, IThemed
             HorizontalAlignment.Center => TextFormatFlags.HorizontalCenter,
             _ => TextFormatFlags.Left,
         };
-        var font = (cell.Bold || header) ? BoldFont : Font;
+        var font = cell.Link ? UnderlineFont : (cell.Bold || header) ? BoldFont : Font;
         TextRenderer.DrawText(
             e.Graphics,
             cell.Text,
@@ -684,6 +707,45 @@ internal class GridView : ListView, IThemed
             bounds,
             color,
             alignment | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+    }
+
+    /// <summary>The load cue of a cell: a translucent accent bar from the left edge of the cell, drawn under the text.</summary>
+    private void DrawBar(Graphics graphics, Palette palette, Rectangle cell, double fraction, bool selected)
+    {
+        var inset = Scaled(2);
+        var room = cell.Width - (inset * 2);
+        var length = (int)Math.Round(room * Math.Clamp(fraction, 0, 1));
+        if (length < 1 || cell.Height <= inset * 2)
+        {
+            return;
+        }
+
+        // A quiet tint: the number on top has to stay as readable as without it, in both themes and on the selected row.
+        // A blue on a dark surface needs a little more opacity than on a light one to be seen at all.
+        var dark = palette.Window.GetBrightness() < 0.5f;
+        var alpha = selected ? BarAlphaSelected : dark ? BarAlphaDark : BarAlpha;
+        using var brush = new SolidBrush(Color.FromArgb(alpha, palette.Accent));
+        graphics.FillRectangle(brush, cell.Left + inset, cell.Top + inset, length, cell.Height - (inset * 2));
+    }
+
+    private const int BarAlpha = 48;
+    private const int BarAlphaDark = 72;
+    private const int BarAlphaSelected = 64;
+
+    private Font? _underline;
+
+    private Font UnderlineFont
+    {
+        get
+        {
+            if (_underline is null || _underline.Size != Font.Size || _underline.Name != Font.Name)
+            {
+                _underline?.Dispose();
+                _underline = new Font(Font, FontStyle.Underline);
+            }
+
+            return _underline;
+        }
     }
 
     private Font? _bold;
@@ -754,17 +816,25 @@ internal class GridView : ListView, IThemed
 
     private int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
 
+    /// <summary>A column width written in logical pixels at the design font size, in pixels for this table's DPI and font.</summary>
+    public int ColumnWidth(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0 * Font.SizeInPoints / DesignPoints);
+
+    /// <summary>The reverse of <see cref="ColumnWidth"/>: what a width on screen is worth in the units the code and the settings file use.</summary>
+    public int ToLogicalWidth(int device) => (int)Math.Round(device * 96.0 / Math.Max(CurrentDpi, 96) * DesignPoints / Font.SizeInPoints);
+
     /// <summary>After a DPI change the column widths (and row height) are brought to the new scale.</summary>
     private void SyncDpi()
     {
         var dpi = CurrentDpi;
-        if (dpi == _columnDpi)
+        var points = Font.SizeInPoints;
+        if (dpi == _columnDpi && Math.Abs(points - _columnPoints) < 0.01f)
         {
             return;
         }
 
-        var factor = (double)dpi / _columnDpi;
+        var factor = (double)dpi / _columnDpi * (points / _columnPoints);
         _columnDpi = dpi;
+        _columnPoints = points;
         _fitting = true;
         try
         {

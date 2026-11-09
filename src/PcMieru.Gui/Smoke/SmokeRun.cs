@@ -127,6 +127,61 @@ internal static class SmokeRun
             Check("process list has an apps group (a window is open)", appRows > 0, appRows + " group headers");
             Check("process list is filled", processes is { VisibleRowCount: > 0 }, (processes?.VisibleRowCount ?? 0) + " rows, selected " + (processes?.List.SelectedIndices.Count ?? -1) + ", row " + (processes?.List.SelectedRow ?? -2));
 
+            if (processes is not null)
+            {
+                // Default columns: what a first-time reader looks at. PID and the I/O split stay behind the column chooser.
+                var columns = processes.VisibleColumns;
+                var wanted = new[] { ProcessColumn.Name, ProcessColumn.Cpu, ProcessColumn.Memory, ProcessColumn.Disk, ProcessColumn.Gpu, ProcessColumn.State };
+                var hidden = new[] { ProcessColumn.Pid, ProcessColumn.IoRead, ProcessColumn.IoWrite };
+                Check(
+                    "process list starts with name, CPU, memory, disk, GPU and state; PID and I/O are behind the column chooser",
+                    wanted.All(columns.Contains) && !hidden.Any(columns.Contains),
+                    string.Join(",", columns));
+
+                // The load cue bars of the CPU and memory cells are fractions of the heaviest row (or of a floor): in range, and
+                // the heaviest memory row fills its bar unless every process is under the floor.
+                var memoryBars = new List<double>();
+                var cpuBars = new List<double>();
+                for (var i = 0; i < processes.Model.Count; i++)
+                {
+                    if (processes.Model[i].IsGroup)
+                    {
+                        continue;
+                    }
+
+                    memoryBars.Add(processes.CellAt(i, ProcessColumn.Memory).Bar);
+                    cpuBars.Add(processes.CellAt(i, ProcessColumn.Cpu).Bar);
+                }
+
+                Check(
+                    "load cue bars are between 0 and 1 and the memory column has at least one",
+                    memoryBars.Count > 0 && memoryBars.Concat(cpuBars).All(b => b is >= 0 and <= 1.0000001) && memoryBars.Max() > 0,
+                    $"memory max {(memoryBars.Count > 0 ? memoryBars.Max() : -1):0.00}, cpu max {(cpuBars.Count > 0 ? cpuBars.Max() : -1):0.00}");
+
+                // The memory unit can be fixed to MB; every row then reads in MB (and the biggest GB figure becomes a MB one).
+                var processRows = Enumerable.Range(0, processes.Model.Count).Where(i => !processes.Model[i].IsGroup).ToList();
+                var automatic = processRows.Select(i => processes.CellAt(i, ProcessColumn.Memory).Text).ToList();
+                processes.SetMemoryInMb(true);
+                var fixedMb = processRows.Select(i => processes.CellAt(i, ProcessColumn.Memory).Text).ToList();
+                processes.SetMemoryInMb(false);
+                Check(
+                    "fixing the memory unit to MB puts every process memory cell in MB",
+                    fixedMb.Count > 0 && fixedMb.All(t => t.EndsWith(" MB", StringComparison.Ordinal)) && automatic.Count == fixedMb.Count,
+                    string.Join(" | ", fixedMb.Take(4)) + " (automatic: " + string.Join(" | ", automatic.Take(4)) + ")");
+
+                // The detail pane can be hidden; the list then takes its width, and showing it again gives the width back.
+                var widthWith = processes.List.Width;
+                processes.SetDetailShown(false);
+                await Task.Delay(120).ConfigureAwait(true);
+                var widthWithout = processes.List.Width;
+                processes.SetDetailShown(true);
+                await Task.Delay(120).ConfigureAwait(true);
+                Check(
+                    "hiding the process detail pane widens the list, and showing it again restores the width",
+                    widthWithout > widthWith && processes.List.Width == widthWith,
+                    $"{widthWith} -> {widthWithout} -> {processes.List.Width}");
+            }
+
             if (processes is not null && !context.Services.UsesFakeData)
             {
                 // Program icons come from the collection area (path first, then the image); a real list shows at least one.
@@ -213,6 +268,13 @@ internal static class SmokeRun
             return page;
         }
 
+        /// <summary>True when the numbers never go up from one to the next (and there are at least two: one number proves no order).</summary>
+        private static bool Descending(IEnumerable<double> values)
+        {
+            var list = values.ToArray();
+            return list.Length >= 2 && list.Zip(list.Skip(1)).All(p => p.First >= p.Second);
+        }
+
         private static async Task Until(Func<bool> condition, int timeoutMs)
         {
             var watch = Stopwatch.StartNew();
@@ -229,6 +291,12 @@ internal static class SmokeRun
             {
                 Check("overview: cards carry values", overview.CpuCard.ValueText != Fmt.Dash && overview.MemoryCard.ValueText != Fmt.Dash, overview.CpuCard.ValueText + " / " + overview.MemoryCard.ValueText);
                 Check("overview: heavy apps are listed", overview.Apps.Count is > 0 and <= 5, overview.Apps.Count + " apps");
+                overview.RankMemoryButton.PerformClick();
+                Check("overview: memory order ranks the list by memory", overview.RankMemoryButton.Checked && !overview.RankCpuButton.Checked && Descending(overview.Apps.Select(a => (double)a.MemoryBytes)), string.Join(", ", overview.Apps.Select(a => a.Name + " " + a.MemoryBytes)));
+                overview.RankCpuButton.PerformClick();
+                Check("overview: CPU order ranks the list by CPU", overview.RankCpuButton.Checked && !overview.RankMemoryButton.Checked && Descending(overview.Apps.Select(a => a.Cpu)), string.Join(", ", overview.Apps.Select(a => a.Name + " " + a.Cpu.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))));
+                var notes = overview.Notes.Items.Cast<WrapItem>().ToArray();
+                Check("overview: an insight with a headline offers a link to a page", notes.All(n => n.Headline.Length == 0 || (n.LinkText.Length > 0 && n.Open is not null)), notes.Length + " rows, " + notes.Count(n => n.Headline.Length > 0) + " with a headline");
             }
 
             if (await Open("performance").ConfigureAwait(true) is PerformancePage performance)
@@ -236,6 +304,14 @@ internal static class SmokeRun
                 Check("performance: one entry per device", performance.List.Items.Count >= 3, performance.List.Items.Count + " entries");
                 Check("performance: a panel is shown", performance.Current is not null);
                 Check("performance: graphs exist", performance.Graphs.Length > 0);
+                if (performance.Graphs.Length > 0 && context.Pump.Latest is { } sampled)
+                {
+                    var graph = performance.Graphs[0];
+                    var ago = Strings.Format("gui.perf.ago", Fmt.Dict(("span", PerfMetrics.Span(PerfMetrics.HistorySeconds(sampled.IntervalMs)))));
+                    Check("performance: the time axis names how far back the left edge is", graph.TimeStartText == ago && graph.TimeEndText == Strings.Get("gui.perf.now"), graph.TimeStartText + " / " + graph.TimeEndText + " (wanted " + ago + ")");
+                    Check("performance: the note under the graphs says the same span", performance.NoteText.Contains(ago, StringComparison.Ordinal) && !SmokeText.IsPlaceholder(performance.NoteText), performance.NoteText);
+                    Check("performance: a graph that has readings is not shown as collecting", !graph.Collecting, string.Empty);
+                }
             }
 
             if (await Open("startup").ConfigureAwait(true) is StartupPage startup)
@@ -258,12 +334,29 @@ internal static class SmokeRun
             if (await Open("users").ConfigureAwait(true) is UsersPage users)
             {
                 Check("users: sessions are listed", users.Rows.Count > 0, users.Rows.Count + " rows");
+                var ownSession = (uint)System.Diagnostics.Process.GetCurrentProcess().SessionId;
+                var ownRow = users.Rows.ToList().FindIndex(r => r.IsSession && r.Session.SessionId == ownSession && r.Session.UserName.Length > 0);
+                if (ownRow >= 0)
+                {
+                    var own = users.Rows[ownRow].Session.UserName;
+                    Check("users: the signed-in user's own row is marked", users.NameTextOf(ownRow) == Strings.Format("gui.users.you", Fmt.Dict(("name", own))), users.NameTextOf(ownRow));
+                    var marked = Enumerable.Range(0, users.Rows.Count).Count(i => users.Rows[i].IsSession && users.NameTextOf(i) != (users.Rows[i].Session.UserName.Length > 0 ? users.Rows[i].Session.UserName : Strings.Get("gui.users.system")));
+                    Check("users: only that one row is marked", marked == 1, marked + " rows marked");
+                }
             }
 
             if (await Open("hardware").ConfigureAwait(true) is HardwarePage hardware)
             {
                 Check("hardware: all categories are in the tree", hardware.Nodes.Count == 11, hardware.Nodes.Count + " categories");
                 Check("hardware: properties are listed", hardware.LineCount > 0, hardware.LineCount + " lines");
+                Check("hardware: the source is not a column (item, value, status)", hardware.Grid.Columns.Count == 3, hardware.Grid.Columns.Count + " columns");
+                var sampleName = Strings.Get("gui.hw.src.sample");
+                Check("hardware: the sample data's source is said as sample data", PartsModel.SourceText(PartsModel.SampleSource) == sampleName && !PartsModel.SourceText(PartsModel.SampleSource).Contains("fake", StringComparison.Ordinal), PartsModel.SourceText(PartsModel.SampleSource));
+                hardware.Grid.SelectRow(0);
+                var origin = hardware.RowAt(0) is { } first ? HardwarePage.Origin(first) : string.Empty;
+                var tip = hardware.Grid.CellTip?.Invoke(0, 1) ?? string.Empty;
+                Check("hardware: a row's source is in its tip", origin.Length > 0 && tip.Contains(origin, StringComparison.Ordinal) && !tip.Contains("fake", StringComparison.Ordinal), tip);
+                Check("hardware: the selected row's source is in the line under the list", hardware.HintText == origin, hardware.HintText);
             }
 
             if (await Open("settings").ConfigureAwait(true) is SettingsPage settings)
@@ -296,6 +389,10 @@ internal static class SmokeRun
             Check("report: a report was generated", diagnose.Document is not null && diagnose.TextView.Text.Length > 100, diagnose.TextView.Text.Length + " characters");
             Check("report: it is not running any more", !diagnose.IsRunning);
             Check("report: no missing strings in the text", !SmokeText.IsPlaceholder(diagnose.TextView.Text), string.Empty);
+            var shown = diagnose.TextView.Text;
+            Check("report: the formatted preview is what opens first", diagnose.View == DiagnoseView.Preview && diagnose.PreviewView.Checked && !diagnose.MarkdownView.Checked && !diagnose.JsonView.Checked);
+            Check("report: the preview has no Markdown marks left in it", !shown.Contains("## ", StringComparison.Ordinal) && !shown.Contains('`', StringComparison.Ordinal) && !shown.Contains("|---", StringComparison.Ordinal), Excerpt(shown));
+            Check("report: Copy and Save give the Markdown text, not the preview", diagnose.ExportText.StartsWith("# ", StringComparison.Ordinal) && diagnose.ExportText.Contains("\n## ", StringComparison.Ordinal), Excerpt(diagnose.ExportText));
             if (shotsDirectory is not null)
             {
                 var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
@@ -319,6 +416,20 @@ internal static class SmokeRun
                 context.SetTheme(theme);
                 await Task.Delay(150).ConfigureAwait(true);
             }
+
+            // The other two forms: the Markdown source (what Copy gives) and JSON; the preview comes back at the end.
+            diagnose.MarkdownView.PerformClick();
+            Check("report: the Markdown view shows the source text", diagnose.View == DiagnoseView.Markdown && diagnose.MarkdownView.Checked && !diagnose.PreviewView.Checked && diagnose.TextView.Text.StartsWith("# ", StringComparison.Ordinal) && diagnose.TextView.Text.Contains("## ", StringComparison.Ordinal), Excerpt(diagnose.TextView.Text));
+            if (shotsDirectory is not null)
+            {
+                var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
+                _shots.Add(await Capture(shotsDirectory, $"{Strings.Current.ToString().ToLowerInvariant()}-{(context.Theme.IsDark ? "dark" : "light")}-diagnose-markdown{scale}.png"));
+            }
+
+            diagnose.JsonView.PerformClick();
+            Check("report: the JSON view shows JSON", diagnose.View == DiagnoseView.Json && diagnose.TextView.Text.TrimStart().StartsWith('{') && diagnose.ExportText.TrimStart().StartsWith('{'), Excerpt(diagnose.TextView.Text));
+            diagnose.PreviewView.PerformClick();
+            Check("report: back to the preview", diagnose.View == DiagnoseView.Preview && diagnose.TextView.Text.Length > 100 && !diagnose.TextView.Text.Contains("## ", StringComparison.Ordinal), Excerpt(diagnose.TextView.Text));
         }
 
         /// <summary>
@@ -353,6 +464,12 @@ internal static class SmokeRun
 
             await Task.Delay(600).ConfigureAwait(true);
             Check($"dpi emulation reached {target}", form.DeviceDpi == target, "device dpi " + form.DeviceDpi);
+        }
+
+        private static string Excerpt(string text)
+        {
+            var line = text.ReplaceLineEndings(" ");
+            return line.Length <= 60 ? line : line[..60] + "...";
         }
 
         /// <summary>
@@ -397,7 +514,13 @@ internal static class SmokeRun
                 }
 
                 current = Take(window, width, height, fileName);
-                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015)
+
+                // Live numbers move in the sample data, so the whole picture may differ a little between two takes; the
+                // navigation never changes, so its strip must be identical. A list that is caught between "background drawn"
+                // and "items drawn" is a few hundred pixels: far under the whole-picture limit, and the take it is in
+                // would have been kept.
+                var strip = new Rectangle(0, 0, Math.Min(current.Width, form.DeviceDpi * 210 / 96), current.Height);
+                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0)
                 {
                     break;
                 }
@@ -503,7 +626,10 @@ internal static class SmokeRun
         }
 
         /// <summary>The fraction of pixels that differ clearly: live numbers moving in the sample data stay far below it, a half painted page does not.</summary>
-        private static double Differs(Bitmap a, Bitmap b)
+        private static double Differs(Bitmap a, Bitmap b) => Differs(a, b, new Rectangle(Point.Empty, a.Size));
+
+        /// <summary>The same, counted inside <paramref name="region"/> only.</summary>
+        private static double Differs(Bitmap a, Bitmap b, Rectangle region)
         {
             if (a.Size != b.Size)
             {
@@ -511,6 +637,12 @@ internal static class SmokeRun
             }
 
             var rect = new Rectangle(Point.Empty, a.Size);
+            region.Intersect(rect);
+            if (region.IsEmpty)
+            {
+                return 0;
+            }
+
             var da = a.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             var db = b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             try
@@ -521,15 +653,19 @@ internal static class SmokeRun
                 Marshal.Copy(da.Scan0, left, 0, bytes);
                 Marshal.Copy(db.Scan0, right, 0, bytes);
                 long different = 0;
-                for (var i = 0; i < bytes; i += 4)
+                for (var y = region.Top; y < region.Bottom; y++)
                 {
-                    if (Math.Abs(left[i] - right[i]) + Math.Abs(left[i + 1] - right[i + 1]) + Math.Abs(left[i + 2] - right[i + 2]) > 24)
+                    for (var x = region.Left; x < region.Right; x++)
                     {
-                        different++;
+                        var i = (y * da.Stride) + (x * 4);
+                        if (Math.Abs(left[i] - right[i]) + Math.Abs(left[i + 1] - right[i + 1]) + Math.Abs(left[i + 2] - right[i + 2]) > 24)
+                        {
+                            different++;
+                        }
                     }
                 }
 
-                return (double)different / (bytes / 4);
+                return (double)different / ((long)region.Width * region.Height);
             }
             finally
             {
