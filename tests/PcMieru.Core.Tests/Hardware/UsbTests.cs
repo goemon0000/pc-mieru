@@ -180,6 +180,7 @@ public class UsbTests
         Assert.Null(UsbVendors.Name("0000"));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void RealCollectionRunsOnThisMachineWithoutThrowing()
     {

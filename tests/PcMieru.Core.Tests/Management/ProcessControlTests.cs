@@ -182,6 +182,7 @@ public class ProtectionPolicyTests
         Assert.False(verdict.MayOperate);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void On_this_PC_the_system_ourselves_and_a_vanished_process_are_not_operable_but_our_own_ping_is()
     {
@@ -200,6 +201,7 @@ public class ProtectionPolicyTests
         Assert.False(policy.Evaluate(new ProcessKey(ping.Pid, ping.CreateTime + 10_000_000)).MayOperate);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void On_this_PC_the_core_windows_processes_are_protected()
     {
@@ -502,6 +504,7 @@ public class ProcessControlTests : IDisposable
 
     // ---- the real thing, on processes this test started itself ----
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_priority_efficiency_and_affinity_on_our_own_ping()
     {
@@ -532,6 +535,7 @@ public class ProcessControlTests : IDisposable
         Assert.Equal(before.ProcessMask, control.QueryAffinity(key)!.ProcessMask);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_terminate_ends_our_ping_and_a_wrong_creation_time_leaves_it_alone()
     {
@@ -562,6 +566,7 @@ public class ProcessControlTests : IDisposable
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_terminate_tree_ends_a_cmd_and_the_ping_it_started_and_nothing_else()
     {

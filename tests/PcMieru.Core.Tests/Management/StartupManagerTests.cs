@@ -710,6 +710,7 @@ public class StartupManagerToggleTests
 }
 
 /// <summary>The real PC, read only. The registry and the shell are only looked at, never written.</summary>
+[Trait("Category", "RealMachine")]
 public class StartupManagerRealReadTests
 {
     private static string[] RegistryNames(RegistryHive hive, RegistryView view)

@@ -684,6 +684,7 @@ public sealed class GpuAdaptersTests
         Assert.Equal(long.MaxValue, a.DedicatedBytes);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Enumerate_never_throws_and_every_adapter_has_a_name_and_a_distinct_luid()
     {

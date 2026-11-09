@@ -326,6 +326,7 @@ public sealed class NicSamplerTests
         Assert.Equal(oper == 1, info.IsUp);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_real_table_can_be_read_and_every_row_it_shows_has_a_name_and_a_unique_id()
     {

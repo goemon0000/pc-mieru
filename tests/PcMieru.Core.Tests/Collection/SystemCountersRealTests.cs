@@ -8,6 +8,7 @@ namespace PcMieru.Core.Tests.Collection;
 /// <c>ping</c> this test starts and kills. Written to hold on a machine with no GPU or with unusual adapters, so what is
 /// asserted is "never a wrong number, always a reason", with the exact values left to the synthetic tests.
 /// </summary>
+[Trait("Category", "RealMachine")]
 public sealed class SystemCountersRealTests : IDisposable
 {
     private readonly List<Process> _children = [];

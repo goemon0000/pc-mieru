@@ -167,6 +167,7 @@ public class OsTests
     [Fact]
     public void CustomPowerPlanHasNoFallbackName() => Assert.Null(OsBuilder.PowerPlanName(Guid.Parse("11111111-2222-3333-4444-555555555555")));
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void RealCollectionRunsOnThisMachine()
     {

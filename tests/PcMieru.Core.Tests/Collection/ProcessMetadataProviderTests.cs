@@ -571,6 +571,7 @@ public sealed class ProcessMetadataProviderTests(ITestOutputHelper output)
 
 public sealed class SystemFactReaderTests(ITestOutputHelper output)
 {
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task A_spawned_process_is_described_from_the_real_system()
     {
@@ -600,6 +601,7 @@ public sealed class SystemFactReaderTests(ITestOutputHelper output)
         Assert.Null(d.Known);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task A_process_that_ended_after_it_was_described_keeps_its_facts_but_efficiency_becomes_Gone()
     {
@@ -615,6 +617,7 @@ public sealed class SystemFactReaderTests(ITestOutputHelper output)
         Assert.Equal(ValueStatus.Gone, after.EfficiencyMode.Status);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task A_process_that_ended_before_anyone_asked_is_Gone_for_everything()
     {
@@ -634,6 +637,7 @@ public sealed class SystemFactReaderTests(ITestOutputHelper output)
         Assert.Equal(ValueStatus.Gone, d.Signature.Status);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task A_PID_that_now_belongs_to_another_process_is_Gone_not_someone_elses_details()
     {
@@ -668,6 +672,7 @@ public sealed class SystemFactReaderTests(ITestOutputHelper output)
         Assert.Equal(ValueStatus.Denied, noSample.Path.Status);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_process_this_user_cannot_open_gets_its_path_only_when_the_latest_sample_vouches_for_it()
     {
@@ -693,6 +698,7 @@ public sealed class SystemFactReaderTests(ITestOutputHelper output)
         Assert.Equal(ValueStatus.Denied, unvouched.Company.Status);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_System_process_has_no_image_file_and_says_so()
     {

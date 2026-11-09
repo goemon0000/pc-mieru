@@ -13,6 +13,7 @@ public class ProcessOperationsTests
     /// <summary>A "someone else" identity: so the ping is not mistaken for ourselves.</summary>
     private static readonly SelfIdentity Other = new(uint.MaxValue - 1, @"C:\Program Files\PC Mieru");
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Terminate_ends_our_own_ping()
     {
@@ -25,6 +26,7 @@ public class ProcessOperationsTests
         Assert.True(WaitUntil(() => ping.HasExited));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_wrong_create_time_means_replaced_and_the_process_is_left_alone()
     {
@@ -37,6 +39,7 @@ public class ProcessOperationsTests
         Assert.False(ping.HasExited);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_wrong_create_time_changes_no_priority_either()
     {
@@ -49,6 +52,7 @@ public class ProcessOperationsTests
         Assert.Equal(before, ping.Priority);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_process_that_is_already_gone_is_reported_as_gone()
     {
@@ -63,6 +67,7 @@ public class ProcessOperationsTests
         Assert.True(WaitUntil(() => ProcessOperations.Terminate(pid, created, Other, System32).Code == OperationCode.Gone));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Terminate_refuses_ourselves_and_the_process_stays_alive()
     {
@@ -86,6 +91,7 @@ public class ProcessOperationsTests
         Assert.Equal(MessageKeys.ProtectedSystem, result.MessageKey);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Priority_is_set_and_read_back()
     {
@@ -100,6 +106,7 @@ public class ProcessOperationsTests
         Assert.Equal(System.Diagnostics.ProcessPriorityClass.Normal, ping.Priority);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Efficiency_mode_turns_on_off_and_restores_what_was_there()
     {
@@ -128,6 +135,7 @@ public class ProcessOperationsTests
         _ = control2;
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Efficiency_off_without_a_record_falls_back_to_normal()
     {
@@ -140,6 +148,7 @@ public class ProcessOperationsTests
         Assert.Equal(System.Diagnostics.ProcessPriorityClass.Normal, ping.Priority);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Efficiency_restore_values_that_are_not_restorable_are_refused_before_opening()
     {
@@ -152,6 +161,7 @@ public class ProcessOperationsTests
         Assert.Equal(System.Diagnostics.ProcessPriorityClass.Normal, ping.Priority);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Efficiency_is_refused_for_ourselves()
     {
@@ -173,6 +183,7 @@ public class ProcessOperationsTests
     /// Real system processes, opened for QUERY ONLY (access 0): this can read their protection facts but cannot change them,
     /// so a bug in the rules shows up as a wrong verdict, never as a killed Windows component.
     /// </summary>
+    [Trait("Category", "RealMachine")]
     [Theory]
     [InlineData("csrss")]
     [InlineData("smss")]
@@ -214,6 +225,7 @@ public class ProcessOperationsTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void An_ordinary_process_of_ours_is_allowed_with_a_query_only_open()
     {
@@ -230,6 +242,7 @@ public class ProcessOperationsTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Explorer_is_not_in_the_protected_list_but_nothing_is_done_to_it()
     {
@@ -265,6 +278,7 @@ public class ProcessOperationsTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Inspect_says_allowed_for_our_ping_and_unknown_when_the_identity_does_not_match()
     {
@@ -277,6 +291,7 @@ public class ProcessOperationsTests
         Assert.Equal(ProtectionReason.SystemProcess, ProcessGuard.Inspect(4, 1, Other, System32).Reason);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Inspect_of_a_process_that_ended_is_unknown_not_allowed()
     {
@@ -292,6 +307,7 @@ public class ProcessOperationsTests
         Assert.Equal(ProtectionOutcome.Unknown, ProcessGuard.Inspect(pid, created, Other, System32).Outcome);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Inspect_of_real_csrss_is_protected_or_unknown_and_never_allowed()
     {
@@ -310,6 +326,7 @@ public class ProcessOperationsTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Affinity_is_narrowed_and_restored_on_our_own_ping_and_bad_masks_are_refused()
     {
@@ -336,6 +353,7 @@ public class ProcessOperationsTests
         Assert.False(ProcessOperations.TryQueryAffinity(ping.Pid, ping.CreateTime + 1, out _, out _));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Affinity_is_refused_for_ourselves()
     {
@@ -385,6 +403,7 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         NowFileTime = () => 1,
     };
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_executor_dispatches_priority_and_terminate_on_our_own_ping()
     {
@@ -428,6 +447,7 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         Assert.Equal(0, api.StartCalls);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Disk_reads_on_this_pc_are_either_data_or_a_clean_refusal_and_never_write_anything()
     {
@@ -467,6 +487,7 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         Assert.NotEqual(OperationCode.Ok, result.Code);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Disk_health_all_on_this_pc_answers_every_drive_it_was_given_and_matches_the_single_reads()
     {
@@ -499,6 +520,7 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Disk_health_all_never_adds_a_key_outside_the_drives_it_was_given()
     {
@@ -557,6 +579,7 @@ public class HelperExecutorProcessTests(Xunit.Abstractions.ITestOutputHelper out
         Assert.Equal(OperationCode.Error, DiskOperations.CombineHealth([]).Code);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_executor_runs_disk_health_all_without_any_request_option_but_the_list()
     {

@@ -78,6 +78,7 @@ public sealed class VersionInfoReaderTests(ITestOutputHelper output)
 
 public sealed class ServiceMapTests(ITestOutputHelper output)
 {
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_real_table_lists_services_by_the_process_that_hosts_them()
     {
@@ -92,6 +93,7 @@ public sealed class ServiceMapTests(ITestOutputHelper output)
         Assert.Equal(1, map.Loads);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_process_that_hosts_no_service_gets_an_empty_list()
     {
@@ -235,6 +237,7 @@ public sealed class ProcessIconSourceTests(ITestOutputHelper output)
 {
     private static string System32(string name) => Path.Combine(Environment.SystemDirectory, name);
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task The_real_icon_of_an_exe_comes_back_as_a_valid_png_of_the_requested_size()
     {
@@ -249,6 +252,7 @@ public sealed class ProcessIconSourceTests(ITestOutputHelper output)
         Assert.Contains(Enumerable.Range(0, rgba.Length / 4), i => rgba[(i * 4) + 3] > 0);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task A_small_size_gives_a_smaller_image()
     {

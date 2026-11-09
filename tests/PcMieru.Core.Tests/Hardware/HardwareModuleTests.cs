@@ -64,6 +64,7 @@ public class HardwareModuleTests
         Dispose(registry);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task OtherCategoriesNeverAskTheSensorHost()
     {
@@ -77,6 +78,7 @@ public class HardwareModuleTests
         Assert.True(info.Os.IsOk);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task AFailingSensorClientTurnsIntoPerGpuErrorsNotAnException()
     {
@@ -95,6 +97,7 @@ public class HardwareModuleTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task ASensorClientThatNeverAnswersCostsAtMostTheFiveSecondLimit()
     {
@@ -115,6 +118,7 @@ public class HardwareModuleTests
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task ACallerWhoCancelsGetsACancellationNotATimeoutValue()
     {

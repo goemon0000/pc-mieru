@@ -68,6 +68,7 @@ public sealed class CollectionModuleTests(ITestOutputHelper output)
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Through_the_registry_the_real_sampler_sees_a_spawned_process_and_the_provider_asks_the_catalog_that_is_registered_later()
     {

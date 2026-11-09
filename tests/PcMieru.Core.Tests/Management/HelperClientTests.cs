@@ -457,6 +457,7 @@ public class HelperClientTests : IDisposable
         throw new FileNotFoundException("PCMieru.Helper.exe was not found: build PcMieru.slnx (not only the test project) before running this test.");
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task The_real_helper_changes_the_priority_of_and_then_ends_our_own_ping_and_nothing_else()
     {

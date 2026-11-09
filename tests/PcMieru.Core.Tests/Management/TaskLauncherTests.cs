@@ -153,6 +153,7 @@ public class TaskLauncherTests
         Assert.Equal(OperationCode.NotFound, result.Code);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void One_real_hidden_launch_of_a_short_ping_through_the_real_executor()
     {

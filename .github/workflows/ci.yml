@@ -26,12 +26,16 @@ jobs:
       - name: Build
         run: dotnet build PcMieru.slnx -c Release --nologo
 
+      # RealMachine tests read live hardware, spawn real processes or compare against the host's registry/processes;
+      # a headless CI runner (few processes, no interactive desktop, no discrete GPU) cannot satisfy them. They run
+      # locally on a real workstation. Everything environment-independent runs here.
       - name: Test
-        run: dotnet test PcMieru.slnx -c Release --no-build --nologo
+        run: dotnet test PcMieru.slnx -c Release --no-build --nologo --filter "Category!=RealMachine"
 
-      # Opens the real window off screen, walks every page in both languages and themes, exits 0 only if every check holds.
+      # Opens the real window off screen on sample data (--fakes), walks every page in both languages and themes,
+      # exits 0 only if every check holds. Sample data so a headless runner (no windowed app, no icons) is enough.
       - name: GUI smoke
-        run: dotnet run --project src/PcMieru.Gui -c Release --no-build -- --smoke "${{ runner.temp }}/smoke.json"
+        run: dotnet run --project src/PcMieru.Gui -c Release --no-build -- --smoke "${{ runner.temp }}/smoke.json" --fakes
 
       - name: Smoke report
         if: always()
@@ -55,4 +59,4 @@ jobs:
 
       - name: Publish and run the folder
         shell: pwsh
-        run: ./tools/publish.ps1 -Version 0.0.0 -Verify -SkipZip
+        run: ./tools/publish.ps1 -Version 0.0.0 -Verify -SkipZip -SmokeFakes

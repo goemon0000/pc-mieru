@@ -529,6 +529,7 @@ public sealed class SamplerLoopTests
         Assert.Empty(loop.History);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task The_real_source_drives_the_loop_and_the_second_snapshot_has_rates()
     {

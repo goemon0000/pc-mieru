@@ -297,6 +297,7 @@ public class ServiceManagerTests
         Assert.Equal(0, api.StartCalls);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_list_agrees_with_Get_Service_on_this_PC()
     {
@@ -334,6 +335,7 @@ public class ServiceManagerTests
         Assert.NotNull(ours["RpcSs"].Pid);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_descriptions_are_resolved_text_and_equal_what_WMI_says_for_well_known_services()
     {
@@ -466,6 +468,7 @@ public class SessionProviderTests
         Assert.Equal("alice", list[1].UserName);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public async Task Real_list_has_our_own_session_with_our_own_user_name()
     {
@@ -614,6 +617,7 @@ public class ShellActionsTests
         Assert.Equal(0, host.StartCalls);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Real_host_finds_our_own_explorer_in_a_normal_session_without_touching_it()
     {

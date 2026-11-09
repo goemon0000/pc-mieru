@@ -288,6 +288,7 @@ public class MemorySamplerTests
         Assert.Equal(ValueStatus.Error, m.CacheBytes.Status);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_real_machine_reports_sane_memory()
     {

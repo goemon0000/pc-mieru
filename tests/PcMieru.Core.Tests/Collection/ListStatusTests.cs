@@ -105,6 +105,7 @@ public sealed class ListStatusTests
         Assert.True(nic.State.IsOk);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_real_adapter_table_gives_an_ok_state_with_the_count_of_the_list()
     {
@@ -128,6 +129,7 @@ public sealed class ListStatusTests
         Assert.True(ListStatus.ExplainsEmptyList(reading.Disks.Count, reading.DisksState));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_real_pdh_reading_has_a_disk_state_that_agrees_with_the_list()
     {
@@ -196,6 +198,7 @@ public sealed class ListStatusTests
         Assert.Equal(1, reading.State.Data);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_real_gpu_sample_never_lists_adapters_under_a_state_that_is_not_ok()
     {

@@ -120,6 +120,7 @@ public class AudioTests
     [InlineData(99u)]
     public void UnknownFormFactorHasNoName(uint form) => Assert.Null(AudioBuilder.FormFactorName(form));
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void RealCollectionRunsOnThisMachineWithoutThrowing()
     {

@@ -52,6 +52,7 @@ internal sealed class SpawnedPing : IDisposable
 
 public sealed class ProcessHandleTests(ITestOutputHelper output)
 {
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_creation_time_of_the_key_identifies_the_process()
     {
@@ -67,6 +68,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_same_pid_with_another_creation_time_is_a_different_process_and_is_gone()
     {
@@ -79,6 +81,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         Assert.Contains("different process", detail);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void A_process_that_has_exited_is_gone()
     {
@@ -100,6 +103,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         Assert.False(string.IsNullOrEmpty(detail));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_facts_of_a_running_child_are_read_from_the_process_itself()
     {
@@ -126,6 +130,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         Assert.True(efficiency.IsOk, efficiency.Detail);
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void Facts_of_a_process_that_exits_while_they_are_read_come_back_as_Gone_not_as_an_error()
     {
@@ -147,6 +152,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         }
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_System_process_has_a_path_from_the_kernel_or_says_it_has_none()
     {
@@ -166,6 +172,7 @@ public sealed class ProcessHandleTests(ITestOutputHelper output)
         Assert.True(path.Status is ValueStatus.Ok or ValueStatus.Unsupported or ValueStatus.Denied, path.Status.ToString());
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void The_System_process_has_no_command_line_and_that_is_not_reported_as_a_failure()
     {

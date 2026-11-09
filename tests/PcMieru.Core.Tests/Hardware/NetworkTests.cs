@@ -209,6 +209,7 @@ public class NetworkTests
         Assert.Equal(string.Empty, NetworkBuilder.NormalizeGuid(null));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void RealCollectionRunsOnThisMachineWithoutThrowing()
     {

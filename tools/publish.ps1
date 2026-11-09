@@ -23,6 +23,7 @@ param(
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
     [switch]$SkipZip,
+    [switch]$SmokeFakes,
     [int]$HelperMaxKB = 8192
 )
 
@@ -269,7 +270,12 @@ function Invoke-VerifyRun([string]$Folder) {
     Write-Host ('pcmi mcp       : initialize ok, {0} tools' -f $tools.Count)
 
     $smoke = Join-Path $Folder 'smoke-verify.json'
-    $process = Start-Process -FilePath $gui -ArgumentList @('--smoke', ('"' + $smoke + '"')) -PassThru -Wait
+    # -SmokeFakes walks every page on sample data: a headless CI runner has no interactive desktop (no windowed app,
+    # no program icons, no real GPU), so the real-data smoke's desktop checks only hold on a real workstation. The
+    # published exe still has to start, initialize WinForms and render every page/language/theme, which this proves.
+    $smokeArgs = @('--smoke', ('"' + $smoke + '"'))
+    if ($SmokeFakes) { $smokeArgs += '--fakes' }
+    $process = Start-Process -FilePath $gui -ArgumentList $smokeArgs -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "PCMieru.exe --smoke exited with $($process.ExitCode); see $smoke" }
     $report = Get-Content -LiteralPath $smoke -Raw | ConvertFrom-Json
     if (-not $report.ok) { throw "PCMieru.exe --smoke reported failures; see $smoke" }

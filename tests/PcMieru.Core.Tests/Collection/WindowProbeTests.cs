@@ -153,6 +153,7 @@ internal sealed class TestWindow : IDisposable
 
 #pragma warning restore SYSLIB1054
 
+[Trait("Category", "RealMachine")]
 public sealed class WindowProbeTests(ITestOutputHelper output)
 {
     [Fact]

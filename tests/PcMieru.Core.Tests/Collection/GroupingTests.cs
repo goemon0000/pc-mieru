@@ -216,6 +216,7 @@ public sealed class ProcessGrouperTests
     }
 }
 
+[Trait("Category", "RealMachine")]
 public sealed class WindowsFolderClassifierTests(ITestOutputHelper output)
 {
     private static ProcessInfo InfoFor(ProcessKey key, uint parent = 0) => new(
@@ -338,6 +339,7 @@ public sealed class WindowsFolderClassifierTests(ITestOutputHelper output)
     }
 }
 
+[Trait("Category", "RealMachine")]
 public sealed class GroupsOfTheRealSystemTests(ITestOutputHelper output)
 {
     [Fact]

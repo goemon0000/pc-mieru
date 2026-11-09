@@ -194,6 +194,7 @@ public class BatteryTests
         Assert.Equal(7u, BinaryPrimitives.ReadUInt32LittleEndian(BatteryNative.WaitStatus(7)));
     }
 
+    [Trait("Category", "RealMachine")]
     [Fact]
     public void RealCollectionRunsOnThisMachineWithoutThrowing()
     {

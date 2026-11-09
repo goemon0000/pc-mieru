@@ -7,6 +7,7 @@ namespace PcMieru.Core.Tests.Collection;
 #pragma warning disable SYSLIB1054 // test-only P/Invoke; the test project does not enable unsafe code, which LibraryImport needs
 
 /// <summary>These run against the real machine, but only ever look at (and only ever touch) the test's own process and its own children.</summary>
+[Trait("Category", "RealMachine")]
 public sealed class WindowsSnapshotSourceTests : IDisposable
 {
     private readonly List<Process> _children = [];

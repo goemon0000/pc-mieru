@@ -37,12 +37,14 @@ jobs:
           "value=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "version $v"
 
+      # Same gate as CI: RealMachine tests need a real workstation (live hardware, real processes, the host registry)
+      # and cannot run on a headless runner, so the release is gated on the environment-independent tests.
       - name: Test
-        run: dotnet test PcMieru.slnx -c Release --nologo
+        run: dotnet test PcMieru.slnx -c Release --nologo --filter "Category!=RealMachine"
 
       - name: Publish and run the folder
         shell: pwsh
-        run: ./tools/publish.ps1 -Version '${{ steps.version.outputs.value }}' -Verify
+        run: ./tools/publish.ps1 -Version '${{ steps.version.outputs.value }}' -Verify -SmokeFakes
 
       - uses: actions/upload-artifact@v4
         with:
