@@ -255,6 +255,16 @@ internal sealed class ServicesPage : PageBase
         }
     }
 
+    /// <summary>A list that arrived before the window existed (the page was the one the app opened on) is put on screen now, not at the next refresh.</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_loaded)
+        {
+            Reload();
+        }
+    }
+
     private void Reload()
     {
         if (!IsHandleCreated)
@@ -346,7 +356,7 @@ internal sealed class ServicesPage : PageBase
                 return new GridCell(Strings.Get("gui.svc.start." + s.StartType.ToString().ToLowerInvariant()), s.StartType == ServiceStartType.Disabled ? CellTone.Dim : CellTone.Normal);
             case PidColumn:
                 return s.Pid is { } pid && pid != 0
-                    ? new GridCell(pid.ToString(CultureInfo.CurrentCulture))
+                    ? new GridCell(pid.ToString(CultureInfo.CurrentCulture)) { Link = true } // a click opens the process (see OverPid)
                     : new GridCell(Fmt.Dash, CellTone.Dim);
             case DescriptionColumn:
                 return s.Description.TryGet(out var text) ? new GridCell(text) : new GridCell(Fmt.Dash, CellTone.Dim);

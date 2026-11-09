@@ -187,6 +187,16 @@ internal sealed class StartupPage : PageBase
         Reload();
     }
 
+    /// <summary>A list that arrived before the window existed (the page was the one the app opened on) is put on screen now, not at the next refresh.</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_loaded)
+        {
+            Reload();
+        }
+    }
+
     private void Reload()
     {
         if (!IsHandleCreated)

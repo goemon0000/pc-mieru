@@ -52,6 +52,9 @@ internal struct GridCell
     /// </summary>
     public double Bar;
 
+    /// <summary>A cell that opens something when it is clicked: drawn underlined in the accent colour, so the colour is not the only sign.</summary>
+    public bool Link;
+
     public GridCell(string text, CellTone tone = CellTone.Normal)
     {
         Text = text;
@@ -62,6 +65,7 @@ internal struct GridCell
         IconSlot = false;
         Icon = null;
         Bar = 0;
+        Link = false;
     }
 }
 
@@ -312,6 +316,7 @@ internal class GridView : ListView, IThemed
             _tip.Dispose();
             _rowHeight.Dispose();
             _bold?.Dispose();
+            _underline?.Dispose();
         }
 
         base.Dispose(disposing);
@@ -681,7 +686,8 @@ internal class GridView : ListView, IThemed
             bounds = new Rectangle(bounds.Left + shift, bounds.Top, Math.Max(bounds.Width - shift, 0), bounds.Height);
         }
 
-        var color = cell.Tone switch
+        var tone = cell.Link ? CellTone.Accent : cell.Tone;
+        var color = tone switch
         {
             CellTone.Dim => selected ? _selectedDim : palette.TextDim,
             CellTone.Accent => selected ? palette.SelectionText : palette.Accent,
@@ -693,7 +699,7 @@ internal class GridView : ListView, IThemed
             HorizontalAlignment.Center => TextFormatFlags.HorizontalCenter,
             _ => TextFormatFlags.Left,
         };
-        var font = (cell.Bold || header) ? BoldFont : Font;
+        var font = cell.Link ? UnderlineFont : (cell.Bold || header) ? BoldFont : Font;
         TextRenderer.DrawText(
             e.Graphics,
             cell.Text,
@@ -725,6 +731,22 @@ internal class GridView : ListView, IThemed
     private const int BarAlpha = 48;
     private const int BarAlphaDark = 72;
     private const int BarAlphaSelected = 64;
+
+    private Font? _underline;
+
+    private Font UnderlineFont
+    {
+        get
+        {
+            if (_underline is null || _underline.Size != Font.Size || _underline.Name != Font.Name)
+            {
+                _underline?.Dispose();
+                _underline = new Font(Font, FontStyle.Underline);
+            }
+
+            return _underline;
+        }
+    }
 
     private Font? _bold;
 
