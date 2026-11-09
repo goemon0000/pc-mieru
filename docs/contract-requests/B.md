@@ -205,8 +205,9 @@ helper process) at every plug event on a machine B cannot observe; if the integr
   normal rows with no GUI change.
 - **Window title and state text.** Under sample data (`--fakes`) the title says "sample data, not measured values" and
   the Hardware "source" column shows "fake". Both come from `FakeAreas`; no real-data screen shows them.
-- **Strings.** Only `gui.*` keys, ja and en, in `Gui/**/*Strings.cs`. 20 PNGs of the real window (light and dark, all
-  nine pages, ja) are in `docs/screenshots/`; they show **sample data**, not this PC's processes.
+- **Strings.** Only `gui.*` keys, ja and en, in `Gui/**/*Strings.cs`. 39 PNGs of the real window (light and dark, all
+  nine pages, ja and en, plus the report page's formatted and Markdown views) are in `docs/screenshots/`; they show
+  **sample data**, not this PC's processes.
 - **No new NuGet package.** `DllImport` is used in four places only: `Data/WindowProbe.cs` (window list),
   `Controls/GridView.cs` (the header's own window and the scroll bars), `Theme/ThemeService.cs` (dark title bar and
   dark scroll bars) and `Smoke/SmokeRun.cs` (capture, DPI event).
