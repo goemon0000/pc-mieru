@@ -54,6 +54,17 @@ internal sealed partial class ProcessesPage : PageBase
 
     private const long HighMemoryBytes = 2L * 1024 * 1024 * 1024;
 
+    /// <summary>
+    /// The load cue bars are drawn against the heaviest row on screen, but never against less than these: on a quiet PC a
+    /// process at 2 % must not fill the cell as a full bar would.
+    /// </summary>
+    private const double BarCpuFloorPercent = 20;
+
+    private const double BarMemoryFloorBytes = 1024.0 * 1024 * 1024;
+
+    private double _barCpuScale = BarCpuFloorPercent;
+    private double _barMemoryScale = BarMemoryFloorBytes;
+
     private readonly ProcessTableModel _model = new();
     private readonly ProcessClassifier _classifier;
     private readonly DetailsCache _details;
@@ -214,6 +225,13 @@ internal sealed partial class ProcessesPage : PageBase
     internal int IconsReady(int rows = 30) => KeysWithIcon(rows).Count();
 
     internal IReadOnlyList<ProcessColumn> VisibleColumns => [.. _visible.Select(s => s.Column)];
+
+    /// <summary>What the list would draw in the cell of <paramref name="column"/> on <paramref name="row"/> (for the self-check); empty if the column is hidden.</summary>
+    internal GridCell CellAt(int row, ProcessColumn column)
+    {
+        var index = _visible.FindIndex(s => s.Column == column);
+        return index < 0 ? new GridCell(string.Empty) : Cell(row, index);
+    }
 
     internal TextBox FilterBox => _filter;
 
@@ -681,6 +699,7 @@ internal sealed partial class ProcessesPage : PageBase
             return;
         }
 
+        MeasureBars();
         _updating = true;
         try
         {
@@ -704,6 +723,36 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         _list.Invalidate();
+    }
+
+    /// <summary>
+    /// What a full load cue bar means right now: the heaviest process among the rows of the list (not the idle one), or the
+    /// floor if all are lighter. Once per refresh, not once per paint.
+    /// </summary>
+    private void MeasureBars()
+    {
+        var cpu = BarCpuFloorPercent;
+        var memory = BarMemoryFloorBytes;
+        for (var i = 0; i < _model.Count; i++)
+        {
+            if (_model[i].Process is not { } p || p.Key.Pid == 0)
+            {
+                continue;
+            }
+
+            if (p.CpuPercent.TryGet(out var share) && share > cpu)
+            {
+                cpu = share;
+            }
+
+            if (p.PrivateWorkingSetBytes > memory)
+            {
+                memory = p.PrivateWorkingSetBytes;
+            }
+        }
+
+        _barCpuScale = cpu;
+        _barMemoryScale = memory;
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e)
@@ -856,9 +905,18 @@ internal sealed partial class ProcessesPage : PageBase
             case ProcessColumn.Pid:
                 return new GridCell(p.Key.Pid.ToString(CultureInfo.CurrentCulture));
             case ProcessColumn.Cpu:
-                return Number(p.CpuPercent, highlight: HighCpuPercent);
+            {
+                // "System Idle Process" is the CPU nobody used, not a load: no bar.
+                var cpu = Number(p.CpuPercent, highlight: HighCpuPercent);
+                cpu.Bar = p.Key.Pid != 0 && p.CpuPercent.TryGet(out var share) ? share / _barCpuScale : 0;
+                return cpu;
+            }
+
             case ProcessColumn.Memory:
-                return new GridCell(Fmt.Bytes(p.PrivateWorkingSetBytes), p.PrivateWorkingSetBytes >= HighMemoryBytes ? CellTone.Accent : CellTone.Normal);
+                return new GridCell(Fmt.Bytes(p.PrivateWorkingSetBytes), p.PrivateWorkingSetBytes >= HighMemoryBytes ? CellTone.Accent : CellTone.Normal)
+                {
+                    Bar = p.PrivateWorkingSetBytes / _barMemoryScale,
+                };
             case ProcessColumn.Disk:
                 return p.IoReadBytesPerSec.IsOk || p.IoWriteBytesPerSec.IsOk
                     ? new GridCell(Fmt.Rate(p.IoReadBytesPerSec, p.IoWriteBytesPerSec))

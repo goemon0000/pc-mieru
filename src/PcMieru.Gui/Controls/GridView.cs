@@ -46,6 +46,12 @@ internal struct GridCell
     /// <summary>First column only: the icon to draw in the slot. Null draws nothing (not known yet, or the file has none).</summary>
     public Image? Icon;
 
+    /// <summary>
+    /// A load cue: how far (0 to 1) a quiet bar tinted in the accent colour fills the cell behind the text. 0 draws nothing.
+    /// It only helps the eye find the heavy rows; the number is always in the text, so nothing depends on seeing the bar.
+    /// </summary>
+    public double Bar;
+
     public GridCell(string text, CellTone tone = CellTone.Normal)
     {
         Text = text;
@@ -55,6 +61,7 @@ internal struct GridCell
         Glyph = ExpanderGlyph.None;
         IconSlot = false;
         Icon = null;
+        Bar = 0;
     }
 }
 
@@ -641,6 +648,11 @@ internal class GridView : ListView, IThemed
         var width = Columns[e.ColumnIndex].Width;
         var pad = Scaled(8);
         var bounds = new Rectangle(left + pad, row.Top, Math.Max(width - (pad * 2), 0), row.Height);
+        if (cell.Bar > 0 && !header)
+        {
+            DrawBar(e.Graphics, palette, new Rectangle(left, row.Top, width, row.Height), cell.Bar, selected);
+        }
+
         if (e.ColumnIndex == 0)
         {
             var step = Scaled(16);
@@ -690,6 +702,29 @@ internal class GridView : ListView, IThemed
             color,
             alignment | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
     }
+
+    /// <summary>The load cue of a cell: a translucent accent bar from the left edge of the cell, drawn under the text.</summary>
+    private void DrawBar(Graphics graphics, Palette palette, Rectangle cell, double fraction, bool selected)
+    {
+        var inset = Scaled(2);
+        var room = cell.Width - (inset * 2);
+        var length = (int)Math.Round(room * Math.Clamp(fraction, 0, 1));
+        if (length < 1 || cell.Height <= inset * 2)
+        {
+            return;
+        }
+
+        // A quiet tint: the number on top has to stay as readable as without it, in both themes and on the selected row.
+        // A blue on a dark surface needs a little more opacity than on a light one to be seen at all.
+        var dark = palette.Window.GetBrightness() < 0.5f;
+        var alpha = selected ? BarAlphaSelected : dark ? BarAlphaDark : BarAlpha;
+        using var brush = new SolidBrush(Color.FromArgb(alpha, palette.Accent));
+        graphics.FillRectangle(brush, cell.Left + inset, cell.Top + inset, length, cell.Height - (inset * 2));
+    }
+
+    private const int BarAlpha = 48;
+    private const int BarAlphaDark = 72;
+    private const int BarAlphaSelected = 64;
 
     private Font? _bold;
 

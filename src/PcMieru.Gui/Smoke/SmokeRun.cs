@@ -138,6 +138,26 @@ internal static class SmokeRun
                     wanted.All(columns.Contains) && !hidden.Any(columns.Contains),
                     string.Join(",", columns));
 
+                // The load cue bars of the CPU and memory cells are fractions of the heaviest row (or of a floor): in range, and
+                // the heaviest memory row fills its bar unless every process is under the floor.
+                var memoryBars = new List<double>();
+                var cpuBars = new List<double>();
+                for (var i = 0; i < processes.Model.Count; i++)
+                {
+                    if (processes.Model[i].IsGroup)
+                    {
+                        continue;
+                    }
+
+                    memoryBars.Add(processes.CellAt(i, ProcessColumn.Memory).Bar);
+                    cpuBars.Add(processes.CellAt(i, ProcessColumn.Cpu).Bar);
+                }
+
+                Check(
+                    "load cue bars are between 0 and 1 and the memory column has at least one",
+                    memoryBars.Count > 0 && memoryBars.Concat(cpuBars).All(b => b is >= 0 and <= 1.0000001) && memoryBars.Max() > 0,
+                    $"memory max {(memoryBars.Count > 0 ? memoryBars.Max() : -1):0.00}, cpu max {(cpuBars.Count > 0 ? cpuBars.Max() : -1):0.00}");
+
                 // The detail pane can be hidden; the list then takes its width, and showing it again gives the width back.
                 var widthWith = processes.List.Width;
                 processes.SetDetailShown(false);
@@ -435,6 +455,12 @@ internal static class SmokeRun
             Check($"dpi emulation reached {target}", form.DeviceDpi == target, "device dpi " + form.DeviceDpi);
         }
 
+        private static string Excerpt(string text)
+        {
+            var line = text.ReplaceLineEndings(" ");
+            return line.Length <= 60 ? line : line[..60] + "...";
+        }
+
         /// <summary>
         /// The window as the user sees it, title bar and frame included: PrintWindow asks the compositor for the real
         /// content (so it also works off screen), CopyFromScreen reads the pixels when the window is on screen. This is
@@ -442,12 +468,6 @@ internal static class SmokeRun
         /// A window that was just switched to another page may still be half repainted (an off-screen window is painted
         /// lazily), so the picture is taken again until two takes in a row agree.
         /// </summary>
-        private static string Excerpt(string text)
-        {
-            var line = text.ReplaceLineEndings(" ");
-            return line.Length <= 60 ? line : line[..60] + "...";
-        }
-
         private async Task<string> Capture(string directory, string fileName)
         {
             Directory.CreateDirectory(directory);
@@ -483,7 +503,13 @@ internal static class SmokeRun
                 }
 
                 current = Take(window, width, height, fileName);
-                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015)
+
+                // Live numbers move in the sample data, so the whole picture may differ a little between two takes; the
+                // navigation never changes, so its strip must be identical. A list that is caught between "background drawn"
+                // and "items drawn" is a few hundred pixels: far under the whole-picture limit, and the take it is in
+                // would have been kept.
+                var strip = new Rectangle(0, 0, Math.Min(current.Width, form.DeviceDpi * 210 / 96), current.Height);
+                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0)
                 {
                     break;
                 }
@@ -589,7 +615,10 @@ internal static class SmokeRun
         }
 
         /// <summary>The fraction of pixels that differ clearly: live numbers moving in the sample data stay far below it, a half painted page does not.</summary>
-        private static double Differs(Bitmap a, Bitmap b)
+        private static double Differs(Bitmap a, Bitmap b) => Differs(a, b, new Rectangle(Point.Empty, a.Size));
+
+        /// <summary>The same, counted inside <paramref name="region"/> only.</summary>
+        private static double Differs(Bitmap a, Bitmap b, Rectangle region)
         {
             if (a.Size != b.Size)
             {
@@ -597,6 +626,12 @@ internal static class SmokeRun
             }
 
             var rect = new Rectangle(Point.Empty, a.Size);
+            region.Intersect(rect);
+            if (region.IsEmpty)
+            {
+                return 0;
+            }
+
             var da = a.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             var db = b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             try
@@ -607,15 +642,19 @@ internal static class SmokeRun
                 Marshal.Copy(da.Scan0, left, 0, bytes);
                 Marshal.Copy(db.Scan0, right, 0, bytes);
                 long different = 0;
-                for (var i = 0; i < bytes; i += 4)
+                for (var y = region.Top; y < region.Bottom; y++)
                 {
-                    if (Math.Abs(left[i] - right[i]) + Math.Abs(left[i + 1] - right[i + 1]) + Math.Abs(left[i + 2] - right[i + 2]) > 24)
+                    for (var x = region.Left; x < region.Right; x++)
                     {
-                        different++;
+                        var i = (y * da.Stride) + (x * 4);
+                        if (Math.Abs(left[i] - right[i]) + Math.Abs(left[i + 1] - right[i + 1]) + Math.Abs(left[i + 2] - right[i + 2]) > 24)
+                        {
+                            different++;
+                        }
                     }
                 }
 
-                return (double)different / (bytes / 4);
+                return (double)different / ((long)region.Width * region.Height);
             }
             finally
             {
