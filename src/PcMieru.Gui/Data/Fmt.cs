@@ -34,6 +34,18 @@ internal static class Fmt
 
     public static string Bytes(Value<long> value) => value.TryGet(out var v) ? Bytes(v) : Dash;
 
+    /// <summary>
+    /// The size in megabytes whatever its size, with the digit groups of the language ("6,512 MB"): a column of these can be
+    /// compared by eye, which one that switches between MB and GB cannot. One decimal below 100 MB, none above.
+    /// </summary>
+    public static string Megabytes(long bytes)
+    {
+        var megabytes = Math.Max(bytes, 0) / (1024.0 * 1024.0);
+        return megabytes == 0
+            ? "0 MB"
+            : megabytes.ToString(megabytes >= 100 ? "N0" : "N1", CultureInfo.CurrentCulture) + " MB";
+    }
+
     public static string Rate(Value<double> value) =>
         value.TryGet(out var v) ? Bytes((long)Math.Max(0, v)) + "/s" : Dash;
 

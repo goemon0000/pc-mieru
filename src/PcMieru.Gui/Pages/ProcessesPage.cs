@@ -65,6 +65,9 @@ internal sealed partial class ProcessesPage : PageBase
     private double _barCpuScale = BarCpuFloorPercent;
     private double _barMemoryScale = BarMemoryFloorBytes;
 
+    /// <summary>The memory columns in megabytes only (a column that can be compared by eye), instead of MB and GB as each size fits.</summary>
+    private bool _memoryInMb;
+
     private readonly ProcessTableModel _model = new();
     private readonly ProcessClassifier _classifier;
     private readonly DetailsCache _details;
@@ -130,6 +133,7 @@ internal sealed partial class ProcessesPage : PageBase
 
         LoadColumnChoices();
         _detailShown = context.Settings.GetBool("proc.detail", true);
+        _memoryInMb = context.Settings.GetBool("proc.memmb", false);
         _model.Mode = (ViewOptions.FirstOrDefault(o => o.Saved == context.Settings.GetValue("proc.view")) ?? ViewOptions[0]).Mode;
         if (Enum.TryParse<ProcessColumn>(context.Settings.GetValue("proc.sort"), out var sort) && Enum.IsDefined(sort))
         {
@@ -318,6 +322,7 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         settings.SetBool("proc.detail", _detailShown);
+        settings.SetBool("proc.memmb", _memoryInMb);
         if (_splitReady && !_split.Panel2Collapsed && _split.Panel2.Width > 0)
         {
             settings.SetInt("proc.split", ToLogical(_split.Panel2.Width));
@@ -610,6 +615,15 @@ internal sealed partial class ProcessesPage : PageBase
                 _list.Invalidate();
             };
             _columnMenu.Items.Add(item);
+        }
+
+        _columnMenu.Items.Add(new ToolStripSeparator());
+        _columnMenu.Items.Add(new ToolStripMenuItem(Strings.Get("gui.proc.memunit.label")) { Enabled = false });
+        foreach (var (inMb, key) in new[] { (false, "gui.proc.memunit.auto"), (true, "gui.proc.memunit.mb") })
+        {
+            var unit = new ToolStripMenuItem(Strings.Get(key)) { Checked = _memoryInMb == inMb, CheckOnClick = false };
+            unit.Click += (_, _) => SetMemoryInMb(inMb);
+            _columnMenu.Items.Add(unit);
         }
 
         Context.Theme.StyleMenu(_columnMenu);
@@ -913,7 +927,7 @@ internal sealed partial class ProcessesPage : PageBase
             }
 
             case ProcessColumn.Memory:
-                return new GridCell(Fmt.Bytes(p.PrivateWorkingSetBytes), p.PrivateWorkingSetBytes >= HighMemoryBytes ? CellTone.Accent : CellTone.Normal)
+                return new GridCell(MemoryText(p.PrivateWorkingSetBytes), p.PrivateWorkingSetBytes >= HighMemoryBytes ? CellTone.Accent : CellTone.Normal)
                 {
                     Bar = p.PrivateWorkingSetBytes / _barMemoryScale,
                 };
@@ -934,9 +948,9 @@ internal sealed partial class ProcessesPage : PageBase
             case ProcessColumn.Handles:
                 return new GridCell(Fmt.Int(p.HandleCount));
             case ProcessColumn.WorkingSet:
-                return new GridCell(Fmt.Bytes(p.WorkingSetBytes));
+                return new GridCell(MemoryText(p.WorkingSetBytes));
             case ProcessColumn.Commit:
-                return new GridCell(Fmt.Bytes(p.CommitBytes));
+                return new GridCell(MemoryText(p.CommitBytes));
             case ProcessColumn.Priority:
                 return new GridCell(PriorityText(p.BasePriority));
             case ProcessColumn.Session:
@@ -947,6 +961,15 @@ internal sealed partial class ProcessesPage : PageBase
                 return new GridCell(string.Empty);
         }
     }
+
+    /// <summary>Chooses megabytes only (true) or MB and GB as each size fits (false) for the memory columns.</summary>
+    internal void SetMemoryInMb(bool value)
+    {
+        _memoryInMb = value;
+        _list.Invalidate();
+    }
+
+    private string MemoryText(long bytes) => _memoryInMb ? Fmt.Megabytes(bytes) : Fmt.Bytes(bytes);
 
     private static GridCell Number(Value<double> value, double highlight) =>
         value.TryGet(out var v)

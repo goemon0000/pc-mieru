@@ -158,6 +158,17 @@ internal static class SmokeRun
                     memoryBars.Count > 0 && memoryBars.Concat(cpuBars).All(b => b is >= 0 and <= 1.0000001) && memoryBars.Max() > 0,
                     $"memory max {(memoryBars.Count > 0 ? memoryBars.Max() : -1):0.00}, cpu max {(cpuBars.Count > 0 ? cpuBars.Max() : -1):0.00}");
 
+                // The memory unit can be fixed to MB; every row then reads in MB (and the biggest GB figure becomes a MB one).
+                var processRows = Enumerable.Range(0, processes.Model.Count).Where(i => !processes.Model[i].IsGroup).ToList();
+                var automatic = processRows.Select(i => processes.CellAt(i, ProcessColumn.Memory).Text).ToList();
+                processes.SetMemoryInMb(true);
+                var fixedMb = processRows.Select(i => processes.CellAt(i, ProcessColumn.Memory).Text).ToList();
+                processes.SetMemoryInMb(false);
+                Check(
+                    "fixing the memory unit to MB puts every process memory cell in MB",
+                    fixedMb.Count > 0 && fixedMb.All(t => t.EndsWith(" MB", StringComparison.Ordinal)) && automatic.Count == fixedMb.Count,
+                    string.Join(" | ", fixedMb.Take(4)) + " (automatic: " + string.Join(" | ", automatic.Take(4)) + ")");
+
                 // The detail pane can be hidden; the list then takes its width, and showing it again gives the width back.
                 var widthWith = processes.List.Width;
                 processes.SetDetailShown(false);
