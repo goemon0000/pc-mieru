@@ -59,7 +59,7 @@ internal static class Program
 
         if (options.SmokeOutput is { } output)
         {
-            return SmokeRun.Run(form, context, output, options.ScreenshotDirectory, options.OnScreen, options.Dpi, startedAt);
+            return SmokeRun.Run(form, context, output, options.ScreenshotDirectory, options.OnScreen, options.Dpi, startedAt, options.NetMeter);
         }
 
         Application.Run(form);
@@ -76,7 +76,8 @@ internal sealed record GuiOptions(
     bool ForceFakes,
     bool OnScreen = false,
     int Dpi = 0,
-    TextSize? TextSize = null);
+    TextSize? TextSize = null,
+    bool NetMeter = false);
 
 /// <summary>
 /// Command line of PCMieru.exe. These switches exist for verification (smoke run, screenshots, picking a page);
@@ -95,6 +96,7 @@ internal static class GuiArgs
         var onScreen = false;
         var dpi = 0;
         TextSize? textSize = null;
+        var netMeter = false;
         problem = string.Empty;
         options = new GuiOptions(null, null, null, null, null, false);
 
@@ -165,6 +167,11 @@ internal static class GuiArgs
                 case "--onscreen":
                     onScreen = true;
                     break;
+                case "--netmeter":
+                    // Smoke only: also start the real network meter and check that traffic reaches the process list.
+                    // It needs an elevated shell; the smoke run never brings up a UAC prompt.
+                    netMeter = true;
+                    break;
                 case "--textsize":
                     textSize = Next()?.ToLowerInvariant() switch
                     {
@@ -194,7 +201,7 @@ internal static class GuiArgs
             }
         }
 
-        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize);
+        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize, netMeter);
         return true;
     }
 }

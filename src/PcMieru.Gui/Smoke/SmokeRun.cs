@@ -15,17 +15,17 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// (0 = all checks passed). It exists because a window cannot be unit tested for "it opens and shows things", and a
 /// published folder must prove that once before release.
 /// </summary>
-internal static class SmokeRun
+internal static partial class SmokeRun
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(90);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
 
-    public static int Run(MainForm form, GuiContext context, string outputPath, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt)
+    public static int Run(MainForm form, GuiContext context, string outputPath, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt, bool netMeter = false)
     {
         var checks = new JsonArray();
-        var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt);
+        var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt, netMeter);
         var exitCode = 1;
 
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
@@ -79,7 +79,7 @@ internal static class SmokeRun
 
     private static double Ms(DateTime since) => Math.Round((DateTime.Now - since).TotalMilliseconds);
 
-    private sealed class Runner(MainForm form, GuiContext context, JsonArray checks, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt)
+    private sealed partial class Runner(MainForm form, GuiContext context, JsonArray checks, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt, bool netMeter)
     {
         private readonly JsonArray _shots = [];
 
@@ -269,6 +269,11 @@ internal static class SmokeRun
             }
 
             await Behaviour().ConfigureAwait(true);
+            if (netMeter)
+            {
+                await RealNetMeter().ConfigureAwait(true);
+            }
+
             Check("window title mentions sample data", !context.Services.UsesFakeData || form.Text.Contains(Strings.Get("core.fake.notice"), StringComparison.Ordinal), form.Text);
         }
 
