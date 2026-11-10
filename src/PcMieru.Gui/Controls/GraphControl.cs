@@ -135,6 +135,13 @@ internal sealed class GraphControl : Control, IThemed
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal double AutoFloor { get; set; } = 1;
 
+    /// <summary>
+    /// The size of one unit of the axis in the data's own unit: 1 when the axis counts what the data counts, 0.125 for a
+    /// bits axis over bytes. The automatic maximum is rounded to 1, 2 or 5 of these, so the labels read round in what they say.
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal double AxisStep { get; set; } = 1;
+
     /// <summary>Text for the axis maximum ("100 %", "5 MB/s"). Null shows nothing.</summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal Func<double, string>? AxisFormatter { get; set; }
@@ -352,7 +359,7 @@ internal sealed class GraphControl : Control, IThemed
             }
         }
 
-        return GraphPainter.NiceMaximum(max * 1.1, AutoFloor);
+        return GraphPainter.NiceMaximum(max * 1.1 / AxisStep, AutoFloor / AxisStep) * AxisStep;
     }
 
     private void DrawPlot(Graphics g, Rectangle plot, Palette palette)

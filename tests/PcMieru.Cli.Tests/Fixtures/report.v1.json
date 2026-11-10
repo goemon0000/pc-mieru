@@ -355,6 +355,14 @@
           "value": "running",
           "status": "ok",
           "source": "test"
+        },
+        "netSendBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
+        },
+        "netReceiveBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
         }
       },
       {
@@ -394,6 +402,14 @@
           "value": "running",
           "status": "ok",
           "source": "test"
+        },
+        "netSendBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
+        },
+        "netReceiveBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
         }
       },
       {
@@ -433,6 +449,14 @@
           "value": "running",
           "status": "ok",
           "source": "test"
+        },
+        "netSendBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
+        },
+        "netReceiveBytesPerSec": {
+          "status": "notCollected",
+          "source": ""
         }
       }
     ]

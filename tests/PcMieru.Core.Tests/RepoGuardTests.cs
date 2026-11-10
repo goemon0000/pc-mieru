@@ -34,15 +34,53 @@ public class RepoGuardTests
         }
     }
 
-    [Fact]
-    public void Helper_references_only_Wire()
+    /// <summary>
+    /// The two elevated, NativeAOT helper exes: the Helper (one-shot, asked for per action) and the network meter (opt-in,
+    /// long-lived). Both are small on purpose: Wire is all they know of the app, they take no NuGet package, they are AOT,
+    /// and the linker is told to load DLLs from System32 only (tools/publish.ps1 then checks the flag in the built exe).
+    /// </summary>
+    [Theory]
+    [InlineData("PcMieru.Helper")]
+    [InlineData("PcMieru.NetMeter")]
+    public void Elevated_helper_exes_reference_only_Wire_and_are_NativeAOT_with_a_System32_only_search(string project)
     {
-        var text = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Helper", "PcMieru.Helper.csproj"));
+        var text = File.ReadAllText(Path.Combine(Root, "src", project, project + ".csproj"));
         var references = Regex.Matches(text, "<(?:Project|Package)Reference\\s+Include=\"([^\"]+)\"")
             .Select(m => Path.GetFileNameWithoutExtension(m.Groups[1].Value.Replace('\\', '/').Split('/')[^1]))
             .ToArray();
         Assert.Equal(["PcMieru.Wire"], references);
         Assert.Contains("<PublishAot>true</PublishAot>", text, StringComparison.Ordinal);
+        Assert.Contains("<LinkerArg Include=\"/DEPENDENTLOADFLAG:0x800\" />", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_release_script_publishes_and_checks_both_helper_exes_and_ships_neither_as_a_managed_dll()
+    {
+        var script = File.ReadAllText(Path.Combine(Root, "tools", "publish.ps1"));
+        foreach (var exe in new[] { "PCMieru.Helper", "PCMieru.NetMeter" })
+        {
+            Assert.Contains($"'{exe}.exe'", script, StringComparison.Ordinal);
+            Assert.Contains($"'{exe}.dll'", script, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("Publish-AotExe 'Helper'", script, StringComparison.Ordinal);
+        Assert.Contains("Publish-AotExe 'NetMeter'", script, StringComparison.Ordinal);
+
+        // The dev-time reference to the managed meter is switched off for the app publishes, so only the NativeAOT exe ships.
+        Assert.Contains("-p:NetMeterNextToApp=false", script, StringComparison.Ordinal);
+        var targets = File.ReadAllText(Path.Combine(Root, "build", "NetMeterNextToApp.targets"));
+        Assert.Contains("'$(NetMeterNextToApp)' != 'false'", targets, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Dev_builds_of_the_apps_and_the_tests_put_the_network_meter_next_to_themselves()
+    {
+        var shared = File.ReadAllText(Path.Combine(Root, "build", "SensorHostNextToApp.targets"));
+        Assert.Contains("NetMeterNextToApp.targets", shared, StringComparison.Ordinal);
+        var meter = File.ReadAllText(Path.Combine(Root, "build", "NetMeterNextToApp.targets"));
+        Assert.Matches(@"<ProjectReference Include=""[^""]*PcMieru\.NetMeter\.csproj"" ReferenceOutputAssembly=""false"" />", meter);
+        var tests = File.ReadAllText(Path.Combine(Root, "tests", "PcMieru.Core.Tests", "PcMieru.Core.Tests.csproj"));
+        Assert.Contains("NetMeterNextToApp.targets", tests, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using PcMieru.Wire;
 
 namespace PcMieru.Core.Collection;
 
@@ -24,6 +25,9 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private static readonly TimeSpan StageTimeout = TimeSpan.FromSeconds(3);
 
     private static readonly TimeSpan FirstStageTimeout = TimeSpan.FromSeconds(8);
+
+    /// <summary>The whole budget of one read from the network meter (it may reconnect once inside it); less than <see cref="StageTimeout"/> so the stage's own limit is only the backstop.</summary>
+    private static readonly TimeSpan NetReadTimeout = TimeSpan.FromSeconds(2.5);
 
     /// <summary>A gap this much longer than the unbiased (awake) time means the machine slept; rates over it are meaningless.</summary>
     private const long SleepThresholdTicks = 20_000_000; // 2 s in 100 ns units
@@ -49,6 +53,14 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private readonly GuardedStage<GpuReading> _gpuStage = new();
     private readonly GuardedStage<WindowProbeResult> _windowStage = new();
 
+    // The network meter is another process: its read is a guarded stage too. The rates are worked out on the tick's own thread
+    // (they need the process list), from the meter's counters and the meter's own clock.
+    private readonly Func<INetMeterControl?> _net;
+    private readonly GuardedStage<NetStageResult> _netStage = new();
+    private readonly NetRateCalculator _netCalc = new();
+    private readonly List<ProcessKey> _netKeys = new(512);
+    private NetRates[] _netRates = new NetRates[512];
+
     private byte[] _buffer = GC.AllocateUninitializedArray<byte>(InitialBufferBytes, pinned: true);
     private ProcessRates[] _rates = new ProcessRates[512];
     private IReadOnlyList<GpuInfo> _gpuKnown = [];
@@ -70,13 +82,18 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     /// replaced). Null or returning null means "no sensor client": the GPU sensor fields say Unsupported.
     /// </param>
     public WindowsSnapshotSource(Func<DateTime> clock, ISamplerControl? control = null, Func<ISensorClient?>? sensors = null)
-        : this(clock, control, sensors, new SignatureVerifier())
+        : this(clock, control, sensors, new SignatureVerifier(), null)
     {
     }
 
     /// <param name="verifier">Shared with the details provider so a file is hashed once for both (grouping looks at Windows-folder files).</param>
-    internal WindowsSnapshotSource(Func<DateTime> clock, ISamplerControl? control, Func<ISensorClient?>? sensors, SignatureVerifier verifier)
+    /// <param name="net">
+    /// Resolves the network meter control every time (it can be replaced). Null or returning null means no meter: the network
+    /// values say it is off.
+    /// </param>
+    internal WindowsSnapshotSource(Func<DateTime> clock, ISamplerControl? control, Func<ISensorClient?>? sensors, SignatureVerifier verifier, Func<INetMeterControl?>? net)
     {
+        _net = net ?? (static () => null);
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _grouper = new ProcessGrouper(new WindowsFolderClassifier(verifier.Verify).Classify);
         _control = control ?? new SamplerSettings();
@@ -174,6 +191,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             _resetRequested = false;
             _deltas.Reset();
             _cpu.Reset();
+            _netCalc.Reset();
             _hasPrevious = false;
             _pdhReset = _nicReset = _gpuReset = true;
         }
@@ -184,6 +202,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         _ = _nicStage.Start(RunNicStage);
         _ = _gpuStage.Start(() => RunGpuStage(gpuActive));
         _ = _windowStage.Start(WindowProbe.Probe);
+        _ = _netStage.Start(RunNetStage);
 
         var length = ReadProcessBuffer();
         var stamp = Stopwatch.GetTimestamp();
@@ -214,6 +233,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         var nics = JoinNics(timeout);
         var gpu = JoinGpu(timeout, gpuActive);
         var windows = JoinWindows(timeout);
+        ComputeNet(JoinNet(timeout));
         var processes = BuildProcesses(gpu, windows);
 
         var nominal = (int)_control.EffectiveInterval.TotalMilliseconds;
@@ -279,6 +299,72 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         }
 
         return _gpu.Sample(active);
+    }
+
+    private NetStageResult RunNetStage()
+    {
+        var control = _net();
+        if (control is null)
+        {
+            return NetStageResult.Without(NetMeterValues.Missing(new NetMeterState(NetMeterStatus.Off)));
+        }
+
+        var state = control.State;
+        if (state.Status != NetMeterStatus.Running)
+        {
+            return NetStageResult.Without(NetMeterValues.Missing(state));
+        }
+
+        if (control is not INetMeterReader reader)
+        {
+            return NetStageResult.Without(Value.Unsupported<double>(NetMeterValues.Source, NetMeterValues.UnsupportedDetail));
+        }
+
+        if (reader.TryRead(NetReadTimeout, out var reading, out var generation) && reading is not null)
+        {
+            return new NetStageResult(reading, generation, default);
+        }
+
+        // The read failed. The control has already moved on and says why (Failed with plain words), or was stopped meanwhile.
+        var after = control.State;
+        return NetStageResult.Without(after.Status == NetMeterStatus.Running
+            ? Value.Failed<double>(NetMeterValues.Source, NetMeterValues.FailedDetail)
+            : NetMeterValues.Missing(after));
+    }
+
+    private NetStageResult JoinNet(TimeSpan timeout) =>
+        _netStage.TryJoin(timeout, out var result, out var failure, out var failureStatus) && result is not null
+            ? result
+            : NetStageResult.Without(Value.Missing<double>(failureStatus, NetMeterValues.Source, "network meter: " + failure));
+
+    /// <summary>Per-process network rates for this tick, in the order of <c>_raw</c>: from the meter's counters, or the reason there are none.</summary>
+    private void ComputeNet(NetStageResult net)
+    {
+        var count = _raw.Count;
+        if (_netRates.Length < count)
+        {
+            _netRates = new NetRates[Math.Max(count, _netRates.Length * 2)];
+        }
+
+        if (net.Reading is null)
+        {
+            Array.Fill(_netRates, NetRates.Both(net.Missing), 0, count);
+            return;
+        }
+
+        _netKeys.Clear();
+        foreach (var p in _raw)
+        {
+            _netKeys.Add(p.Key);
+        }
+
+        _netCalc.Compute(net.Reading, net.Generation, _netKeys, _netRates);
+    }
+
+    /// <summary>The meter's part of a tick: its counters, or (when <see cref="Reading"/> is null) the value every process gets instead.</summary>
+    private sealed record NetStageResult(NetMeterReading? Reading, long Generation, Value<double> Missing)
+    {
+        public static NetStageResult Without(Value<double> missing) => new(null, 0, missing);
     }
 
     private PdhSystemReading JoinPdh(TimeSpan timeout)
@@ -391,7 +477,9 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
                 rates.ReadPerSec,
                 rates.WritePerSec,
                 ProcessGpu(p.Pid, rates, gpu),
-                ProcessStateRule.Decide(p.AllThreadsSuspended, p.Pid, windows.Result, windows.FailureStatus, windows.FailureDetail));
+                ProcessStateRule.Decide(p.AllThreadsSuspended, p.Pid, windows.Result, windows.FailureStatus, windows.FailureDetail),
+                _netRates[i].Send,
+                _netRates[i].Receive);
         }
 
         return result;

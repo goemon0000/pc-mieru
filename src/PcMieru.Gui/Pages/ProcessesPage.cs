@@ -14,16 +14,19 @@ internal sealed partial class ProcessesPage : PageBase
     private static readonly ColumnSpec[] Specs =
     [
         // What a first-time reader looks at: name, how busy, how big, state. PID and the fine I/O split are one click away
-        // in the column chooser. (No per-process network column: Core does not collect one.)
-        new(ProcessColumn.Name, "gui.proc.col.name", 220, HorizontalAlignment.Left, true),
+        // in the column chooser. Network is on by default but fills only once the user starts the meter (it costs one UAC prompt).
+        new(ProcessColumn.Name, "gui.proc.col.name", 190, HorizontalAlignment.Left, true),
         new(ProcessColumn.Pid, "gui.proc.col.pid", 64, HorizontalAlignment.Right, false),
-        new(ProcessColumn.Cpu, "gui.proc.col.cpu", 72, HorizontalAlignment.Right, true),
-        new(ProcessColumn.Memory, "gui.proc.col.memory", 92, HorizontalAlignment.Right, true),
-        new(ProcessColumn.Disk, "gui.proc.col.disk", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Cpu, "gui.proc.col.cpu", 68, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Memory, "gui.proc.col.memory", 84, HorizontalAlignment.Right, true),
+        new(ProcessColumn.Disk, "gui.proc.col.disk", 92, HorizontalAlignment.Right, true),
         new(ProcessColumn.IoRead, "gui.proc.col.ioread", 100, HorizontalAlignment.Right, false),
         new(ProcessColumn.IoWrite, "gui.proc.col.iowrite", 100, HorizontalAlignment.Right, false),
-        new(ProcessColumn.Gpu, "gui.proc.col.gpu", 64, HorizontalAlignment.Right, true),
-        new(ProcessColumn.State, "gui.proc.col.state", 84, HorizontalAlignment.Left, true),
+        new(ProcessColumn.Network, "gui.proc.col.network", 100, HorizontalAlignment.Right, true),
+        new(ProcessColumn.NetSend, "gui.proc.col.netsend", 100, HorizontalAlignment.Right, false),
+        new(ProcessColumn.NetReceive, "gui.proc.col.netreceive", 100, HorizontalAlignment.Right, false),
+        new(ProcessColumn.Gpu, "gui.proc.col.gpu", 60, HorizontalAlignment.Right, true),
+        new(ProcessColumn.State, "gui.proc.col.state", 76, HorizontalAlignment.Left, true),
         new(ProcessColumn.Threads, "gui.proc.col.threads", 96, HorizontalAlignment.Right, false),
         new(ProcessColumn.Handles, "gui.proc.col.handles", 96, HorizontalAlignment.Right, false),
         new(ProcessColumn.WorkingSet, "gui.proc.col.workingset", 116, HorizontalAlignment.Right, false),
@@ -62,8 +65,17 @@ internal sealed partial class ProcessesPage : PageBase
 
     private const double BarMemoryFloorBytes = 1024.0 * 1024 * 1024;
 
+    /// <summary>1 MB/s (8 Mbps): a process at 50 kB/s must not fill the cell on a quiet connection.</summary>
+    private const double BarNetFloorBytes = 1_000_000;
+
+    /// <summary>The column layout version a saved <c>proc.cols</c> has been brought up to: 1 means the Network column was offered once.</summary>
+    private const string ColumnLayoutSetting = "proc.cols.v";
+
+    private const int ColumnLayoutVersion = 1;
+
     private double _barCpuScale = BarCpuFloorPercent;
     private double _barMemoryScale = BarMemoryFloorBytes;
+    private double _barNetScale = BarNetFloorBytes;
 
     /// <summary>The memory columns in megabytes only (a column that can be compared by eye), instead of MB and GB as each size fits.</summary>
     private bool _memoryInMb;
@@ -85,6 +97,7 @@ internal sealed partial class ProcessesPage : PageBase
     private readonly ComboBox _view = new() { Name = "processView", DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Right };
     private readonly Button _columns = new() { Name = "processColumns", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Button _run = new() { Name = "processRun", AutoSize = true, Anchor = AnchorStyles.Right };
+    private readonly Button _meter = new() { Name = "processNetMeter", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Button _detailToggle = new() { Name = "processDetailToggle", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Label _count = new() { AutoSize = true, Name = "processCount", Margin = new Padding(0, 0, 16, 0), Anchor = AnchorStyles.Left };
     private readonly ToneLabel _hint = new() { AutoSize = true, Name = "processHint", Anchor = AnchorStyles.Left };
@@ -101,6 +114,7 @@ internal sealed partial class ProcessesPage : PageBase
     private bool _goneShown;
     private bool _splitReady;
     private bool _detailShown = true;
+    private Bitmap? _shield;
 
     /// <summary>False when the icon source is the sample-data stand-in: no icons will ever come, so no empty slot is kept in front of the names.</summary>
     private readonly bool _iconSlots;
@@ -148,7 +162,7 @@ internal sealed partial class ProcessesPage : PageBase
         _list.SelectedIndexChanged += OnSelectionChanged;
         _list.ExpanderClicked += OnExpanderClicked;
         _list.KeyDown += OnListKeyDown;
-        _list.TabIndex = 5;
+        _list.TabIndex = 6;
         _menu.Opening += OnMenuOpening;
         _menu.Closed += (_, _) =>
         {
@@ -193,6 +207,11 @@ internal sealed partial class ProcessesPage : PageBase
         _pane.EndRequested += () => Run(TerminateSelectedAsync);
         _pane.FolderRequested += OpenSelectedFolder;
         _pane.WebRequested += SearchSelectedOnWeb;
+        _pane.NetworkUnit = context.Settings.NetworkUnit;
+        _pane.NetworkMissingTip = value => NetMeterUi.MissingTip(Context.NetMeter.State, value);
+        _meter.Click += (_, _) => OnMeterClick();
+        context.NetMeter.StateChanged += OnMeterStateChanged;
+        context.NetworkUnitChanged += OnNetworkUnitChanged;
 
         BuildLayout();
         _split.Panel2Collapsed = !_detailShown;
@@ -339,6 +358,7 @@ internal sealed partial class ProcessesPage : PageBase
             _columns.Text = Strings.Get("gui.proc.columns");
             _run.Text = Strings.Get("gui.proc.run");
             _detailToggle.Text = Strings.Get(_detailShown ? "gui.proc.detail.hide" : "gui.proc.detail.show");
+            ApplyMeterState();
             var mode = _model.Mode;
             _view.BeginUpdate();
             _view.Items.Clear();
@@ -393,9 +413,13 @@ internal sealed partial class ProcessesPage : PageBase
         if (disposing)
         {
             Context.Pump.Sampled -= OnSampled;
+            Context.NetMeter.StateChanged -= OnMeterStateChanged;
+            Context.NetworkUnitChanged -= OnNetworkUnitChanged;
             _tips.Dispose();
             _menu.Dispose();
             _columnMenu.Dispose();
+            _meter.Image = null;
+            _shield?.Dispose();
             _icons.Dispose();
         }
 
@@ -411,21 +435,22 @@ internal sealed partial class ProcessesPage : PageBase
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 8,
+            ColumnCount = 9,
             RowCount = 1,
             Padding = new Padding(Px(12), Px(10), Px(12), Px(8)),
             Name = "processBar",
         };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(260)));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(200)));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _filterLabel.Margin = new Padding(0, 0, Px(8), 0);
-        _filter.Width = Px(250);
+        _filter.Width = Px(190);
         _filter.Margin = new Padding(0);
         _viewLabel.Margin = new Padding(0, 0, Px(8), 0);
         _view.Width = Px(140);
@@ -436,18 +461,26 @@ internal sealed partial class ProcessesPage : PageBase
         _detailToggle.Margin = new Padding(0, 0, Px(8), 0);
         _run.MinimumSize = new Size(Px(150), Px(30));
         _run.Margin = new Padding(0);
+
+        // Wide enough for the longest of its three texts, so the bar does not shift when the state changes.
+        _meter.MinimumSize = new Size(Px(150), Px(30));
+        _meter.Margin = new Padding(0, 0, Px(16), 0);
+        _meter.ImageAlign = ContentAlignment.MiddleLeft;
+        _meter.TextImageRelation = TextImageRelation.ImageBeforeText;
         _filter.TabIndex = 0;
-        _view.TabIndex = 1;
-        _columns.TabIndex = 2;
-        _detailToggle.TabIndex = 3;
-        _run.TabIndex = 4;
+        _meter.TabIndex = 1;
+        _view.TabIndex = 2;
+        _columns.TabIndex = 3;
+        _detailToggle.TabIndex = 4;
+        _run.TabIndex = 5;
         bar.Controls.Add(_filterLabel, 0, 0);
         bar.Controls.Add(_filter, 1, 0);
-        bar.Controls.Add(_viewLabel, 3, 0);
-        bar.Controls.Add(_view, 4, 0);
-        bar.Controls.Add(_columns, 5, 0);
-        bar.Controls.Add(_detailToggle, 6, 0);
-        bar.Controls.Add(_run, 7, 0);
+        bar.Controls.Add(_meter, 3, 0);
+        bar.Controls.Add(_viewLabel, 4, 0);
+        bar.Controls.Add(_view, 5, 0);
+        bar.Controls.Add(_columns, 6, 0);
+        bar.Controls.Add(_detailToggle, 7, 0);
+        bar.Controls.Add(_run, 8, 0);
 
         var footer = new FlowLayoutPanel
         {
@@ -526,6 +559,15 @@ internal sealed partial class ProcessesPage : PageBase
             _shown.Clear();
         }
 
+        // The Network column came after users had saved their choice of columns. A saved set gets it once; the version marker
+        // then makes a later hide stick. A first run has no saved set and the defaults already include it.
+        if (_shown.Count > 0 && Context.Settings.GetInt(ColumnLayoutSetting, 0) < ColumnLayoutVersion)
+        {
+            _shown.Add(ProcessColumn.Network);
+        }
+
+        Context.Settings.SetInt(ColumnLayoutSetting, ColumnLayoutVersion);
+
         if (_shown.Count == 0)
         {
             foreach (var spec in Specs.Where(s => s.Default))
@@ -602,6 +644,12 @@ internal sealed partial class ProcessesPage : PageBase
                 Checked = _shown.Contains(spec.Column),
                 Enabled = spec.Column != ProcessColumn.Name,
                 Tag = spec.Column,
+                ToolTipText = spec.Column switch
+                {
+                    ProcessColumn.Network => Strings.Get("gui.proc.col.network.hint"),
+                    ProcessColumn.NetSend or ProcessColumn.NetReceive => Strings.Get("gui.proc.col.netdir.hint"),
+                    _ => null,
+                },
             };
             item.Click += (_, _) =>
             {
@@ -624,6 +672,16 @@ internal sealed partial class ProcessesPage : PageBase
             var unit = new ToolStripMenuItem(Strings.Get(key)) { Checked = _memoryInMb == inMb, CheckOnClick = false };
             unit.Click += (_, _) => SetMemoryInMb(inMb);
             _columnMenu.Items.Add(unit);
+        }
+
+        // The same four choices as the Settings page; the choice goes through the context, so both stay in step.
+        _columnMenu.Items.Add(new ToolStripSeparator());
+        _columnMenu.Items.Add(new ToolStripMenuItem(Strings.Get("gui.proc.netunit.label")) { Enabled = false });
+        foreach (var choice in NetworkUnits.All)
+        {
+            var netUnit = new ToolStripMenuItem(NetworkUnits.Label(choice)) { Checked = Context.Settings.NetworkUnit == choice, CheckOnClick = false, Tag = choice };
+            netUnit.Click += (_, _) => Context.SetNetworkUnit(choice);
+            _columnMenu.Items.Add(netUnit);
         }
 
         Context.Theme.StyleMenu(_columnMenu);
@@ -747,12 +805,15 @@ internal sealed partial class ProcessesPage : PageBase
     {
         var cpu = BarCpuFloorPercent;
         var memory = BarMemoryFloorBytes;
+        var network = BarNetFloorBytes;
         for (var i = 0; i < _model.Count; i++)
         {
             if (_model[i].Process is not { } p || p.Key.Pid == 0)
             {
                 continue;
             }
+
+            network = Math.Max(network, ProcessTableModel.NetRate(p));
 
             if (p.CpuPercent.TryGet(out var share) && share > cpu)
             {
@@ -767,6 +828,7 @@ internal sealed partial class ProcessesPage : PageBase
 
         _barCpuScale = cpu;
         _barMemoryScale = memory;
+        _barNetScale = network;
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e)
@@ -939,6 +1001,17 @@ internal sealed partial class ProcessesPage : PageBase
                 return Rate(p.IoReadBytesPerSec);
             case ProcessColumn.IoWrite:
                 return Rate(p.IoWriteBytesPerSec);
+            case ProcessColumn.Network:
+                return p.NetSendBytesPerSec.IsOk || p.NetReceiveBytesPerSec.IsOk
+                    ? new GridCell(Fmt.NetRate(p.NetSendBytesPerSec, p.NetReceiveBytesPerSec, Context.Settings.NetworkUnit))
+                    {
+                        Bar = ProcessTableModel.NetRate(p) / _barNetScale,
+                    }
+                    : new GridCell(Fmt.Dash, CellTone.Dim);
+            case ProcessColumn.NetSend:
+                return NetRate(p.NetSendBytesPerSec);
+            case ProcessColumn.NetReceive:
+                return NetRate(p.NetReceiveBytesPerSec);
             case ProcessColumn.Gpu:
                 return Number(p.GpuPercent, highlight: double.MaxValue);
             case ProcessColumn.State:
@@ -978,6 +1051,9 @@ internal sealed partial class ProcessesPage : PageBase
 
     private static GridCell Rate(Value<double> value) =>
         value.TryGet(out _) ? new GridCell(Fmt.Rate(value)) : new GridCell(Fmt.Dash, CellTone.Dim);
+
+    private GridCell NetRate(Value<double> value) =>
+        value.TryGet(out _) ? new GridCell(Fmt.NetRate(value, Context.Settings.NetworkUnit)) : new GridCell(Fmt.Dash, CellTone.Dim);
 
     private static GridCell State(ProcessInfo p)
     {
@@ -1030,6 +1106,11 @@ internal sealed partial class ProcessesPage : PageBase
             ProcessColumn.Name => NameTip(p),
             ProcessColumn.Disk when !p.IoReadBytesPerSec.IsOk && !p.IoWriteBytesPerSec.IsOk => Fmt.MissingTip(p.IoReadBytesPerSec),
             ProcessColumn.Disk => Strings.Get("gui.proc.col.disk.hint"),
+            ProcessColumn.Network when !p.NetSendBytesPerSec.IsOk && !p.NetReceiveBytesPerSec.IsOk => NetMeterUi.MissingTip(Context.NetMeter.State, p.NetSendBytesPerSec),
+            ProcessColumn.NetSend when !p.NetSendBytesPerSec.IsOk => NetMeterUi.MissingTip(Context.NetMeter.State, p.NetSendBytesPerSec),
+            ProcessColumn.NetReceive when !p.NetReceiveBytesPerSec.IsOk => NetMeterUi.MissingTip(Context.NetMeter.State, p.NetReceiveBytesPerSec),
+            ProcessColumn.Network => Strings.Get("gui.proc.col.network.hint"),
+            ProcessColumn.NetSend or ProcessColumn.NetReceive => Strings.Get("gui.proc.col.netdir.hint"),
             ProcessColumn.Cpu when !p.CpuPercent.IsOk => Fmt.MissingTip(p.CpuPercent),
             ProcessColumn.Gpu when !p.GpuPercent.IsOk => Fmt.MissingTip(p.GpuPercent),
             ProcessColumn.IoRead when !p.IoReadBytesPerSec.IsOk => Fmt.MissingTip(p.IoReadBytesPerSec),

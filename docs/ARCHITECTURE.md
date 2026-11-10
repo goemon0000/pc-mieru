@@ -109,7 +109,7 @@ MCP の伏せ字は起動引数 `--no-redact` だけで切り替わり、呼び�
 ## 7. 配布（`tools/publish.ps1`）
 
 ```
-powershell -File tools\publish.ps1 -Version 0.1.0 -Verify     # dist\PCMieru-0.1.0-win-x64\ と .zip と SHA256.txt
+powershell -File tools\publish.ps1 -Version 0.2.0 -Verify     # dist\PCMieru-0.2.0-win-x64\ と .zip と SHA256.txt
 ```
 
 - Gui・Cli・SensorHost を別々に自己完結＋ReadyToRun で発行し、1 つのフォルダに合流させる。

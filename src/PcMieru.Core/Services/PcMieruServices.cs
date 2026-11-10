@@ -83,6 +83,9 @@ public sealed class PcMieruServices : IDisposable
 
     public IProcessIconSource ProcessIcons => _registry.Get<IProcessIconSource>();
 
+    /// <summary>The opt-in per-process network meter (one UAC prompt to start). See SPEC 4.1.</summary>
+    public INetMeterControl NetMeter => _registry.Get<INetMeterControl>();
+
     public IHardwareProvider Hardware => _registry.Get<IHardwareProvider>();
 
     public IStorageHealthProvider StorageHealth => _registry.Get<IStorageHealthProvider>();

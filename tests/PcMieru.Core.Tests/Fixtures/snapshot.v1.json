@@ -435,6 +435,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -475,6 +485,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 1522,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 4058,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -515,6 +535,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -555,6 +585,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -595,6 +635,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -635,6 +685,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -675,6 +735,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -715,6 +785,16 @@
         "status": "denied",
         "source": "fake:thread-state",
         "detail": "protected process"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -755,6 +835,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 795,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 2120,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -795,6 +885,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 1157,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 3084,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -835,6 +935,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 989,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 2637,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -875,6 +985,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -914,6 +1034,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -954,6 +1084,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 18471,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 246278,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -994,6 +1134,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 21703,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 289379,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1034,6 +1184,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 23784,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 317125,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1074,6 +1234,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 14887,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 198494,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1114,6 +1284,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1154,6 +1334,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1194,6 +1384,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1234,6 +1434,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 6044,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 21154,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1274,6 +1484,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 26190,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 3616723,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1314,6 +1534,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 464201,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 5497,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1354,6 +1584,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 145439,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 3636,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1394,6 +1634,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1434,6 +1684,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1474,6 +1734,16 @@
         "value": "running",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     },
     {
@@ -1514,6 +1784,16 @@
         "value": "notResponding",
         "status": "ok",
         "source": "fake:IsHungAppWindow"
+      },
+      "netSendBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
+      },
+      "netReceiveBytesPerSec": {
+        "value": 0,
+        "status": "ok",
+        "source": "fake:etw-kernel-network"
       }
     }
   ]

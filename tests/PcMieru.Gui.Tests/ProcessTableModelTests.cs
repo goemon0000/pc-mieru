@@ -66,6 +66,60 @@ public class ProcessTableModelTests
         Assert.Equal("unknown", Names(model)[^1]);
     }
 
+    private static ProcessInfo WithNet(ProcessInfo p, double? send, double? receive) =>
+        p with
+        {
+            NetSendBytesPerSec = send is { } s ? Value.Ok(s, "t") : Value.NotCollected<double>("t"),
+            NetReceiveBytesPerSec = receive is { } r ? Value.Ok(r, "t") : Value.NotCollected<double>("t"),
+        };
+
+    private static readonly ProcessInfo[] NetProcesses =
+    [
+        WithNet(Proc(1, "sender", 1), 900, null),
+        WithNet(Proc(2, "both", 1), 500, 600),
+        WithNet(Proc(3, "unknown", 1), null, null),
+        WithNet(Proc(4, "receiver", 1), null, 100),
+        WithNet(Proc(5, "quiet", 1), 0, 0),
+    ];
+
+    [Fact]
+    public async Task The_network_column_ranks_by_send_plus_receive_high_first_and_an_uncollected_one_goes_last()
+    {
+        var model = await ModelAsync(NetProcesses);
+        model.SortBy(ProcessColumn.Network);
+        Assert.Equal(["both", "sender", "receiver", "quiet", "unknown"], Names(model));
+    }
+
+    [Fact]
+    public async Task A_missing_network_value_stays_last_in_both_directions_and_the_rest_flips()
+    {
+        var model = await ModelAsync(NetProcesses);
+        model.SortBy(ProcessColumn.Network);
+        model.SortBy(ProcessColumn.Network);
+        Assert.Equal(["quiet", "receiver", "sender", "both", "unknown"], Names(model));
+    }
+
+    [Fact]
+    public async Task A_process_with_only_one_side_collected_counts_the_other_as_zero_for_the_sum()
+    {
+        var model = await ModelAsync(
+            WithNet(Proc(1, "send-only", 1), 300, null),
+            WithNet(Proc(2, "both", 1), 100, 150));
+        model.SortBy(ProcessColumn.Network);
+        Assert.Equal(["send-only", "both"], Names(model));
+    }
+
+    [Fact]
+    public async Task The_send_and_receive_columns_rank_each_side_on_its_own_with_the_uncollected_last()
+    {
+        var model = await ModelAsync(NetProcesses);
+        model.SortBy(ProcessColumn.NetSend);
+        Assert.Equal(["sender", "both", "quiet"], Names(model).Take(3));
+        Assert.Equal(["receiver", "unknown"], Names(model).TakeLast(2).Order());
+        model.SortBy(ProcessColumn.NetReceive);
+        Assert.Equal(["both", "receiver", "quiet"], Names(model).Take(3));
+    }
+
     [Fact]
     public async Task The_flat_view_ranks_every_process_in_one_list_with_no_group_headers()
     {

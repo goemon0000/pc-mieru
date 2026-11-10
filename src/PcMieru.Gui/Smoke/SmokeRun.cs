@@ -15,17 +15,17 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// (0 = all checks passed). It exists because a window cannot be unit tested for "it opens and shows things", and a
 /// published folder must prove that once before release.
 /// </summary>
-internal static class SmokeRun
+internal static partial class SmokeRun
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(90);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
 
-    public static int Run(MainForm form, GuiContext context, string outputPath, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt)
+    public static int Run(MainForm form, GuiContext context, string outputPath, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt, bool netMeter = false)
     {
         var checks = new JsonArray();
-        var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt);
+        var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt, netMeter);
         var exitCode = 1;
 
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
@@ -79,7 +79,7 @@ internal static class SmokeRun
 
     private static double Ms(DateTime since) => Math.Round((DateTime.Now - since).TotalMilliseconds);
 
-    private sealed class Runner(MainForm form, GuiContext context, JsonArray checks, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt)
+    private sealed partial class Runner(MainForm form, GuiContext context, JsonArray checks, string? shotsDirectory, bool onScreen, int dpiPercent, DateTime startedAt, bool netMeter)
     {
         private readonly JsonArray _shots = [];
 
@@ -131,10 +131,10 @@ internal static class SmokeRun
             {
                 // Default columns: what a first-time reader looks at. PID and the I/O split stay behind the column chooser.
                 var columns = processes.VisibleColumns;
-                var wanted = new[] { ProcessColumn.Name, ProcessColumn.Cpu, ProcessColumn.Memory, ProcessColumn.Disk, ProcessColumn.Gpu, ProcessColumn.State };
-                var hidden = new[] { ProcessColumn.Pid, ProcessColumn.IoRead, ProcessColumn.IoWrite };
+                var wanted = new[] { ProcessColumn.Name, ProcessColumn.Cpu, ProcessColumn.Memory, ProcessColumn.Disk, ProcessColumn.Network, ProcessColumn.Gpu, ProcessColumn.State };
+                var hidden = new[] { ProcessColumn.Pid, ProcessColumn.IoRead, ProcessColumn.IoWrite, ProcessColumn.NetSend, ProcessColumn.NetReceive };
                 Check(
-                    "process list starts with name, CPU, memory, disk, GPU and state; PID and I/O are behind the column chooser",
+                    "process list starts with name, CPU, memory, disk, network, GPU and state; PID, I/O and the network split are behind the column chooser",
                     wanted.All(columns.Contains) && !hidden.Any(columns.Contains),
                     string.Join(",", columns));
 
@@ -168,6 +168,56 @@ internal static class SmokeRun
                     "fixing the memory unit to MB puts every process memory cell in MB",
                     fixedMb.Count > 0 && fixedMb.All(t => t.EndsWith(" MB", StringComparison.Ordinal)) && automatic.Count == fixedMb.Count,
                     string.Join(" | ", fixedMb.Take(4)) + " (automatic: " + string.Join(" | ", automatic.Take(4)) + ")");
+
+                // Network (send + receive). With the sample data the meter runs and every process has a rate; on a real machine the
+                // meter is off until the user starts it, so the cell is the dash and its tip says how to turn the meter on.
+                var networkColumn = columns.ToList().IndexOf(ProcessColumn.Network);
+                string NetworkText(int row) => processes.CellAt(row, ProcessColumn.Network).Text;
+                var meterRuns = context.NetMeter.State.Status == NetMeterStatus.Running;
+                var inBits = processRows.Select(NetworkText).ToList();
+                if (meterRuns)
+                {
+                    var networkTip = processes.List.CellTip?.Invoke(processRows[0], networkColumn) ?? string.Empty;
+                    Check(
+                        "network column shows every process's rate in bits per second by default, with a bar on the busiest",
+                        inBits.Count > 0 && inBits.All(t => t.EndsWith("bps", StringComparison.Ordinal)) && processRows.Max(i => processes.CellAt(i, ProcessColumn.Network).Bar) > 0,
+                        string.Join(" | ", inBits.Take(4)));
+                    Check(
+                        "a network cell's tip says what the column counts",
+                        networkTip == Strings.Get("gui.proc.col.network.hint") && !SmokeText.IsPlaceholder(networkTip),
+                        networkTip);
+                    var unitBefore = context.Settings.NetworkUnit;
+                    context.SetNetworkUnit(NetworkUnit.AutoBytes);
+                    var inBytes = processRows.Select(NetworkText).ToList();
+                    context.SetNetworkUnit(NetworkUnit.FixedMegabits);
+                    var inMegabits = processRows.Select(NetworkText).ToList();
+                    context.SetNetworkUnit(unitBefore);
+                    Check(
+                        "switching the network unit to bytes per second rewrites every network cell",
+                        inBytes.All(t => t.EndsWith("B/s", StringComparison.Ordinal)) && inBytes.Count == inBits.Count,
+                        string.Join(" | ", inBytes.Take(4)));
+                    Check(
+                        "a fixed Mbps unit writes every network cell in Mbps",
+                        inMegabits.All(t => t.EndsWith("Mbps", StringComparison.Ordinal)),
+                        string.Join(" | ", inMegabits.Take(4)));
+                }
+                else
+                {
+                    var reason = processes.List.CellTip?.Invoke(processRows[0], networkColumn) ?? string.Empty;
+                    Check(
+                        "network column is the dash, with the reason in its tip, while the meter is not running",
+                        inBits.Count > 0 && inBits.All(t => t == Fmt.Dash) && reason.Length > 0 && !SmokeText.IsPlaceholder(reason),
+                        string.Join(" | ", inBits.Take(2)) + " / " + reason);
+                }
+
+                // The button follows the meter: start (with the shield), getting ready, stop, or not there when it cannot run.
+                var meterState = context.NetMeter.State.Status;
+                var expectedButton = NetMeterUi.Button(meterState);
+                var meterButton = processes.MeterButton;
+                Check(
+                    "the meter button shows what the meter's state asks for",
+                    meterButton.Visible == expectedButton.Visible && meterButton.Enabled == expectedButton.Enabled && meterButton.Text == Strings.Get(expectedButton.TextKey) && (meterButton.Image is not null) == expectedButton.Shield,
+                    meterState + ": '" + meterButton.Text + "', visible " + meterButton.Visible + ", enabled " + meterButton.Enabled + ", shield " + (meterButton.Image is not null));
 
                 // The detail pane can be hidden; the list then takes its width, and showing it again gives the width back.
                 var widthWith = processes.List.Width;
@@ -219,6 +269,11 @@ internal static class SmokeRun
             }
 
             await Behaviour().ConfigureAwait(true);
+            if (netMeter)
+            {
+                await RealNetMeter().ConfigureAwait(true);
+            }
+
             Check("window title mentions sample data", !context.Services.UsesFakeData || form.Text.Contains(Strings.Get("core.fake.notice"), StringComparison.Ordinal), form.Text);
         }
 
@@ -312,6 +367,51 @@ internal static class SmokeRun
                     Check("performance: the note under the graphs says the same span", performance.NoteText.Contains(ago, StringComparison.Ordinal) && !SmokeText.IsPlaceholder(performance.NoteText), performance.NoteText);
                     Check("performance: a graph that has readings is not shown as collecting", !graph.Collecting, string.Empty);
                 }
+
+                // The network graph's axis and its numbers follow the network unit (the history itself stays in bytes).
+                performance.Select("network");
+                await Task.Delay(200).ConfigureAwait(true);
+                if (performance.Current is { Kind: PerfKind.Network } && performance.Graphs.Length > 0)
+                {
+                    var axis = performance.Graphs[0].AxisFormatter;
+                    var unitBefore = context.Settings.NetworkUnit;
+                    context.SetNetworkUnit(NetworkUnit.AutoBits);
+                    var bitsAxis = axis?.Invoke(1_250_000) ?? string.Empty;
+                    var bitsStats = string.Join(" | ", performance.ShownStats);
+                    context.SetNetworkUnit(NetworkUnit.AutoBytes);
+                    var bytesAxis = axis?.Invoke(1_250_000) ?? string.Empty;
+                    var bytesStats = string.Join(" | ", performance.ShownStats);
+                    var bytesStep = performance.Graphs[0].AxisStep;
+                    context.SetNetworkUnit(unitBefore);
+                    Check("performance: the network axis is in bits per second by default (10 Mbps for 1.25 MB/s)", bitsAxis.StartsWith("10", StringComparison.Ordinal) && bitsAxis.EndsWith("Mbps", StringComparison.Ordinal), bitsAxis);
+                    Check("performance: the network axis follows the unit setting at once", bytesAxis.EndsWith("MB/s", StringComparison.Ordinal) && bytesStep == 1, bytesAxis);
+                    Check("performance: the network numbers follow the unit setting at once", bitsStats.Contains("bps", StringComparison.Ordinal) && !bitsStats.Contains("B/s", StringComparison.Ordinal) && bytesStats.Contains("B/s", StringComparison.Ordinal), bitsStats + " -> " + bytesStats);
+                    if (shotsDirectory is not null)
+                    {
+                        // The walk shows the first panel of each page (the CPU); the network graph, whose axis carries the unit, gets its own pictures.
+                        var scale = dpiPercent > 0 ? "@" + dpiPercent : string.Empty;
+                        var language = Strings.Current;
+                        var theme = context.Theme.IsDark ? ThemeMode.Dark : ThemeMode.Light;
+                        foreach (var shotLanguage in new[] { Language.Ja, Language.En })
+                        {
+                            foreach (var shotTheme in new[] { ThemeMode.Dark, ThemeMode.Light })
+                            {
+                                context.SetLanguage(shotLanguage);
+                                context.SetTheme(shotTheme);
+                                await Task.Delay(250).ConfigureAwait(true);
+                                _shots.Add(await Capture(shotsDirectory, $"{shotLanguage.ToString().ToLowerInvariant()}-{shotTheme.ToString().ToLowerInvariant()}-performance-network{scale}.png"));
+                            }
+                        }
+
+                        context.SetLanguage(language);
+                        context.SetTheme(theme);
+                        await Task.Delay(150).ConfigureAwait(true);
+                    }
+                }
+                else
+                {
+                    Check("performance: a network adapter has a panel", !context.Services.UsesFakeData, performance.Current?.Kind.ToString() ?? "none");
+                }
             }
 
             if (await Open("startup").ConfigureAwait(true) is StartupPage startup)
@@ -369,6 +469,21 @@ internal static class SmokeRun
                 Check("settings: pause reaches the sampler", context.Pump.Paused);
                 settings.PauseBox.Checked = false;
                 Check("settings: resume reaches the sampler", !context.Pump.Paused);
+
+                // The network unit has four choices and bits-per-second automatic is the default; measuring at startup is off by default.
+                var unitDefault = context.Settings.NetworkUnit;
+                Check("settings: the network unit lists its four choices", settings.NetUnitBox.Items.Count == NetworkUnits.All.Length, settings.NetUnitBox.Items.Count + " items");
+                Check("settings: the network unit box shows the current unit", settings.NetUnitBox.SelectedIndex == NetworkUnits.All.ToList().IndexOf(unitDefault), settings.NetUnitBox.Text);
+                settings.NetUnitBox.SelectedIndex = NetworkUnits.All.ToList().IndexOf(NetworkUnit.FixedMegabytes);
+                Check("settings: the network unit reaches the setting", context.Settings.NetworkUnit == NetworkUnit.FixedMegabytes, context.Settings.NetworkUnit.ToString());
+                context.SetNetworkUnit(NetworkUnit.AutoBytes);
+                Check("settings: a unit chosen elsewhere moves the box", settings.NetUnitBox.SelectedIndex == NetworkUnits.All.ToList().IndexOf(NetworkUnit.AutoBytes), settings.NetUnitBox.Text);
+                context.SetNetworkUnit(unitDefault);
+                Check("settings: measuring network traffic at startup is off by default", !settings.NetAutostartBox.Checked && !context.Settings.NetMeterAutostart);
+                settings.NetAutostartBox.Checked = true;
+                Check("settings: the startup measuring choice reaches the setting", context.Settings.NetMeterAutostart);
+                settings.NetAutostartBox.Checked = false;
+                Check("settings: the startup measuring choice can be turned off again", !context.Settings.NetMeterAutostart);
             }
 
             await ReportRun().ConfigureAwait(true);
