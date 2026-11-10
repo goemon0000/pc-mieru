@@ -1,5 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace PcMieru.Wire;
 
+[JsonConverter(typeof(CamelCaseEnumConverter<NetMeterDirection>))]
 public enum NetMeterDirection : byte
 {
     Send,

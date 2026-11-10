@@ -56,6 +56,25 @@ public sealed class CollectionModuleTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void The_real_network_meter_is_registered_but_asks_for_nothing_and_starts_nothing_until_it_is_told_to()
+    {
+        using var services = PcMieruServices.Create(new PcMieruOptions());
+
+        Assert.IsType<NetMeterControl>(services.NetMeter);
+        Assert.Equal(NetMeterStatus.Off, services.NetMeter.State.Status);
+        Assert.DoesNotContain(nameof(FakeNetMeterControl), services.FakeAreas);
+    }
+
+    [Fact]
+    public void ForceFakes_serves_the_fake_network_meter_and_says_so()
+    {
+        using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
+
+        Assert.IsType<FakeNetMeterControl>(services.NetMeter);
+        Assert.Contains(nameof(FakeNetMeterControl), services.FakeAreas);
+    }
+
+    [Fact]
     public void The_group_and_state_strings_exist_in_both_languages()
     {
         using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });

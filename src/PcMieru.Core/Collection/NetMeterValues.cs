@@ -55,24 +55,3 @@ public sealed class FakeNetMeterControl : INetMeterControl, IFakeImplementation
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 }
-
-/// <summary>
-/// Stand-in for the real meter until PCMieru.NetMeter.exe is wired up: always Unsupported, never prompts.
-/// TODO(net-core): replace with the real NetMeterControl.
-/// </summary>
-public sealed class UnbuiltNetMeterControl : INetMeterControl
-{
-    public NetMeterState State { get; } = new(NetMeterStatus.Unsupported);
-
-    public event EventHandler? StateChanged
-    {
-        add { }
-        remove { }
-    }
-
-    public Task<NetMeterState> StartAsync(CancellationToken ct = default) => Task.FromResult(State);
-
-    public void Stop()
-    {
-    }
-}

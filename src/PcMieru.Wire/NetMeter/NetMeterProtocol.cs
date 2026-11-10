@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
+using System.Text.Json.Serialization;
 
 namespace PcMieru.Wire;
 
 /// <summary>What the front end may ask the network meter. There is nothing else: no setting, no path, no command.</summary>
+[JsonConverter(typeof(CamelCaseEnumConverter<NetMeterRequestKind>))]
 public enum NetMeterRequestKind : byte
 {
     Read = 1,

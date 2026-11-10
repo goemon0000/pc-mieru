@@ -45,6 +45,8 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj
+  src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
+      the same post-link check, copied for the network meter
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART
