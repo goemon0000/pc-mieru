@@ -3,7 +3,7 @@ using PcMieru.Wire;
 
 namespace PcMieru.Core;
 
-// Per-process network attribution (SPEC 5.3a). Added after the five-area freeze as its own interface.
+// Per-process network attribution (SPEC 4.1). Added after the five-area freeze as its own interface.
 // The data comes from PCMieru.NetMeter.exe: an elevated, long-lived process that runs one ETW session
 // (Microsoft-Windows-Kernel-Network) and hands per-process byte counters to the non-elevated front end over a
 // locked-down named pipe. It is opt-in, because starting it costs one UAC prompt; viewing everything else never elevates.

@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Dev builds only: puts the network meter (PCMieru.NetMeter.exe) next to the app, so "Start the network meter" finds it
+    after a plain "dotnet build" or F5. Imported by SensorHostNextToApp.targets (so Gui and Cli get it without touching their
+    projects) and by the Core test project, whose real-machine tests start the meter.
+
+    A plain build of the meter is the managed one (NativeAOT only happens in publish): MSBuild copies the apphost, runtimeconfig
+    and deps.json through the ProjectReference (ReferenceOutputAssembly=false), and the target below adds the managed dll the
+    apphost needs. The app already carries PcMieru.Wire.dll, which is all the meter references.
+    tools/publish.ps1 does not rely on this: it publishes the meter with NativeAOT on its own, as a single exe, and switches
+    this off for the app publishes (-p:NetMeterNextToApp=false), or a managed apphost and runtimeconfig would leak into the
+    release folder next to the NativeAOT exe.
+  -->
+  <ItemGroup Condition="'$(NetMeterNextToApp)' != 'false'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\src\PcMieru.NetMeter\PcMieru.NetMeter.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="CopyNetMeterDllNextToApp" AfterTargets="CopyFilesToOutputDirectory" Condition="'$(OutDir)' != '' And '$(NetMeterNextToApp)' != 'false'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\PcMieru.NetMeter\PcMieru.NetMeter.csproj" Targets="GetTargetPath" SkipNonexistentTargets="false">
+      <Output TaskParameter="TargetOutputs" ItemName="_NetMeterDll" />
+    </MSBuild>
+    <ItemGroup>
+      <_NetMeterFile Include="@(_NetMeterDll)" />
+      <_NetMeterFile Include="@(_NetMeterDll->'%(RootDir)%(Directory)%(Filename).pdb')" Condition="Exists('%(RootDir)%(Directory)%(Filename).pdb')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_NetMeterFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

@@ -42,6 +42,7 @@ public class ProtectionRulesTests
     [InlineData(@"C:\Program Files\PC Mieru\PCMieru.exe")]
     [InlineData(@"c:\program files\pc mieru\pcmi.exe")]
     [InlineData(@"C:\Program Files\PC Mieru\PCMieru.Helper.exe")]
+    [InlineData(@"C:\Program Files\PC Mieru\PCMieru.NetMeter.exe")]
     [InlineData(@"C:\Program Files\PC Mieru\PCMieru.SensorHost.exe")]
     [InlineData(@"\\?\C:\Program Files\PC Mieru\PCMieru.exe")]
     public void Our_executables_in_our_folder_are_protected(string path)
