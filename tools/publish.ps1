@@ -6,10 +6,11 @@
   1. Publishes Gui, Cli and SensorHost one by one (self-contained, ReadyToRun) into separate work folders.
   2. Merges them into one folder. A file that exists in more than one work folder must be byte-identical
      (SHA256); if it is not, the script stops. Nothing is overwritten silently.
-  3. Publishes the Helper with NativeAOT and checks the exe itself: DependentLoadFlags must contain
-     LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) and the static imports must be system DLLs only.
+  3. Publishes the Helper and the network meter (PCMieru.NetMeter.exe) with NativeAOT and checks each exe itself:
+     DependentLoadFlags must contain LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) and the static imports must be system DLLs only.
   4. Zips the folder and writes SHA256.txt next to it.
-  5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, and PCMieru.exe --smoke.
+  5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, PCMieru.exe --smoke, and the
+     network meter started with no arguments (it must start and refuse with exit code 2; it opens nothing).
 
   Works in Windows PowerShell 5.1 and pwsh. ASCII only on purpose (5.1 reads BOM-less files as ANSI).
 
@@ -24,7 +25,8 @@ param(
     [switch]$Verify,
     [switch]$SkipZip,
     [switch]$SmokeFakes,
-    [int]$HelperMaxKB = 8192
+    [int]$HelperMaxKB = 8192,
+    [int]$NetMeterMaxKB = 8192
 )
 
 Set-StrictMode -Version Latest
@@ -36,8 +38,9 @@ $Output = [IO.Path]::GetFullPath($Output)
 
 if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "Version must look like 1.2.3 (got '$Version')" }
 
-# Imports a NativeAOT Helper may have. Everything in here is resolved from System32 once DependentLoadFlags has 0x800.
-# Extend it when the Helper really needs another system DLL, and say why in the commit.
+# Imports a NativeAOT helper exe (the Helper, the network meter) may have. Everything in here is resolved from System32 once
+# DependentLoadFlags has 0x800. Extend it when one of them really needs another system DLL, and say why in the commit.
+# (tdh.dll is not here on purpose: the network meter loads it lazily, which the csproj check vouches for; it is no static import.)
 $AllowedHelperImports = @(
     'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
     'oleaut32.dll', 'ws2_32.dll', 'bcrypt.dll', 'crypt32.dll', 'ucrtbase.dll', 'rpcrt4.dll', 'sechost.dll',
@@ -183,7 +186,7 @@ namespace PcMieru.Build
 '@
 }
 
-function Test-HelperExe([string]$Path) {
+function Test-AotExe([string]$Path, [string]$Label) {
     $pe = [PcMieru.Build.PeInfo]::Read($Path)
     $problems = New-Object System.Collections.Generic.List[string]
     if ($pe.IsManaged) { $problems.Add('the exe has a CLR header: it is not a NativeAOT image') }
@@ -197,12 +200,27 @@ function Test-HelperExe([string]$Path) {
         $lower = $name.ToLowerInvariant()
         $ok = $AllowedHelperImports -contains $lower
         if (-not $ok) { foreach ($p in $AllowedHelperImportPatterns) { if ($lower -match $p) { $ok = $true; break } } }
-        if (-not $ok) { $problems.Add("unexpected import: $name (extend `$AllowedHelperImports only if it is a System32 DLL the Helper truly needs)") }
+        if (-not $ok) { $problems.Add("unexpected import: $name (extend `$AllowedHelperImports only if it is a System32 DLL the $Label truly needs)") }
     }
-    Write-Host ('Helper imports : ' + ((@($pe.Imports) | Sort-Object) -join ', '))
-    if (@($pe.DelayImports).Count -gt 0) { Write-Host ('Helper delay   : ' + ((@($pe.DelayImports) | Sort-Object) -join ', ')) }
-    Write-Host ('Helper load flags: 0x{0:X}' -f $pe.DependentLoadFlags)
-    if ($problems.Count -gt 0) { throw ("Helper check failed:`n  " + ($problems -join "`n  ")) }
+    Write-Host ($Label + ' imports : ' + ((@($pe.Imports) | Sort-Object) -join ', '))
+    if (@($pe.DelayImports).Count -gt 0) { Write-Host ($Label + ' delay   : ' + ((@($pe.DelayImports) | Sort-Object) -join ', ')) }
+    Write-Host ($Label + ' load flags: 0x{0:X}' -f $pe.DependentLoadFlags)
+    if ($problems.Count -gt 0) { throw ($Label + " check failed:`n  " + ($problems -join "`n  ")) }
+}
+
+# Publishes one NativeAOT exe into $work, holds it to its size limit and the exe checks, and copies it into the release folder.
+function Publish-AotExe([string]$Label, [string]$Project, [string]$ExeName, [int]$MaxKB) {
+    Write-Step ("Publish $Label (NativeAOT)")
+    Add-VswhereToPath
+    $out = Join-Path $work $Label
+    Invoke-Dotnet (@('publish', (Join-Path $root $Project)) + $common + @('-o', $out))
+    $exe = Join-Path $out $ExeName
+    if (-not (Test-Path -LiteralPath $exe)) { throw "$ExeName was not produced" }
+    $kb = [int]((Get-Item -LiteralPath $exe).Length / 1KB)
+    Write-Host ("{0} size    : {1} KB" -f $Label, $kb)
+    if ($kb -gt $MaxKB) { throw "$Label is $kb KB, over the $MaxKB KB limit: something large got linked in" }
+    Test-AotExe $exe $Label
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $folder $ExeName)
 }
 
 function Get-Sha256([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -269,6 +287,14 @@ function Invoke-VerifyRun([string]$Folder) {
     if ($tools.Count -lt 1) { throw 'pcmi mcp listed no tools' }
     Write-Host ('pcmi mcp       : initialize ok, {0} tools' -f $tools.Count)
 
+    # The network meter is elevated and long-lived, so it is not run for real here. Started with no arguments it must come up
+    # (the NativeAOT image loads, System32-only search takes effect) and refuse with exit code 2 (invalid arguments) before it
+    # touches ETW or a pipe.
+    $meter = Join-Path $Folder 'PCMieru.NetMeter.exe'
+    $meterRun = Start-Process -FilePath $meter -PassThru -Wait
+    if ($meterRun.ExitCode -ne 2) { throw "PCMieru.NetMeter.exe with no arguments exited with $($meterRun.ExitCode), expected 2 (invalid arguments)" }
+    Write-Host 'NetMeter       : starts, refuses no arguments (exit 2)'
+
     $smoke = Join-Path $Folder 'smoke-verify.json'
     # -SmokeFakes walks every page on sample data: a headless CI runner has no interactive desktop (no windowed app,
     # no program icons, no real GPU), so the real-data smoke's desktop checks only hold on a real workstation. The
@@ -305,7 +331,7 @@ $apps = @(
 )
 foreach ($app in $apps) {
     Write-Step ("Publish " + $app.Name)
-    Invoke-Dotnet (@('publish', (Join-Path $root $app.Project)) + $common + @('-p:SelfContained=true', '-p:PublishReadyToRun=true', '-o', (Join-Path $work $app.Name)))
+    Invoke-Dotnet (@('publish', (Join-Path $root $app.Project)) + $common + @('-p:SelfContained=true', '-p:PublishReadyToRun=true', '-p:NetMeterNextToApp=false', '-o', (Join-Path $work $app.Name)))
 }
 
 Write-Step 'Merge (same-named files must be identical)'
@@ -318,27 +344,22 @@ $desktopFacades = @('System.Drawing.dll', 'Microsoft.VisualBasic.dll')
 $count = Merge-Folders -Sources @($apps | ForEach-Object { Join-Path $work $_.Name }) -Destination $folder -FirstWins $desktopFacades
 Write-Host ("merged $count files from $($apps.Count) publishes")
 
-Write-Step 'Publish Helper (NativeAOT)'
-Add-VswhereToPath
-Invoke-Dotnet (@('publish', (Join-Path $root 'src\PcMieru.Helper\PcMieru.Helper.csproj')) + $common + @('-o', (Join-Path $work 'Helper')))
-$helperExe = Join-Path (Join-Path $work 'Helper') 'PCMieru.Helper.exe'
-if (-not (Test-Path -LiteralPath $helperExe)) { throw 'PCMieru.Helper.exe was not produced' }
-$helperKB = [int]((Get-Item -LiteralPath $helperExe).Length / 1KB)
-Write-Host "Helper size    : $helperKB KB"
-if ($helperKB -gt $HelperMaxKB) { throw "Helper is $helperKB KB, over the $HelperMaxKB KB limit: something large got linked in" }
-Test-HelperExe $helperExe
-Copy-Item -LiteralPath $helperExe -Destination (Join-Path $folder 'PCMieru.Helper.exe')
+Publish-AotExe 'Helper' 'src\PcMieru.Helper\PcMieru.Helper.csproj' 'PCMieru.Helper.exe' $HelperMaxKB
+Publish-AotExe 'NetMeter' 'src\PcMieru.NetMeter\PcMieru.NetMeter.csproj' 'PCMieru.NetMeter.exe' $NetMeterMaxKB
 
 foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     $source = Join-Path $root $extra
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $folder $extra) }
 }
 
-$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.Core.dll')
+$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll')
 foreach ($file in $expected) {
     if (-not (Test-Path -LiteralPath (Join-Path $folder $file))) { throw "missing from the release folder: $file" }
 }
 if (Test-Path -LiteralPath (Join-Path $folder 'PCMieru.Helper.dll')) { throw 'the Helper must not ship as a managed dll' }
+foreach ($stray in @('PCMieru.NetMeter.dll', 'PCMieru.NetMeter.runtimeconfig.json', 'PCMieru.NetMeter.deps.json')) {
+    if (Test-Path -LiteralPath (Join-Path $folder $stray)) { throw "the network meter ships as one NativeAOT exe, but $stray is in the release folder (a managed build leaked in)" }
+}
 
 if ($Verify) {
     Write-Step 'Run the published folder'

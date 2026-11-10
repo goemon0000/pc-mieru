@@ -22,4 +22,7 @@
     <ProjectReference Include="..\..\src\PcMieru.Wire\PcMieru.Wire.csproj" />
   </ItemGroup>
 
+  <!-- The real-machine tests start PCMieru.NetMeter.exe: build it and put it next to the test binaries. -->
+  <Import Project="..\..\build\NetMeterNextToApp.targets" />
+
 </Project>

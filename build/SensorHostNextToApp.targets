@@ -18,4 +18,7 @@
     <Copy SourceFiles="@(_SensorHostFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- The network meter (opt-in, elevated) goes next to the app the same way. -->
+  <Import Project="NetMeterNextToApp.targets" />
+
 </Project>
