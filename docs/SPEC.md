@@ -11,7 +11,7 @@ web-autoai.com が配布する（GitHub Releases・サイトに紹介ページ�
 ## 1. 対象と前提
 
 - Windows 10 22H2 / Windows 11、x64。日本語 UI を先、英語を次。
-- 通常の利用者権限で起動する（asInvoker）。管理者が要る操作は補助 exe（§8）に閉じ込め、その都度 UAC。
+- 通常の利用者権限で起動する（asInvoker）。管理者が要る操作は補助 exe（§8）に閉じ込め、その都度 UAC。見るだけでは昇格しない。唯一の例外が、利用者が自分で入れる任意の「ネットワークメーター」（§4.1・§8。UAC 1 回、読み取り専用）。
 - **自前のカーネルドライバは配らない。** WinRing0 も使わない。ファン・クロック・電圧の制御はしない。
 - 通信しない。更新の確認は「サイトを開く」メニューだけ（v1）。
 - 対象の利用者: 初心者（「何が重いのか知りたい」）〜上級者（列を足して詳細を見る・CLI・AI）。
@@ -22,12 +22,13 @@ web-autoai.com が配布する（GitHub Releases・サイトに紹介ページ�
 PCMieru.exe            GUI（WinForms・GUI サブシステム・通常権限）。AssemblyName=PCMieru
 pcmi.exe               CLI と MCP サーバ（コンソール サブシステム）。AssemblyName=pcmi
 PCMieru.Helper.exe     管理者の要る型付きの操作だけ。NativeAOT の単体 exe（隣の DLL に依存しない）。1 回の UAC で 1 要求
+PCMieru.NetMeter.exe   プロセスごとのネット送受信量だけ（任意・§4.1）。管理者で動く常駐の読み取り専用 exe。NativeAOT の単体 exe。Wire だけを参照
 PCMieru.SensorHost.exe ハングし得るメーカー API（NVML・ADLX）の隔離。stdout に JSON 行。AssemblyName=PCMieru.SensorHost
 PcMieru.Core.dll       UI に依存しない計測・部品情報・操作・レポート・データの形
 ```
 
 - **Windows のファイル名は大文字小文字を区別しない。** `PCMieru.exe` と `pcmieru.exe` は同じ名前になるので、CLI は `pcmi.exe`。
-- .NET 10、WinForms＋通常 JIT。ReadyToRun で起動を速くする。トリミング・NativeAOT は GUI/CLI/SensorHost では使わない（WinForms は非対応）。Helper だけ NativeAOT（パーツぐらしの PartsLife.Check と同じ形。発行時に「exe の隣を探す読み込み」が無いことを検査）。
+- .NET 10、WinForms＋通常 JIT。ReadyToRun で起動を速くする。トリミング・NativeAOT は GUI/CLI/SensorHost では使わない（WinForms は非対応）。管理者で動く 2 つの exe（Helper とネットワークメーター）だけ NativeAOT（パーツぐらしの PartsLife.Check と同じ形。発行時に「exe の隣を探す読み込み」が無いことを検査）。
 - 配布は自己完結（self-contained）のフォルダを ZIP 1 本に。GUI・CLI・SensorHost は同じランタイムを共有する（利用者に .NET の導入を求めない）。発行は各 exe を別フォルダに publish → 1 つに集める。同名のファイルは中身（sha256）が一致することを確かめ、不一致なら発行を止める（黙って上書きしない）。
 - GUI と CLI と MCP は **Core の同じ Snapshot だけ** を使う。計算を別々に持たない。
 - 再利用元: パーツぐらし（goemon0000/parts-life、同じ持ち主・MIT）の NVML・ADLX・GPU アダプタ・PDH・NVMe/SMART 解析。写した物はファイル頭に出典を書く。
@@ -72,6 +73,32 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
 - CPU % = `100 × Δ(UserTime＋KernelTime) / Stopwatch の実経過 / 有効な論理 CPU 数`。全体の CPU は KernelTime から IdleTime を引く。タスクマネージャーと「同じ」とは書かず、式をヘルプに書く。
 - processor group: 論理 CPU 64 超の機械では group ごとに取る（取れなければ取れた分だけ・欠けを status で示す）。
 - GPU: エンジンの識別は `(adapter LUID, phys, eng)`。同じエンジンの PID 分を合計し、代表値は最も忙しいエンジン。プロセスの代表値もそのプロセスの最も忙しいエンジン。PDH のインスタンス名 `pid_…_luid_…_phys_…_eng_…_engtype_…` はトークンとして解析し、知らない形は欠損に。
+
+### 4.1 プロセスごとのネット送受信量（任意・ネットワークメーター）
+
+プロセスごとの送受信量は ETW でしか取れず、ETW のリアルタイムセッションは管理者を要する。だから **利用者が自分で入れたときだけ**、管理者で動く別 exe `PCMieru.NetMeter.exe` が計測し、通常権限の GUI・CLI に累積値を渡す。見るだけでは昇格しない。既定はオフ。
+
+- **出力**: `ProcessInfo` の `netSendBytesPerSec`・`netReceiveBytesPerSec`（B/s、`Value<double>`、source は `etw:Microsoft-Windows-Kernel-Network`）。メーターが動いていない間は、全プロセスの値が理由を持つ。Off／Starting＝`notCollected`、Declined（UAC を断った）＝`denied`、Failed（起動後に壊れた）＝`error`（理由つき）、Unsupported（Fakes・CI）＝`unsupported`。Running のときだけ実値。
+- **取得元**: ETW の Microsoft-Windows-Kernel-Network（`{7DD42A49-5329-4832-8DFD-43D979153A88}`、キーワード IPv4＝0x10・IPv6＝0x20）。数えるイベント（Windows 11 build 26300 で実測）は TCP 送信／受信が IPv4＝10／11・IPv6＝26／27、UDP 送信／受信が IPv4＝42／43・IPv6＝58／59。ペイロードの `PID` と `size`（UInt32）を使い、**ヘッダの PID は使わない**（ペイロードの PID と違う）。イベント 18（TCP の copy）は 11 と二重なので数えない。イベントの形は tdh で確かめ、予想と違う物は数えず「読めなかった数」に足す。
+- **起動（オプトイン）**: `INetMeterControl.StartAsync()` が ShellExecute の `runas` でメーターを起動する（UAC 1 回）。呼び出し元が既に昇格しているときは普通の起動。UAC を断れば Declined。メーターは `PCMieru.exe` と同じフォルダの物だけを起動する（探さない）。
+- **引数**: `--parent <pid> --parent-created <FILETIME> --pipe PCMieru.NetMeter.<16〜64 桁の 16 進> --user-sid <SID>` の 4 つを各 1 回だけ。厳格に解析し、形の違う物・足りない物・余る物は終了コード 2（SID は SDDL に入るので、正規の SID の形以外は拒む）。親の pid と作成時刻が実在の親と一致しなければ終了コード 3 で、ETW もパイプも開かない。
+- **セッション**: 実時間のセッションを 1 本だけ、名前は `PCMieru.NetMeter.<利用者の SID>`、FlushTimer 1 秒。起動と同時に開始する（接続を待たない）。メーターを強制終了するとセッションは残る（実測）。同名のセッションが残っていたら**その名前だけ**を止めて 1 回だけやり直す（引き継ぎ）。他のセッションには触らない。ディスクには何も書かない。
+- **パイプ**: 名前付きパイプ・非同期・インスタンスは 1 つ・first-instance・リモートのクライアントは拒否・DACL は `D:P(A;;GRGW;;;<利用者の SID>)`（利用者本人だけ）。接続してきたクライアントの pid と作成時刻が `--parent` と一致しなければ切る。呼び出し側も、パイプのサーバの pid が自分が起動したメーターの pid か確かめ、違えば**何も送らない**（Stop も）。読むときは Identification の偽装レベル（偽のサーバに権限を貸さない）。
+- **通信（版 1）**: 要求は 8 バイト（長さ 4＋版 2＋種別 1＋予約 1）。種別は Read と Stop だけ。応答は長さ（u32）＋44 バイトのヘッダ（タイムスタンプ・失ったイベント数・失ったバッファ数・読めなかったイベント数・セッションの健全さ・エラーコード）＋項目 28 バイト（pid u32・作成時刻 FILETIME i64・送信の累積 u64・受信の累積 u64）×最大 16384。大きさ・版・予約・件数が合わない物は推測せず捨てる。
+- **終了**: メーターは、親の終了・クライアントが切れて 5 秒戻らない・起動後 30 秒誰も接続しない・Stop・Ctrl+C／閉じる／ログオフ／シャットダウンのどれかで、**必ず ETW セッションを止めてから**終わる（親が殺されても親のハンドルを待っているので終わる）。応答の書き込みは 10 秒で諦める。終了コード: 0 正常・1 DLL の探索設定に失敗・2 引数・3 親が違う・4 パイプ・5 内部。メーターはディスクへの書き込み・通信・コマンドの実行をしない。呼び出し側の `Stop()` は待たず、`Dispose()` は 3 秒まで待つ。
+- **何を数えるか**: TCP と UDP、IPv4 と IPv6、送信と受信のデータのバイト数。**ループバックは送り手の送信と受け手の受信の両方に出る**（同じプロセス内なら 1 回ずつ。実測: 4 MiB を同じプロセスの中で送ると、送信も受信もちょうど 4,194,304）。PID 4（System）も他と同じプロセスとして出す。メーターが開けなかったプロセス（イベントの届く前に終了・PID 0）の分は「終了したプロセスの分」の合計に入れ、**他のプロセスには渡さない**。
+- **NIC の合計とは一致しない**: NIC（§4）の送受信は物理や仮想アダプタのフレームの量で、こちらはプロセスのデータの量。ループバック・VPN の外側の包み・オフロード・ヘッダ・再送・TCP/UDP 以外（ICMP など）で差が出る。「NIC の内訳」「一致する」とは書かない。ヘルプにもそう書く。
+- **識別**: (pid, 作成時刻 FILETIME)。メーターは初めて見たときにプロセスを開いたままにし（その間 PID は別のプロセスに再利用されない）、そのハンドルから作成時刻を読む。この値が `ProcessKey` と一致する（実機で確認）。終了したプロセスの項目は落とす。項目は最大 16384 で、超えたら終了済みから落とす。
+- **1 秒のまとまり**: ETW は約 1 秒ごとにまとめて渡す。応答のタイムスタンプは「その時刻までのカウンタが揃っている時刻」（最新の配達の時刻。1.5 秒届かなければ読んだ時刻−1.5 秒。後戻りしない）で、静かな通信は 0 に減る。**B/s の経過時間はこのタイムスタンプの差で計算し、フロントエンドの時計は使わない。**
+- **B/s の規則**（`NetRateCalculator`）:
+  - 最初の読み・Stop/Start の後の最初の読み（世代が変わった）・時計の逆行は基準にするだけで `notCollected`（0 にしない）。
+  - 前回の読みにいなかったプロセスは `notCollected`（新しいプロセスで窓の全部を覆わない）。両方の読みにいて項目が無ければ、通信が無かったので `ok` の 0（測った 0）。
+  - カウンタが後戻りしたら `notCollected`。
+  - その窓で失ったイベント・バッファ、読めなかったイベントがあれば、全プロセスを `error`（個数つき）にする。下限値を測定値として出さない。
+  - **取得間隔が 1 秒より短い（0.5 秒など）と、2 回の読みが同じタイムスタンプになる。そのときは経過 0 秒で割らず 0 にもせず、直前の窓の B/s を繰り返し、detail に「前の値と同じ（メーターに新しいカウンタがまだ無い）」旨を残す。**直前の窓にいなかったプロセスは `notCollected`。
+- **壊れ方**: 1 回のタイムアウト・切断では捨てず、1 回だけ再接続する。Failed の理由は、セッションの拒否・ETW の資源不足・セッションが外から止められた・パイプの喪失・応答なし・不正な応答・他者のパイプ・メーターの終了、のどれかを detail に出す。自分のフォルダに exe が無いときは Unsupported（理由つき）、自分の利用者 SID や作成時刻が読めない・起動できないときは Failed。
+- **配布**: `PCMieru.NetMeter.exe` は Wire だけを参照する NativeAOT の単体 exe（NuGet なし・P/Invoke だけ・manifest は `asInvoker`）。発行スクリプトが Helper と同じ検査（DependentLoadFlags に 0x800・静的 import が System32 の DLL だけ・大きさの上限）をかけ、引数なしで起動して終了コード 2 を確かめる。tdh.dll は遅延で読む（静的 import に出ない）ことを csproj の検査が保証する。開発ビルドでは、アプリとテストの隣に管理された（非 AOT の）メーターが置かれる。
+- **未確認**（README に書く）: UAC のプロンプトを通る起動（開発 PC のシェルは昇格済みで、普通の起動の経路だけ実機で確かめた）・別資格情報の UAC（メーターは別の利用者で動く）・Win10・メーターが動いたままの OS のスリープ復帰。
 
 ## 5. 画面（GUI）
 
@@ -136,15 +163,16 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
 ## 8. 操作と安全
 
 - 操作の直前に ProcessKey で対象を引き直し、**開いた同じハンドルに**対して行う（ハンドルから `GetProcessTimes` で作成時刻を確かめる）。作成時刻が違えば「別のプロセスに変わりました」で止める。CLI で `--started-at` を省いたときは「今その PID のプロセス」を対象とし、そう表示する。
-- 守るもの: PCミエル自身（GUI・CLI・Helper・SensorHost）・`IsProcessCritical`（PROCESS_QUERY_LIMITED_INFORMATION、out 引数が真）・保護プロセス（`GetProcessInformation(ProcessProtectionLevelInfo)` が PROTECTION_LEVEL_NONE 以外）・PID 0/4・Windows 中核（smss・csrss・wininit・services・lsass・winlogon・fontdrvhost・dwm を `%SystemRoot%\System32` のパスで。csrss/winlogon は対話セッションにもいる）。これらは終了・優先度・affinity・効率モードを出さない。**判定できなかった（問い合わせ失敗）ときも操作しない**（「守られているかを確かめられません」）。
+- 守るもの: PCミエル自身（GUI・CLI・Helper・NetMeter・SensorHost）・`IsProcessCritical`（PROCESS_QUERY_LIMITED_INFORMATION、out 引数が真）・保護プロセス（`GetProcessInformation(ProcessProtectionLevelInfo)` が PROTECTION_LEVEL_NONE 以外）・PID 0/4・Windows 中核（smss・csrss・wininit・services・lsass・winlogon・fontdrvhost・dwm を `%SystemRoot%\System32` のパスで。csrss/winlogon は対話セッションにもいる）。これらは終了・優先度・affinity・効率モードを出さない。**判定できなかった（問い合わせ失敗）ときも操作しない**（「守られているかを確かめられません」）。
 - explorer.exe は「再起動」を別に用意する。
 - 名前で終了（CLI）: 一致が複数なら一覧を出して止める。`--all` で全部。
 - ツリーごと終了: その時点の子孫だけ。後から生まれた子は追わない。
 - スタートアップの無効化は消さず戻せる。サービスの停止は依存を出して確認、前の状態を記録。
-- Helper（パイプは使わない）: GUI/CLI が `ShellExecuteEx("runas")` で **要求をコマンドライン引数に固定して** 起動する（例 `PCMieru.Helper.exe service-stop --name Spooler --result <path> --nonce <乱数>`）。起動後に別の要求へ差し替えられない。1 回の UAC で 1 要求、終わったら終了。結果は終了コードと、呼び出し元が作った `%LOCALAPPDATA%\PCMieru\helper\<nonce>.json` への JSON（呼び出し元は nonce と一致する物だけ読む。結果は表示に使うだけ）。
+- 見るだけでは昇格しない。例外は §4.1 のネットワークメーターだけ（利用者が自分で入れる・UAC 1 回・読み取り専用・プロバイダは Kernel-Network に固定・ローカルの名前付きパイプ）。メーターは操作を受けない（Read と Stop だけ）。メーターのプロセス自体は、PCミエル自身として終了・優先度などを出さない。
+- Helper（パイプは使わない。パイプを使うのは上のネットワークメーターだけ）: GUI/CLI が `ShellExecuteEx("runas")` で **要求をコマンドライン引数に固定して** 起動する（例 `PCMieru.Helper.exe service-stop --name Spooler --result <path> --nonce <乱数>`）。起動後に別の要求へ差し替えられない。1 回の UAC で 1 要求、終わったら終了。結果は終了コードと、呼び出し元が作った `%LOCALAPPDATA%\PCMieru\helper\<nonce>.json` への JSON（呼び出し元は nonce と一致する物だけ読む。結果は表示に使うだけ）。
   - 受ける要求（固定の表）: service-start/stop/restart（ローカル SCM・サービス名だけ）・startup-hklm-set（provider と値名と enable/disable だけ。キーのパスは受けない）・process-terminate/priority/efficiency（pid＋作成時刻。Helper 側で開き直し・守る判定をやり直す）・smart-read（物理ドライブ番号だけ。固定の SMART 読み取りだけで任意の IOCTL・ATA コマンドは受けない）・nvme-health（物理ドライブ番号だけ）・disk-health-all（物理ドライブ番号の一覧 `--drives 0,2,3` だけ。0〜255 の小さな整数・昇順・重複なし・16 個まで。パスは受けない。バスは Helper が自分で見分け、1 回の昇格＝UAC 1 回で全ドライブを読む。結果は `drive.<n>.*` のキーで返り、各ドライブが自分の code を持つ）。
   - 別の資格情報の UAC（標準ユーザーが管理者のパスワードを入れる）だと Helper のユーザーは別人になる。結果ファイルは呼び出し元が先に作って Helper は上書きするだけ（ACL は呼び出し元のもの）。
-  - Helper は NativeAOT 単体で、system32 以外の DLL を読まない（発行時に検査）。ZIP の置き場所が利用者の書けるフォルダであることは残る危険として README に書く。
+  - Helper とネットワークメーターは NativeAOT 単体で、system32 以外の DLL を読まない（発行時に検査）。ZIP の置き場所が利用者の書けるフォルダであることは残る危険として README に書く。
   - Explorer の再起動は Helper ではなく呼び出し元のユーザーで行う（昇格した Explorer を作らない）。
 - AI（MCP）に出さない物: 変更操作すべて（v1）、任意のシェル、メモリの読み取り・ダンプ、DLL の注入、ハンドルの強制クローズ、保護の迂回、ドライバ、電圧・クロック・ファン。
 - DLL は `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` で、メーカーの DLL は既知の場所から絶対パスで読む。
@@ -210,14 +238,15 @@ pcmi version
 
 - CI（windows-latest）: SystemProcessInformation の解析（作ったバッファ・境界）・差分と PID の再利用・欠損の扱い・JSON の形（スナップショット試験）・SMBIOS の解析（実機の RSMB を保存した試料、シリアルは消す）・NVMe Health log・EDID・伏せ字・守る対象の判定・CLI の引数と終了コード・MCP の initialize/tools/list/tools/call。
 - 実機（この PC）: 通常ユーザーで全タブ・権限拒否・スリープ復帰・SensorHost を止めたときの回復・UAC を断ったとき。
+- ネットワークメーター（§4.1）: 計算の規則・通信・状態の遷移は偽物の起動と偽のチャネルで CI に載せる。実際の ETW とパイプは `[Trait("Category","RealMachine")]` の試験で、管理者のシェルでだけ動かす（昇格していなければ飛ばさず失敗させる）。内容: ループバックで 4 MiB を送り、自分の送信・受信の累積が各々ちょうどそれだけ増える／メーターを殺すとセッションが残り、次の起動が引き継ぐ／親が終わるとメーターとセッションが消える／親の作成時刻が違う起動は終了コード 3 でセッションを開かない／本物のサンプラーとメーターの (pid, 作成時刻) が一致する。終わったら `logman query -ets` に `PCMieru.NetMeter.*` が残らないこと。
 - CI の仮想機での成功を「ハードの対応を確かめた」と扱わない。
 
 ## 13. 版の線
 
-- **v1.0**: §4〜§10 の全部（ただし「v1.x」と書いた物を除く）。
+- **v1.0**: §4〜§10 の全部（ただし「v1.x」と書いた物を除く）。プロセスごとのネット送受信量（§4.1 のネットワークメーター）を含む。任意で既定はオフ。メーターの UAC を通る起動と別資格情報の UAC は「未確認」に入れる。
 - 確かめていない環境（Win10・AMD/Intel GPU・ノートとバッテリー・論理 CPU 64 超・別資格情報の UAC）は README とページに「未確認」と書いて出す。
-- **v1.x**: 複数 group をまたぐ affinity・タスクスケジューラ/StartupTask の切り替え・プロセスごとのネット接続（GetExtendedTcpTable）・ファイルを使っているプロセス（Restart Manager）・サービスの起動の種類の変更・ユーザーの切断・GUI と CLI のスナップショット共有・Intel IGCL・MCP の承認待ち操作・自動更新（パーツぐらしの方式）・LHM＋PawnIO を任意で。
-- **v2**: アプリの履歴・ダンプ・ハンドル/モジュール・ETW（Helper）でのプロセスごとのディスク/ネット帰属。
+- **v1.x**: 複数 group をまたぐ affinity・タスクスケジューラ/StartupTask の切り替え・プロセスごとのネット接続の一覧（GetExtendedTcpTable。§4.1 のメーターは量だけで接続は出さない）・ファイルを使っているプロセス（Restart Manager）・サービスの起動の種類の変更・ユーザーの切断・GUI と CLI のスナップショット共有・Intel IGCL・MCP の承認待ち操作・自動更新（パーツぐらしの方式）・LHM＋PawnIO を任意で。
+- **v2**: アプリの履歴・ダンプ・ハンドル/モジュール・ETW でのプロセスごとのディスク帰属。（プロセスごとのネット帰属は v1.0 に前倒しした＝§4.1。1 回きりの Helper ではなく、長く動く別のメーターで。）
 
 ## 14. 配布
 
