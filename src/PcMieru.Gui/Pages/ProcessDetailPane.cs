@@ -25,6 +25,8 @@ internal sealed class ProcessDetailPane : UserControl
         Services,
         Memory,
         Counts,
+        NetSend,
+        NetReceive,
     }
 
     private static readonly string[] RowKeys =
@@ -43,6 +45,8 @@ internal sealed class ProcessDetailPane : UserControl
         "gui.proc.detail.services",
         "gui.proc.detail.memory",
         "gui.proc.detail.counts",
+        "gui.proc.detail.netsend",
+        "gui.proc.detail.netreceive",
     ];
 
     private readonly Panel _scroll = new() { Dock = DockStyle.Fill, AutoScroll = true, Name = "detailScroll" };
@@ -308,12 +312,40 @@ internal sealed class ProcessDetailPane : UserControl
         Relayout();
     }
 
-    /// <summary>Per-sample refresh of the two rows that move. Setting an unchanged Text is a no-op, so this never repaints needlessly.</summary>
+    /// <summary>The unit the send and receive rows are written in. Set by the page; a change shows at the next <see cref="UpdateNumbers"/>.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public NetworkUnit NetworkUnit { get; set; } = NetworkUnit.AutoBits;
+
+    /// <summary>The reason a network value is missing (the meter is off, was declined...). The page knows the meter; the pane only asks.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Func<Value<double>, string> NetworkMissingTip { get; set; } = Fmt.MissingTip;
+
+    /// <summary>Per-sample refresh of the rows that move. Setting an unchanged Text is a no-op, so this never repaints needlessly.</summary>
     public void UpdateNumbers(ProcessInfo process)
     {
         Set(Row.Memory, Fmt.Bytes(process.PrivateWorkingSetBytes), CellTone.Normal, null);
         Set(Row.Counts, Fmt.Int(process.ThreadCount) + " / " + Fmt.Int(process.HandleCount), CellTone.Normal, null);
+        SetNetwork(Row.NetSend, process.NetSendBytesPerSec);
+        SetNetwork(Row.NetReceive, process.NetReceiveBytesPerSec);
     }
+
+    /// <summary>A rate in the chosen unit, or the grey dash with the reason the meter gives.</summary>
+    private void SetNetwork(Row row, Value<double> value)
+    {
+        if (value.TryGet(out var rate))
+        {
+            Set(row, Fmt.NetRate(rate, NetworkUnit), CellTone.Normal, null);
+        }
+        else
+        {
+            Set(row, Fmt.Dash, CellTone.Dim, NetworkMissingTip(value));
+        }
+    }
+
+    /// <summary>The text of the send and receive rows (the smoke run and tests read what the user would).</summary>
+    internal string NetSendText => _values[(int)Row.NetSend].Text;
+
+    internal string NetReceiveText => _values[(int)Row.NetReceive].Text;
 
     /// <summary>True when an icon is on screen beside the name. Only meaningful while the page is shown (the smoke run checks it there).</summary>
     internal bool HasIcon => _icon.Visible && _icon.Image is not null;

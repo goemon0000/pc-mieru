@@ -355,6 +355,8 @@ internal sealed partial class ProcessesPage
         Line("gui.proc.col.memory", Fmt.Bytes(process.PrivateWorkingSetBytes));
         Line("gui.proc.col.ioread", Fmt.Rate(process.IoReadBytesPerSec));
         Line("gui.proc.col.iowrite", Fmt.Rate(process.IoWriteBytesPerSec));
+        Line("gui.proc.detail.netsend", Fmt.NetRate(process.NetSendBytesPerSec, Context.Settings.NetworkUnit));
+        Line("gui.proc.detail.netreceive", Fmt.NetRate(process.NetReceiveBytesPerSec, Context.Settings.NetworkUnit));
         if (details is not null)
         {
             Line("gui.proc.detail.product", Fmt.Text(details.Product, s => s));
