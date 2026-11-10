@@ -58,7 +58,7 @@ public sealed record SelfIdentity(uint Pid, string? Directory);
 public static class ProtectionRules
 {
     public static readonly IReadOnlyList<string> SelfFileNames =
-        ["PCMieru.exe", "pcmi.exe", "PCMieru.Helper.exe", "PCMieru.SensorHost.exe"];
+        ["PCMieru.exe", "pcmi.exe", "PCMieru.Helper.exe", "PCMieru.NetMeter.exe", "PCMieru.SensorHost.exe"];
 
     public static readonly IReadOnlyList<string> WindowsCoreFileNames =
         ["smss.exe", "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "winlogon.exe", "fontdrvhost.exe", "dwm.exe"];
