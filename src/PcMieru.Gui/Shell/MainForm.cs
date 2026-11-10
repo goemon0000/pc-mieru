@@ -240,6 +240,30 @@ internal sealed class MainForm : Form
         _context.Pump.SetPaused(_context.Settings.Paused);
         _context.Pump.Start();
         ShowPumpState();
+        if (_context.Settings.NetMeterAutostart)
+        {
+            StartNetMeterAtLaunch();
+        }
+    }
+
+    /// <summary>
+    /// The "start measuring when the app opens" setting: asks for administrator permission once, off the UI thread, so the
+    /// window is already up (and never waits on the prompt). The state the meter reaches shows on the Processes page's button.
+    /// </summary>
+    private async void StartNetMeterAtLaunch()
+    {
+        try
+        {
+            var state = await _context.StartNetMeterAsync().ConfigureAwait(true);
+            if (state.Status == NetMeterStatus.Declined)
+            {
+                _context.ReportKey("gui.proc.net.tip.declined");
+            }
+        }
+        catch (Exception ex)
+        {
+            _context.Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+        }
     }
 
     /// <summary>

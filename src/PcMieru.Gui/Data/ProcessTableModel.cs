@@ -11,6 +11,9 @@ internal enum ProcessColumn
     Disk,
     IoRead,
     IoWrite,
+    Network,
+    NetSend,
+    NetReceive,
     Gpu,
     State,
     Threads,
@@ -383,6 +386,9 @@ internal sealed class ProcessTableModel
             ProcessColumn.Disk => DiskRate(a).CompareTo(DiskRate(b)),
             ProcessColumn.IoRead => Number(a.IoReadBytesPerSec).CompareTo(Number(b.IoReadBytesPerSec)),
             ProcessColumn.IoWrite => Number(a.IoWriteBytesPerSec).CompareTo(Number(b.IoWriteBytesPerSec)),
+            ProcessColumn.Network => NetRate(a).CompareTo(NetRate(b)),
+            ProcessColumn.NetSend => Number(a.NetSendBytesPerSec).CompareTo(Number(b.NetSendBytesPerSec)),
+            ProcessColumn.NetReceive => Number(a.NetReceiveBytesPerSec).CompareTo(Number(b.NetReceiveBytesPerSec)),
             ProcessColumn.Gpu => Number(a.GpuPercent).CompareTo(Number(b.GpuPercent)),
             ProcessColumn.Threads => a.ThreadCount.CompareTo(b.ThreadCount),
             ProcessColumn.Handles => a.HandleCount.CompareTo(b.HandleCount),
@@ -410,6 +416,9 @@ internal sealed class ProcessTableModel
         ProcessColumn.Disk => !p.IoReadBytesPerSec.IsOk && !p.IoWriteBytesPerSec.IsOk,
         ProcessColumn.IoRead => !p.IoReadBytesPerSec.IsOk,
         ProcessColumn.IoWrite => !p.IoWriteBytesPerSec.IsOk,
+        ProcessColumn.Network => !p.NetSendBytesPerSec.IsOk && !p.NetReceiveBytesPerSec.IsOk,
+        ProcessColumn.NetSend => !p.NetSendBytesPerSec.IsOk,
+        ProcessColumn.NetReceive => !p.NetReceiveBytesPerSec.IsOk,
         ProcessColumn.State => !p.State.IsOk,
         _ => false,
     };
@@ -418,6 +427,9 @@ internal sealed class ProcessTableModel
 
     /// <summary>Read plus write of the process itself (the Disk column). A side that was not collected counts as nothing.</summary>
     internal static double DiskRate(ProcessInfo p) => Number(p.IoReadBytesPerSec) + Number(p.IoWriteBytesPerSec);
+
+    /// <summary>Send plus receive of the process itself (the Network column), in bytes per second. A side that was not collected counts as nothing.</summary>
+    internal static double NetRate(ProcessInfo p) => Number(p.NetSendBytesPerSec) + Number(p.NetReceiveBytesPerSec);
 
     private static int StateRank(ProcessInfo p) => p.State.TryGet(out var s) ? (int)s : 0;
 }

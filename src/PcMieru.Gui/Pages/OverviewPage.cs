@@ -66,6 +66,7 @@ internal sealed class OverviewPage : PageBase
         _gpu.SetHistory(_gpuHistory, 0);
         _disk.SetHistory(_diskHistory, 0);
         _network.SetHistory(_networkHistory, 0);
+        context.NetworkUnitChanged += OnNetworkUnitChanged;
 
         PageLayout.Prepare(
             _top,
@@ -300,12 +301,22 @@ internal sealed class OverviewPage : PageBase
         if (disposing)
         {
             Context.Pump.Sampled -= OnSampled;
+            Context.NetworkUnitChanged -= OnNetworkUnitChanged;
         }
 
         base.Dispose(disposing);
     }
 
     private void OnSampled(Snapshot snapshot) => Fill(snapshot, evaluate: ++_ticks % ObservationEvery == 1);
+
+    /// <summary>The network card writes its rates again in the new unit, from the last sample, without waiting for the next one.</summary>
+    private void OnNetworkUnitChanged()
+    {
+        if (_last is { } snapshot)
+        {
+            Fill(snapshot, evaluate: false);
+        }
+    }
 
     private void Open(string panel) => Context.Navigate("performance", null, panel);
 
@@ -379,10 +390,11 @@ internal sealed class OverviewPage : PageBase
 
         var send = system.Nics.Sum(n => n.SendBytesPerSec.GetOr(0));
         var receive = system.Nics.Sum(n => n.ReceiveBytesPerSec.GetOr(0));
+        var unit = Context.Settings.NetworkUnit;
         _network.Commit(
             Strings.Get("gui.overview.card.network"),
-            system.Nics.Count == 0 ? Fmt.Dash : Fmt.Bytes((long)(send + receive)) + "/s",
-            system.Nics.Count == 0 ? EmptyList(system.NicsState, "gui.common.na") : Strings.Format("gui.overview.net.sub", Fmt.Dict(("send", Fmt.Bytes((long)send) + "/s"), ("receive", Fmt.Bytes((long)receive) + "/s"))),
+            system.Nics.Count == 0 ? Fmt.Dash : Fmt.NetRate(send + receive, unit),
+            system.Nics.Count == 0 ? EmptyList(system.NicsState, "gui.common.na") : Strings.Format("gui.overview.net.sub", Fmt.Dict(("send", Fmt.NetRate(send, unit)), ("receive", Fmt.NetRate(receive, unit)))),
             string.Empty,
             false);
 

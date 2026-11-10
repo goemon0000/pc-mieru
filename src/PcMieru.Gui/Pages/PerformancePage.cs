@@ -125,6 +125,7 @@ internal sealed class PerformancePage : PageBase
         Controls.Add(_list);
         _list.TabIndex = 0;
         _perCore.TabIndex = 1;
+        Context.NetworkUnitChanged += OnNetworkUnitChanged;
         ApplyLanguage();
     }
 
@@ -203,13 +204,35 @@ internal sealed class PerformancePage : PageBase
         if (disposing)
         {
             Context.Pump.Sampled -= OnSampled;
+            Context.NetworkUnitChanged -= OnNetworkUnitChanged;
             _tips.Dispose();
         }
 
         base.Dispose(disposing);
     }
 
-    private void Select(string argument)
+    /// <summary>An axis label of a network graph. Graph history stays in bytes per second; only the label follows the unit setting.</summary>
+    private string NetworkAxis(double bytesPerSecond) => Fmt.NetRate(bytesPerSecond, Context.Settings.NetworkUnit);
+
+    /// <summary>The unit changed: every network number on this page is written again, at once.</summary>
+    private void OnNetworkUnitChanged()
+    {
+        if (_last is not { } snapshot)
+        {
+            return;
+        }
+
+        // The axis step is set per view, so it is configured again even when this page is not the one showing.
+        if (_current is { } panel)
+        {
+            ConfigureView(panel);
+        }
+
+        // Fills the list headlines and the selected panel from the last sample, the way a new sample would.
+        OnSampled(snapshot);
+    }
+
+    internal void Select(string argument)
     {
         var index = _panels.FindIndex(p => PerfMetrics.Argument(p.Kind) == argument || p.Key == argument);
         if (index >= 0)
@@ -247,7 +270,7 @@ internal sealed class PerformancePage : PageBase
         _panels = panels;
         for (var i = 0; i < panels.Count; i++)
         {
-            _list.SetValue(i, PerfMetrics.Headline(panels[i], snapshot.System));
+            _list.SetValue(i, PerfMetrics.Headline(panels[i], snapshot.System, Context.Settings.NetworkUnit));
         }
 
         if (_current is not null)
@@ -284,7 +307,7 @@ internal sealed class PerformancePage : PageBase
         _rebuilding = true;
         try
         {
-            _list.SetItems([.. panels.Select(p => new SummaryItem(p.Key, p.Name, PerfMetrics.Headline(p, snapshot.System)))], select);
+            _list.SetItems([.. panels.Select(p => new SummaryItem(p.Key, p.Name, PerfMetrics.Headline(p, snapshot.System, Context.Settings.NetworkUnit)))], select);
         }
         finally
         {
@@ -379,7 +402,9 @@ internal sealed class PerformancePage : PageBase
             _graphs[g].Title = Strings.Get(spec.TitleKey);
             _graphs[g].FixedMaximum = spec.FixedMaximum;
             _graphs[g].AutoFloor = spec.AutoFloor;
-            _graphs[g].AxisFormatter = spec.BytesAxis ? RateAxis : PercentAxis;
+            var network = spec.BytesAxis && panel.Kind == PerfKind.Network;
+            _graphs[g].AxisFormatter = network ? NetworkAxis : spec.BytesAxis ? RateAxis : PercentAxis;
+            _graphs[g].AxisStep = network ? NetworkUnits.AxisStep(Context.Settings.NetworkUnit) : 1;
             for (var s = 0; s < SeriesPerGraph; s++)
             {
                 _graphs[g].SetSeriesName(s, s < spec.SeriesKeys.Length ? Strings.Get(spec.SeriesKeys[s]) : string.Empty);
@@ -402,7 +427,7 @@ internal sealed class PerformancePage : PageBase
         var count = Math.Min(history.Count, SnapshotPump.HistoryLength);
         var offset = history.Count - count;
         UpdateTimeScale();
-        var headline = PerfMetrics.Headline(panel, snapshot.System);
+        var headline = PerfMetrics.Headline(panel, snapshot.System, Context.Settings.NetworkUnit);
         _detail.Text = PerfMetrics.Detail(panel, snapshot.System, _facts);
         _perCore.Enabled = snapshot.System.Cpu.PerLogicalPercent.Count > 0;
 
@@ -442,7 +467,7 @@ internal sealed class PerformancePage : PageBase
             }
         }
 
-        ShowStats(PerfMetrics.Stats(panel, snapshot, _facts));
+        ShowStats(PerfMetrics.Stats(panel, snapshot, _facts, Context.Settings.NetworkUnit));
     }
 
     private static string GraphValue(PerfPanel panel, Snapshot snapshot, int graph)

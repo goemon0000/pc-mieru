@@ -51,6 +51,12 @@ internal sealed class GuiSettings
 
     public TextSize TextSize { get; set; } = TextSize.Normal;
 
+    /// <summary>How network rates are written everywhere they show (bits or bytes, automatic or fixed prefix). Decimal, unlike the disk and memory figures.</summary>
+    public NetworkUnit NetworkUnit { get; set; } = NetworkUnit.AutoBits;
+
+    /// <summary>Whether the network meter is started when the window opens (one UAC prompt each time). Off unless the user turns it on.</summary>
+    public bool NetMeterAutostart { get; set; }
+
     /// <summary>Whether the sampler is paused. Not remembered across runs: opening the app should always show live numbers.</summary>
     public bool Paused { get; set; }
 
@@ -140,6 +146,12 @@ internal sealed class GuiSettings
             case "textsize" when Enum.TryParse<TextSize>(value, ignoreCase: true, out var textSize) && Enum.IsDefined(textSize):
                 TextSize = textSize;
                 break;
+            case "net.unit" when Enum.TryParse<NetworkUnit>(value, ignoreCase: true, out var networkUnit) && Enum.IsDefined(networkUnit):
+                NetworkUnit = networkUnit;
+                break;
+            case "net.meter.autostart":
+                NetMeterAutostart = value == "1";
+                break;
             default:
                 if (!IsReserved(key))
                 {
@@ -159,6 +171,8 @@ internal sealed class GuiSettings
             $"interval={IntervalMs}",
             $"alwaysontop={(AlwaysOnTop ? 1 : 0)}",
             $"textsize={TextSize.ToString().ToLowerInvariant()}",
+            $"net.unit={NetworkUnit.ToString().ToLowerInvariant()}",
+            $"net.meter.autostart={(NetMeterAutostart ? 1 : 0)}",
         };
         foreach (var pair in _extra.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
@@ -185,5 +199,5 @@ internal sealed class GuiSettings
         }
     }
 
-    private static bool IsReserved(string key) => key is "language" or "theme" or "interval" or "alwaysontop" or "textsize";
+    private static bool IsReserved(string key) => key is "language" or "theme" or "interval" or "alwaysontop" or "textsize" or "net.unit" or "net.meter.autostart";
 }
