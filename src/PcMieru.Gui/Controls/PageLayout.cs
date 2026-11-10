@@ -44,7 +44,7 @@ internal static class PageLayout
         var footer = new FooterPanel(pad)
         {
             Dock = DockStyle.Bottom,
-            WrapContents = false,
+            WrapContents = true,
             Padding = new Padding(pad, pad * 7 / 12, pad, 0),
             Name = name,
         };
@@ -54,7 +54,11 @@ internal static class PageLayout
         return footer;
     }
 
-    /// <summary>The line under a list. Its height follows the font, so a larger text size is not cut off.</summary>
+    /// <summary>
+    /// The line under a list. Its height follows the font, so a larger text size is not cut off. When its notes do not fit on
+    /// one line (real data can add a note or two: "partial only", "* means ..."), they go on the next line and a note longer
+    /// than the whole width wraps inside itself; the panel grows to hold them instead of letting the text run off the side.
+    /// </summary>
     private sealed class FooterPanel : FlowLayoutPanel
     {
         private readonly int _pad;
@@ -69,6 +73,36 @@ internal static class PageLayout
         {
             base.OnFontChanged(e);
             Height = MinimumHeight();
+        }
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            var available = ClientSize.Width - Padding.Horizontal;
+            if (available < _pad * 8)
+            {
+                // Not laid out yet (no width): wrapping to nothing would only make the panel absurdly tall for a moment.
+                base.OnLayout(levent);
+                return;
+            }
+
+            foreach (Control control in Controls)
+            {
+                if (control is Label { AutoSize: true } label)
+                {
+                    var limit = new Size(Math.Max(1, available - label.Margin.Horizontal), 0);
+                    if (label.MaximumSize != limit)
+                    {
+                        label.MaximumSize = limit;
+                    }
+                }
+            }
+
+            base.OnLayout(levent);
+            var wanted = Math.Max(MinimumHeight(), GetPreferredSize(new Size(Width, 0)).Height);
+            if (Height != wanted)
+            {
+                Height = wanted;
+            }
         }
 
         private int MinimumHeight() => Math.Max(_pad * 8 / 3, Font.Height + (_pad * 7 / 12) + (_pad * 2 / 3));
