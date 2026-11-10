@@ -176,7 +176,7 @@ internal static class PerfMetrics
     }
 
     /// <summary>The short current value for the list on the left and the big number of the graph.</summary>
-    public static string Headline(PerfPanel panel, SystemInfo system)
+    public static string Headline(PerfPanel panel, SystemInfo system, NetworkUnit unit = NetworkUnit.AutoBits)
     {
         switch (panel.Kind)
         {
@@ -196,7 +196,7 @@ internal static class PerfMetrics
                     return Fmt.Dash;
                 }
 
-                return Fmt.Rate(nic.SendBytesPerSec, nic.ReceiveBytesPerSec);
+                return Fmt.NetRate(nic.SendBytesPerSec, nic.ReceiveBytesPerSec, unit);
         }
     }
 
@@ -211,7 +211,7 @@ internal static class PerfMetrics
         _ => string.Empty,
     };
 
-    public static List<StatLine> Stats(PerfPanel panel, Snapshot snapshot, PerfFacts facts)
+    public static List<StatLine> Stats(PerfPanel panel, Snapshot snapshot, PerfFacts facts, NetworkUnit unit = NetworkUnit.AutoBits)
     {
         var system = snapshot.System;
         var lines = new List<StatLine>(16);
@@ -277,8 +277,8 @@ internal static class PerfMetrics
                 break;
             default:
                 var found = Find(system.Nics, n => n.Id == panel.DeviceId);
-                lines.Add(found is null ? Plain("gui.perf.s.send", Fmt.Dash) : Line("gui.perf.s.send", found.SendBytesPerSec, v => Fmt.Bytes((long)Math.Max(0, v)) + "/s"));
-                lines.Add(found is null ? Plain("gui.perf.s.receive", Fmt.Dash) : Line("gui.perf.s.receive", found.ReceiveBytesPerSec, v => Fmt.Bytes((long)Math.Max(0, v)) + "/s"));
+                lines.Add(found is null ? Plain("gui.perf.s.send", Fmt.Dash) : Line("gui.perf.s.send", found.SendBytesPerSec, v => Fmt.NetRate(v, unit)));
+                lines.Add(found is null ? Plain("gui.perf.s.receive", Fmt.Dash) : Line("gui.perf.s.receive", found.ReceiveBytesPerSec, v => Fmt.NetRate(v, unit)));
                 lines.Add(found is null ? Plain("gui.perf.s.link", Fmt.Dash) : Line("gui.perf.s.link", found.LinkSpeedBitsPerSec, Speed));
                 lines.Add(Plain("gui.perf.s.state", Strings.Get(found is { IsUp: true } ? "gui.perf.s.up" : "gui.perf.s.down")));
                 break;

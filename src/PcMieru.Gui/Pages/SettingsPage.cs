@@ -15,7 +15,10 @@ internal sealed class SettingsPage : PageBase
     private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsLanguage" };
     private readonly Label _textSizeLabel = new() { AutoSize = true };
     private readonly ComboBox _textSize = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsTextSize" };
+    private readonly Label _netUnitLabel = new() { AutoSize = true };
+    private readonly ComboBox _netUnit = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsNetUnit" };
     private readonly CheckBox _onTop = new() { AutoSize = true, Name = "settingsOnTop" };
+    private readonly CheckBox _netAutostart = new() { AutoSize = true, Name = "settingsNetAutostart" };
     private readonly Label _about = new() { AutoSize = true, Name = "settingsAbout" };
     private readonly ToneLabel _privacy = new() { AutoSize = true, Name = "settingsPrivacy" };
     private readonly ToolTip _tips = new() { ShowAlways = true };
@@ -37,7 +40,7 @@ internal sealed class SettingsPage : PageBase
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         // Explicit cells: a hidden spacer would be skipped by the automatic flow and shift every control after it.
-        foreach (var box in new[] { _interval, _theme, _language, _textSize })
+        foreach (var box in new[] { _interval, _theme, _language, _textSize, _netUnit })
         {
             box.Width = Px(260);
         }
@@ -47,14 +50,16 @@ internal sealed class SettingsPage : PageBase
         AddRow(grid, _themeLabel, _theme, 2);
         AddRow(grid, _languageLabel, _language, 3);
         AddRow(grid, _textSizeLabel, _textSize, 4);
-        AddWide(grid, _onTop, 5);
+        AddRow(grid, _netUnitLabel, _netUnit, 5);
+        AddWide(grid, _onTop, 6);
+        AddWide(grid, _netAutostart, 7);
         _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
         _privacy.MaximumSize = new Size(Px(640), 0);
-        grid.Controls.Add(_about, 0, 6);
+        grid.Controls.Add(_about, 0, 8);
         grid.SetColumnSpan(_about, 2);
-        grid.Controls.Add(_privacy, 0, 7);
+        grid.Controls.Add(_privacy, 0, 9);
         grid.SetColumnSpan(_privacy, 2);
         Controls.Add(grid);
 
@@ -63,7 +68,9 @@ internal sealed class SettingsPage : PageBase
         _theme.TabIndex = 2;
         _language.TabIndex = 3;
         _textSize.TabIndex = 4;
-        _onTop.TabIndex = 5;
+        _netUnit.TabIndex = 5;
+        _onTop.TabIndex = 6;
+        _netAutostart.TabIndex = 7;
         _interval.SelectedIndexChanged += (_, _) =>
         {
             if (!_filling && _interval.SelectedIndex >= 0)
@@ -106,6 +113,21 @@ internal sealed class SettingsPage : PageBase
                 Context.SetAlwaysOnTop(_onTop.Checked);
             }
         };
+        _netUnit.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_filling && _netUnit.SelectedIndex >= 0)
+            {
+                Context.SetNetworkUnit(NetworkUnits.All[_netUnit.SelectedIndex]);
+            }
+        };
+        _netAutostart.CheckedChanged += (_, _) =>
+        {
+            if (!_filling)
+            {
+                Context.SetNetMeterAutostart(_netAutostart.Checked);
+            }
+        };
+        context.NetworkUnitChanged += Sync;
         context.Pump.StateChanged += OnPumpState;
         ApplyLanguage();
     }
@@ -121,6 +143,10 @@ internal sealed class SettingsPage : PageBase
     internal ComboBox TextSizeBox => _textSize;
 
     internal CheckBox OnTopBox => _onTop;
+
+    internal ComboBox NetUnitBox => _netUnit;
+
+    internal CheckBox NetAutostartBox => _netAutostart;
 
     /// <summary>The controls are brought back in line with the live state every time the page opens (the theme or language may have been changed by a switch, a command-line option or the status bar).</summary>
     public override void OnActivated() => Sync();
@@ -148,6 +174,10 @@ internal sealed class SettingsPage : PageBase
             _textSize.Items.Clear();
             _textSize.Items.AddRange([Strings.Get("gui.settings.textsize.small"), Strings.Get("gui.settings.textsize.normal"), Strings.Get("gui.settings.textsize.large")]);
             _onTop.Text = Strings.Get("gui.settings.ontop");
+            _netUnitLabel.Text = Strings.Get("gui.settings.netunit");
+            _netUnit.Items.Clear();
+            _netUnit.Items.AddRange([.. NetworkUnits.All.Select(NetworkUnits.Label).Cast<object>()]);
+            _netAutostart.Text = Strings.Get("gui.settings.netmeter.autostart");
             ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
             _privacy.Text = Strings.Get("gui.settings.privacy");
@@ -155,7 +185,10 @@ internal sealed class SettingsPage : PageBase
             _theme.AccessibleName = _themeLabel.Text;
             _language.AccessibleName = _languageLabel.Text;
             _textSize.AccessibleName = _textSizeLabel.Text;
+            _netUnit.AccessibleName = _netUnitLabel.Text;
             _tips.SetToolTip(_textSize, Strings.Get("gui.settings.textsize.tip"));
+            _tips.SetToolTip(_netUnit, Strings.Get("gui.settings.netunit.tip"));
+            _tips.SetToolTip(_netAutostart, Strings.Get("gui.settings.netmeter.autostart.tip"));
             _tips.SetToolTip(_pause, Strings.Get("gui.pause.tip"));
             _tips.SetToolTip(_onTop, Strings.Get("gui.settings.ontop.tip"));
         }
@@ -170,6 +203,7 @@ internal sealed class SettingsPage : PageBase
         if (disposing)
         {
             Context.Pump.StateChanged -= OnPumpState;
+            Context.NetworkUnitChanged -= Sync;
             _tips.Dispose();
         }
 
@@ -198,6 +232,8 @@ internal sealed class SettingsPage : PageBase
         _language.SelectedIndex = (int)Strings.Current;
         _textSize.SelectedIndex = (int)Context.Settings.TextSize;
         _onTop.Checked = Context.Settings.AlwaysOnTop;
+        _netUnit.SelectedIndex = Math.Max(0, Array.IndexOf(NetworkUnits.All, Context.Settings.NetworkUnit));
+        _netAutostart.Checked = Context.Settings.NetMeterAutostart;
     }
 
     private void OnPumpState()
@@ -248,6 +284,10 @@ internal static class SettingsStrings
         new("gui.settings.textsize.normal", "標準", "Normal"),
         new("gui.settings.textsize.large", "大", "Large"),
         new("gui.settings.textsize.tip", "画面全体の文字の大きさです。表と詳細欄も一緒に変わります", "The size of the text everywhere. Tables and detail panes follow"),
+        new("gui.settings.netunit", "ネットワークの単位", "Network unit"),
+        new("gui.settings.netunit.tip", "ネットワークの速さの書き方です。「自動」は大きさに合わせて単位が変わり、「固定」はいつも同じ単位にそろえます。プロセス・パフォーマンス・概要のすべてに効きます", "How network speeds are written. Auto changes the unit to fit the size; fixed always uses the same unit. It applies to Processes, Performance and Overview"),
+        new("gui.settings.netmeter.autostart", "起動時に通信量の計測を始める（管理者の確認が出ます）", "Start measuring network traffic when the app opens (asks for administrator permission)"),
+        new("gui.settings.netmeter.autostart.tip", "オンにすると、PCミエルを開くたびに Windows の管理者の確認が出て、許可するとプロセスごとの通信量が計測されます。オフのままなら、プロセス画面の「通信量を計測」を押したときだけ計測します", "When on, Windows asks for administrator permission each time PC Mieru opens, and if you allow it, traffic is measured per process. When off, it is measured only after you press Measure network on the Processes page"),
         new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
