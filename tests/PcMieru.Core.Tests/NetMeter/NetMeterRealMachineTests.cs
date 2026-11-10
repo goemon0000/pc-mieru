@@ -25,6 +25,7 @@ namespace PcMieru.Core.Tests.NetMeter;
 public sealed class NetMeterRealMachineTests : IDisposable
 {
     private const int FourMiB = 4 * 1024 * 1024;
+    private const int SteadySamples = 8;
     private const string MeterProcessName = "PCMieru.NetMeter";
 
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(20);
@@ -192,37 +193,46 @@ public sealed class NetMeterRealMachineTests : IDisposable
             static () => DateTime.UtcNow, new SamplerSettings { GpuDefaultOn = false }, null, new SignatureVerifier(), () => control);
         var me = (uint)Environment.ProcessId;
 
+        // A steady stream: 4 MiB/s over loopback, paced, running for a while before the baseline so that every window after
+        // the baseline lies entirely inside it. Every sample must then read about 4 MiB/s. Not the best of them and not their
+        // mean: a mean hides a rate that swings (events handed over in batches at a different time than they happened gave
+        // 0, 2, 4.6, 4, 1.8, 6.4 MB/s while the totals were right). A key that does not match gives 0 for ever (the process
+        // is "alive and absent from the meter"), so a rate near 4 MiB/s also proves that the meter's (pid, creation time)
+        // is the stage's key.
+        using var stop = new CancellationTokenSource();
+        var stream = Task.Run(() => PacedLoopbackAsync(FourMiB, stop.Token));
+        await Task.Delay(2500);
+
         var first = await source.SampleAsync();
         var firstOwn = first.Processes.Single(p => p.Key.Pid == me);
         Assert.Equal(ValueStatus.NotCollected, firstOwn.NetSendBytesPerSec.Status); // the first sample is only a baseline
 
-        await LoopbackAsync(FourMiB);
-
-        // Sampled as the app does (about once a second) until the burst is in a window. A key that does not match gives 0
-        // for ever (the process is "alive and absent from the meter"), so a positive rate is the proof that the meter's
-        // (pid, creation time) is the stage's key.
         ProcessInfo own = firstOwn;
-        double bestSend = 0, bestReceive = 0;
-        var clock = Stopwatch.StartNew();
-        while (clock.Elapsed < Patience && (bestSend < 256 * 1024 || bestReceive < 256 * 1024))
+        var sends = new List<double>();
+        var receives = new List<double>();
+        for (var i = 0; i < SteadySamples; i++)
         {
-            await Task.Delay(1200);
+            await Task.Delay(1000); // about as often as the app samples
             var snapshot = await source.SampleAsync();
             own = snapshot.Processes.Single(p => p.Key.Pid == me);
-            if (own.NetSendBytesPerSec.IsOk)
-            {
-                bestSend = Math.Max(bestSend, own.NetSendBytesPerSec.Data);
-            }
-
-            if (own.NetReceiveBytesPerSec.IsOk)
-            {
-                bestReceive = Math.Max(bestReceive, own.NetReceiveBytesPerSec.Data);
-            }
+            sends.Add(own.NetSendBytesPerSec.IsOk ? own.NetSendBytesPerSec.Data : double.NaN);
+            receives.Add(own.NetReceiveBytesPerSec.IsOk ? own.NetReceiveBytesPerSec.Data : double.NaN);
         }
 
-        _output.WriteLine($"best own rate after a 4 MiB loopback burst: send {bestSend:N0} B/s, receive {bestReceive:N0} B/s");
-        Assert.True(bestSend >= 256 * 1024, $"send rate stayed at {bestSend:N0} B/s; last status {own.NetSendBytesPerSec.Status}: {own.NetSendBytesPerSec.Detail}");
-        Assert.True(bestReceive >= 256 * 1024, $"receive rate stayed at {bestReceive:N0} B/s; last status {own.NetReceiveBytesPerSec.Status}: {own.NetReceiveBytesPerSec.Detail}");
+        stop.Cancel();
+        await stream.WaitAsync(Patience);
+
+        var sendText = string.Join(' ', sends.Select(v => (v / (1024 * 1024)).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+        var receiveText = string.Join(' ', receives.Select(v => (v / (1024 * 1024)).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+        _output.WriteLine($"a paced 4.00 MiB/s loopback stream, own rate per sample: send [{sendText}] receive [{receiveText}] MiB/s");
+        var low = FourMiB * 0.7;
+        var high = FourMiB * 1.3;
+        Assert.True(
+            sends.All(v => v >= low && v <= high),
+            $"send rates are not steady (every sample must be within 30% of 4 MiB/s): [{sendText}] MiB/s; last status {own.NetSendBytesPerSec.Status}: {own.NetSendBytesPerSec.Detail}");
+        Assert.True(
+            receives.All(v => v >= low && v <= high),
+            $"receive rates are not steady (every sample must be within 30% of 4 MiB/s): [{receiveText}] MiB/s; last status {own.NetReceiveBytesPerSec.Status}: {own.NetReceiveBytesPerSec.Detail}");
 
         // The meter's key for this process is the stage's key, byte for byte.
         var reader = (INetMeterReader)control;
@@ -376,7 +386,7 @@ public sealed class NetMeterRealMachineTests : IDisposable
         var last = before;
         while (clock.Elapsed < Patience)
         {
-            // The meter reports counters up to about a second and a half ago (it waits for events still in flight).
+            // The meter reports counters up to about 0.75 s ago (it waits for events still in flight).
             await Task.Delay(500);
             last = ReadOwn(reader, me);
             if (last.Send - before.Send >= (ulong)bytes && last.Receive - before.Receive >= (ulong)bytes)
@@ -386,6 +396,48 @@ public sealed class NetMeterRealMachineTests : IDisposable
         }
 
         return last;
+    }
+
+    /// <summary>
+    /// Sends over a TCP connection to a listener in this very process at <paramref name="bytesPerSecond"/> (paced against a
+    /// stopwatch, so the pacing does not drift) until <paramref name="stop"/> is cancelled.
+    /// </summary>
+    private static async Task PacedLoopbackAsync(int bytesPerSecond, CancellationToken stop)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var receiver = Task.Run(async () =>
+        {
+            using var accepted = await listener.AcceptTcpClientAsync();
+            var inbound = accepted.GetStream();
+            var buffer = new byte[64 * 1024];
+            while (await inbound.ReadAsync(buffer) > 0)
+            {
+            }
+        });
+
+        using (var client = new TcpClient())
+        {
+            await client.ConnectAsync(IPAddress.Loopback, port);
+            var outbound = client.GetStream();
+            var chunk = new byte[16 * 1024];
+            var clock = Stopwatch.StartNew();
+            long sent = 0;
+            while (!stop.IsCancellationRequested)
+            {
+                var due = (long)(clock.Elapsed.TotalSeconds * bytesPerSecond);
+                while (sent + chunk.Length <= due)
+                {
+                    await outbound.WriteAsync(chunk);
+                    sent += chunk.Length;
+                }
+
+                await Task.Delay(5);
+            }
+        }
+
+        await receiver.WaitAsync(Patience);
     }
 
     /// <summary>Sends <paramref name="bytes"/> over a TCP connection to a listener in this very process, and waits until all of it has arrived.</summary>
