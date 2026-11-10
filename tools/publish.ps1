@@ -15,11 +15,11 @@
   Works in Windows PowerShell 5.1 and pwsh. ASCII only on purpose (5.1 reads BOM-less files as ANSI).
 
 .EXAMPLE
-  powershell -File tools\publish.ps1 -Version 0.1.0 -Verify
+  powershell -File tools\publish.ps1 -Version 0.2.0 -Verify
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.1.0',
+    [string]$Version = '0.2.0',
     [string]$Output = '',
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
