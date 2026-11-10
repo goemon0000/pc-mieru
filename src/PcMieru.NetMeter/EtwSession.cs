@@ -42,6 +42,7 @@ internal sealed unsafe class EtwSession
 
     private const uint WnodeFlagTracedGuid = 0x0002_0000;
     private const uint EventTraceRealTimeMode = 0x0000_0100;
+    private const uint EventTraceUseMsFlushTimer = 0x0000_0010; // FlushTimer is in milliseconds (Windows 8 and later)
 
     // EVENT_TRACE_LOGFILEW (448 bytes) and the two fields set in it.
     private const int LogfileSize = 448;
@@ -50,9 +51,11 @@ internal sealed unsafe class EtwSession
     private const int LogfileEventRecordCallback = 424;
     private const uint ProcessTraceModeRealTime = 0x0000_0100;
     private const uint ProcessTraceModeEventRecord = 0x1000_0000;
+    private const uint ProcessTraceModeRawTimestamp = 0x0000_1000; // EVENT_HEADER.TimeStamp stays the raw QueryPerformanceCounter count
 
     // EVENT_RECORD (112 bytes): the parts of the header and the user data the meter reads.
     private const int RecordHeaderFlags = 4;
+    private const int RecordTimeStamp = 16;
     private const int RecordProviderId = 24;
     private const int RecordEventId = 40;
     private const int RecordEventVersion = 42;
@@ -226,7 +229,7 @@ internal sealed unsafe class EtwSession
         }
 
         *(nint*)(_logfile + LogfileLoggerName) = (nint)_loggerName;
-        *(uint*)(_logfile + LogfileProcessTraceMode) = ProcessTraceModeRealTime | ProcessTraceModeEventRecord;
+        *(uint*)(_logfile + LogfileProcessTraceMode) = ProcessTraceModeRealTime | ProcessTraceModeEventRecord | ProcessTraceModeRawTimestamp;
         *(nint*)(_logfile + LogfileEventRecordCallback) = (nint)(delegate* unmanaged<byte*, void>)&OnEvent;
         _trace = Native.OpenTrace(_logfile);
         if (_trace == Native.INVALID_PROCESSTRACE_HANDLE)
@@ -259,8 +262,8 @@ internal sealed unsafe class EtwSession
         *(uint*)(block + PropBufferSize) = 64; // KB per buffer
         *(uint*)(block + PropMinimumBuffers) = (uint)minimum;
         *(uint*)(block + PropMaximumBuffers) = (uint)(minimum + 32);
-        *(uint*)(block + PropLogFileMode) = EventTraceRealTimeMode;
-        *(uint*)(block + PropFlushTimer) = 1; // seconds: the batching NetMeterCounters' horizon accounts for
+        *(uint*)(block + PropLogFileMode) = EventTraceRealTimeMode | EventTraceUseMsFlushTimer;
+        *(uint*)(block + PropFlushTimer) = NetMeterEvents.FlushTimerMilliseconds; // the delivery latency NetMeterCounters.LagTicks covers
         *(uint*)(block + PropLoggerNameOffset) = PropertiesSize;
     }
 
@@ -276,7 +279,7 @@ internal sealed unsafe class EtwSession
             // An exception must never leave an UnmanagedCallersOnly method. The event counts as undecodable.
             try
             {
-                s_counters?.NoteDelivery(true);
+                s_counters?.NoteUndecodable();
             }
             catch (Exception)
             {
@@ -296,7 +299,6 @@ internal sealed unsafe class EtwSession
         var version = record[RecordEventVersion];
         if (!NetMeterEvents.TryClassify(id, out var direction))
         {
-            counters.NoteDelivery();
             return;
         }
 
@@ -307,11 +309,13 @@ internal sealed unsafe class EtwSession
             || !TryGetLayout(record, id, version, pointerSize, out var layout)
             || !layout.TryRead(new ReadOnlySpan<byte>(data, length), out var pid, out var size))
         {
-            counters.NoteDelivery(true);
+            counters.NoteUndecodable();
             return;
         }
 
-        counters.Count(direction, pid, size);
+        // The event's own time (the raw counter, see ProcessTraceModeRawTimestamp), never the moment it is delivered.
+        var eventTime = MeterClock.FromQpc(*(long*)(record + RecordTimeStamp));
+        counters.Count(direction, pid, size, eventTime);
     }
 
     private static bool TryGetLayout(byte* record, ushort id, byte version, int pointerSize, out NetMeterPayloadLayout layout)

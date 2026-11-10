@@ -13,7 +13,9 @@ internal readonly record struct NetRates(Value<double> Send, Value<double> Recei
 /// it is given, so every rule below is tested without a meter.
 /// <list type="bullet">
 /// <item>The elapsed time is the METER's timestamp difference (the time up to which its counters are complete), never this
-/// process's clock: the reading and the arrival of the reply are not the same instant, and the ETW session delivers in batches.</item>
+/// process's clock: the reading and the arrival of the reply are not the same instant. (The meter stamps bytes with the time
+/// of the event, not of its delivery, and reports a horizon a fixed lag behind its clock, so this difference is the span of
+/// events the counters cover however the session batched them.)</item>
 /// <item>The first reading, the first after <see cref="Reset"/> and the first of a new meter run (another generation) are only a
 /// baseline: NotCollected, never 0.</item>
 /// <item>A process that was not alive at the previous reading is NotCollected (new): its counter does not cover the whole window.</item>
@@ -21,9 +23,9 @@ internal readonly record struct NetRates(Value<double> Send, Value<double> Recei
 /// <item>Events lost by Windows (or events whose layout could not be read) in the window make every rate an Error with the count:
 /// a lower bound is not a measurement and is never reported as one.</item>
 /// <item>A counter that went backwards is NotCollected.</item>
-/// <item>The meter's batches arrive about once a second, so with a shorter sampling interval two readings can carry the same
-/// timestamp. Then no time has passed that the counters know of, and the rates of the last window are repeated (marked in the
-/// detail) instead of computing over zero seconds; a process that is not in them is NotCollected (new).</item>
+/// <item>The meter's horizon moves in 100 ms steps, so two readings less than that apart can carry the same timestamp (rare:
+/// the app samples about once a second). Then no time has passed that the counters know of, and the rates of the last window
+/// are repeated (marked in the detail) instead of computing over zero seconds; a process that is not in them is NotCollected (new).</item>
 /// </list>
 /// Not thread-safe: the snapshot source calls it from the tick only.
 /// </summary>

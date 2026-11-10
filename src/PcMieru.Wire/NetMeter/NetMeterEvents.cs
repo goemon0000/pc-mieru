@@ -32,6 +32,13 @@ public static class NetMeterEvents
 
     public const string SizeField = "size";
 
+    /// <summary>
+    /// How long a session buffer that holds events waits before ETW hands it over, in milliseconds (the session sets
+    /// EVENT_TRACE_USE_MS_FLUSH_TIMER, so the unit is milliseconds, not the default seconds). It is what bounds the time from an
+    /// event happening to its delivery, and so what <see cref="NetMeterCounters.LagTicks"/> has to cover.
+    /// </summary>
+    public const uint FlushTimerMilliseconds = 100;
+
     /// <summary>TCP send/recv IPv4 = 10/11, IPv6 = 26/27; UDP send/recv IPv4 = 42/43, IPv6 = 58/59.</summary>
     public static bool TryClassify(ushort eventId, out NetMeterDirection direction)
     {
