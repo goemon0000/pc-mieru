@@ -27,7 +27,12 @@ public sealed record ProcessInfo(
     Value<double> IoReadBytesPerSec,
     Value<double> IoWriteBytesPerSec,
     Value<double> GpuPercent,
-    Value<ProcessState> State);
+    Value<ProcessState> State,
+    // Network bytes this process sent / received per second (TCP+UDP, IPv4+IPv6, loopback included), from the elevated
+    // NetMeter's ETW session. NotCollected while the meter is off (it is opt-in: it needs one UAC prompt), so the default
+    // never reads as "no traffic". Bytes, not bits: the front end converts for display.
+    Value<double> NetSendBytesPerSec = default,
+    Value<double> NetReceiveBytesPerSec = default);
 
 [JsonConverter(typeof(CamelCaseEnumConverter<ProcessState>))]
 public enum ProcessState

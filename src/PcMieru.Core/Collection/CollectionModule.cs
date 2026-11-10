@@ -19,7 +19,9 @@ public static class CollectionModule
 
         if (options.ForceFakes)
         {
-            var fake = new FakeSnapshotSource(options.Clock);
+            var fakeNet = new FakeNetMeterControl();
+            registry.Set<INetMeterControl>(fakeNet);
+            var fake = new FakeSnapshotSource(options.Clock, fakeNet);
             registry.Set<ISnapshotSource>(fake);
             registry.Set(new SamplerLoop(fake, settings));
             registry.Set<IProcessDetailsProvider>(new FakeProcessDetailsProvider());
@@ -30,6 +32,9 @@ public static class CollectionModule
 
         // Hardware and Reporting register after this module, so what we need from them is looked up when it is used.
         // A catalog or sensor client that is replaced later (tests, `configure`) is picked up too.
+        // TODO(net-core): the real meter (PCMieru.NetMeter.exe) and its sampling stage in WindowsSnapshotSource.
+        registry.Set<INetMeterControl>(new UnbuiltNetMeterControl());
+
         var verifier = new SignatureVerifier();
         var source = new WindowsSnapshotSource(
             options.Clock,

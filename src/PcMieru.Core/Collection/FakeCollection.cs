@@ -49,7 +49,8 @@ public static class FakeSnapshots
         int Handles);
 
     /// <summary>tick 0 has no baseline, so CPU and rates are NotCollected, like the first real sample.</summary>
-    public static Snapshot Create(DateTime takenAtUtc, int tick, int intervalMs = 1000)
+    /// <param name="net">The network meter's state; null means Running.</param>
+    public static Snapshot Create(DateTime takenAtUtc, int tick, int intervalMs = 1000, NetMeterState? net = null)
     {
         takenAtUtc = DateTime.SpecifyKind(takenAtUtc, DateTimeKind.Utc);
         var baseline = tick > 0;
@@ -87,6 +88,24 @@ public static class FakeSnapshots
                 _ => Value.Ok(ProcessState.Running, "fake:IsHungAppWindow"),
             };
 
+            // Bytes per second (send, receive): a download, a stream upload, a browser, chat, the system.
+            var (netSend, netReceive) = p.Name switch
+            {
+                "Steam.exe" => (42_000.0, 5_800_000.0),
+                "OBS64.exe" => (760_000.0, 9_000.0),
+                "chrome.exe" => (18_000.0, 240_000.0),
+                "Discord.exe" => (6_000.0, 21_000.0),
+                "OneDrive.exe" => (120_000.0, 3_000.0),
+                "svchost.exe" => (900.0, 2_400.0),
+                "System" => (1_500.0, 4_000.0),
+                _ => (0.0, 0.0),
+            };
+            const string NetSrc = "fake:etw-kernel-network";
+            Value<double> Net(double v) =>
+                net is { Status: not NetMeterStatus.Running } ? NetMeterValues.Missing(net, NetSrc)
+                : baseline ? Value.Ok(Math.Round(v * jitter, 0), NetSrc)
+                : Value.NotCollected<double>(NetSrc, "first sample has no baseline");
+
             var key = keys[p.Pid];
             list.Add(new ProcessInfo(
                 key,
@@ -106,7 +125,9 @@ public static class FakeSnapshots
                 Rate(ioRead),
                 Rate(ioWrite),
                 gpu,
-                state));
+                state,
+                Net(netSend),
+                Net(netReceive)));
         }
 
         var logical = 32;
@@ -199,14 +220,19 @@ public static class FakeSnapshots
 public sealed class FakeSnapshotSource : ISnapshotSource, IFakeImplementation
 {
     private readonly Func<DateTime> _clock;
+    private readonly INetMeterControl? _net;
     private int _tick;
 
-    public FakeSnapshotSource(Func<DateTime>? clock = null) => _clock = clock ?? (static () => DateTime.UtcNow);
+    public FakeSnapshotSource(Func<DateTime>? clock = null, INetMeterControl? net = null)
+    {
+        _clock = clock ?? (static () => DateTime.UtcNow);
+        _net = net;
+    }
 
     public Task<Snapshot> SampleAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(FakeSnapshots.Create(_clock(), _tick++));
+        return Task.FromResult(FakeSnapshots.Create(_clock(), _tick++, net: _net?.State));
     }
 
     public void ResetBaseline() => _tick = 0;
