@@ -3,7 +3,7 @@ using System.Globalization;
 namespace PcMieru.Gui;
 
 /// <summary>Display formatting. A value that was not collected is a dash, never a zero.</summary>
-internal static class Fmt
+internal static partial class Fmt
 {
     public const string Dash = "-";
 

@@ -3,15 +3,19 @@ namespace PcMieru.Gui;
 /// <summary>Everything a page may use. Pages take this in their constructor and never reach for a global.</summary>
 internal sealed class GuiContext
 {
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings)
+    /// <param name="netMeter">The network meter the pages control. Null: the one in <paramref name="services"/>. A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null)
     {
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
+        NetMeter = netMeter ?? services.NetMeter;
     }
 
     public PcMieruServices Services { get; }
+
+    public INetMeterControl NetMeter { get; }
 
     public SnapshotPump Pump { get; }
 
@@ -32,6 +36,9 @@ internal sealed class GuiContext
 
     /// <summary>Raised after the text size changed. MainForm sets the window font; every control that takes its font from the window follows.</summary>
     public event Action? TextSizeChanged;
+
+    /// <summary>Raised after the network unit changed. Every page that writes a network rate shows it again at once.</summary>
+    public event Action? NetworkUnitChanged;
 
     public void SetLanguage(Language language)
     {
@@ -89,6 +96,37 @@ internal sealed class GuiContext
         Settings.Save();
         TextSizeChanged?.Invoke();
     }
+
+    public void SetNetworkUnit(NetworkUnit unit)
+    {
+        if (Settings.NetworkUnit == unit)
+        {
+            return;
+        }
+
+        Settings.NetworkUnit = unit;
+        Settings.Save();
+        NetworkUnitChanged?.Invoke();
+    }
+
+    public void SetNetMeterAutostart(bool autostart)
+    {
+        if (Settings.NetMeterAutostart == autostart)
+        {
+            return;
+        }
+
+        Settings.NetMeterAutostart = autostart;
+        Settings.Save();
+    }
+
+    /// <summary>
+    /// Starts the network meter. The call runs on a pool thread: it waits for the UAC prompt, and the window must keep
+    /// painting meanwhile. The meter reports where it is through <see cref="INetMeterControl.StateChanged"/>.
+    /// </summary>
+    public Task<NetMeterState> StartNetMeterAsync() => Task.Run(() => NetMeter.StartAsync());
+
+    public Task StopNetMeterAsync() => Task.Run(NetMeter.Stop);
 
     public void Report(string message) => StatusMessage?.Invoke(message);
 
