@@ -8,6 +8,7 @@
     <RootNamespace>PcMieru.Gui</RootNamespace>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\PCMieru.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- The manifest (also PerMonitorV2) is the source of truth so the setting applies before any window exists; WFO0003 only asks to move it. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
@@ -25,6 +26,11 @@
     <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
     <!-- Not linked: only built, so PCMieru.SensorHost.exe lands next to the app (the GPU live values are read by that process). -->
     <ProjectReference Include="..\PcMieru.SensorHost\PcMieru.SensorHost.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The same .ico as the exe, for the window and taskbar (a Form shows the WinForms default icon otherwise). -->
+    <EmbeddedResource Include="..\..\assets\PCMieru.ico" LogicalName="PCMieru.ico" />
   </ItemGroup>
 
   <ItemGroup>
