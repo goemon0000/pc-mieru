@@ -195,6 +195,7 @@ pcmi health  [--json]                            ストレージの健康（deni
 pcmi perf    [--sample 1s] [--json]              全体の値
 pcmi watch   [--interval 1s] [--top N] [--ndjson]
 pcmi report  [--duration 10s] [--format markdown|json] [--no-redact] [-o file]
+pcmi parts   --share [--include-usb] [-o file]   部品の型番だけの JSON（pcm-parts/1、9.1）
 pcmi kill    --pid N [--started-at T] [--tree] | --name X [--all]
 pcmi priority --pid N <idle|below|normal|above|high>   （realtime は出さない）
 pcmi eco     --pid N on|off                      効率モード
@@ -209,6 +210,42 @@ pcmi version
 - `ps` の CPU は差分が要るので、GUI が動いていなければ `--sample`（既定 1 秒）だけ測ってから返す。GUI が動いているときの共有は v1.x。
 - 人向けの表は端末幅に合わせ、日本語の幅（全角＝2）を考慮。`--json` は §3 の形。
 - 伏せ字（report と MCP の既定）: ユーザー名→`<user>`、ユーザーのフォルダ→`%USERPROFILE%`、PC 名→`<host>`、シリアル・MAC・IP・SSID→伏せる、コマンドラインは出さない。
+
+### 9.1 型番だけの一覧（`pcmi parts --share`・形式 `pcm-parts/1`）
+
+web-autoai.com の、ブラウザの中だけで動く道具（電力・互換性）に貼るための、**部品の型番だけ**の JSON。伏せ字ではなく**許可リスト**で作る（`PartsShare.Build` が `HardwareInfo` から決めた項目だけを専用の record に写し、手書きの書き出しがその record だけを書く）。ハードウェアの型に後から項目が増えても、ここへは混ざらない。
+
+- コマンド: `pcmi parts --share [--include-usb] [-o file]`。`--share` が無いときは使い方の誤り（終了コード 2）。既定は標準出力へ（診断は stderr）。`-o` は UTF-8（BOM なし）でファイルへ、末尾に改行 1 つ。サイトを開く・送る機能は持たない（`--url` は付けない。貼るのは利用者）。
+- GUI: 「PC の構成」の「型番だけコピー（サイト用）」。押すと、**コピーされる JSON そのもの**を小さなダイアログに表示し、「シリアル番号・MAC・PC の名前などは含みません」と添える。コピーはダイアログの［コピー］を押したときだけ。GUI では USB を含めない。
+- 読む分類は CPU・メモリ・ボード・GPU・ストレージ・ディスプレイ・バッテリー（形態の判定用）だけ（`--include-usb` で USB を足す）。ネットワーク・オーディオ・Windows の分類は**要求しない**（MAC・IP・SSID・PC 名・ユーザー名を、そもそも読まない）。
+
+```
+{
+  "format": "pcm-parts/1",
+  "app": "PCMieru 0.2.0",
+  "cpu":      [ { "name", "vendor", "cpuid": "ファミリ-モデル-ステッピング（10 進）" } ],
+  "board":    { "manufacturer", "product", "revision" },
+  "memory":   [ { "manufacturer", "partNumber", "type", "capacityBytes", "count" } ],
+  "gpus":     [ { "name", "pciId": "VVVV:DDDD", "subsystemId": "VVVV:DDDD",
+                  "observed": { "nvmlDefaultPowerLimitW", "formFactor": "desktop|laptop|unknown" } } ],
+  "storage":  [ { "model", "bus", "capacityBytes", "count" } ],
+  "displays": [ { "edidManufacturer", "edidProductCode", "edidModel", "physicalWidthMm", "physicalHeightMm" } ],
+  "usb":      [ { "vid", "pid" } ]            // --include-usb のときだけ
+}
+```
+
+- 1 部品 1 行。配列は常にある（空なら `[]`）。`board` は 1 項目も分からないときだけ無い。分からない項目は**省く**（空文字や 0 は書かない）。
+- メモリ・ストレージは、メーカー・型番・種類・容量が同じ物を 1 件にまとめて `count`。空きスロット（容量 0）は数えない。種類の綴りは `DDR3/4/5`・`LPDDR4/5`、バスは `NVMe`・`SATA`・`USB`・`RAID`・`SCSI`。取り外せる USB 記憶装置も `storage` に `USB` として出る。
+- `cpuid` は 10 進の「ファミリ-モデル-ステッピング」（Windows の「Family 25 Model 97 Stepping 2」なら `25-97-2`）。16 進ではない。
+- `pciId`・`subsystemId` は `VVVV:DDDD`（16 進 4 桁ずつ・大文字）で、その形の物だけ。Windows の「Microsoft Basic Render Driver」（Software のアダプタ）は載せない。
+- `observed` は **NVIDIA で、ボード既定の電力上限（NVML の default power limit）が正しく読めたときだけ**。値は 10〜1500 W の範囲だけ採る。`formFactor` は SMBIOS の筐体の種類（ノート型系→laptop・デスクトップ型系→desktop・それ以外や読めないとき→unknown）と、システムバッテリーの有無で決める（**バッテリーがあれば筐体がデスクトップ型でも laptop**）。ボード既定の W は、GPU の電力上限の `Detail` 文の「board default N W」から `GpuSensorMerge.TryParseBoardDefaultWatts` で読み戻す（書く側と読む側は同じファイルに置き、往復を試験する）。
+- `displays`: EDID の製造元 3 文字（バイト 8〜9）・製品コード（**バイト 10〜11 をリトルエンディアンで 4 桁の 16 進**、例 `1234`）・モニター名（**記述子 0xFC だけ**。0xFF＝シリアル、0xFE＝指定なしの文字は読まない。0xFC が無ければ `edidModel` は省く）・物理サイズ mm。EDID から身元が 1 つも取れない画面は載せない。Windows 側の名前（`DisplayDevice.Model`）は使わない。
+- `usb`（任意）: VID・PID の 4 桁（大文字）だけ。重複は 1 件に、並びは昇順。機器の名前・階層・メーカー名は載せない。
+- 文字は印字できる文字だけにし（制御・書式・私用・単独の半端な文字を捨てる）、空白を 1 つにまとめ、前後を削って、**64 文字まで**。
+
+**絶対に入れない物**: シリアル番号（マザー・メモリ・ストレージ・GPU・ディスプレイ・USB・BIOS・筐体）・MAC・IP・DNS・SSID・PC の名前・ユーザー名・ファイルやフォルダのパス・日時（収集時刻・BIOS の日付・製造年週を含む）・ドライバ／BIOS／ファームウェア／OS の版・EDID の生のバイトや記述子・USB 機器の名前・プロセス情報。`app` に入れるのは PCミエル自身の版だけ。
+
+- 試験: 取りこぼしの検出は、シリアル・MAC・名前・パス・版・日時の全部の欄に固有の目印を入れた偽の PC から文書を作り、目印が 1 つも出ないことを見る（併せて、その目印が**全部入りの JSON には出る**ことと、検出器が漏れを本当に拾うことを確かめる）。EDID は、0xFF と 0xFE に目印の文字を入れた作り物と実機の EDID を実際の `DisplayBuilder` に通して、その文字が出ないことを見る。CLI は Fake の PC で、GUI はダイアログの表示とコピーの一致・ボタン・文言で。
 
 ## 10. MCP（`pcmieru mcp`）
 

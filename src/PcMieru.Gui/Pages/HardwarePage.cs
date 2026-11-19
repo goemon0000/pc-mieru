@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Share;
 
 namespace PcMieru.Gui;
 
@@ -22,6 +23,7 @@ internal sealed class HardwarePage : PageBase
     private readonly Button _reload = new() { Name = "partsReload", AutoSize = true };
     private readonly Button _copyText = new() { Name = "partsCopyText", AutoSize = true };
     private readonly Button _copyJson = new() { Name = "partsCopyJson", AutoSize = true };
+    private readonly Button _share = new() { Name = "partsShare", AutoSize = true };
     private readonly CheckBox _redact = new() { Name = "partsRedact", AutoSize = true, Checked = true };
     private readonly Label _stamp = new() { AutoSize = true, Name = "partsStamp", Margin = new Padding(0, 0, 16, 0) };
     private readonly ToneLabel _hint = new() { AutoSize = true, Name = "partsHint" };
@@ -75,9 +77,11 @@ internal sealed class HardwarePage : PageBase
         _reload.MinimumSize = new Size(Px(88), Px(30));
         _copyText.MinimumSize = new Size(Px(88), Px(30));
         _copyJson.MinimumSize = new Size(Px(88), Px(30));
+        _share.MinimumSize = new Size(Px(88), Px(30));
         _reload.Click += (_, _) => RefreshNow();
         _copyText.Click += (_, _) => Copy(json: false);
         _copyJson.Click += (_, _) => Copy(json: true);
+        _share.Click += (_, _) => Run(ShareAsync);
         _redact.Checked = Context.Services.Redactor.Enabled && context.Settings.GetBool("hw.redact", true);
         _redact.Enabled = Context.Services.Redactor.Enabled;
         _redact.CheckedChanged += (_, _) => context.Settings.SetBool("hw.redact", _redact.Checked);
@@ -88,6 +92,7 @@ internal sealed class HardwarePage : PageBase
         _redact.TabIndex = 3;
         _copyText.TabIndex = 4;
         _copyJson.TabIndex = 5;
+        _share.TabIndex = 6;
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Name = "partsBody" };
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(260)));
@@ -101,6 +106,11 @@ internal sealed class HardwarePage : PageBase
         var pad = Px(12);
         Controls.Add(body);
         Controls.Add(PageLayout.Footer("partsFooter", pad, _stamp, _hint));
+        // The share button has a bar of its own under the first one: the first bar already fills the page's width at the window's
+        // smallest size, and a button this wide would push the copy buttons off the right edge.
+        var shareBar = PageLayout.Bar("partsShareBar", pad, [_share], []);
+        shareBar.Padding = new Padding(pad, 0, pad, pad * 2 / 3);
+        Controls.Add(shareBar);
         Controls.Add(PageLayout.Bar("partsBar", pad, [_reload], [_redact, _copyText, _copyJson]));
         ApplyLanguage();
     }
@@ -141,10 +151,12 @@ internal sealed class HardwarePage : PageBase
         _reload.Text = Strings.Get("gui.common.reload");
         _copyText.Text = Strings.Get("gui.hw.copy.text");
         _copyJson.Text = Strings.Get("gui.hw.copy.json");
+        _share.Text = Strings.Get("gui.hw.share");
         _redact.Text = Strings.Get("gui.hw.redact");
         _tips.SetToolTip(_redact, Strings.Get(Context.Services.Redactor.Enabled ? "gui.hw.redact.tip" : "gui.hw.redact.off"));
         _tips.SetToolTip(_copyText, Strings.Get("gui.hw.copy.tip"));
         _tips.SetToolTip(_copyJson, Strings.Get("gui.hw.copy.tip"));
+        _tips.SetToolTip(_share, Strings.Get("gui.hw.share.tip"));
         _tree.AccessibleName = Strings.Get("gui.hw.tree");
         _grid.AccessibleName = Strings.Get("gui.nav.hardware");
         string[] keys = ["item", "value", "status"];
@@ -468,6 +480,22 @@ internal sealed class HardwarePage : PageBase
         var redact = _redact.Checked && Context.Services.Redactor.Enabled;
         Context.CopyText(BuildCopy(json, redact), redact ? "gui.hw.copied.redacted" : "gui.hw.copied.plain");
     }
+
+    /// <summary>
+    /// "型番だけコピー（サイト用）": collects the model-numbers document and shows it in a dialog. Nothing is copied or sent until the person
+    /// presses Copy in the dialog. Kept separate from the page's own tree so the document can never pick up fields the page shows.
+    /// </summary>
+    internal async Task ShareAsync()
+    {
+        var json = await PartsShare.CreateJsonAsync(
+            (category, ct) => Context.Services.Hardware.GetAsync(category, ct),
+            AppInfo.Version,
+            includeUsb: false).ConfigureAwait(true);
+        PartsShareDialog.Open(FindForm(), Context.Theme, json, text => Context.CopyText(text, "gui.common.copied"));
+    }
+
+    /// <summary>The share button, for tests.</summary>
+    internal Button ShareButton => _share;
 
     private readonly record struct Line(PartsRow? Row, int ExpertCount);
 }
