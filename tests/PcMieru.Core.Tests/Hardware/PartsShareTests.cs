@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using PcMieru.Core.Hardware;
+using PcMieru.Core.Hardware.Collectors;
 using PcMieru.Core.Hardware.Model;
 using PcMieru.Core.Hardware.Sensors;
 using PcMieru.Core.Hardware.Share;
@@ -41,6 +42,17 @@ public partial class PartsShareTests
 
     private static Value<IReadOnlyList<string>> Strings(params string[] items) => Value.Ok<IReadOnlyList<string>>(items, "test");
 
+    /// <summary>A drive whose model, bus and size are read; every other text holds a marker.</summary>
+    private static StorageDevice Drive(Marks m, int number, string model, Value<StorageBus> bus, long bytes, bool removable = false) => new(
+        number, Ok(model, m), Plain(m.Next("DRIVESERIAL")), Plain(m.Next("DRIVEFIRMWARE")), bus, Ok(bytes, m), Plain(true), Plain("GPT"),
+        [new StorageVolume(m.Next("VOLUMELETTER"), m.Next("VOLUMELABEL"), "NTFS", Plain(1L), Plain(1L))],
+        new StorageDetails(
+            Plain("SSD"), Plain(512), Plain(4096), Plain(removable), [new StoragePartition(1, 0, 1, m.Next("PARTITIONTYPE"), "GPT")],
+            Plain(m.Next("STORAGEDRIVER")), Plain(4), Plain(4), Plain(4), Plain(4)));
+
+    private static StorageDevice Drive(Marks m, int number, string model, StorageBus bus, long bytes, bool removable = false) =>
+        Drive(m, number, model, Ok(bus, m), bytes, removable);
+
     /// <summary>A fully populated tree: the exported fields hold real model numbers, every other text holds a marker.</summary>
     private static HardwareInfo Loaded(Marks m, DateTime? collectedAtUtc = null)
     {
@@ -61,8 +73,9 @@ public partial class PartsShareTests
             ],
             new MemoryDetails(Plain(1L), Plain(m.Next("ECC")), Plain(m.Next("MEMLOCATION")), Plain(1)));
 
+        // The board "revision" field of SMBIOS is free text: some boards put an EC firmware version or a per-unit id in it.
         var board = new BoardHardware(
-            Ok("ASUSTeK COMPUTER INC.", m), Ok("TUF GAMING X670E-PLUS WIFI", m), Ok("Rev 1.xx", m), Plain(m.Next("BOARDSERIAL")),
+            Ok("ASUSTeK COMPUTER INC.", m), Ok("TUF GAMING X670E-PLUS WIFI", m), Ok("KBC Version 08.4F.00", m), Plain(m.Next("BOARDSERIAL")),
             Plain(m.Next("BIOSVENDOR")), Plain(m.Next("BIOSVERSION")), Plain(m.Next("BIOSDATE")), Plain(true), Plain(true), Plain(true), Plain(m.Next("TPMVERSION")),
             new BoardDetails(
                 new SystemIdentity(Plain(m.Next("SYSMAKER")), Plain(m.Next("SYSPRODUCT")), Plain(m.Next("SYSFAMILY")), Plain(m.Next("SYSSKU")), Plain(m.Next("SYSVERSION")), Plain(m.Next("SYSSERIAL"))),
@@ -84,18 +97,15 @@ public partial class PartsShareTests
             Gpu("Microsoft Basic Render Driver", "Microsoft", "1414:008C", "0000:0000", "Software", null),
         };
 
-        StorageDevice Drive(int number, string model, StorageBus bus, long bytes) => new(
-            number, Ok(model, m), Plain(m.Next("DRIVESERIAL")), Plain(m.Next("DRIVEFIRMWARE")), Ok(bus, m), Ok(bytes, m), Plain(true), Plain("GPT"),
-            [new StorageVolume(m.Next("VOLUMELETTER"), m.Next("VOLUMELABEL"), "NTFS", Plain(1L), Plain(1L))],
-            new StorageDetails(
-                Plain("SSD"), Plain(512), Plain(4096), Plain(false), [new StoragePartition(1, 0, 1, m.Next("PARTITIONTYPE"), "GPT")],
-                Plain(m.Next("STORAGEDRIVER")), Plain(4), Plain(4), Plain(4), Plain(4)));
-
         var storage = new List<StorageDevice>
         {
-            Drive(0, "Samsung SSD 980 PRO 2TB", StorageBus.Nvme, 2_000_398_934_016),
-            Drive(1, "Samsung SSD 980 PRO 2TB", StorageBus.Nvme, 2_000_398_934_016),
-            Drive(2, "TOSHIBA MG04ACA200E", StorageBus.Sata, 2_000_398_934_016),
+            Drive(m, 0, "Samsung SSD 980 PRO 2TB", StorageBus.Nvme, 2_000_398_934_016),
+            Drive(m, 1, "Samsung SSD 980 PRO 2TB", StorageBus.Nvme, 2_000_398_934_016),
+            Drive(m, 2, "TOSHIBA MG04ACA200E", StorageBus.Sata, 2_000_398_934_016),
+            // What was plugged in or mounted is not part of the PC (each kind has its own test); these ride along in every test that uses the tree.
+            Drive(m, 3, "SanDisk Cruzer Blade", StorageBus.Usb, 15_376_000_000, removable: true),
+            Drive(m, 4, "Samsung PSSD T7", StorageBus.Usb, 1_000_204_886_016),
+            Drive(m, 5, "Msft Virtual Disk", StorageBus.Virtual, 68_719_476_736),
         };
 
         var network = new List<NetworkAdapter>
@@ -110,8 +120,8 @@ public partial class PartsShareTests
             new(Plain(m.Next("DISPLAYMAKERTEXT")), Plain(m.Next("DISPLAYMODELTEXT")), Plain(2024), Plain(14), Plain(597), Plain(336),
                 Plain("2560x1440 @ 165 Hz"), Plain(m.Next("CURRENTRES")), Plain(165.0), Plain(false), Plain(DisplayConnection.DisplayPort), Plain(m.Next("DISPLAYGPUNAME")),
                 new DisplayDetails(
-                    Plain("WAM"), Plain(0x2700), Plain(m.Next("EDIDSERIAL")), Plain(m.Next("EDIDVERSION")), Plain(true), Plain(1), Plain(27.0), Plain(m.Next("INPUTTYPE")),
-                    Plain(8), Plain("UG27PJ"), Plain(48.0), Plain(165.0), Plain(true), Plain(true), Plain(400))),
+                    Ok("WAM", m), Ok(0x2700, m), Plain(m.Next("EDIDSERIAL")), Plain(m.Next("EDIDVERSION")), Plain(true), Plain(1), Plain(27.0), Plain(m.Next("INPUTTYPE")),
+                    Plain(8), Ok("UG27PJ", m), Plain(48.0), Plain(165.0), Plain(true), Plain(true), Plain(400))),
         };
 
         var audio = new List<AudioEndpoint>
@@ -128,8 +138,9 @@ public partial class PartsShareTests
             new(Plain(m.Next("USBNAME3")), Plain("1532"), Plain("0003"), Plain(m.Next("USBMAKER3")), Plain(m.Next("USBPARENT3"))),
         };
 
+        // A battery that is not a system battery: the USB UPS of a desktop (Windows lists it as a battery).
         var battery = new BatteryHardware(Plain(80), Plain(true), Plain(1L), Plain(1L), Plain(1.0), Plain(100),
-            new BatteryDetails(Plain(m.Next("CHEMISTRY")), Plain(m.Next("BATTERYSTATUS")), Plain(1), Plain(1)));
+            new BatteryDetails(Plain(m.Next("CHEMISTRY")), Plain(m.Next("BATTERYSTATUS")), Plain(1), Plain(1), Plain(false)));
 
         var os = new OsHardware(Plain(m.Next("OSNAME")), Plain(m.Next("OSVERSION")), Plain(m.Next("OSBUILD")), Plain(m.Next("OSARCH")), Plain(123_456L), Plain(m.Next("POWERPLAN")), Plain(true), Plain(true),
             new OsDetails(Plain(m.Next("OSEDITION")), Plain(m.Next("OSDISPLAYVERSION")), Plain(1), Plain(m.Next("BOOTTIME")), Plain(m.Next("LOCALE"))));
@@ -253,8 +264,8 @@ public partial class PartsShareTests
             }
         }
 
-        Assert.Equal(["manufacturer", "product", "revision"], root.GetProperty("board").EnumerateObject().Select(p => p.Name));
-        Assert.Equal(["nvmlDefaultPowerLimitW", "formFactor"], root.GetProperty("gpus")[0].GetProperty("observed").EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["manufacturer", "product"], root.GetProperty("board").EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["nvmlDefaultPowerLimitW", "formFactor"], root.GetProperty("gpus")[1].GetProperty("observed").EnumerateObject().Select(p => p.Name));
         Assert.Equal(["format", "app", "cpu", "board", "memory", "gpus", "storage", "displays", "usb"], root.EnumerateObject().Select(p => p.Name));
     }
 
@@ -321,6 +332,14 @@ public partial class PartsShareTests
         Assert.Equal(64, PartsShare.Clean(new string('x', 62) + " yz")!.Length);
         // An unpaired surrogate and a private-use character are not printable text.
         Assert.Equal("ab", PartsShare.Clean("a\ud800b"));
+
+        // Every surrogate goes, so a whole pair (an emoji outside the Basic Multilingual Plane) is dropped as well.
+        var emoji = char.ConvertFromUtf32(0x1F600);
+        Assert.Equal(2, emoji.Length);
+        Assert.Equal("ab", PartsShare.Clean("a" + emoji + "b"));
+        Assert.Equal("a b", PartsShare.Clean("a " + emoji + " b"));
+        Assert.Null(PartsShare.Clean(emoji));
+        Assert.Equal("ab", PartsShare.Clean("a" + (char)0xE000 + "b"));
     }
 
     [Fact]
@@ -505,25 +524,27 @@ public partial class PartsShareTests
     {
         var gpus = Parse(Json(Loaded(new Marks()))).GetProperty("gpus").EnumerateArray().ToList();
 
+        // Sorted by PCI id, not in the order Windows listed them (NVIDIA was first there): 1002 before 10DE.
         Assert.Equal(2, gpus.Count);
-        Assert.Equal("NVIDIA GeForce RTX 5070", gpus[0].GetProperty("name").GetString());
-        Assert.Equal("10DE:2F04", gpus[0].GetProperty("pciId").GetString());
-        Assert.Equal("1043:89E6", gpus[0].GetProperty("subsystemId").GetString());
-        Assert.Equal("AMD Radeon(TM) Graphics", gpus[1].GetProperty("name").GetString());
-        Assert.Equal("1002:164E", gpus[1].GetProperty("pciId").GetString());
+        Assert.Equal("AMD Radeon(TM) Graphics", gpus[0].GetProperty("name").GetString());
+        Assert.Equal("1002:164E", gpus[0].GetProperty("pciId").GetString());
+        Assert.Equal("NVIDIA GeForce RTX 5070", gpus[1].GetProperty("name").GetString());
+        Assert.Equal("10DE:2F04", gpus[1].GetProperty("pciId").GetString());
+        Assert.Equal("1043:89E6", gpus[1].GetProperty("subsystemId").GetString());
         Assert.DoesNotContain("Basic Render", Json(Loaded(new Marks())), StringComparison.Ordinal);
     }
 
     [Fact]
     public void ObservedIsOnlyForNvidiaWithAValidBoardDefault()
     {
-        // A desktop: the loaded tree has a battery (for the privacy markers), and a battery would make it a laptop.
-        var loaded = Loaded(new Marks()) with { Battery = Value.Unsupported<BatteryHardware>("test", "no battery") };
+        // A desktop with a USB UPS: the loaded tree has a battery (for the privacy markers), and that does not make it a laptop.
+        var loaded = Loaded(new Marks());
+        Assert.True(loaded.Battery.IsOk);
         var gpus = loaded.Gpus.Data!.ToList();
         var nvidia = gpus[0];
 
         // As built: NVIDIA with "board default 250 W".
-        var observed = Parse(Json(loaded)).GetProperty("gpus")[0].GetProperty("observed");
+        var observed = Parse(Json(loaded)).GetProperty("gpus")[1].GetProperty("observed");
         Assert.Equal(250, observed.GetProperty("nvmlDefaultPowerLimitW").GetDouble());
         Assert.Equal("desktop", observed.GetProperty("formFactor").GetString());
 
@@ -545,15 +566,43 @@ public partial class PartsShareTests
         Parse(Json(info with { Gpus = Value.Ok<IReadOnlyList<GpuHardware>>([gpu], "test") })).GetProperty("gpus")[0];
 
     [Fact]
-    public void AMalformedPciIdIsLeftOutNotPassedOn()
+    public void AMalformedSubsystemIdIsLeftOutNotPassedOn()
     {
         var loaded = Loaded(new Marks());
-        var gpu = loaded.Gpus.Data![0] with { PciId = Plain("PCI\\VEN_10DE&DEV_0000") };
+        var gpu = loaded.Gpus.Data![0];
         var element = OneGpu(loaded, gpu with { Details = gpu.Details! with { SubsystemId = Plain("12345") } });
 
-        Assert.False(element.TryGetProperty("pciId", out _));
+        Assert.Equal("10DE:2F04", element.GetProperty("pciId").GetString());
         Assert.False(element.TryGetProperty("subsystemId", out _));
         Assert.Equal("NVIDIA GeForce RTX 5070", element.GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("PCI\\VEN_10DE&DEV_0000")]
+    [InlineData("10DE-2F04")]
+    [InlineData("10DE:2F0")]
+    [InlineData("zzzz:2F04")]
+    public void AGpuWithoutAUsablePciIdIsNotListed(string? pciId)
+    {
+        // Remote Desktop, an indirect display driver and other virtual adapters have no PCI id: they are not a card in a slot.
+        var marks = new Marks();
+        var loaded = Loaded(marks);
+        var remote = loaded.Gpus.Data![0] with
+        {
+            Name = Ok("Microsoft Remote Display Adapter", marks),
+            Vendor = Ok("Microsoft", marks),
+            PciId = pciId is null ? Bad<string>() : Plain(pciId),
+            PowerLimitWatts = Bad<double>(),
+        };
+        var info = loaded with { Gpus = Value.Ok<IReadOnlyList<GpuHardware>>([loaded.Gpus.Data![0], remote], "test") };
+
+        var json = Json(info);
+        var gpus = Parse(json).GetProperty("gpus").EnumerateArray().ToList();
+        Assert.Single(gpus);
+        Assert.Equal("NVIDIA GeForce RTX 5070", gpus[0].GetProperty("name").GetString());
+        Assert.DoesNotContain("Remote Display", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -566,45 +615,98 @@ public partial class PartsShareTests
         Assert.Equal(0, Parse(Json(info)).GetProperty("gpus").GetArrayLength());
     }
 
-    [Theory]
-    [InlineData("Desktop", false, "desktop")]
-    [InlineData("Tower", false, "desktop")]
-    [InlineData("Mini PC", false, "desktop")]
-    [InlineData("Laptop", false, "laptop")]
-    [InlineData("Notebook", false, "laptop")]
-    [InlineData("Convertible", false, "laptop")]
-    [InlineData("Desktop", true, "laptop")]
-    [InlineData("Main server chassis", false, "unknown")]
-    [InlineData("Other", false, "unknown")]
-    [InlineData("Other (12)", false, "unknown")]
-    [InlineData(null, false, "unknown")]
-    [InlineData(null, true, "laptop")]
-    public void FormFactorComesFromTheChassisAndTheBattery(string? chassis, bool battery, string expected)
+    [Fact]
+    public void AGpuWithOnlyAPciIdIsListedByItsId()
     {
         var loaded = Loaded(new Marks());
+        var bare = loaded.Gpus.Data![0] with { Name = Bad<string>(), Details = null, PowerLimitWatts = Bad<double>() };
+
+        var element = OneGpu(loaded, bare);
+        Assert.Equal(["pciId"], element.EnumerateObject().Select(p => p.Name));
+        Assert.Equal("10DE:2F04", element.GetProperty("pciId").GetString());
+    }
+
+    /// <summary>How the battery category reads on the PC: none, a UPS (a battery that is not the system battery), the system battery, or a driver that says nothing.</summary>
+    private static Value<BatteryHardware> BatteryOf(string kind) => kind switch
+    {
+        "none" => Value.Unsupported<BatteryHardware>("test", "no battery in this PC"),
+        "ups" => Value.Ok(new BatteryHardware(Plain(100), Plain(true), Plain(1L), Plain(1L), Plain(1.0), Plain(1), new BatteryDetails(Plain("c"), Plain("s"), Plain(1), Plain(1), Plain(false))), "test"),
+        "system" => Value.Ok(new BatteryHardware(Plain(80), Plain(true), Plain(1L), Plain(1L), Plain(1.0), Plain(1), new BatteryDetails(Plain("c"), Plain("s"), Plain(1), Plain(1), Plain(true))), "test"),
+        "nodetails" => Value.Ok(new BatteryHardware(Plain(80), Plain(true), Plain(1L), Plain(1L), Plain(1.0), Plain(1)), "test"),
+        "unread" => Bad<BatteryHardware>(),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    private static HardwareInfo WithChassis(HardwareInfo loaded, string? chassis, string battery)
+    {
         var board = loaded.Board.Data!;
         var details = board.Details! with
         {
             Chassis = board.Details.Chassis with { Type = chassis is null ? Bad<string>() : Plain(chassis) },
         };
-        var info = loaded with
-        {
-            Board = Plain(board with { Details = details }),
-            Battery = battery ? loaded.Battery : Value.Unsupported<BatteryHardware>("test", "no battery"),
-        };
+        return loaded with { Board = Plain(board with { Details = details }), Battery = BatteryOf(battery) };
+    }
+
+    [Theory]
+    // A known chassis decides, whatever the battery says: a desktop with a USB UPS stays a desktop.
+    [InlineData("Desktop", "none", "desktop")]
+    [InlineData("Desktop", "ups", "desktop")]
+    [InlineData("Desktop", "system", "desktop")]
+    [InlineData("Tower", "ups", "desktop")]
+    [InlineData("Tower", "nodetails", "desktop")]
+    [InlineData("Mini PC", "ups", "desktop")]
+    [InlineData("All in one", "ups", "desktop")]
+    [InlineData("Laptop", "none", "laptop")]
+    [InlineData("Laptop", "ups", "laptop")]
+    [InlineData("Laptop", "unread", "laptop")]
+    [InlineData("Notebook", "system", "laptop")]
+    [InlineData("Convertible", "none", "laptop")]
+    // Another known chassis (server, embedded) is neither, and the battery does not turn it into a laptop.
+    [InlineData("Main server chassis", "none", "unknown")]
+    [InlineData("Main server chassis", "system", "unknown")]
+    [InlineData("Rack mount", "ups", "unknown")]
+    [InlineData("Embedded PC", "system", "unknown")]
+    // A chassis that says nothing: only a battery that reports itself as the system battery makes it a laptop.
+    [InlineData("Other", "none", "unknown")]
+    [InlineData("Other", "ups", "unknown")]
+    [InlineData("Other", "nodetails", "unknown")]
+    [InlineData("Other", "system", "laptop")]
+    [InlineData("Unknown", "ups", "unknown")]
+    [InlineData("Unknown", "system", "laptop")]
+    [InlineData("Other (12)", "ups", "unknown")]
+    [InlineData("Other (12)", "system", "laptop")]
+    [InlineData(null, "none", "unknown")]
+    [InlineData(null, "ups", "unknown")]
+    [InlineData(null, "nodetails", "unknown")]
+    [InlineData(null, "unread", "unknown")]
+    [InlineData(null, "system", "laptop")]
+    public void FormFactorComesFromTheChassisAndOnlyThenFromASystemBattery(string? chassis, string battery, string expected)
+    {
+        var info = WithChassis(Loaded(new Marks()), chassis, battery);
 
         Assert.Equal(expected, PartsShare.FormFactorOf(info));
         Assert.Equal(expected, OneGpu(info, info.Gpus.Data![0]).GetProperty("observed").GetProperty("formFactor").GetString());
     }
 
     [Fact]
+    public void ADesktopWithAUsbUpsIsNotALaptopEvenWhenTheUpsLooksLikeASystemBattery()
+    {
+        // The bug this guards: "Windows lists a battery, so it is a laptop". The chassis says tower, the UPS is just a battery device.
+        foreach (var chassis in new[] { "Desktop", "Tower", "Mini tower", "Low profile desktop" })
+        {
+            Assert.Equal("desktop", PartsShare.FormFactorOf(WithChassis(Loaded(new Marks()), chassis, "ups")));
+            Assert.Equal("desktop", PartsShare.FormFactorOf(WithChassis(Loaded(new Marks()), chassis, "system")));
+        }
+    }
+
+    [Fact]
     public void EveryChassisTypeNameIsClassifiedOnPurpose()
     {
         // BoardCollector.ChassisType can gain a name; this fails until the new name is put in one of the lists on purpose.
-        string[] unknownOnPurpose = ["Main server chassis", "Rack mount", "IoT gateway", "Embedded PC", "Stick PC", "Other", "Unknown"];
+        string[] unknownOnPurpose = ["Main server chassis", "Rack mount", "IoT gateway", "Embedded PC", "Stick PC"];
         var unclassified = PartsShare.AllChassisNames()
             .Where(name => !PartsShare.LaptopChassis.Contains(name) && !PartsShare.DesktopChassis.Contains(name)
-                           && !unknownOnPurpose.Contains(name) && !name.StartsWith("Other (", StringComparison.Ordinal))
+                           && !unknownOnPurpose.Contains(name) && !PartsShare.IsUnspecifiedChassis(name))
             .Distinct()
             .ToList();
         Assert.True(unclassified.Count == 0, "chassis names with no form factor: " + string.Join(", ", unclassified));
@@ -612,6 +714,18 @@ public partial class PartsShareTests
         var known = PartsShare.AllChassisNames().ToHashSet(StringComparer.Ordinal);
         Assert.All(PartsShare.LaptopChassis.Concat(PartsShare.DesktopChassis), name => Assert.Contains(name, known));
         Assert.Empty(PartsShare.LaptopChassis.Intersect(PartsShare.DesktopChassis));
+        Assert.All(unknownOnPurpose, name => Assert.Contains(name, known));
+    }
+
+    [Fact]
+    public void OnlyTheNamesThatSayNothingAreUnspecifiedChassis()
+    {
+        Assert.True(PartsShare.IsUnspecifiedChassis(BoardCollector.ChassisType(1)));
+        Assert.True(PartsShare.IsUnspecifiedChassis(BoardCollector.ChassisType(2)));
+        Assert.True(PartsShare.IsUnspecifiedChassis(BoardCollector.ChassisType(99)));
+        Assert.False(PartsShare.IsUnspecifiedChassis("Desktop"));
+        Assert.False(PartsShare.IsUnspecifiedChassis("Main server chassis"));
+        Assert.All(PartsShare.LaptopChassis.Concat(PartsShare.DesktopChassis), name => Assert.False(PartsShare.IsUnspecifiedChassis(name)));
     }
 
     // ---- the default power limit text ----

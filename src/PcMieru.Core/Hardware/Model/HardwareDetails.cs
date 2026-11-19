@@ -141,7 +141,8 @@ public sealed record BatteryDetails(
     Value<string> Chemistry,
     Value<string> Status,
     Value<int> VoltageMillivolts,
-    Value<int> RemainingMinutes);
+    Value<int> RemainingMinutes,
+    Value<bool> SystemBattery = default);
 
 public sealed record OsDetails(
     Value<string> Edition,

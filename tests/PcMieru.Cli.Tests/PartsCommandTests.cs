@@ -70,6 +70,17 @@ public class PartsCommandTests
     }
 
     [Fact]
+    public async Task Share_has_no_board_revision_and_lists_the_same_text_every_time()
+    {
+        var first = await CliRun.RunAsync(["parts", "--share", "--include-usb"]);
+        var second = await CliRun.RunAsync(["parts", "--share", "--include-usb"]);
+
+        Assert.DoesNotContain("revision", first.Out, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["manufacturer", "product"], JsonDocument.Parse(first.Out).RootElement.GetProperty("board").EnumerateObject().Select(p => p.Name));
+        Assert.Equal(first.Out, second.Out);
+    }
+
+    [Fact]
     public async Task Include_usb_adds_the_vendor_and_product_ids_only()
     {
         var r = await CliRun.RunAsync(["parts", "--share", "--include-usb"]);

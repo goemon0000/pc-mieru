@@ -100,13 +100,13 @@ internal sealed class PartsShareDialog : Form
 
     /// <summary>
     /// Shows the dialog. With <see cref="Dialogs.AutoAnswer"/> set (smoke run and tests) it only logs, so an automated run never waits
-    /// for a click.
+    /// for a click. Without it nothing is logged: <see cref="Dialogs.Log"/> lives as long as the app, and the document is not kept there.
     /// </summary>
     public static void Open(IWin32Window? owner, ThemeService theme, string json, Func<string, bool> copyToClipboard)
     {
-        Dialogs.Log.Add(Strings.Get("gui.hw.share") + " | " + json);
         if (Dialogs.AutoAnswer is not null)
         {
+            Dialogs.Log.Add(Strings.Get("gui.hw.share") + " | " + json);
             return;
         }
 

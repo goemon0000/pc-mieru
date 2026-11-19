@@ -17,6 +17,7 @@ public sealed class HwCommand : ICliCommand
         ["usb"] = "USB",
         ["raid"] = "RAID",
         ["scsi"] = "SCSI",
+        ["iscsi"] = "iSCSI",
         ["ddr3"] = "DDR3",
         ["ddr4"] = "DDR4",
         ["ddr5"] = "DDR5",

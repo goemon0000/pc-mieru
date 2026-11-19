@@ -38,6 +38,31 @@ public class BatteryTests
     }
 
     [Fact]
+    public void ASystemBatteryIsFlaggedAsOneInTheDetails()
+    {
+        var b = Ok(BatteryBuilder.Build(Power(flag: 1), [Laptop()]));
+        Assert.Equal(ValueStatus.Ok, b.Details!.SystemBattery.Status);
+        Assert.True(b.Details.SystemBattery.Data);
+    }
+
+    [Fact]
+    public void AUsbUpsThatWindowsListsAsABatteryIsNotFlaggedAsTheSystemBattery()
+    {
+        // The power status of a desktop with a UPS does not say "no battery", so the category is Ok; the flag is what tells it from a laptop.
+        var b = Ok(BatteryBuilder.Build(Power(flag: 1), [Laptop(caps: 0)]));
+        Assert.Equal(ValueStatus.Ok, b.Details!.SystemBattery.Status);
+        Assert.False(b.Details.SystemBattery.Data);
+    }
+
+    [Fact]
+    public void AnythingWhoseDriverGivesNoBatteryDetailsIsNotFlaggedAsTheSystemBattery()
+    {
+        var b = Ok(BatteryBuilder.Build(Power(flag: 1), []));
+        Assert.Equal(ValueStatus.Ok, b.Details!.SystemBattery.Status);
+        Assert.False(b.Details.SystemBattery.Data);
+    }
+
+    [Fact]
     public void LaptopBatteryReportsChargeCapacityWearAndCycles()
     {
         var b = Ok(BatteryBuilder.Build(Power(ac: 0, flag: 1, percent: 63, life: 5400), [Laptop(state: 2)]));

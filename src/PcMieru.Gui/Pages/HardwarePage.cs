@@ -487,12 +487,45 @@ internal sealed class HardwarePage : PageBase
     /// </summary>
     internal async Task ShareAsync()
     {
-        var json = await PartsShare.CreateJsonAsync(
-            (category, ct) => Context.Services.Hardware.GetAsync(category, ct),
-            AppInfo.Version,
-            includeUsb: false).ConfigureAwait(true);
-        PartsShareDialog.Open(FindForm(), Context.Theme, json, text => Context.CopyText(text, "gui.common.copied"));
+        // One at a time: the button is off while the list is being collected and while the dialog is open, and a second call that
+        // gets past it anyway (a keyboard repeat, a test) does nothing.
+        if (_sharing)
+        {
+            return;
+        }
+
+        _sharing = true;
+        _share.Enabled = false;
+        try
+        {
+            string json;
+            try
+            {
+                json = await PartsShare.CreateJsonAsync(ShareReader ?? DefaultShareReader, AppInfo.Version, includeUsb: false).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+            {
+                // The status bar is easy to miss: say it where the person is looking.
+                Dialogs.Info(FindForm(), Context.Theme, Strings.Get("gui.hw.share"), Strings.Format("gui.hw.share.error", Fmt.Dict(("error", ex.Message))));
+                return;
+            }
+
+            PartsShareDialog.Open(FindForm(), Context.Theme, json, text => Context.CopyText(text, "gui.common.copied"));
+        }
+        finally
+        {
+            _sharing = false;
+            _share.Enabled = true;
+        }
     }
+
+    private bool _sharing;
+
+    private Task<HardwareInfo> DefaultShareReader(HardwareCategory category, CancellationToken ct) => Context.Services.Hardware.GetAsync(category, ct);
+
+    /// <summary>Where the share document reads the hardware from. Null means the app's hardware service; tests put their own here.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Func<HardwareCategory, CancellationToken, Task<HardwareInfo>>? ShareReader { get; set; }
 
     /// <summary>The share button, for tests.</summary>
     internal Button ShareButton => _share;

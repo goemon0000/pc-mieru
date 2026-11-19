@@ -37,15 +37,28 @@ public static class PartsShare
             ? [HardwareCategory.Cpu, HardwareCategory.Memory, HardwareCategory.Board, HardwareCategory.Gpu, HardwareCategory.Storage, HardwareCategory.Display, HardwareCategory.Battery, HardwareCategory.Usb]
             : [HardwareCategory.Cpu, HardwareCategory.Memory, HardwareCategory.Board, HardwareCategory.Gpu, HardwareCategory.Storage, HardwareCategory.Display, HardwareCategory.Battery];
 
+    /// <summary>How many more times the GPU category is read when the sensor host had no first reading yet (each read waits for it itself).</summary>
+    internal const int MaxSensorRetries = 1;
+
     /// <summary>
     /// Reads the categories of <see cref="Categories"/> one by one through <paramref name="read"/> and merges them into one
     /// <see cref="HardwareInfo"/> whose other categories are NotCollected. Nothing outside the list is requested, so the network
     /// adapters (MAC, IP, SSID) and the Windows facts (user and PC related) are never even read for this document.
+    /// The board default power limit of an NVIDIA card comes from the sensor host, which can be slow with its very first reading: when
+    /// that reading timed out, the GPU category is read once more (the hardware service waits for the first reading on every read), so
+    /// <c>observed</c> is not missing only because the host was still starting. That is the only wait; if it still has no reading,
+    /// <c>observed</c> is left out.
     /// </summary>
     public static async Task<HardwareInfo> CollectAsync(Func<HardwareCategory, CancellationToken, Task<HardwareInfo>> read, bool includeUsb, CancellationToken ct = default)
     {
         var categories = Categories(includeUsb);
         var infos = await Task.WhenAll(categories.Select(c => read(c, ct))).ConfigureAwait(false);
+        var gpuAt = categories.ToList().IndexOf(HardwareCategory.Gpu);
+        for (var retry = 0; retry < MaxSensorRetries && WaitsForSensorHost(infos[gpuAt]); retry++)
+        {
+            ct.ThrowIfCancellationRequested();
+            infos[gpuAt] = await read(HardwareCategory.Gpu, ct).ConfigureAwait(false);
+        }
 
         HardwareInfo Of(HardwareCategory category)
         {
@@ -77,6 +90,11 @@ public static class PartsShare
             Of(HardwareCategory.Battery).Battery,
             Value.NotCollected<OsHardware>(source, notAsked));
     }
+
+    /// <summary>True when an NVIDIA card has no power limit only because the sensor host had not produced its first reading in time.</summary>
+    private static bool WaitsForSensorHost(HardwareInfo gpuInfo) =>
+        gpuInfo.Gpus.TryGet(out var gpus)
+        && gpus.Any(g => g.Vendor.TryGet(out var vendor) && vendor == "NVIDIA" && g.PowerLimitWatts.Status == ValueStatus.Timeout);
 
     /// <summary>Reads this PC through <paramref name="read"/> and returns the finished JSON text (see <see cref="ToJson"/>).</summary>
     public static async Task<string> CreateJsonAsync(Func<HardwareCategory, CancellationToken, Task<HardwareInfo>> read, string appVersion, bool includeUsb, CancellationToken ct = default) =>
@@ -127,8 +145,9 @@ public static class PartsShare
     }
 
     /// <summary>
-    /// A text cut down to printable characters: control, format, private-use and unpaired characters are dropped, runs of white space
-    /// become one space, the ends are trimmed and the result is cut at <see cref="MaxText"/>. Null when nothing is left.
+    /// A text cut down to printable characters: control, format, private-use, unassigned and every surrogate character are dropped
+    /// (so a character outside the Basic Multilingual Plane, such as an emoji, goes too, even when its surrogate pair is whole),
+    /// runs of white space become one space, the ends are trimmed and the result is cut at <see cref="MaxText"/>. Null when nothing is left.
     /// </summary>
     internal static string? Clean(string? text)
     {
@@ -229,8 +248,9 @@ public static class PartsShare
             return null;
         }
 
-        var result = new PartsBoard(Text(board.Manufacturer), Text(board.Product), Text(board.Revision));
-        return result.Manufacturer is null && result.Product is null && result.Revision is null ? null : result;
+        // The revision is not exported: SMBIOS puts anything in that field, an EC firmware version ("KBC Version 08.4F.00") or a per-unit id.
+        var result = new PartsBoard(Text(board.Manufacturer), Text(board.Product));
+        return result.Manufacturer is null && result.Product is null ? null : result;
     }
 
     private static IReadOnlyList<PartsMemory> Memory(HardwareInfo info)
@@ -300,18 +320,24 @@ public static class PartsShare
                 continue;
             }
 
-            var name = Text(gpu.Name);
+            // An adapter with no PCI id (Remote Desktop, an indirect display driver, a virtual adapter) is not a card in a slot.
             var pci = gpu.PciId.TryGet(out var pciId) && IsPciPair(pciId) ? pciId.ToUpperInvariant() : null;
-            var sub = gpu.Details is { } det && det.SubsystemId.TryGet(out var subId) && IsPciPair(subId) ? subId.ToUpperInvariant() : null;
-            if (name is null && pci is null && sub is null)
+            if (pci is null)
             {
                 continue;
             }
 
+            var name = Text(gpu.Name);
+            var sub = gpu.Details is { } det && det.SubsystemId.TryGet(out var subId) && IsPciPair(subId) ? subId.ToUpperInvariant() : null;
             list.Add(new PartsGpu(name, pci, sub, Observed(gpu, formFactor)));
         }
 
-        return list;
+        // The order Windows lists the adapters in can change from one run to the next; the document must not.
+        return [.. list
+            .OrderBy(g => g.PciId, StringComparer.Ordinal)
+            .ThenBy(g => g.SubsystemId, StringComparer.Ordinal)
+            .ThenBy(g => g.Name, StringComparer.Ordinal)
+            .ThenBy(g => g.Observed?.NvmlDefaultPowerLimitW ?? -1)];
     }
 
     /// <summary>"XXXX:XXXX", four hex digits each side (vendor and device, or subsystem vendor and device).</summary>
@@ -344,6 +370,11 @@ public static class PartsShare
         var groups = new List<PartsStorage>();
         foreach (var drive in drives)
         {
+            if (!IsBuiltIn(drive))
+            {
+                continue;
+            }
+
             var item = new PartsStorage(
                 Text(drive.Model),
                 drive.Bus.TryGet(out var bus) ? BusName(bus) : null,
@@ -365,14 +396,37 @@ public static class PartsShare
             }
         }
 
-        return groups;
+        return [.. groups
+            .OrderBy(s => s.Bus, StringComparer.Ordinal)
+            .ThenBy(s => s.Model, StringComparer.Ordinal)
+            .ThenBy(s => s.CapacityBytes ?? -1)];
+    }
+
+    /// <summary>
+    /// A drive that is a part of this PC. A USB stick or an external disk, any removable medium, a virtual disk (a mounted VHD, a
+    /// hypervisor's disk), an iSCSI target and a Storage Spaces disk are not: they are what the user plugged in or mounted, not what was
+    /// built in. A drive whose bus cannot be read is left out as well, because nothing says it is built in.
+    /// </summary>
+    private static bool IsBuiltIn(StorageDevice drive)
+    {
+        if (drive.Details is { } details && details.Removable.TryGet(out var removable) && removable)
+        {
+            return false;
+        }
+
+        if (!drive.Bus.TryGet(out var bus) || bus is StorageBus.Unknown or StorageBus.Usb or StorageBus.Virtual or StorageBus.Iscsi or StorageBus.Spaces)
+        {
+            return false;
+        }
+
+        // "Msft Virtual Disk", "VMware Virtual disk": a virtual disk that a driver reported on an ordinary bus (a Hyper-V guest says SCSI).
+        return !(Text(drive.Model) is { } model && model.Contains("virtual", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? BusName(StorageBus bus) => bus switch
     {
         StorageBus.Nvme => "NVMe",
         StorageBus.Sata => "SATA",
-        StorageBus.Usb => "USB",
         StorageBus.Raid => "RAID",
         StorageBus.Scsi => "SCSI",
         _ => null,
@@ -417,7 +471,13 @@ public static class PartsShare
             list.Add(new PartsDisplay(maker, code, model, width, height));
         }
 
-        return list;
+        // Windows does not list the monitors in a fixed order; the document does.
+        return [.. list
+            .OrderBy(d => d.EdidManufacturer, StringComparer.Ordinal)
+            .ThenBy(d => d.EdidProductCode, StringComparer.Ordinal)
+            .ThenBy(d => d.EdidModel, StringComparer.Ordinal)
+            .ThenBy(d => d.PhysicalWidthMm ?? -1)
+            .ThenBy(d => d.PhysicalHeightMm ?? -1)];
     }
 
     private static IReadOnlyList<PartsUsb> Usb(HardwareInfo info)
@@ -442,8 +502,11 @@ public static class PartsShare
     // ---- form factor ----
 
     /// <summary>
-    /// "laptop", "desktop" or "unknown". A system battery (the collector already ignores a UPS) or a laptop-like SMBIOS chassis type
-    /// means laptop; a desktop-like chassis type means desktop; anything else (server, embedded, "Other", not readable) is unknown.
+    /// "laptop", "desktop" or "unknown". A known SMBIOS chassis type decides: a laptop-like one is laptop, a desktop-like one is desktop
+    /// (a desktop with a USB UPS stays a desktop, because Windows lists a UPS as a battery), and any other known one (server, embedded)
+    /// is unknown. Only when the chassis says nothing ("Other", "Unknown", not readable) does a system battery decide: laptop if a
+    /// battery device that reports itself as the system battery was seen. A battery value that is merely Ok is not enough, since that
+    /// is also what a UPS gives.
     /// </summary>
     internal static string FormFactorOf(HardwareInfo info)
     {
@@ -453,14 +516,24 @@ public static class PartsShare
             chassis = type;
         }
 
-        var battery = info.Battery.IsOk;
-        if (battery || (chassis is not null && LaptopChassis.Contains(chassis)))
+        if (chassis is not null && !IsUnspecifiedChassis(chassis))
         {
-            return "laptop";
+            if (LaptopChassis.Contains(chassis))
+            {
+                return "laptop";
+            }
+
+            return DesktopChassis.Contains(chassis) ? "desktop" : "unknown";
         }
 
-        return chassis is not null && DesktopChassis.Contains(chassis) ? "desktop" : "unknown";
+        return info.Battery.TryGet(out var battery) && battery.Details is { } d && d.SystemBattery.TryGet(out var system) && system
+            ? "laptop"
+            : "unknown";
     }
+
+    /// <summary>The chassis names that carry no information: SMBIOS 1 and 2, and the types the collector has no name for.</summary>
+    internal static bool IsUnspecifiedChassis(string chassis) =>
+        chassis is "Other" or "Unknown" || chassis.StartsWith("Other (", StringComparison.Ordinal);
 
     // The names are the ones BoardCollector.ChassisType gives; a test walks every SMBIOS chassis type through it so a new name cannot be missed.
     internal static readonly HashSet<string> LaptopChassis = new(StringComparer.Ordinal)
@@ -553,7 +626,6 @@ public static class PartsShare
         w.WriteStartObject();
         Str(w, "manufacturer", b.Manufacturer);
         Str(w, "product", b.Product);
-        Str(w, "revision", b.Revision);
         w.WriteEndObject();
     }
 
@@ -644,7 +716,7 @@ public sealed record PartsDocument(
 
 public sealed record PartsCpu(string? Name, string? Vendor, string? CpuId);
 
-public sealed record PartsBoard(string? Manufacturer, string? Product, string? Revision);
+public sealed record PartsBoard(string? Manufacturer, string? Product);
 
 /// <summary>Modules of the same maker, part number, type and size are one entry with a count.</summary>
 public sealed record PartsMemory(string? Manufacturer, string? PartNumber, string? Type, long? CapacityBytes, int Count);

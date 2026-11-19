@@ -176,6 +176,7 @@ internal static class HardwareStrings
         new("gui.hw.share.note", "シリアル番号・MAC・PC の名前などは含みません", "Serial numbers, MAC addresses, the PC's name and similar are not included"),
         new("gui.hw.share.json", "コピーされる内容（型番だけの一覧）", "What will be copied (model numbers only)"),
         new("gui.hw.share.failed", "コピーできませんでした（クリップボードが使用中です）", "Could not copy (the clipboard is busy)"),
+        new("gui.hw.share.error", "型番の一覧を作れませんでした: {error}", "Could not build the list of model numbers: {error}"),
         new("gui.hw.redact", "個人情報を伏せてコピー", "Hide personal info when copying"),
         new("gui.hw.redact.tip", "シリアル番号・MAC アドレス・IP アドレス・PC 名・ユーザー名を伏せてコピーします。画面の表示は変わりません", "Hides serial numbers, MAC and IP addresses, the PC name and the user name in what you copy. The screen does not change"),
         new("gui.hw.redact.off", "この起動では、個人情報を伏せる機能が切ってあります", "Hiding personal info is turned off for this run"),

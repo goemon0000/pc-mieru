@@ -164,17 +164,67 @@ public class PartsShareDisplayTests
     [Fact]
     public void RealEdidsNeverLeakTheirSerialText()
     {
-        foreach (var fixture in new[] { "edid-ug27pj.bin", "edid-mfg27f4q.bin", "edid-philips-278e1.bin" })
+        // The three captured EDIDs carry no serial of their own (a 32-bit serial of 0 and no 0xFF descriptor), so checking them as they are
+        // would pass without testing anything. Each gets a serial planted in a descriptor slot and in the base block, and the test
+        // insists that the parser did read it: only then does "not in the document" mean something.
+        var planted = 0;
+        foreach (var (fixture, maker, code, model) in new[]
+        {
+            ("edid-ug27pj.bin", "WAM", "2700", "UG27PJ"),
+            ("edid-mfg27f4q.bin", "XEC", "0033", "MFG27F4Q"),
+            ("edid-philips-278e1.bin", "PHL", "C217", "PHL 278E1"),
+        })
         {
             var bytes = HwFixture.Bytes(fixture);
-            var display = DisplayBuilder.Build(Path(), bytes, null, null, 2026);
-            var json = Json(Info(display));
+            Assert.Equal(0, bytes[12] | bytes[13] | bytes[14] | bytes[15]);
 
+            // Slot 1 is a spare timing or a dummy descriptor in all three; overwrite it with the serial text.
+            EdidParserTests.TextDescriptor(bytes, 1, 0xFF, "PLANTSER12345");
+            bytes[12] = 0x15;
+            bytes[13] = 0xCD;
+            bytes[14] = 0x5B;
+            bytes[15] = 0x07;
+            EdidParserTests.Fix(bytes);
+
+            var display = DisplayBuilder.Build(Path(), bytes, null, null, 2026);
             var serial = display.Details!.SerialNumber;
-            if (serial.TryGet(out var text) && text.Length >= 4)
+            Assert.True(serial.TryGet(out var text) && text.Length >= 4, fixture + ": the planted serial was not read, so the check below would be vacuous");
+            Assert.Equal("PLANTSER12345", text);
+            planted++;
+
+            var json = Json(Info(display));
+            foreach (var secret in new[] { text, "PLANTSER", "123456789", "075BCD15" })
             {
-                Assert.DoesNotContain(text, json, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(secret, json, StringComparison.OrdinalIgnoreCase);
             }
+
+            // The model stays what the real descriptor says.
+            var only = Assert.Single(Displays(json).EnumerateArray());
+            Assert.Equal(maker, only.GetProperty("edidManufacturer").GetString());
+            Assert.Equal(code, only.GetProperty("edidProductCode").GetString());
+            Assert.Equal(model, only.GetProperty("edidModel").GetString());
+        }
+
+        Assert.Equal(3, planted);
+    }
+
+    [Fact]
+    public void ANameSplitOverTwoDescriptorsIsOneModelAndNothingElseJoinsIt()
+    {
+        var edid = EdidParserTests.BaseBlock(extensions: 0);
+        EdidParserTests.TextDescriptor(edid, 0, 0xFF, "SERIALFF123");
+        EdidParserTests.TextDescriptor(edid, 1, 0xFC, "LG ULTRAGEAR ");
+        EdidParserTests.TextDescriptor(edid, 2, 0xFE, "TEXTFE45678");
+        EdidParserTests.TextDescriptor(edid, 3, 0xFC, "27GP950-B");
+        EdidParserTests.Fix(edid);
+
+        var json = Json(Info(DisplayBuilder.Build(Path(), edid, null, null, 2026)));
+
+        var only = Assert.Single(Displays(json).EnumerateArray());
+        Assert.Equal("LG ULTRAGEAR 27GP950-B", only.GetProperty("edidModel").GetString());
+        foreach (var secret in new[] { "SERIALFF123", "TEXTFE45678", "SERIALFF", "TEXTFE" })
+        {
+            Assert.DoesNotContain(secret, json, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -184,5 +234,22 @@ public class PartsShareDisplayTests
         // No EDID: no maker, no code, no name. A size alone tells the tool nothing about the model.
         var display = DisplayBuilder.Build(Path(), null, null, "Some GPU", 2026);
         Assert.Equal(0, Displays(Json(Info(display))).GetArrayLength());
+    }
+
+    [Fact]
+    public void AVirtualDisplayWithoutAnEdidIsDroppedAndTheRealMonitorStays()
+    {
+        // Remote Desktop, an indirect display driver and a virtual monitor have a name and a resolution from Windows and no EDID behind them.
+        var real = DisplayBuilder.Build(Path(), Crafted(fc: "MY MONITOR", ff: null, fe: null), null, null, 2026);
+        var virtualOne = DisplayBuilder.Build(Path("Indirect Display Device"), null, null, "Some GPU", 2026)
+            with { Model = Value.Ok("Indirect Display Device", "test") };
+        var remote = DisplayBuilder.Build(Path("Remote Display"), null, null, "Some GPU", 2026);
+
+        var json = Json(Info(virtualOne, real, remote));
+
+        var only = Assert.Single(Displays(json).EnumerateArray());
+        Assert.Equal("MY MONITOR", only.GetProperty("edidModel").GetString());
+        Assert.DoesNotContain("Indirect", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Remote", json, StringComparison.Ordinal);
     }
 }

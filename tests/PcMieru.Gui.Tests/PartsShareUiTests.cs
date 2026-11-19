@@ -75,7 +75,7 @@ public class PartsShareUiTests
     [Fact]
     public void The_new_strings_are_registered_in_both_languages_and_the_note_says_what_the_coordinator_asked()
     {
-        var keys = new[] { "gui.hw.share", "gui.hw.share.tip", "gui.hw.share.lead", "gui.hw.share.note", "gui.hw.share.json", "gui.hw.share.failed" };
+        var keys = new[] { "gui.hw.share", "gui.hw.share.tip", "gui.hw.share.lead", "gui.hw.share.note", "gui.hw.share.json", "gui.hw.share.failed", "gui.hw.share.error" };
         var registered = GuiStrings.All.ToDictionary(e => e.Key, StringComparer.Ordinal);
         foreach (var key in keys)
         {
@@ -203,6 +203,109 @@ public class PartsShareUiTests
         {
             Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void The_failure_message_is_registered_with_its_placeholder_in_both_languages()
+    {
+        var registered = GuiStrings.All.ToDictionary(e => e.Key, StringComparer.Ordinal);
+        Assert.True(registered.TryGetValue("gui.hw.share.error", out var entry));
+        Assert.Contains("{error}", entry.Ja, StringComparison.Ordinal);
+        Assert.Contains("{error}", entry.En, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void While_the_list_is_collected_the_button_is_off_and_a_second_press_does_nothing()
+    {
+        using var rig = new Rig(Language.En);
+        using var page = new HardwarePage(rig.Context);
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        page.ShareReader = async (category, ct) =>
+        {
+            Interlocked.Increment(ref reads);
+            await gate.Task;
+            return await rig.Services.Hardware.GetAsync(category, ct);
+        };
+        Assert.True(page.ShareButton.Enabled);
+
+        var first = page.ShareAsync();
+        Assert.False(first.IsCompleted);
+        Assert.False(page.ShareButton.Enabled, "the button stays off while the list is collected");
+        var readsOfTheFirstPress = reads;
+        Assert.Equal(PartsShare.Categories(includeUsb: false).Count, readsOfTheFirstPress);
+
+        var second = page.ShareAsync();
+        Assert.True(second.IsCompleted, "a press while one is running returns at once");
+        Assert.Equal(readsOfTheFirstPress, reads);
+
+        gate.SetResult(true);
+        Finish(first);
+
+        Assert.True(page.ShareButton.Enabled, "the button comes back when the dialog is closed");
+        Assert.Equal(readsOfTheFirstPress, reads);
+        Assert.Single(Dialogs.Log);
+    }
+
+    [Fact]
+    public void A_collection_failure_is_said_in_a_dialog_and_the_button_comes_back()
+    {
+        using var rig = new Rig(Language.En);
+        using var page = new HardwarePage(rig.Context);
+        page.ShareReader = (_, _) => Task.FromException<PcMieru.Core.Hardware.Model.HardwareInfo>(new InvalidOperationException("the service is not answering"));
+
+        Finish(page.ShareAsync());
+
+        var entry = Assert.Single(Dialogs.Log);
+        Assert.StartsWith(Strings.Get("gui.hw.share") + " | ", entry, StringComparison.Ordinal);
+        Assert.Contains("the service is not answering", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("{error}", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("pcm-parts/1", entry, StringComparison.Ordinal);
+        Assert.True(page.ShareButton.Enabled);
+
+        // And it can be pressed again.
+        page.ShareReader = null;
+        Finish(page.ShareAsync());
+        Assert.Equal(2, Dialogs.Log.Count);
+        Assert.Contains("pcm-parts/1", Dialogs.Log[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_document_is_not_kept_in_the_dialog_log_when_the_dialog_really_opens()
+    {
+        // Dialogs.Log lives as long as the app. Only the test hook (AutoAnswer) writes the document there; a real dialog does not.
+        using var rig = new Rig(Language.En);
+        Dialogs.AutoAnswer = null;
+        var closer = new System.Windows.Forms.Timer { Interval = 20 };
+        var clock = Stopwatch.StartNew();
+        var closed = false;
+        closer.Tick += (_, _) =>
+        {
+            foreach (var form in Application.OpenForms.OfType<PartsShareDialog>().ToList())
+            {
+                closed = true;
+                form.Close();
+            }
+
+            if (clock.ElapsedMilliseconds > 8_000)
+            {
+                closer.Stop();
+            }
+        };
+        closer.Start();
+        try
+        {
+            PartsShareDialog.Open(null, rig.Theme, "{\n  \"format\": \"pcm-parts/1\"\n}", _ => true);
+        }
+        finally
+        {
+            closer.Stop();
+            closer.Dispose();
+            Dialogs.AutoAnswer = false;
+        }
+
+        Assert.True(closed, "the dialog was shown and closed by the test");
+        Assert.Empty(Dialogs.Log);
     }
 
     [Fact]
