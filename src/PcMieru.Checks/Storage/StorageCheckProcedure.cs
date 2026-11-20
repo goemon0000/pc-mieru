@@ -50,6 +50,11 @@ internal sealed class StorageCheckProcedure : ICheckProcedure
             collector.Note(CheckNotes.StorageBaselineReadFailed);
         }
 
+        if (baseline.NotesAbandonedImport)
+        {
+            collector.Note(CheckNotes.StorageLegacyImportAbandoned);
+        }
+
         collector.Add(Devices(inspection));
         foreach (var disk in baseline.Disks)
         {

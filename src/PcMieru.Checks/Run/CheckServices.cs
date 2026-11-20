@@ -21,7 +21,11 @@ public sealed class CheckServices
     public static string DefaultApp { get; } = AppStringOf(typeof(CheckServices).Assembly);
 
     /// <param name="time">The clock. Start and end times of a run come from it.</param>
-    /// <param name="root">The folder that holds the baseline (<c>baseline\</c>). The history store has its own root; the caller passes the same one.</param>
+    /// <param name="root">
+    /// The product's data folder (the app passes <c>%LOCALAPPDATA%\PCMieru</c>). The baseline is kept under <c>&lt;root&gt;\checks\baseline</c>
+    /// (DESIGN-A §4), inside the folder the history store of <see cref="CreateLive"/> uses (<c>&lt;root&gt;\checks</c>): the history scan
+    /// looks at files only, so the <c>baseline</c> folder is not a result.
+    /// </param>
     /// <param name="storage">The source of the storage check's input.</param>
     /// <param name="legacyDirectory">The checks folder the v0.7.4 app kept, only read, or null for no import.</param>
     /// <param name="history">Where a finished run is saved.</param>
@@ -33,7 +37,7 @@ public sealed class CheckServices
         string? legacyDirectory,
         ICheckHistoryMaintainer history,
         string? app = null)
-        : this(time, storage, history, new BaselineEngine(root, legacyDirectory, PhysicalBaselineFileSystem.Instance, PhysicalHistoryFileReader.Instance, new FileBaselineLock(Path.Combine(root, "baseline")), time, null), app, runIds: null)
+        : this(time, storage, history, NewBaseline(time, root, legacyDirectory), app, runIds: null)
     {
     }
 
@@ -57,6 +61,17 @@ public sealed class CheckServices
         RunIds = runIds ?? Guid.NewGuid;
     }
 
+    /// <summary>The folder of the saved results and of the baseline (<c>&lt;root&gt;\checks</c>, DESIGN-A §4).</summary>
+    internal static string ChecksFolder(string root) => Path.Combine(root, "checks");
+
+    // The engine puts its files in "<its root>\baseline", and so does its lock: the engine's root is the checks folder, never the data folder.
+    private static BaselineEngine NewBaseline(TimeProvider time, string root, string? legacyDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        var checks = ChecksFolder(root);
+        return new BaselineEngine(checks, legacyDirectory, PhysicalBaselineFileSystem.Instance, PhysicalHistoryFileReader.Instance, new FileBaselineLock(Path.Combine(checks, "baseline")), time, null);
+    }
+
     public TimeProvider Time { get; }
 
     public IStorageInspectionSource Storage { get; }
@@ -71,9 +86,9 @@ public sealed class CheckServices
     internal Func<Guid> RunIds { get; }
 
     /// <summary>
-    /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the baseline under
-    /// <c>&lt;root&gt;\baseline</c> and the history under <c>&lt;root&gt;\checks</c>. <paramref name="root"/> is the product's data folder
-    /// (the app passes <c>%LOCALAPPDATA%\PCMieru</c>) and <paramref name="legacyDirectory"/> the v0.7.4 folder or null: both are the caller's
+    /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the history under
+    /// <c>&lt;root&gt;\checks</c> and the baseline under <c>&lt;root&gt;\checks\baseline</c> (DESIGN-A §4). <paramref name="root"/> is the
+    /// product's data folder (the app passes <c>%LOCALAPPDATA%\PCMieru</c>) and <paramref name="legacyDirectory"/> the v0.7.4 folder or null: both are the caller's
     /// decision, nothing here looks at the user's profile, and nothing is read or created until a run starts. No elevated reader is wired
     /// unless <paramref name="elevated"/> is given: without one, a request with <see cref="CheckRequest.AllowElevation"/> keeps the
     /// denied drives denied.
@@ -86,7 +101,7 @@ public sealed class CheckServices
             root,
             new RealStorageInspectionSource(elevated),
             legacyDirectory,
-            new CheckHistoryStore(Path.Combine(root, "checks")),
+            new CheckHistoryStore(ChecksFolder(root)),
             app);
     }
 

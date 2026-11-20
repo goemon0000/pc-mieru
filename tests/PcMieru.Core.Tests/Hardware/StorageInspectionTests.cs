@@ -155,6 +155,28 @@ public class InspectionParserTests
         Assert.False(counters.AtaThresholdsRead);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(273)]
+    [InlineData(309)]
+    [InlineData(343)]
+    [InlineData(65535)]
+    public void The_nvme_composite_temperature_is_kept_as_the_raw_kelvin_of_bytes_1_and_2(int kelvin)
+    {
+        var page = InspectionFixtures.NvmePage();
+        BinaryPrimitives.WriteUInt16LittleEndian(page.AsSpan(1), (ushort)kelvin);
+
+        var counters = InspectionParsers.FromNvme(page, null)!;
+
+        Assert.Equal(kelvin, counters.NvmeCompositeKelvin);
+    }
+
+    [Fact]
+    public void A_sata_read_has_no_nvme_temperature()
+    {
+        Assert.Null(InspectionParsers.ForAta(null, true).NvmeCompositeKelvin);
+    }
+
     [Fact]
     public void A_counter_above_64_bits_keeps_its_full_value_and_is_flagged_as_one_the_old_ulong_clipped()
     {

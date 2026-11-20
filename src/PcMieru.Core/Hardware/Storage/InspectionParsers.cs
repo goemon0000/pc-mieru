@@ -68,7 +68,8 @@ internal static class InspectionParsers
             saturated,
             unrepresentable,
             AtaPredictFailure: null,
-            AtaThresholdsRead: false);
+            AtaThresholdsRead: false,
+            NvmeCompositeKelvin: BinaryPrimitives.ReadUInt16LittleEndian(page.Slice(1, 2)));
     }
 
     /// <summary>SATA: only whether the failure-prediction window answered and whether the threshold table was read.</summary>

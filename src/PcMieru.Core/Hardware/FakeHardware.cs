@@ -281,7 +281,7 @@ public sealed class FakeStorageInspectionSource(Func<DateTime>? clock = null) : 
                 at,
                 nvme,
                 StorageIdentityConfirmation.Confirmed,
-                new StorageInspectionCounters(StorageHealthKind.Nvme, new U128(24UL), new U128(94140625UL), new StorageErrorLogCounts(0, 0), false, [], null, false)),
+                new StorageInspectionCounters(StorageHealthKind.Nvme, new U128(24UL), new U128(94140625UL), new StorageErrorLogCounts(0, 0), false, [], null, false, NvmeCompositeKelvin: 314)),
             new StorageInspectionDrive(
                 1,
                 StorageRecognition.Recognized,

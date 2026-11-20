@@ -57,8 +57,11 @@ public sealed class StorageCheckRunTests
 
         // Two disks, numbered in the order the baseline met them.
         Assert.Equal(["disk-1", "disk-2"], run.Result.Items.Where(i => i.Subject is not null).Select(i => i.Subject!.Id).Distinct());
-        Assert.Equal("Samsung SSD 980 PRO 2TB", Row(run, "storage.health", "disk-1").Subject!.Model);
-        Assert.Equal("WDC WD40EZRZ-00GXCB0", Row(run, "storage.health", "disk-2").Subject!.Model);
+        Assert.Equal("Samsung SSD 980 PRO 2TB", Row(run, "storage.capacity", "disk-1").Subject!.Model);
+        Assert.Equal("WDC WD40EZRZ-00GXCB0", Row(run, "storage.capacity", "disk-2").Subject!.Model);
+
+        // DESIGN-A §13: no "storage.health" row yet (the value will come from Windows' own status, step 5).
+        Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
 
         // The NVMe disk: its 8 compared counters, all first.
         var nvmeDeltas = RowsOf(run, "disk-1").Where(static i => i.Id.EndsWith(".delta", StringComparison.Ordinal)).ToList();
@@ -161,11 +164,12 @@ public sealed class StorageCheckRunTests
         Assert.Equal(CheckEvidenceCode.LikelyCable, Row(run, "storage.ata.199.delta", "disk-2").Evidence!.Code);
         Assert.Equal(ItemVerdict.Ok, Row(run, "storage.ata.197", "disk-2").Verdict);
 
-        // Health follows the worst judged row of each disk; the overall verdict is the worst of all (check > caution > unavailable > ok).
-        Assert.Equal(CheckValue.Text("critical"), Row(run, "storage.health", "disk-1").Value);
-        Assert.Equal(CheckValue.Text("critical"), Row(run, "storage.health", "disk-2").Value);
+        // The overall verdict is the worst of all (check > caution > unavailable > ok), from the rows themselves: no roll-up row of each
+        // disk is added, so nothing is counted twice. The checks are the media errors and the reallocated sectors, each with its delta.
+        Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
         Assert.Equal(CheckVerdict.Check, run.Result.Verdict);
-        Assert.True(run.Result.Counts.Check >= 4);
+        Assert.Equal(4, run.Result.Counts.Check);
+        Assert.Equal(run.Result.Items.Count(static i => i.Verdict == ItemVerdict.Check), run.Result.Counts.Check);
 
         // No row of a compared disk says first any more.
         Assert.DoesNotContain(run.Result.Items, static i => i.Evidence?.Code == CheckEvidenceCode.BaselineFirst);
@@ -234,7 +238,8 @@ public sealed class StorageCheckRunTests
 
         // The slot: one row, unavailable.
         var slot = Assert.Single(RowsOf(run, "disk-3"));
-        Assert.Equal("storage.health", slot.Id);
+        Assert.Equal("storage.temperature", slot.Id); // the one row that keeps the slot in the result and the verdict from reading "ok"
+        Assert.Equal(CheckReason.Error, slot.Reason);
         Assert.Equal(ItemVerdict.Unavailable, slot.Verdict);
         Assert.Null(slot.Value);
         Assert.Null(slot.Subject!.Model);
@@ -264,10 +269,10 @@ public sealed class StorageCheckRunTests
 
         var run = await RunOnce(rig, raid);
 
-        Assert.Equal(["storage.devices", "storage.health", "storage.capacity", "storage.temperature"], run.Result.Items.Select(static i => i.Id).Where(static id => !id.EndsWith(".delta", StringComparison.Ordinal)));
-        var health = Row(run, "storage.health", "disk-1");
-        Assert.Equal(CheckReason.Unsupported, health.Reason);
-        Assert.Equal(ItemVerdict.Unavailable, health.Verdict);
+        Assert.Equal(["storage.devices", "storage.capacity", "storage.temperature"], run.Result.Items.Select(static i => i.Id).Where(static id => !id.EndsWith(".delta", StringComparison.Ordinal)));
+        var temperature = Row(run, "storage.temperature", "disk-1");
+        Assert.Equal(CheckReason.Unsupported, temperature.Reason);
+        Assert.Equal(ItemVerdict.Unavailable, temperature.Verdict);
         Assert.Equal(CheckVerdict.Unavailable, run.Result.Verdict);
     }
 
@@ -286,7 +291,8 @@ public sealed class StorageCheckRunTests
         Assert.Equal(run.Result.Items.Count(static i => i.Verdict == ItemVerdict.Unavailable), counts.Unavailable);
         Assert.Equal(run.Result.Items.Count(static i => i.Verdict == ItemVerdict.Ok), counts.Ok);
         Assert.Equal(0, counts.Check);
-        Assert.True(counts.Caution >= 1 && counts.Unavailable >= 2);
+        Assert.True(counts.Caution >= 1);
+        Assert.Equal(1, counts.Unavailable); // the denied disk's temperature: one row, no second "health" row for the same fact
     }
 
     // ---- elevation ----
@@ -315,9 +321,9 @@ public sealed class StorageCheckRunTests
         var elevated = await rig.RunAsync(new CheckRequest(CheckKind.Storage, AllowElevation: true));
 
         Assert.Equal([false, true], rig.Source.Elevations);
-        Assert.Equal(CheckReason.Denied, Row(plain, "storage.health", "disk-1").Reason);
+        Assert.Equal(CheckReason.Denied, Row(plain, "storage.temperature", "disk-1").Reason);
         Assert.Equal(CheckVerdict.Unavailable, plain.Result.Verdict);
-        Assert.Equal(CheckValue.Text("healthy"), Row(elevated, "storage.health", "disk-1").Value);
+        Assert.Equal(ItemVerdict.Ok, Row(elevated, "storage.temperature", "disk-1").Verdict);
         Assert.Equal(CheckVerdict.Ok, elevated.Result.Verdict);
     }
 
@@ -344,7 +350,7 @@ public sealed class StorageCheckRunTests
         });
 
         // The absolute rows are judged all the same: a damaged baseline does not take the health away.
-        Assert.Equal(CheckValue.Text("healthy"), Row(run, "storage.health", "disk-1").Value);
+        Assert.Equal(ItemVerdict.Ok, Row(run, "storage.temperature", "disk-1").Verdict);
         Assert.Equal(CheckVerdict.Ok, run.Result.Verdict);
         Assert.True(run.IsSaved);
         Assert.Empty(rig.Baseline.Names());
@@ -358,6 +364,83 @@ public sealed class StorageCheckRunTests
         var run = await RunOnce(rig, Nvme());
 
         Assert.Empty(run.Result.Notes);
+    }
+
+    // ---- the import of the v0.7.4 folder was abandoned (DESIGN-A §5.3-2, note storage.legacy_import_abandoned) ----
+
+    // An old twins file nobody can read: the import is abandoned, with an old history beside it that is then not used as a base.
+    private static RunRig RigWithAbandonedImport()
+    {
+        var rig = new RunRig(withLegacy: true);
+        OldFiles.Put(
+            rig.Baseline.Legacy,
+            Drives.FileNameOf(Drives.NvmeKey, "S6B1NJ0R123456"),
+            OldFiles.History(Drives.NvmeKey, "Samsung SSD 980 PRO 2TB", [new OldEntry(H(-2), OldFiles.Nvme(media: 1))]));
+        OldFiles.Put(rig.Baseline.Legacy, "twins.json", "[ \"just some text\" ]");
+        return rig;
+    }
+
+    [Fact]
+    public async Task The_run_that_abandons_the_old_import_has_the_note_and_every_delta_says_first()
+    {
+        using var rig = RigWithAbandonedImport();
+
+        var run = await RunOnce(rig, Nvme());
+
+        Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+        Assert.Equal([CheckNotes.StorageLegacyImportAbandoned], run.Result.Notes);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+        Assert.True(run.IsSaved);
+        var deltas = run.Result.Items.Where(static i => i.Id.EndsWith(".delta", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(deltas);
+        Assert.All(deltas, static d => Assert.Equal(CheckEvidenceCode.BaselineFirst, d.Evidence!.Code));
+        Assert.Contains("\"status\": \"abandoned\"", File.ReadAllText(Path.Combine(rig.Baseline.Baseline, "imported-v074.json")));
+    }
+
+    [Fact]
+    public async Task A_later_run_keeps_the_note_while_no_disk_has_been_compared_and_drops_it_with_the_first_comparison()
+    {
+        using var rig = RigWithAbandonedImport();
+
+        // A disk whose counters cannot be read has no baseline: the comparison cannot start, and the note stays for as long.
+        var unread = await RunOnce(rig, Drives.NoHealth());
+        rig.Time.Now = H(1);
+        var unreadAgain = await RunOnce(rig, Drives.NoHealth(at: H(1)));
+
+        Assert.Equal([CheckNotes.StorageLegacyImportAbandoned], unread.Result.Notes);
+        Assert.Equal([CheckNotes.StorageLegacyImportAbandoned], unreadAgain.Result.Notes);
+        Assert.Empty(rig.Baseline.DiskFiles());
+
+        // The first run with the counters records this disk (every delta says first): still no comparison, still the note.
+        rig.Time.Now = H(2);
+        var recorded = await RunOnce(rig, Drives.Nvme(at: H(2)));
+        Assert.Equal([CheckNotes.StorageLegacyImportAbandoned], recorded.Result.Notes);
+        Assert.Single(rig.Baseline.DiskFiles());
+
+        // The next run compares with it: the result stands on a baseline of this version, and there is no note.
+        rig.Time.Now = H(3);
+        var compared = await RunOnce(rig, Drives.Nvme(at: H(3), poh: 101));
+        Assert.Empty(compared.Result.Notes);
+        Assert.Empty(CheckResultValidator.Validate(compared.Result));
+        Assert.Equal(CheckValue.SignedDec(1), Row(compared, "storage.nvme.power_on_hours.delta", "disk-1").Value);
+
+        // And it stays gone: the marker still says abandoned, but a disk was compared.
+        rig.Time.Now = H(4);
+        var later = await RunOnce(rig, Drives.Nvme(at: H(4), poh: 102));
+        Assert.Empty(later.Result.Notes);
+    }
+
+    [Fact]
+    public async Task A_run_after_a_complete_or_absent_import_never_has_the_note()
+    {
+        using var rig = new RunRig(withLegacy: true); // an old folder with nothing in it: there is nothing to abandon
+
+        var first = await RunOnce(rig, Nvme());
+        rig.Time.Now = H(1);
+        var second = await RunOnce(rig, Drives.Nvme(at: H(1), poh: 101));
+
+        Assert.DoesNotContain(CheckNotes.StorageLegacyImportAbandoned, first.Result.Notes);
+        Assert.DoesNotContain(CheckNotes.StorageLegacyImportAbandoned, second.Result.Notes);
     }
 
     // ---- stop ----

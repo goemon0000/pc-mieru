@@ -55,9 +55,16 @@ public static class CheckNotes
     /// <summary>A storage result whose baseline could not be read (DESIGN-A §3).</summary>
     public const string StorageBaselineReadFailed = "storage.baseline_read_failed";
 
+    /// <summary>
+    /// A storage result whose import of the v0.7.4 baseline was abandoned (DESIGN-A §5.3-2, §4.1): the old records could not be trusted, so the
+    /// comparison starts from this version's own baseline. Written by the run that abandoned the import, and by every later run until some
+    /// disk has a baseline of this version to be compared with.
+    /// </summary>
+    public const string StorageLegacyImportAbandoned = "storage.legacy_import_abandoned";
+
     /// <summary>Every note a writer may write.</summary>
     public static IReadOnlyList<string> Known { get; } =
-        [CpuTemperatureNotMeasured, MemoryBorrowedRegionOnly, MemoryPressure, StorageBaselineReadFailed];
+        [CpuTemperatureNotMeasured, MemoryBorrowedRegionOnly, MemoryPressure, StorageBaselineReadFailed, StorageLegacyImportAbandoned];
 
     public static bool IsKnown(string? note) => note is not null && Known.Contains(note);
 

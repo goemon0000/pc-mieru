@@ -16,10 +16,16 @@ namespace PcMieru.Checks.Storage;
 /// </summary>
 internal static class StorageJudge
 {
-    /// <summary>NVMe: the composite temperature that is a check, and the one that is a caution (≥).</summary>
-    public const double NvmeTemperatureCheck = 80;
+    /// <summary>
+    /// NVMe: the composite temperature that is a check, and the one that is a caution (≥), in whole degrees: the drive's Kelvin minus 273
+    /// (<see cref="NvmeKelvinOffset"/>), as v0.7.4 and DESIGN-A §14.4 have it. 343 K is 70 (a caution); the 69.85 of the screens is not judged.
+    /// </summary>
+    public const int NvmeTemperatureCheck = 80;
 
-    public const double NvmeTemperatureCaution = 70;
+    public const int NvmeTemperatureCaution = 70;
+
+    /// <summary>The whole-degree conversion of the NVMe composite temperature (v0.7.4: <c>kelvin - 273</c>, not 273.15).</summary>
+    public const int NvmeKelvinOffset = 273;
 
     /// <summary>ATA: the same for attribute 194, or 190 when there is no 194 (≥).</summary>
     public const long AtaTemperatureCheck = 70;
@@ -39,7 +45,10 @@ internal static class StorageJudge
 
     public const double WearCaution = 90;
 
-    /// <summary>The rows of one disk, in the order of §3.3: health, capacity, temperature, the protocol's rows, the ".delta" rows.</summary>
+    /// <summary>
+    /// The rows of one disk, in the order of §3.3: capacity, temperature, the protocol's rows, the ".delta" rows. There is no "storage.health"
+    /// row yet (see the TODO in the row builder).
+    /// </summary>
     public static IReadOnlyList<CheckItem> Rows(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject)
     {
         ArgumentNullException.ThrowIfNull(drive);
@@ -52,10 +61,13 @@ internal static class StorageJudge
     public static CheckSubject SubjectOf(StorageInspectionDrive drive, string diskId) =>
         new(diskId, string.IsNullOrWhiteSpace(drive.Model) ? null : drive.Model.Trim());
 
-    /// <summary>The reason a value is missing. A state that says nothing about the drive (not collected, gone) is the closest of the fixed list.</summary>
+    /// <summary>
+    /// The reason a value is missing. Only "the drive said it does not have this" is unsupported: a value that was never collected, or whose
+    /// drive is gone, is an error of the read (a drive that does have it, and was not asked, must not be named as one that lacks it).
+    /// </summary>
     public static CheckReason ReasonOf(ValueStatus status) => status switch
     {
-        ValueStatus.Unsupported or ValueStatus.NotCollected => CheckReason.Unsupported,
+        ValueStatus.Unsupported => CheckReason.Unsupported,
         ValueStatus.Denied => CheckReason.Denied,
         ValueStatus.Timeout => CheckReason.Timeout,
         _ => CheckReason.Error,
@@ -77,6 +89,11 @@ internal static class StorageJudge
     {
         private readonly List<CheckItem> _rows = [];
 
+        // TODO(DESIGN-A step 5, §14.4): the "storage.health" row is not written yet. Its value is Windows' own health status
+        // (MSFT_PhysicalDisk.HealthStatus, read with the §6.1 deadline), which the storage check's input does not carry; a roll-up of this
+        // disk's own judged rows in its place would count each of them twice in the overall verdict (the row and the rows it summarises).
+        // Until step 5 supplies the real value a disk has no health row. The registry keeps the row for then, and the validator does not
+        // require it.
         public IReadOnlyList<CheckItem> Build()
         {
             if (drive.Recognition == StorageRecognition.Recognized && drive.Health.TryGet(out var health))
@@ -92,18 +109,17 @@ internal static class StorageJudge
                     AtaTemperature(health);
                     AtaRows(health);
                 }
-
-                _rows.Insert(0, HealthRow());
             }
             else
             {
-                var reason = HealthMissingReason();
-                _rows.Add(Item("storage.health", null, ItemVerdict.Unavailable, CheckSource.StorageQuery, reason));
+                // The drive was not read. A slot that could not be looked at at all gets the one row that says so (and keeps its "disk-N"
+                // in the result, which is what makes the overall verdict "unavailable" instead of the healthy ones' "ok").
                 if (drive.Recognition == StorageRecognition.Recognized)
                 {
                     Capacity();
-                    _rows.Add(Item("storage.temperature", null, ItemVerdict.Unavailable, CheckSource.StorageQuery, reason));
                 }
+
+                _rows.Add(Item("storage.temperature", null, ItemVerdict.Unavailable, CheckSource.StorageQuery, HealthMissingReason()));
             }
 
             _rows.AddRange(BaselineDeltaRows.Build(baseline, subject));
@@ -112,42 +128,11 @@ internal static class StorageJudge
 
         // ---- the rows every disk has ----
 
+        /// <summary>Why the drive's health could not be read, from how the read came out. A slot that is there and could not be looked at is an error.</summary>
         private CheckReason HealthMissingReason()
         {
             var status = drive.Health.Status;
-            if (status is ValueStatus.NotCollected && drive.Recognition == StorageRecognition.Unreadable)
-            {
-                return CheckReason.Error; // the slot is there and could not be looked at
-            }
-
             return status == ValueStatus.Ok ? CheckReason.Error : ReasonOf(status);
-        }
-
-        /// <summary>
-        /// The disk's health summary. DESIGN-A §14.4 says "as system.storage.health" (Windows' own HealthStatus), which the storage check's
-        /// input does not carry, so the summary is the worst of the disk's own judged rows: a check is critical, a caution is warning, and
-        /// a disk with nothing but ok rows is healthy. A row that was not measured says nothing (it has its own unavailable row).
-        /// </summary>
-        private CheckItem HealthRow()
-        {
-            var judged = _rows.Where(static r => r.Verdict is ItemVerdict.Ok or ItemVerdict.Caution or ItemVerdict.Check).ToArray();
-            if (judged.Any(static r => r.Verdict == ItemVerdict.Check))
-            {
-                return Item("storage.health", CheckValue.Text("critical"), ItemVerdict.Check, CheckSource.StorageQuery);
-            }
-
-            if (judged.Any(static r => r.Verdict == ItemVerdict.Caution))
-            {
-                return Item("storage.health", CheckValue.Text("warning"), ItemVerdict.Caution, CheckSource.StorageQuery);
-            }
-
-            if (judged.Length > 0)
-            {
-                return Item("storage.health", CheckValue.Text("healthy"), ItemVerdict.Ok, CheckSource.StorageQuery);
-            }
-
-            // Readable, but not one judged reading came out of it.
-            return Item("storage.health", null, ItemVerdict.Unavailable, CheckSource.StorageQuery, CheckReason.Partial);
         }
 
         private void Capacity()
@@ -167,13 +152,24 @@ internal static class StorageJudge
         private void NvmeTemperature(StorageHealth health)
         {
             const string id = "storage.temperature";
-            if (!health.TemperatureC.TryGet(out var celsius) || !double.IsFinite(celsius))
+            if (!health.TemperatureC.TryGet(out var shown) || !double.IsFinite(shown))
             {
                 // Unreadable is unavailable whatever the minutes above the limits say (v0.7.4).
                 Unavailable(id, CheckSource.Nvme, Missing(health.TemperatureC));
                 return;
             }
 
+            // The value and the verdict are the page's whole Kelvin minus 273, never the rounded Celsius the screens show (343 K is 70 here and
+            // 69.85 there, one step apart). The raw Kelvin comes with the counters, read from the same bytes: a temperature without it is not
+            // judged from the rounded one.
+            var kelvin = drive.Counters?.NvmeCompositeKelvin ?? 0;
+            if (kelvin <= 0)
+            {
+                Unavailable(id, CheckSource.Nvme, CheckReason.Error);
+                return;
+            }
+
+            var celsius = kelvin - NvmeKelvinOffset;
             var verdict = celsius >= NvmeTemperatureCheck ? ItemVerdict.Check : celsius >= NvmeTemperatureCaution ? ItemVerdict.Caution : ItemVerdict.Ok;
             CheckEvidence? evidence = null;
             if (health.Nvme is { } details && details.CriticalCompositeTempMinutes.TryGet(out var critical) && critical > 0)
@@ -364,7 +360,9 @@ internal static class StorageJudge
             const string id = "storage.ata.threshold_status";
             if (drive.Counters is not { AtaThresholdsRead: true })
             {
-                Unavailable(id, CheckSource.Ata, CheckReason.Unsupported); // without the table a 0 is not a real threshold
+                // Without the table a 0 is not a real threshold. Why it is missing comes from the read: "unsupported" is only a drive that
+                // gave its SMART data and no threshold table, never a read that failed (denied, timed out, or lost its bytes).
+                Unavailable(id, CheckSource.Ata, drive.Health.Status != ValueStatus.Ok ? HealthMissingReason() : drive.Counters is null ? CheckReason.Error : CheckReason.Unsupported);
                 return;
             }
 

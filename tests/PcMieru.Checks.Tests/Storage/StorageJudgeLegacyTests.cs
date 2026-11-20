@@ -23,7 +23,7 @@ public sealed class StorageJudgeLegacyTests
         var rows = Rows(Nvme(critical: 1));
 
         Is(ItemVerdict.Check, rows["storage.nvme.critical_warning"]);
-        Assert.Equal(CheckValue.Text("critical"), rows["storage.health"].Value);
+        Assert.DoesNotContain("storage.health", rows.Keys); // no roll-up row (DESIGN-A §13): the verdict comes from the rows themselves
         Assert.Equal(CheckVerdict.Check, WorstOf(Nvme(critical: 1)));
     }
 
@@ -123,7 +123,7 @@ public sealed class StorageJudgeLegacyTests
         Is(ItemVerdict.Ok, rows["storage.temperature"]);
         IsDec(12000, rows["storage.ata.9"]);
 
-        Assert.Equal(CheckValue.Text("critical"), rows["storage.health"].Value);
+        Assert.DoesNotContain("storage.health", rows.Keys);
         Assert.Equal(CheckVerdict.Check, WorstOf(SataWithEightPending()));
     }
 
@@ -164,7 +164,9 @@ public sealed class StorageJudgeLegacyTests
         var rows = StorageJudge.Rows(usb, First(), Subject);
 
         AssertValid(rows);
-        Assert.All(rows.Where(static r => r.Id is "storage.health" or "storage.temperature"), static r => Assert.Equal(ItemVerdict.Unavailable, r.Verdict));
+        Assert.DoesNotContain(rows, static r => r.Id == "storage.health");
+        var temperature = Assert.Single(rows, static r => r.Id == "storage.temperature");
+        Assert.Equal(ItemVerdict.Unavailable, temperature.Verdict);
         Assert.Equal(CheckVerdict.Unavailable, Overall(rows));
     }
 

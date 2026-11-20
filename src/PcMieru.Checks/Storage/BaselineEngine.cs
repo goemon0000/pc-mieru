@@ -56,7 +56,20 @@ public sealed record BaselineDiskOutcome(int DriveIndex, string DiskId, Baseline
 /// A baseline file could not be read or written in this run (a disk got baseline_read_failed), the set of twins could not be trusted or
 /// stored, or the migration stopped the comparison: the writer of the storage result adds the note <see cref="CheckNotes.StorageBaselineReadFailed"/>.
 /// </param>
-public sealed record BaselineRunResult(IReadOnlyList<BaselineDiskOutcome> Disks, BaselineMigrationReport Migration, bool ReadFailed);
+/// <param name="ImportAbandoned">
+/// The mark of the v0.7.4 import says "abandoned" (this run wrote it, or an earlier one did): the old records are not used as a base.
+/// </param>
+public sealed record BaselineRunResult(IReadOnlyList<BaselineDiskOutcome> Disks, BaselineMigrationReport Migration, bool ReadFailed, bool ImportAbandoned = false)
+{
+    /// <summary>
+    /// Whether the storage result carries the note <see cref="CheckNotes.StorageLegacyImportAbandoned"/> (DESIGN-A §5.3-2): in the run that
+    /// abandoned the import, and in every later run while no disk has been compared yet, that is, while the result still has no baseline of
+    /// this version behind it. Once one disk is compared the note is gone: the comparison no longer depends on the old records.
+    /// </summary>
+    public bool NotesAbandonedImport =>
+        Migration.Status == BaselineMigrationStatus.Abandoned
+        || (ImportAbandoned && !Disks.Any(static disk => disk.State == BaselineDiskState.Compared));
+}
 
 /// <summary>
 /// The baseline of the storage check (DESIGN-A §5, §14.5): remembers the counters of every strong-keyed disk between runs and says,
@@ -211,15 +224,19 @@ public sealed class BaselineEngine
                 _stateBlocked = _migration.StopsComparison;
             }
 
+            var abandoned = false;
             if (_canWrite)
             {
                 // An abandoned import (DESIGN-A §5.3-2) means the old twins could not be trusted: whatever an interrupted earlier run
                 // had already copied from the old side is not used as a base. A marker that cannot be read is treated the same way
                 // (when an old folder is set, the migration has stopped the comparison already).
-                if (_store.ReadMarker() is BaselineMarker.Abandoned or BaselineMarker.Unreadable)
+                var marker = _store.ReadMarker();
+                if (marker is BaselineMarker.Abandoned or BaselineMarker.Unreadable)
                 {
                     _ignoreImported = true;
                 }
+
+                abandoned = marker == BaselineMarker.Abandoned;
             }
 
             LoadTwins();
@@ -232,7 +249,7 @@ public sealed class BaselineEngine
                 outcomes[work.Index] = Decide(work);
             }
 
-            return new BaselineRunResult(outcomes, _migration, _readFailed || _stateBlocked || _twinsWriteFailed);
+            return new BaselineRunResult(outcomes, _migration, _readFailed || _stateBlocked || _twinsWriteFailed, abandoned);
         }
 
         // ---- twins ----

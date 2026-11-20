@@ -539,6 +539,7 @@ public class ValidatorTests
     [InlineData("memory.borrowed_region_only", true)]
     [InlineData("memory.pressure", true)]
     [InlineData("storage.baseline_read_failed", true)]
+    [InlineData("storage.legacy_import_abandoned", true)]
     [InlineData("a.b", true)]
     [InlineData("a1.b_2", true)]
     [InlineData("", false)]
@@ -556,12 +557,15 @@ public class ValidatorTests
         Assert.Equal(expected, CheckNotes.IsWellFormed(note));
 
     [Fact]
-    public void The_four_named_notes_are_well_formed()
+    public void The_five_named_notes_are_well_formed_and_known()
     {
-        foreach (var note in new[] { CheckNotes.CpuTemperatureNotMeasured, CheckNotes.MemoryBorrowedRegionOnly, CheckNotes.MemoryPressure, CheckNotes.StorageBaselineReadFailed })
+        foreach (var note in new[] { CheckNotes.CpuTemperatureNotMeasured, CheckNotes.MemoryBorrowedRegionOnly, CheckNotes.MemoryPressure, CheckNotes.StorageBaselineReadFailed, CheckNotes.StorageLegacyImportAbandoned })
         {
             Assert.True(CheckNotes.IsWellFormed(note), note);
+            Assert.Empty(CheckResultValidator.Validate(Samples.MemoryCheck() with { Notes = [note] }));
         }
+
+        Assert.Equal("storage.legacy_import_abandoned", CheckNotes.StorageLegacyImportAbandoned);
     }
 
     [Fact]

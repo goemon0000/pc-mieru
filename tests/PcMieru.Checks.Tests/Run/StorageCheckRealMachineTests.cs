@@ -6,7 +6,7 @@ namespace PcMieru.Checks.Tests.Run;
 /// <summary>
 /// The storage check on this machine: the real Core source, no elevation (the Helper is never started), a temp root, no legacy folder.
 /// It only reads; nothing is written to a drive. Run on purpose, not by default (<c>--filter Category=RealMachine</c>).
-/// What it prints is masked: disk numbers, protocols and verdicts, never a serial, a unique ID or a model.
+/// What it prints is masked: disk numbers, protocols, verdicts and the reason a reading is missing, never a serial, a unique ID or a model.
 /// </summary>
 public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
 {
@@ -33,15 +33,23 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             var problems = CheckResultValidator.Validate(run.Result);
             Assert.True(problems.Count == 0, string.Join(" | ", problems));
 
+            // Every slot has at least one row with its subject (there is no per-disk "storage.health" row yet), so the slots are the subjects.
             var devices = Assert.Single(run.Result.Items, static i => i.Id == "storage.devices");
-            var disks = run.Result.Items.Where(static i => i.Id == "storage.health").ToList();
-            Assert.Equal(CheckValue.Int(disks.Count), devices.Value);
+            Assert.Equal(CheckValue.Int(DiskIds(run).Count), devices.Value);
+            Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
         }
 
         // The file read back by the read-only history is the file that was written.
         var back = await CheckHistory.OpenReadOnly(Path.Combine(temp.Path, "checks")).GetAsync(second.Result.RunId, CancellationToken.None);
         Assert.Equal(CheckHistoryGetStatus.Found, back.Status);
         Assert.Equal(Kit.Bytes(second.Result), Kit.Bytes(back.Result!));
+
+        // A disk that gave its health (it has rows of its protocol) has deltas in both runs, so the comparison is really looked at.
+        if (first.Result.Items.Any(static i => IsProtocolRow(i.Id)))
+        {
+            Assert.NotEmpty(Deltas(first));
+            Assert.NotEmpty(Deltas(second));
+        }
 
         // The first run had nothing to compare with: every .delta says why. The second run compares, or says why it could not.
         Assert.All(Deltas(first), static d => AssertNotCompared(d));
@@ -61,11 +69,25 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             }
         }
 
-        // Nothing but the two folders of the check was made under the temp root.
-        Assert.All(Directory.GetDirectories(temp.Path), static d => Assert.Contains(Path.GetFileName(d), new[] { "checks", "baseline" }));
+        // Nothing but the one folder of the check was made under the temp root (DESIGN-A §4): the results, and the baseline inside them.
+        Assert.Equal(["checks"], Directory.GetDirectories(temp.Path).Select(static d => Path.GetFileName(d)));
+        Assert.Empty(Directory.GetFiles(temp.Path));
+        var checks = Path.Combine(temp.Path, "checks");
+        Assert.All(Directory.GetDirectories(checks), static d => Assert.Equal("baseline", Path.GetFileName(d)));
+        var baseline = Path.Combine(checks, "baseline");
+        if (Directory.Exists(baseline))
+        {
+            Assert.Empty(Directory.GetDirectories(baseline)); // no baseline\baseline
+        }
     }
 
     private static IEnumerable<CheckItem> Deltas(CheckRun run) => run.Result.Items.Where(static i => i.Id.EndsWith(".delta", StringComparison.Ordinal));
+
+    private static bool IsProtocolRow(string id) =>
+        id.StartsWith("storage.nvme.", StringComparison.Ordinal) || id.StartsWith("storage.ata.", StringComparison.Ordinal);
+
+    private static List<string> DiskIds(CheckRun run) =>
+        [.. run.Result.Items.Where(static i => i.Subject is not null).Select(static i => i.Subject!.Id).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
 
     private static void AssertNotCompared(CheckItem delta)
     {
@@ -84,19 +106,26 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             $"{label}: outcome={result.Outcome} verdict={result.Verdict} ok={counts.Ok} caution={counts.Caution} check={counts.Check} unavailable={counts.Unavailable} info={counts.Info} items={result.Items.Count} saved={run.IsSaved}"));
         output.WriteLine("  notes: " + (result.Notes is { Count: > 0 } notes ? string.Join(",", notes) : "(none)"));
 
-        foreach (var health in result.Items.Where(static i => i.Id == "storage.health"))
+        foreach (var id in DiskIds(run))
         {
-            var id = health.Subject!.Id;
             var rows = result.Items.Where(i => i.Subject?.Id == id).ToList();
             var protocol = rows.Any(static r => r.Id.StartsWith("storage.nvme.", StringComparison.Ordinal))
                 ? "nvme"
-                : rows.Any(static r => r.Id.StartsWith("storage.ata.", StringComparison.Ordinal)) ? "ata" : "no-health";
+                : rows.Any(static r => r.Id.StartsWith("storage.ata.", StringComparison.Ordinal)) ? "ata" : "none";
+
+            // What the health reading gave: the reason it is missing (denied, error, unsupported, timeout ...) or "readable". The temperature row is
+            // the one every slot has, and it carries the reason of the health reading the disk's rows come from.
+            var temperature = rows.FirstOrDefault(static r => r.Id == "storage.temperature");
+            var health = temperature is { Value: null } ? "missing:" + (temperature.Reason?.ToString() ?? "no-reason") : "readable";
+            var check = rows.Count(static r => r.Verdict == ItemVerdict.Check);
+            var caution = rows.Count(static r => r.Verdict == ItemVerdict.Caution);
+            var unavailable = rows.Count(static r => r.Verdict == ItemVerdict.Unavailable);
             var deltas = rows.Where(static r => r.Id.EndsWith(".delta", StringComparison.Ordinal)).ToList();
             var compared = deltas.Count(static d => d.Value is not null);
             var codes = deltas.Where(static d => d.Evidence?.Code is not null).Select(static d => d.Evidence!.Code!.Value.ToString()).Distinct().Order();
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"  {id}: protocol={protocol} health={health.Verdict} rows={rows.Count} deltas={deltas.Count} compared={compared} codes=[{string.Join(",", codes)}]"));
+                $"  {id}: protocol={protocol} health={health} check={check} caution={caution} unavailable={unavailable} rows={rows.Count} deltas={deltas.Count} compared={compared} codes=[{string.Join(",", codes)}]"));
         }
     }
 }

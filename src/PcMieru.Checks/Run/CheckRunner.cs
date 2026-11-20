@@ -12,8 +12,9 @@ namespace PcMieru.Checks;
 /// <item>A started run is saved whatever its outcome. The save gets no token (a final result is written even after a stop). A save that fails is
 /// reported in <see cref="CheckRun.Save"/> and the result stays.</item>
 /// <item>The result is validated with the strict <see cref="CheckResultValidator"/> before anything is written. A result that does not pass is
-/// a bug of the writer: it is replaced by an empty failed result with the code <see cref="CheckRunFailureCodes.ResultInvalid"/> and the
-/// invalid one is neither saved nor returned.</item>
+/// a bug of the writer: only an empty failed result with the code <see cref="CheckRunFailureCodes.ResultInvalid"/> is saved in its place. The
+/// invalid one is never saved, but it is returned on <see cref="CheckRun.UnsavedResult"/> (with the failure code the run had before, and the
+/// first problem) so the screen can still show what was measured.</item>
 /// </list>
 /// </summary>
 public sealed class CheckRunner : ICheckRunner
@@ -41,6 +42,10 @@ public sealed class CheckRunner : ICheckRunner
     /// <summary>The kinds this runner can run.</summary>
     public IReadOnlyCollection<CheckKind> SupportedKinds => _procedures.Keys;
 
+    /// <remarks>
+    /// The returned task completes after the result is final and saved, but it may then wait up to <see cref="ProgressPatience"/> (250 ms) for
+    /// the progress handler to take the last notifications: a caller that times a run sees that wait after the save, never before it.
+    /// </remarks>
     public async Task<CheckRun> RunAsync(CheckRequest request, IProgress<CheckProgress>? progress, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -68,7 +73,7 @@ public sealed class CheckRunner : ICheckRunner
             context.Stage(CheckStage.Saving);
             var save = await SaveAsync(final.Result).ConfigureAwait(false);
             context.Stage(CheckStage.Done);
-            return new CheckRun(final.Result, save, final.FailureCode, final.FailureDetail);
+            return new CheckRun(final.Result, save, final.FailureCode, final.FailureDetail, final.UnsavedResult, final.OriginalFailureCode, final.FirstProblem);
         }
         finally
         {
@@ -100,7 +105,8 @@ public sealed class CheckRunner : ICheckRunner
 
     /// <summary>
     /// The one place a result is made final (DESIGN-A §2). A stop that arrives before this point makes a run that would have been
-    /// completed <c>stopped</c>; a failure stays a failure. The result is validated strictly; one that does not pass is replaced.
+    /// completed <c>stopped</c>; a failure stays a failure. The result is validated strictly; one that does not pass is replaced for the save
+    /// by an empty failed one, and is kept (unsaved) with the failure code the run had and the first problem.
     /// </summary>
     private FinalResult Finalize(Guid runId, CheckKind kind, DateTimeOffset startedUtc, CheckCollector collector, ProcedureEnd end, CancellationToken ct)
     {
@@ -120,17 +126,29 @@ public sealed class CheckRunner : ICheckRunner
                 return new FinalResult(result, end.FailureCode, end.FailureDetail);
             }
 
-            return Replacement(runId, kind, startedUtc, endedUtc, CheckRunFailureCodes.ResultInvalid, Truncate(problems[0]));
+            var firstProblem = Truncate(problems[0]);
+            return Replacement(runId, kind, startedUtc, endedUtc, CheckRunFailureCodes.ResultInvalid, firstProblem, result, end.FailureCode, firstProblem);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            return Replacement(runId, kind, startedUtc, endedUtc, CheckRunFailureCodes.InternalError, Describe(ex));
+            // The result could not even be built, so there is nothing to keep but the code the run had.
+            return Replacement(runId, kind, startedUtc, endedUtc, CheckRunFailureCodes.InternalError, Describe(ex), null, end.FailureCode, null);
         }
     }
 
     // The empty failed result that stands in for one that could not be made or did not pass: no rows, no notes, valid by construction.
-    private FinalResult Replacement(Guid runId, CheckKind kind, DateTimeOffset startedUtc, DateTimeOffset endedUtc, string code, string detail) =>
-        new(CheckResult.Create(_services.App, runId, kind, startedUtc, endedUtc, CheckOutcome.Failed, [], []), code, detail);
+    // The original (when there is one) rides along on the run, unsaved.
+    private FinalResult Replacement(
+        Guid runId,
+        CheckKind kind,
+        DateTimeOffset startedUtc,
+        DateTimeOffset endedUtc,
+        string code,
+        string detail,
+        CheckResult? unsaved,
+        string? originalFailureCode,
+        string? firstProblem) =>
+        new(CheckResult.Create(_services.App, runId, kind, startedUtc, endedUtc, CheckOutcome.Failed, [], []), code, detail, unsaved, originalFailureCode, firstProblem);
 
     private async Task<CheckSaveState> SaveAsync(CheckResult result)
     {
@@ -153,5 +171,11 @@ public sealed class CheckRunner : ICheckRunner
 
     private readonly record struct ProcedureEnd(CheckOutcome Outcome, string? FailureCode, string? FailureDetail);
 
-    private readonly record struct FinalResult(CheckResult Result, string? FailureCode, string? FailureDetail);
+    private readonly record struct FinalResult(
+        CheckResult Result,
+        string? FailureCode,
+        string? FailureDetail,
+        CheckResult? UnsavedResult = null,
+        string? OriginalFailureCode = null,
+        string? FirstProblem = null);
 }

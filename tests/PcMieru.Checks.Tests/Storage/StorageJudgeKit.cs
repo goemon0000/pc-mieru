@@ -27,7 +27,11 @@ internal static class J
     public static StorageInspectionDrive EditCounters(this StorageInspectionDrive drive, Func<StorageInspectionCounters, StorageInspectionCounters> change) =>
         drive with { Counters = change(drive.Counters!) };
 
-    /// <summary>A healthy NVMe drive with any of the values the judge reads changed.</summary>
+    /// <summary>
+    /// A healthy NVMe drive with any of the values the judge reads changed. The temperature is whole degrees (as the screens' 41 °C): the
+    /// page's Kelvin is that plus 273 and the shown value that minus the 0.15 (as Core reads it), unless <paramref name="kelvin"/> sets the
+    /// raw Kelvin itself (then the shown value is <c>kelvin - 273.15</c> rounded to two places, exactly as <c>HealthParsers</c> does).
+    /// </summary>
     public static StorageInspectionDrive Nvme(
         double temperature = 41,
         double used = 3,
@@ -35,9 +39,15 @@ internal static class J
         double threshold = 10,
         int critical = 0,
         ulong media = 0,
-        ulong errorLog = 0) =>
-        Drives.Nvme(used: used, spare: spare, critical: critical, media: media, errorLog: errorLog)
-            .Edit(h => h with { TemperatureC = Ok(temperature), AvailableSpareThresholdPercent = Ok(threshold) });
+        ulong errorLog = 0,
+        int? kelvin = null)
+    {
+        var raw = kelvin ?? (int)Math.Round(temperature + 273);
+        var shown = kelvin is { } k ? Math.Round(k - 273.15, 2) : temperature;
+        return Drives.Nvme(used: used, spare: spare, critical: critical, media: media, errorLog: errorLog)
+            .Edit(h => h with { TemperatureC = Ok(shown), AvailableSpareThresholdPercent = Ok(threshold) })
+            .EditCounters(c => c with { NvmeCompositeKelvin = raw });
+    }
 
     public static SmartAttribute Attr(int id, ulong raw, int current = 100, int worst = 100, int threshold = 0) =>
         new(id, "attribute " + id, current, worst, threshold, new U128(raw), true);

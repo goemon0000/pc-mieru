@@ -28,15 +28,13 @@ public sealed class StorageJudgeTests
 
         Assert.Equal(
             [
-                "storage.health", "storage.capacity", "storage.temperature", "storage.nvme.critical_warning", "storage.nvme.available_spare",
+                "storage.capacity", "storage.temperature", "storage.nvme.critical_warning", "storage.nvme.available_spare",
                 "storage.nvme.spare_threshold", "storage.nvme.percentage_used", "storage.nvme.media_errors", "storage.nvme.error_log_entries",
                 "storage.nvme.unsafe_shutdowns", "storage.nvme.power_cycles", "storage.nvme.power_on_hours", "storage.nvme.data_units_written",
             ],
             rows.Select(static r => r.Id));
         AssertValid(rows);
         Assert.All(rows, static r => Assert.Equal(Subject, r.Subject));
-        Assert.Equal(CheckValue.Text("healthy"), rows[0].Value);
-        Is(ItemVerdict.Ok, rows[0]);
         Assert.Equal(CheckVerdict.Ok, Overall(rows));
     }
 
@@ -47,7 +45,7 @@ public sealed class StorageJudgeTests
 
         // No predict_failure (the window was not read), no 187/196/198 (the drive does not list them).
         Assert.Equal(
-            ["storage.health", "storage.capacity", "storage.temperature", "storage.ata.threshold_status", "storage.ata.5", "storage.ata.197", "storage.ata.199", "storage.ata.9"],
+            ["storage.capacity", "storage.temperature", "storage.ata.threshold_status", "storage.ata.5", "storage.ata.197", "storage.ata.199", "storage.ata.9"],
             rows.Select(static r => r.Id));
         AssertValid(rows);
         Assert.Equal(CheckVerdict.Ok, Overall(rows));
@@ -57,7 +55,6 @@ public sealed class StorageJudgeTests
     public void The_sources_are_the_ones_of_the_table()
     {
         var nvme = Rows(Nvme());
-        Assert.Equal(CheckSource.StorageQuery, nvme["storage.health"].Source);
         Assert.Equal(CheckSource.StorageQuery, nvme["storage.capacity"].Source);
         Assert.Equal(CheckSource.Nvme, nvme["storage.temperature"].Source);
         Assert.Equal(CheckSource.Nvme, nvme["storage.nvme.media_errors"].Source);
@@ -107,23 +104,53 @@ public sealed class StorageJudgeTests
 
     // ---- storage.temperature, NVMe ----
 
+    // The value and the verdict are the page's whole Kelvin minus 273 (v0.7.4, DESIGN-A §14.4), so 343 K is 70 and a caution, though the
+    // screens show 69.85 for it (Kelvin minus 273.15).
     [Theory]
-    [InlineData(40.0, ItemVerdict.Ok)]
-    [InlineData(69.0, ItemVerdict.Ok)]
-    [InlineData(69.9, ItemVerdict.Ok)]
-    [InlineData(70.0, ItemVerdict.Caution)]
-    [InlineData(79.0, ItemVerdict.Caution)]
-    [InlineData(79.9, ItemVerdict.Caution)]
-    [InlineData(80.0, ItemVerdict.Check)]
-    [InlineData(95.0, ItemVerdict.Check)]
-    public void Nvme_temperature_boundaries(double celsius, ItemVerdict expected)
+    [InlineData(313, 40, ItemVerdict.Ok)]
+    [InlineData(341, 68, ItemVerdict.Ok)]
+    [InlineData(342, 69, ItemVerdict.Ok)]
+    [InlineData(343, 70, ItemVerdict.Caution)]
+    [InlineData(344, 71, ItemVerdict.Caution)]
+    [InlineData(352, 79, ItemVerdict.Caution)]
+    [InlineData(353, 80, ItemVerdict.Check)]
+    [InlineData(354, 81, ItemVerdict.Check)]
+    [InlineData(368, 95, ItemVerdict.Check)]
+    public void Nvme_temperature_boundaries_are_the_kelvin_minus_273(int kelvin, int degrees, ItemVerdict expected)
     {
-        var row = Rows(Nvme(temperature: celsius))["storage.temperature"];
+        var row = Rows(Nvme(kelvin: kelvin))["storage.temperature"];
 
         Is(expected, row);
-        IsNumber(celsius, row);
+        IsNumber(degrees, row);
         Assert.Equal("°C", row.Unit);
         Assert.Null(row.Evidence);
+    }
+
+    [Fact]
+    public void The_nvme_temperature_is_not_judged_from_the_rounded_celsius_the_screens_show()
+    {
+        // 343 K shows as 69.85 (Core: kelvin - 273.15) and is 70 here: a caution. Judging the shown value would be one step too low.
+        var drive = Nvme(kelvin: 343);
+
+        Assert.Equal(69.85, drive.Health.Data!.TemperatureC.Data);
+        Is(ItemVerdict.Caution, Rows(drive)["storage.temperature"]);
+
+        var hot = Nvme(kelvin: 353);
+        Assert.Equal(79.85, hot.Health.Data!.TemperatureC.Data);
+        Is(ItemVerdict.Check, Rows(hot)["storage.temperature"]);
+    }
+
+    [Fact]
+    public void A_nvme_temperature_without_the_raw_kelvin_is_an_error_not_a_guess_from_the_rounded_value()
+    {
+        var withoutCounters = Nvme() with { Counters = null };
+        IsMissing(CheckReason.Error, Rows(withoutCounters)["storage.temperature"]);
+
+        var noKelvin = Nvme().EditCounters(static c => c with { NvmeCompositeKelvin = null });
+        IsMissing(CheckReason.Error, Rows(noKelvin)["storage.temperature"]);
+
+        var zero = Nvme().EditCounters(static c => c with { NvmeCompositeKelvin = 0 });
+        IsMissing(CheckReason.Error, Rows(zero)["storage.temperature"]);
     }
 
     [Fact]
@@ -143,7 +170,7 @@ public sealed class StorageJudgeTests
     [InlineData(ValueStatus.Timeout, CheckReason.Timeout)]
     [InlineData(ValueStatus.Error, CheckReason.Error)]
     [InlineData(ValueStatus.Gone, CheckReason.Error)]
-    [InlineData(ValueStatus.NotCollected, CheckReason.Unsupported)]
+    [InlineData(ValueStatus.NotCollected, CheckReason.Error)]
     public void A_missing_reading_carries_the_reason_of_its_status(ValueStatus status, CheckReason expected)
     {
         var drive = Nvme().Edit(h => h with { TemperatureC = Value.Missing<double>(status, "t") });
@@ -771,42 +798,55 @@ public sealed class StorageJudgeTests
 
     // ---- storage.health ----
 
+    // TODO(DESIGN-A step 5, §14.4): the row comes from Windows' own status (MSFT_PhysicalDisk). Until then there is none, and the disk's
+    // own judged rows are counted once in the overall verdict, never a second time through a roll-up.
+
     [Fact]
-    public void Health_is_the_worst_of_the_disks_own_judged_rows()
+    public void There_is_no_health_row_for_any_disk_yet_and_the_rows_are_counted_once()
     {
-        var critical = Rows(Nvme(critical: 1))["storage.health"];
-        Is(ItemVerdict.Check, critical);
-        Assert.Equal(CheckValue.Text("critical"), critical.Value);
+        var critical = Rows(Nvme(critical: 1));
+        Assert.DoesNotContain("storage.health", critical.Keys);
+        Is(ItemVerdict.Check, critical["storage.nvme.critical_warning"]);
 
-        var warning = Rows(Nvme(used: 95))["storage.health"];
-        Is(ItemVerdict.Caution, warning);
-        Assert.Equal(CheckValue.Text("warning"), warning.Value);
+        var worn = StorageJudge.Rows(Nvme(used: 95), First(), Subject);
+        Assert.DoesNotContain(worn, static r => r.Id == "storage.health");
+        Assert.Equal(1, worn.Count(static r => r.Verdict == ItemVerdict.Caution)); // the wear row alone, not it and a summary of it
+        Assert.Equal(CheckVerdict.Caution, Overall(worn));
 
-        var both = Rows(Nvme(used: 95, critical: 4))["storage.health"];
-        Assert.Equal(CheckValue.Text("critical"), both.Value);
+        var both = StorageJudge.Rows(Nvme(used: 95, critical: 4), First(), Subject);
+        Assert.Equal(1, both.Count(static r => r.Verdict == ItemVerdict.Check));
+        Assert.Equal(1, both.Count(static r => r.Verdict == ItemVerdict.Caution));
 
-        Assert.Equal(CheckValue.Text("healthy"), Rows(Nvme())["storage.health"].Value);
+        Assert.DoesNotContain("storage.health", Rows(HealthyAta()).Keys);
     }
 
     [Fact]
-    public void Health_is_not_judged_by_the_delta_rows_or_the_observations()
-    {
-        // A grown unsafe-shutdown counter is info; a ".delta" that says "check" has its base row's check already.
-        var rows = Rows(Nvme(), Compared(Counter("nvme.unsafe_shutdowns", 1, 5)));
-
-        Assert.Equal(CheckValue.Text("healthy"), rows["storage.health"].Value);
-    }
-
-    [Fact]
-    public void Health_with_nothing_judged_is_unavailable_and_partial()
+    public void A_sata_drive_with_nothing_readable_has_unavailable_rows_only()
     {
         var drive = Ata([], thresholdsRead: false);
 
         var rows = Rows(drive);
 
-        IsMissing(CheckReason.Partial, rows["storage.health"]);
+        Assert.DoesNotContain("storage.health", rows.Keys);
         IsMissing(CheckReason.Unsupported, rows["storage.temperature"]);
         IsMissing(CheckReason.Unsupported, rows["storage.ata.threshold_status"]);
+    }
+
+    // ---- storage.ata.threshold_status when the table was not read ----
+
+    [Fact]
+    public void An_unread_threshold_table_of_a_drive_that_gave_its_smart_data_is_unsupported()
+    {
+        IsMissing(CheckReason.Unsupported, Rows(Ata([Attr(194, 33)], thresholdsRead: false))["storage.ata.threshold_status"]);
+    }
+
+    [Fact]
+    public void An_unread_threshold_table_without_the_bytes_behind_the_health_is_an_error_not_unsupported()
+    {
+        // Health came out, the evidence it was read from did not: whether the drive has a table is not known.
+        var drive = Ata([Attr(194, 33)]) with { Counters = null };
+
+        IsMissing(CheckReason.Error, Rows(drive)["storage.ata.threshold_status"]);
     }
 
     // ---- disks that cannot be read ----
@@ -816,7 +856,9 @@ public sealed class StorageJudgeTests
     [InlineData(ValueStatus.Denied, CheckReason.Denied)]
     [InlineData(ValueStatus.Timeout, CheckReason.Timeout)]
     [InlineData(ValueStatus.Error, CheckReason.Error)]
-    public void A_disk_without_health_has_health_capacity_and_temperature_and_nothing_judged(ValueStatus status, CheckReason reason)
+    [InlineData(ValueStatus.NotCollected, CheckReason.Error)]
+    [InlineData(ValueStatus.Gone, CheckReason.Error)]
+    public void A_disk_without_health_has_capacity_and_temperature_and_nothing_judged(ValueStatus status, CheckReason reason)
     {
         // A USB bridge or a RAID volume: the disk is there, its health is not.
         var drive = Drives.NoHealth() with { Health = Value.Missing<StorageHealth>(status, "t") };
@@ -824,25 +866,25 @@ public sealed class StorageJudgeTests
         var rows = StorageJudge.Rows(drive, J.First(), Subject);
 
         AssertValid(rows);
-        Assert.Equal(["storage.health", "storage.capacity", "storage.temperature"], rows.Select(static r => r.Id));
-        IsMissing(reason, rows[0]);
-        IsDec(2000398934016UL, rows[1]);
-        IsMissing(reason, rows[2]);
+        Assert.Equal(["storage.capacity", "storage.temperature"], rows.Select(static r => r.Id));
+        IsDec(2000398934016UL, rows[0]);
+        IsMissing(reason, rows[1]);
         Assert.Equal(CheckVerdict.Unavailable, Overall(rows));
     }
 
     [Fact]
-    public void An_unreadable_slot_has_a_health_row_and_nothing_else()
+    public void An_unreadable_slot_has_one_unavailable_temperature_row_and_nothing_else()
     {
         var slot = Drives.Unreadable();
 
         var rows = StorageJudge.Rows(slot, First(), StorageJudge.SubjectOf(slot, "disk-2"));
 
         AssertValid(rows);
-        var health = Assert.Single(rows);
-        Assert.Equal("storage.health", health.Id);
-        IsMissing(CheckReason.Error, health);
-        Assert.Null(health.Subject!.Model);
+        var only = Assert.Single(rows);
+        Assert.Equal("storage.temperature", only.Id);
+        IsMissing(CheckReason.Error, only);
+        Assert.Null(only.Subject!.Model);
+        Assert.Equal(CheckVerdict.Unavailable, Overall(rows)); // the slot keeps the overall verdict from reading "ok"
     }
 
     [Fact]
@@ -863,6 +905,7 @@ public sealed class StorageJudgeTests
     {
         Assert.Equal(80, StorageJudge.NvmeTemperatureCheck);
         Assert.Equal(70, StorageJudge.NvmeTemperatureCaution);
+        Assert.Equal(273, StorageJudge.NvmeKelvinOffset);
         Assert.Equal(70, StorageJudge.AtaTemperatureCheck);
         Assert.Equal(60, StorageJudge.AtaTemperatureCaution);
         Assert.Equal(1, StorageJudge.AtaTemperatureMin);

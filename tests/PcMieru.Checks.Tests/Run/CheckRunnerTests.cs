@@ -376,6 +376,72 @@ public sealed class CheckRunnerTests
         Assert.Same(run.Result, saved);
         Assert.Empty(CheckResultValidator.Validate(saved));
         Assert.True(run.IsSaved);
+        var back = await rig.ReadBackAsync(run.Result.RunId);
+        Assert.Empty(back!.Items);
+
+        // What the check built is not lost (DESIGN-A §2): it rides on the run, unsaved and invalid, for the screen, with the first problem as
+        // the diagnosis. The procedure itself did not fail, so there is no earlier failure code.
+        var unsaved = run.UnsavedResult!;
+        Assert.NotNull(run.UnsavedResult);
+        Assert.NotSame(run.Result, unsaved);
+        Assert.Equal(run.Result.RunId, unsaved.RunId);
+        Assert.Equal(CheckOutcome.Completed, unsaved.Outcome);
+        Assert.Equal(2, unsaved.Items.Count);
+        Assert.NotEmpty(CheckResultValidator.Validate(unsaved));
+        Assert.DoesNotContain(rig.History.Saved, r => ReferenceEquals(r, unsaved));
+        Assert.Null(run.OriginalFailureCode);
+        Assert.False(string.IsNullOrWhiteSpace(run.FirstProblem));
+        Assert.Equal(run.FirstProblem, run.FailureDetail);
+    }
+
+    [Fact]
+    public async Task The_failure_code_the_run_had_before_the_replacement_is_kept_beside_the_new_one()
+    {
+        using var rig = new RunRig();
+        var runner = With(rig, (c, _) =>
+        {
+            c.Collector.Add(Duration());
+            c.Collector.Add(Duration(60)); // the same (id, subject) twice
+            throw new InvalidOperationException("the drive list broke");
+        });
+
+        var run = await Run(runner);
+
+        Assert.Equal(CheckRunFailureCodes.ResultInvalid, run.FailureCode);
+        Assert.Equal(CheckRunFailureCodes.InternalError, run.OriginalFailureCode);
+        var unsaved = run.UnsavedResult!;
+        Assert.NotNull(run.UnsavedResult);
+        Assert.Equal(CheckOutcome.Failed, unsaved.Outcome);
+        Assert.Equal(2, unsaved.Items.Count);
+        Assert.False(string.IsNullOrWhiteSpace(run.FirstProblem));
+        AssertValid(run);
+        Assert.Empty(run.Result.Items);
+        Assert.Single(rig.History.Saved);
+    }
+
+    [Fact]
+    public async Task A_run_whose_result_passes_has_no_unsaved_copy_and_no_diagnosis()
+    {
+        using var rig = new RunRig();
+        var completed = await Run(With(rig, (c, _) =>
+        {
+            c.Collector.Add(Duration());
+            return Task.CompletedTask;
+        }));
+        var failed = await Run(With(rig, (c, _) =>
+        {
+            c.Collector.Add(Duration());
+            throw new InvalidOperationException("something nobody planned for");
+        }));
+
+        foreach (var run in new[] { completed, failed })
+        {
+            Assert.Null(run.UnsavedResult);
+            Assert.Null(run.OriginalFailureCode);
+            Assert.Null(run.FirstProblem);
+        }
+
+        Assert.Equal(CheckRunFailureCodes.InternalError, failed.FailureCode);
     }
 
     [Fact]
@@ -396,6 +462,11 @@ public sealed class CheckRunnerTests
         Assert.Empty(run.Result.Items);
         Assert.True(run.Result.Notes is null or { Count: 0 });
         AssertValid(run);
+
+        // The note the registry refused is on the unsaved original, not in what was saved.
+        Assert.NotNull(run.UnsavedResult);
+        Assert.Contains("made.up_note", run.UnsavedResult!.Notes!);
+        Assert.False(string.IsNullOrWhiteSpace(run.FirstProblem));
     }
 
     [Fact]
@@ -415,6 +486,11 @@ public sealed class CheckRunnerTests
         Assert.Equal(CheckOutcome.Failed, run.Result.Outcome);
         Assert.Equal(CheckRunFailureCodes.ResultInvalid, run.FailureCode);
         AssertValid(run);
+
+        // The original was a stopped run: that is what the screen is told (a stop is not a failure code).
+        Assert.NotNull(run.UnsavedResult);
+        Assert.Equal(CheckOutcome.Stopped, run.UnsavedResult!.Outcome);
+        Assert.Null(run.OriginalFailureCode);
     }
 
     // ---- the save ----

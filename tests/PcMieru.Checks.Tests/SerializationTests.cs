@@ -740,9 +740,9 @@ public class SerializationTests
     }
 
     [Fact]
-    public void The_strict_reader_accepts_the_four_known_notes_and_nothing_else()
+    public void The_strict_reader_accepts_the_five_known_notes_and_nothing_else()
     {
-        foreach (var note in new[] { "cpu.temperature_not_measured", "memory.borrowed_region_only", "memory.pressure", "storage.baseline_read_failed" })
+        foreach (var note in new[] { "cpu.temperature_not_measured", "memory.borrowed_region_only", "memory.pressure", "storage.baseline_read_failed", "storage.legacy_import_abandoned" })
         {
             var json = Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"" + note + "\"]");
             Assert.Equal([note], CheckJson.Deserialize(json).Notes.ToArray());

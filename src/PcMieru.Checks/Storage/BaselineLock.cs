@@ -40,7 +40,7 @@ internal sealed class FileBaselineLock : IBaselineLock
     private readonly string _path;
     private readonly Action<TimeSpan> _sleep;
 
-    /// <param name="directory">The baseline folder (<c>&lt;root&gt;\baseline</c>). It is created when it is not there yet.</param>
+    /// <param name="directory">The baseline folder (<c>&lt;root&gt;\checks\baseline</c>, DESIGN-A §4). It is created when it is not there yet.</param>
     /// <param name="sleep">Waits between two tries. Tests give their own.</param>
     public FileBaselineLock(string directory, Action<TimeSpan>? sleep = null)
     {

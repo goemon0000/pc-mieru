@@ -191,7 +191,7 @@ internal static class Drives
             Wide(unsafeShutdowns),
             Wide(media),
             []);
-        var counters = new StorageInspectionCounters(StorageHealthKind.Nvme, new U128(errorLog), new U128(written), null, false, [], null, false);
+        var counters = new StorageInspectionCounters(StorageHealthKind.Nvme, new U128(errorLog), new U128(written), null, false, [], null, false, NvmeCompositeKelvin: 314); // 41 °C
         return new StorageInspectionDrive(number, StorageRecognition.Recognized, model, serial, "FW1", 17, size, uniqueId, location, at ?? T0, Value.Ok(health, "test"), confirmation, counters);
     }
 

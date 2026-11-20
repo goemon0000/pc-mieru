@@ -1,11 +1,13 @@
 using System.Text.RegularExpressions;
+using PcMieru.Checks.Tests.Storage;
 using PcMieru.Core.Hardware;
 
 namespace PcMieru.Checks.Tests.Run;
 
 /// <summary>
 /// How the services are put together: every folder is given, nothing is created before a run, and the live wiring is the real Core source over
-/// <c>&lt;root&gt;\checks</c> and <c>&lt;root&gt;\baseline</c>. All of it on fresh temp folders; the user's own folders are never named.
+/// <c>&lt;root&gt;\checks</c> (the results) and <c>&lt;root&gt;\checks\baseline</c> (DESIGN-A §4). All of it on fresh temp folders; the
+/// user's own folders are never named.
 /// </summary>
 public sealed partial class CheckServicesTests
 {
@@ -89,6 +91,40 @@ public sealed partial class CheckServicesTests
         var files = Directory.GetFiles(Path.Combine(temp.Path, "checks"), "*.json", SearchOption.AllDirectories);
         Assert.Single(files);
         Assert.DoesNotContain(Directory.GetDirectories(temp.Path), static d => !Path.GetFileName(d).Equals("checks", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_baseline_lives_in_checks_baseline_and_nowhere_else_under_the_root()
+    {
+        using var temp = new TempRoot();
+        var root = Path.Combine(temp.Path, "app-data");
+        var checks = Path.Combine(root, "checks");
+        var baseline = Path.Combine(checks, "baseline");
+        var source = new FakeStorageSource();
+        var services = new CheckServices(TimeProvider.System, root, source, null, new CheckHistoryStore(CheckServices.ChecksFolder(root)), Samples.App);
+        var runner = new CheckRunner(services);
+        var before = DateTimeOffset.UtcNow.AddHours(-2);
+        source.Returns(Drives.Inspect(before, [Drives.Nvme(at: before)]));
+        source.Returns(Drives.Inspect(before.AddHours(1), [Drives.Nvme(at: before.AddHours(1), poh: 101)]));
+
+        var first = await runner.RunAsync(new CheckRequest(CheckKind.Storage), null, CancellationToken.None);
+        var second = await runner.RunAsync(new CheckRequest(CheckKind.Storage), null, CancellationToken.None);
+
+        // The root holds one folder, "checks", and that holds the results and one folder, "baseline", with the disks' files in it.
+        Assert.Equal(["checks"], Directory.GetDirectories(root).Select(static d => Path.GetFileName(d)));
+        Assert.Equal(["baseline"], Directory.GetDirectories(checks).Select(static d => Path.GetFileName(d)));
+        Assert.Empty(Directory.GetDirectories(baseline)); // no baseline\baseline
+        Assert.False(Directory.Exists(Path.Combine(root, "baseline")));
+        Assert.NotEmpty(Directory.GetFiles(baseline, "disk-*.json"));
+        Assert.Empty(Directory.GetFiles(root));
+        Assert.Equal(2, Directory.GetFiles(checks).Length); // the two saved runs, nothing of the baseline
+        Assert.All(Directory.GetFiles(checks), static f => Assert.EndsWith(".json", f, StringComparison.Ordinal));
+
+        // The second run found the first one's record where it was written, and the history still reads both runs beside the folder.
+        Assert.Equal(CheckValue.SignedDec(1), second.Result.Items.Single(static i => i.Id == "storage.nvme.power_on_hours.delta").Value);
+        var history = CheckHistory.OpenReadOnly(checks);
+        Assert.Equal(CheckHistoryGetStatus.Found, (await history.GetAsync(first.Result.RunId, CancellationToken.None)).Status);
+        Assert.Equal(CheckHistoryGetStatus.Found, (await history.GetAsync(second.Result.RunId, CancellationToken.None)).Status);
     }
 
     [Fact]

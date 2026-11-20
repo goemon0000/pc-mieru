@@ -60,6 +60,11 @@ public sealed record StorageErrorLogCounts(int EntriesRead, int MediaErrors);
 /// SMART READ DATA fails, so for an ordinary SMART read this is null, not false.
 /// </param>
 /// <param name="AtaThresholdsRead">SATA: the SMART READ THRESHOLDS table was read, so the thresholds on the attributes are real (0 is a real threshold only then).</param>
+/// <param name="NvmeCompositeKelvin">
+/// NVMe: the composite temperature exactly as the health log page holds it (bytes 1 and 2, whole Kelvin); 0 when the drive reports none,
+/// null when this is not an NVMe read. The checks judge and show <c>Kelvin - 273</c> (v0.7.4's whole degrees: 343 K is 70, a caution), not
+/// <see cref="StorageHealth.TemperatureC"/>, whose <c>Kelvin - 273.15</c> (69.85) is for the screens and would move every verdict one step.
+/// </param>
 public sealed record StorageInspectionCounters(
     StorageHealthKind Kind,
     U128? ErrorLogEntries,
@@ -68,7 +73,8 @@ public sealed record StorageInspectionCounters(
     bool Saturated,
     IReadOnlyList<string> UnrepresentableCounters,
     bool? AtaPredictFailure,
-    bool AtaThresholdsRead);
+    bool AtaThresholdsRead,
+    int? NvmeCompositeKelvin = null);
 
 /// <summary>The names v0.7.4's baseline gave the NVMe counters it stored (BaselineEntry.Counters keys). They are part of the stored format.</summary>
 public static class StorageLegacyCounterKeys
