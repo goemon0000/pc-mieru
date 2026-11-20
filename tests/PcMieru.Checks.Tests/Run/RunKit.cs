@@ -1,4 +1,5 @@
 using PcMieru.Checks.Storage;
+using PcMieru.Checks.Tests.SystemInfo;
 using PcMieru.Core;
 using PcMieru.Core.Hardware;
 using PcMieru.Core.Hardware.Model;
@@ -126,20 +127,34 @@ internal sealed class RunRig : IDisposable
 {
     private long _runs;
 
-    public RunRig(bool withLegacy = false)
+    /// <param name="withLegacy">The baseline has an old install's records to read.</param>
+    /// <param name="clock">The clock the checks' deadlines run on (a test that moves time by hand); the baseline and the history keep their own.</param>
+    public RunRig(bool withLegacy = false, TimeProvider? clock = null)
     {
         Baseline = new BaselineRig(withLegacy);
         Source = new FakeStorageSource();
         HistoryFaults = new FaultFileSystem();
         HistoryRoot = Path.Combine(Baseline.Root, "checks");
         History = new RecordingHistory(Kit.Store(HistoryRoot, Baseline.Time, HistoryFaults));
-        Services = new CheckServices(Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId);
+        Hardware = new FakeHardware();
+        Wmi = FakeWmiReader.Typical(FakeWmiReader.AnyDisks());
+        Events = new FakeEventCounter();
+        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, Hardware, Wmi, Events);
         Runner = new CheckRunner(Services);
     }
 
     public BaselineRig Baseline { get; }
 
     public FakeStorageSource Source { get; }
+
+    /// <summary>The hardware of Core for the system check (a healthy typical machine until a test says otherwise). It never reads the machine.</summary>
+    public FakeHardware Hardware { get; }
+
+    /// <summary>WMI for the checks: ten healthy disks that say no serial, the page file and the video controller of a typical machine. It never calls Windows.</summary>
+    public FakeWmiReader Wmi { get; }
+
+    /// <summary>The event log for the system check: no event of any kind. It never calls Windows.</summary>
+    public FakeEventCounter Events { get; }
 
     public FaultFileSystem HistoryFaults { get; }
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
 
@@ -46,15 +47,17 @@ internal static class StorageJudge
     public const double WearCaution = 90;
 
     /// <summary>
-    /// The rows of one disk, in the order of §3.3: capacity, temperature, the protocol's rows, the ".delta" rows. There is no "storage.health"
-    /// row yet (see the TODO in the row builder).
+    /// The rows of one disk, in the order of §3.3: <c>storage.health</c>, capacity, temperature, the protocol's rows, the ".delta" rows.
+    /// Every disk has the health row, first, and it is Windows' own: <paramref name="health"/> comes from <c>MSFT_PhysicalDisk</c>
+    /// (<see cref="DiskHealthReading.Of"/>), never from this disk's other rows (those would be counted twice in the overall verdict).
+    /// A disk that was not read (or a slot that could not be looked at) still has the row, with whatever Windows said of it.
     /// </summary>
-    public static IReadOnlyList<CheckItem> Rows(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject)
+    public static IReadOnlyList<CheckItem> Rows(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject, DiskHealthVerdict windowsHealth)
     {
         ArgumentNullException.ThrowIfNull(drive);
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(subject);
-        return new DiskRows(drive, baseline, subject).Build();
+        return new DiskRows(drive, baseline, subject, windowsHealth).Build();
     }
 
     /// <summary>The subject of a disk: its "disk-N" from the baseline, and its model as read (never a serial). The model is left out rather than empty.</summary>
@@ -85,17 +88,17 @@ internal static class StorageJudge
         Cable,
     }
 
-    private sealed class DiskRows(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject)
+    private sealed class DiskRows(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject, DiskHealthVerdict windowsHealth)
     {
         private readonly List<CheckItem> _rows = [];
 
-        // TODO(DESIGN-A step 5, §14.4): the "storage.health" row is not written yet. Its value is Windows' own health status
-        // (MSFT_PhysicalDisk.HealthStatus, read with the §6.1 deadline), which the storage check's input does not carry; a roll-up of this
-        // disk's own judged rows in its place would count each of them twice in the overall verdict (the row and the rows it summarises).
-        // Until step 5 supplies the real value a disk has no health row. The registry keeps the row for then, and the validator does not
-        // require it.
         public IReadOnlyList<CheckItem> Build()
         {
+            // One health row per disk, first, from Windows' reading (§14.4). It is never a roll-up of the rows below: that would count each of
+            // them twice in the overall verdict. A drive that could not be read through SMART (denied, not elevated) or a slot that could not
+            // be looked at has it too: Windows' status does not need this process to open the drive.
+            _rows.Add(windowsHealth.ToItem("storage.health", subject));
+
             if (drive.Recognition == StorageRecognition.Recognized && drive.Health.TryGet(out var health))
             {
                 Capacity();
@@ -361,8 +364,9 @@ internal static class StorageJudge
             if (drive.Counters is not { AtaThresholdsRead: true })
             {
                 // Without the table a 0 is not a real threshold. Why it is missing comes from the read: "unsupported" is only a drive that
-                // gave its SMART data and no threshold table, never a read that failed (denied, timed out, or lost its bytes).
-                Unavailable(id, CheckSource.Ata, drive.Health.Status != ValueStatus.Ok ? HealthMissingReason() : drive.Counters is null ? CheckReason.Error : CheckReason.Unsupported);
+                // gave its SMART data and no threshold table, never a read that failed (denied, timed out, or lost its bytes). The status of
+                // the READ THRESHOLDS call travels with the counters (a read the Helper made does not carry it: "not said", so unsupported as before).
+                Unavailable(id, CheckSource.Ata, ThresholdsMissingReason());
                 return;
             }
 
@@ -397,6 +401,23 @@ internal static class StorageJudge
             {
                 Judged(id, CheckValue.Text("within"), ItemVerdict.Ok, CheckSource.Ata);
             }
+        }
+
+        private CheckReason ThresholdsMissingReason()
+        {
+            if (drive.Health.Status != ValueStatus.Ok)
+            {
+                return HealthMissingReason(); // the SMART read itself did not come
+            }
+
+            if (drive.Counters is null)
+            {
+                return CheckReason.Error; // the data came but its bytes did not reach the judge
+            }
+
+            // The IOCTL's own answer when this process asked: denied, timeout or error. Only "answered, no table" (or a reading nobody says
+            // more about) is unsupported.
+            return drive.Counters.AtaThresholdsStatus is { } why ? ReasonOf(why) : CheckReason.Unsupported;
         }
 
         // ---- counters that should not grow (§14.4, the table) ----

@@ -73,6 +73,16 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/SystemInfo/NativeEventLogApi.cs
       the wevtapi calls (EvtQuery, EvtNext, EvtClose) and the batch loop, from
       the owner's parts-life EventCounts
+  src/PcMieru.Checks/SystemInfo/SystemJudge.cs
+      the thresholds and verdict rules of the system check, from the owner's
+      pl-cloud src/PartsLife.Checks/SystemInfo/SystemCheck.cs (the
+      parts-life Checks code)
+  src/PcMieru.Checks/SystemInfo/SystemWmi.cs
+      the page file and video controller questions, from the same
+      SystemCheck.cs (ReadPagefile, ReadVideo)
+  src/PcMieru.Checks/SystemInfo/DiskHealthReader.cs
+      the disk health verdict rule (HealthStatus and OperationalStatus), from
+      the same SystemCheck.cs (JudgeDisk)
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj

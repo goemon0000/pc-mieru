@@ -65,6 +65,12 @@ public sealed record StorageErrorLogCounts(int EntriesRead, int MediaErrors);
 /// null when this is not an NVMe read. The checks judge and show <c>Kelvin - 273</c> (v0.7.4's whole degrees: 343 K is 70, a caution), not
 /// <see cref="StorageHealth.TemperatureC"/>, whose <c>Kelvin - 273.15</c> (69.85) is for the screens and would move every verdict one step.
 /// </param>
+/// <param name="AtaThresholdsStatus">
+/// SATA: why the SMART READ THRESHOLDS table is missing, when this process asked for it and it did not come: Denied, Timeout or Error
+/// when the IOCTL failed, Unsupported when the drive answered without a table. Null when the table was read (<see cref="AtaThresholdsRead"/>),
+/// when this is not a SATA read, and when the reading was taken elsewhere (the elevated Helper's answer does not carry the reason, so
+/// "not said", never "unsupported").
+/// </param>
 public sealed record StorageInspectionCounters(
     StorageHealthKind Kind,
     U128? ErrorLogEntries,
@@ -74,7 +80,8 @@ public sealed record StorageInspectionCounters(
     IReadOnlyList<string> UnrepresentableCounters,
     bool? AtaPredictFailure,
     bool AtaThresholdsRead,
-    int? NvmeCompositeKelvin = null);
+    int? NvmeCompositeKelvin = null,
+    ValueStatus? AtaThresholdsStatus = null);
 
 /// <summary>The names v0.7.4's baseline gave the NVMe counters it stored (BaselineEntry.Counters keys). They are part of the stored format.</summary>
 public static class StorageLegacyCounterKeys
@@ -151,4 +158,8 @@ public sealed record StorageInspection(
 /// <param name="Identity">The identity as the Helper read it on the handle the health bytes came through.</param>
 /// <param name="ErrorLog">The Helper's counts from log page 0x01.</param>
 /// <param name="PredictFailure">The failure-prediction answer, when the Helper used that window.</param>
-public sealed record ElevatedDriveRead(byte[]? Bytes, DiskIdentity? Identity, StorageErrorLogCounts? ErrorLog, bool? PredictFailure);
+/// <param name="ThresholdsStatus">
+/// SATA read in this process only: why the SMART READ THRESHOLDS table did not come after the SMART data did (null when it came). The
+/// elevated Helper's answer does not carry it, so for a Helper read it is null, which means "not said".
+/// </param>
+public sealed record ElevatedDriveRead(byte[]? Bytes, DiskIdentity? Identity, StorageErrorLogCounts? ErrorLog, bool? PredictFailure, ValueStatus? ThresholdsStatus = null);

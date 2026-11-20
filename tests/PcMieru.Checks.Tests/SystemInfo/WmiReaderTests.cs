@@ -57,6 +57,7 @@ public sealed class WmiReaderTests
         clock.Advance(TimeSpan.FromMilliseconds(1500));
         var executor = new FakeWmiExecutor(FakeWmiExecutor.Rows(1));
         var storage = new WmiQuery<int>(WmiScopes.Storage, "SELECT V FROM MSFT_Test", row => (int)row["V"]!);
+        var callerThread = Environment.CurrentManagedThreadId; // taken before the await: after it the test may continue on the very pool thread the executor ran on
 
         await QueryTest.Done(Reader(executor).ReadAsync(storage, deadline, CancellationToken.None));
 
@@ -64,7 +65,7 @@ public sealed class WmiReaderTests
         Assert.Equal(@"\\.\root\microsoft\windows\storage", scope);
         Assert.Equal("SELECT V FROM MSFT_Test", text);
         Assert.Equal(TimeSpan.FromMilliseconds(3500), timeout);
-        Assert.NotEqual(Environment.CurrentManagedThreadId, Assert.Single(executor.Threads));
+        Assert.NotEqual(callerThread, Assert.Single(executor.Threads));
     }
 
     [Fact]

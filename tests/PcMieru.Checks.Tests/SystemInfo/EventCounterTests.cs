@@ -30,7 +30,7 @@ public sealed class EventCounterTests
     private static void AssertOwnedByOneWorker(FakeEventLogApi api)
     {
         var worker = Assert.Single(api.CallThreads.Distinct());
-        Assert.NotEqual(Environment.CurrentManagedThreadId, worker);
+        Assert.NotEqual(api.CreatedOnThread, worker);
     }
 
     [Fact]

@@ -273,12 +273,12 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
                     : Value.Unsupported<StorageHealth>(source, "the drive returned no SMART table (SMART disabled, or a bridge that does not pass it through)");
             }
 
-            var thresholds = SmartTable(h, StorageProtocol.SmartReadThresholds, (byte)number, out _);
+            var thresholds = SmartTable(h, StorageProtocol.SmartReadThresholds, (byte)number, out var thresholdsError);
             var parsed = StorageHealthParsers.FromSmartTables(data, thresholds);
             if (evidence is not null)
             {
                 var both = thresholds is null ? data : [.. data, .. thresholds];
-                evidence(new ElevatedDriveRead(both, ReadIdentity(h), null, null));
+                evidence(new ElevatedDriveRead(both, ReadIdentity(h), null, null, ThresholdsStatusOf(thresholds, thresholdsError)));
             }
 
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source} (elevated process)", parsed.Detail);
@@ -318,6 +318,28 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Why the SMART READ THRESHOLDS table did not come (null when it did): the Win32 error of the IOCTL when there was one (access denied,
+    /// a timeout, any other failure), and "unsupported" only for a drive that answered without a table (error 0: the status registers
+    /// said no, or the answer was short).
+    /// </summary>
+    internal static ValueStatus? ThresholdsStatusOf(byte[]? thresholds, int error)
+    {
+        if (thresholds is not null)
+        {
+            return null;
+        }
+
+        const int ErrorSemTimeout = 121;
+        const int ErrorTimeout = 1460;
+        return error switch
+        {
+            0 => ValueStatus.Unsupported,
+            ErrorSemTimeout or ErrorTimeout => ValueStatus.Timeout,
+            _ => Probe.FromWin32<StorageHealth>(error, string.Empty, string.Empty).Status,
+        };
     }
 
     /// <summary>SMART READ DATA / READ THRESHOLDS only: the request builder refuses any other ATA feature.</summary>

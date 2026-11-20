@@ -1,4 +1,5 @@
 using PcMieru.Checks.Storage;
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
 
@@ -95,12 +96,16 @@ internal static class J
     // ---- rows ----
 
     /// <summary>The rows of the drive by ID. They are also written as one result and must pass the strict validator.</summary>
-    public static Dictionary<string, CheckItem> Rows(StorageInspectionDrive drive, BaselineDiskOutcome? baseline = null)
+    public static Dictionary<string, CheckItem> Rows(StorageInspectionDrive drive, BaselineDiskOutcome? baseline = null, DiskHealthVerdict? health = null)
     {
-        var rows = StorageJudge.Rows(drive, baseline ?? First(), Subject);
+        var rows = Judged(drive, baseline ?? First(), Subject, health);
         AssertValid(rows);
         return rows.ToDictionary(static r => r.Id, StringComparer.Ordinal);
     }
+
+    /// <summary>The rows of the judge for a disk whose Windows health is as given (healthy when not said), in the judge's order.</summary>
+    public static IReadOnlyList<CheckItem> Judged(StorageInspectionDrive drive, BaselineDiskOutcome baseline, CheckSubject subject, DiskHealthVerdict? health = null) =>
+        StorageJudge.Rows(drive, baseline, subject, health ?? DiskHealthVerdict.Healthy);
 
     public static void AssertValid(IReadOnlyList<CheckItem> rows)
     {

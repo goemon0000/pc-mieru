@@ -1,6 +1,7 @@
 using System.Reflection;
 using PcMieru.Checks.Storage;
 using PcMieru.Core;
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core.Hardware;
 
 namespace PcMieru.Checks;
@@ -11,8 +12,9 @@ namespace PcMieru.Checks;
 /// Every path is given by the caller: nothing here looks at the user's profile. The Windows pieces are plugged in by whoever assembles the
 /// services (<see cref="CreateLive"/> for the real machine).
 /// <para>
-/// The hardware provider and the CPU test-session factory of §2 are not here yet: they arrive with the system, CPU and memory checks
-/// (DESIGN-A §11 steps 5 to 7) as further constructor parameters and properties of this class.
+/// The hardware provider arrived with the system check (<see cref="Hardware"/>), as did the two readers it asks Windows through
+/// (<see cref="Wmi"/> and <see cref="Events"/>, which the storage check's disk health uses too). The CPU test-session factory of §2 arrives
+/// with the CPU and memory checks (DESIGN-A §11 steps 6 and 7).
 /// </para>
 /// </summary>
 public sealed class CheckServices
@@ -30,24 +32,35 @@ public sealed class CheckServices
     /// <param name="legacyDirectory">The checks folder the v0.7.4 app kept, only read, or null for no import.</param>
     /// <param name="history">Where a finished run is saved.</param>
     /// <param name="app">The <c>app</c> field of the results ("PCMieru 0.4.0"). Defaults to <see cref="DefaultApp"/>.</param>
+    /// <param name="hardware">
+    /// The source of the system check's hardware facts (OS, CPU, memory, GPUs, disks). Defaults to a new <see cref="RealHardwareProvider"/>,
+    /// which reads nothing until a system check asks.
+    /// </param>
     public CheckServices(
         TimeProvider time,
         string root,
         IStorageInspectionSource storage,
         string? legacyDirectory,
         ICheckHistoryMaintainer history,
-        string? app = null)
-        : this(time, storage, history, NewBaseline(time, root, legacyDirectory), app, runIds: null)
+        string? app = null,
+        IHardwareProvider? hardware = null)
+        : this(time, storage, history, NewBaseline(time, root, legacyDirectory), app, runIds: null, hardware)
     {
     }
 
+    /// <param name="hardware">The hardware provider (null: a real one).</param>
+    /// <param name="wmi">The WMI reader of the system check and of the storage check's disk health (null: the real one, <see cref="ManagementWmiReader"/>).</param>
+    /// <param name="events">The System-log counter of the system check (null: the real one, <see cref="WevtEventCounter"/>).</param>
     internal CheckServices(
         TimeProvider time,
         IStorageInspectionSource storage,
         ICheckHistoryMaintainer history,
         BaselineEngine baseline,
         string? app,
-        Func<Guid>? runIds)
+        Func<Guid>? runIds,
+        IHardwareProvider? hardware = null,
+        IWmiReader? wmi = null,
+        IEventCounter? events = null)
     {
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(storage);
@@ -59,6 +72,9 @@ public sealed class CheckServices
         Baseline = baseline;
         App = string.IsNullOrWhiteSpace(app) ? DefaultApp : app;
         RunIds = runIds ?? Guid.NewGuid;
+        Hardware = hardware ?? new RealHardwareProvider();
+        Wmi = wmi ?? new ManagementWmiReader();
+        Events = events ?? new WevtEventCounter();
     }
 
     /// <summary>The folder of the saved results and of the baseline (<c>&lt;root&gt;\checks</c>, DESIGN-A §4).</summary>
@@ -85,8 +101,18 @@ public sealed class CheckServices
     /// <summary>Makes the ID of a new run. A test fixes it.</summary>
     internal Func<Guid> RunIds { get; }
 
+    /// <summary>The system check's hardware facts. Each run of the system check asks it to forget what it cached first.</summary>
+    public IHardwareProvider Hardware { get; }
+
+    /// <summary>WMI, for the system check's page files and GPU status and for the disk health of the system and storage checks. Each question has its own 5 s deadline (§6.1).</summary>
+    internal IWmiReader Wmi { get; }
+
+    /// <summary>The System-log counts of the system check. The eleven queries of a run share one 5 s deadline (§6.1).</summary>
+    internal IEventCounter Events { get; }
+
     /// <summary>
-    /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the history under
+    /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the real hardware provider,
+    /// WMI and System-log readers (system check), the history under
     /// <c>&lt;root&gt;\checks</c> and the baseline under <c>&lt;root&gt;\checks\baseline</c> (DESIGN-A §4). <paramref name="root"/> is the
     /// product's data folder (the app passes <c>%LOCALAPPDATA%\PCMieru</c>) and <paramref name="legacyDirectory"/> the v0.7.4 folder or null: both are the caller's
     /// decision, nothing here looks at the user's profile, and nothing is read or created until a run starts. No elevated reader is wired

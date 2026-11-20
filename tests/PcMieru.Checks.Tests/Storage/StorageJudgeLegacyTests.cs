@@ -1,4 +1,5 @@
 using PcMieru.Checks.Storage;
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
 using static PcMieru.Checks.Tests.Storage.J;
@@ -13,7 +14,7 @@ namespace PcMieru.Checks.Tests.Storage;
 public sealed class StorageJudgeLegacyTests
 {
     private static CheckVerdict WorstOf(StorageInspectionDrive drive, BaselineDiskOutcome? baseline = null) =>
-        Overall(StorageJudge.Rows(drive, baseline ?? First(), Subject));
+        Overall(Judged(drive, baseline ?? First(), Subject));
 
     // ---- NVMe ----
 
@@ -23,7 +24,9 @@ public sealed class StorageJudgeLegacyTests
         var rows = Rows(Nvme(critical: 1));
 
         Is(ItemVerdict.Check, rows["storage.nvme.critical_warning"]);
-        Assert.DoesNotContain("storage.health", rows.Keys); // no roll-up row (DESIGN-A §13): the verdict comes from the rows themselves
+        // The disk's own health row is Windows' (ok here), not a roll-up of these rows: the check below comes from the critical warning once.
+        Is(ItemVerdict.Ok, rows["storage.health"]);
+        Assert.Equal(1, rows.Values.Count(static r => r.Verdict == ItemVerdict.Check));
         Assert.Equal(CheckVerdict.Check, WorstOf(Nvme(critical: 1)));
     }
 
@@ -72,7 +75,7 @@ public sealed class StorageJudgeLegacyTests
 
         Is(ItemVerdict.Check, rows["storage.nvme.media_errors"]);
         Is(ItemVerdict.Check, rows["storage.nvme.media_errors.delta"]);
-        Assert.Equal(CheckVerdict.Check, Overall(StorageJudge.Rows(Nvme(media: 5), Compared(Counter("nvme.media_errors", 3, 5)), Subject)));
+        Assert.Equal(CheckVerdict.Check, Overall(Judged(Nvme(media: 5), Compared(Counter("nvme.media_errors", 3, 5)), Subject)));
     }
 
     [Fact]
@@ -82,7 +85,7 @@ public sealed class StorageJudgeLegacyTests
 
         Is(ItemVerdict.Ok, rows["storage.nvme.media_errors"]);
         Is(ItemVerdict.Ok, rows["storage.nvme.media_errors.delta"]);
-        Assert.Equal(CheckVerdict.Ok, Overall(StorageJudge.Rows(Nvme(media: 3), Compared(Counter("nvme.media_errors", 3, 3)), Subject)));
+        Assert.Equal(CheckVerdict.Ok, Overall(Judged(Nvme(media: 3), Compared(Counter("nvme.media_errors", 3, 3)), Subject)));
     }
 
     [Fact]
@@ -94,7 +97,7 @@ public sealed class StorageJudgeLegacyTests
 
         Is(ItemVerdict.Caution, rows["storage.nvme.error_log_entries"]);
         Assert.Equal(CheckEvidenceCode.MediaErrorsInLog, rows["storage.nvme.error_log_entries"].Evidence!.Code);
-        Assert.Equal(CheckVerdict.Caution, Overall(StorageJudge.Rows(drive, Compared(Counter("nvme.error_log_entries", 4, 4)), Subject)));
+        Assert.Equal(CheckVerdict.Caution, Overall(Judged(drive, Compared(Counter("nvme.error_log_entries", 4, 4)), Subject)));
     }
 
     // ---- SATA ----
@@ -123,7 +126,7 @@ public sealed class StorageJudgeLegacyTests
         Is(ItemVerdict.Ok, rows["storage.temperature"]);
         IsDec(12000, rows["storage.ata.9"]);
 
-        Assert.DoesNotContain("storage.health", rows.Keys);
+        Is(ItemVerdict.Ok, rows["storage.health"]); // Windows' reading, one row; the eight pending sectors are counted once, by their own row
         Assert.Equal(CheckVerdict.Check, WorstOf(SataWithEightPending()));
     }
 
@@ -161,10 +164,10 @@ public sealed class StorageJudgeLegacyTests
     {
         var usb = Drives.NoHealth() with { BusType = 7 };
 
-        var rows = StorageJudge.Rows(usb, First(), Subject);
+        var rows = Judged(usb, First(), Subject);
 
         AssertValid(rows);
-        Assert.DoesNotContain(rows, static r => r.Id == "storage.health");
+        Assert.Equal(["storage.health", "storage.capacity", "storage.temperature"], rows.Select(static r => r.Id)); // Windows still says how the disk is, whatever SMART could not
         var temperature = Assert.Single(rows, static r => r.Id == "storage.temperature");
         Assert.Equal(ItemVerdict.Unavailable, temperature.Verdict);
         Assert.Equal(CheckVerdict.Unavailable, Overall(rows));
@@ -175,16 +178,16 @@ public sealed class StorageJudgeLegacyTests
     {
         // v0.7.4 left an unavailable disk out of the overall verdict, so a healthy disk and a USB disk were "ok". DESIGN-A §3 ranks
         // unavailable above ok: a result with a disk nobody could look at is not "ok". This is an intended change.
-        var healthy = StorageJudge.Rows(Nvme(), First(), Subject);
-        var usb = StorageJudge.Rows(Drives.NoHealth() with { BusType = 7 }, First(), new CheckSubject("disk-2", null));
+        var healthy = Judged(Nvme(), First(), Subject);
+        var usb = Judged(Drives.NoHealth() with { BusType = 7 }, First(), new CheckSubject("disk-2", null));
 
         Assert.Equal(CheckVerdict.Ok, Overall(healthy));
         Assert.Equal(CheckVerdict.Unavailable, Overall(healthy, usb));
 
-        var caution = StorageJudge.Rows(Nvme(used: 95), First(), new CheckSubject("disk-3", null));
+        var caution = Judged(Nvme(used: 95), First(), new CheckSubject("disk-3", null));
         Assert.Equal(CheckVerdict.Caution, Overall(healthy, usb, caution));
 
-        var check = StorageJudge.Rows(Nvme(critical: 1), First(), new CheckSubject("disk-4", null));
+        var check = Judged(Nvme(critical: 1), First(), new CheckSubject("disk-4", null));
         Assert.Equal(CheckVerdict.Check, Overall(healthy, usb, caution, check));
     }
 
@@ -193,8 +196,8 @@ public sealed class StorageJudgeLegacyTests
     {
         var slot = Drives.Unreadable();
 
-        var rows = StorageJudge.Rows(slot, First(1), new CheckSubject("disk-2", null));
+        var rows = Judged(slot, First(1), new CheckSubject("disk-2", null));
 
-        Assert.Equal(CheckVerdict.Unavailable, Overall(StorageJudge.Rows(Nvme(), First(), Subject), rows));
+        Assert.Equal(CheckVerdict.Unavailable, Overall(Judged(Nvme(), First(), Subject), rows));
     }
 }

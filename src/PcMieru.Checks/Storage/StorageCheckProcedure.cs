@@ -1,3 +1,4 @@
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core.Hardware;
 using PcMieru.Core.Hardware.Model;
 
@@ -11,6 +12,7 @@ namespace PcMieru.Checks.Storage;
 /// <item><see cref="IStorageInspectionSource.InspectAsync"/> with <see cref="CheckRequest.AllowElevation"/>. A source that throws (other than a
 /// cancel) fails the run as a whole: there is nothing to judge.</item>
 /// <item><see cref="BaselineEngine.Complete"/> on a worker thread (it may wait for the baseline's lock for seconds, so never on the caller's).</item>
+/// <item>Windows' health status of the disks, read once (<see cref="DiskHealthReader"/>).</item>
 /// <item>Rows: <c>storage.devices</c>, then per disk <see cref="StorageJudge.Rows"/> in the order the baseline numbered the disks.</item>
 /// </list>
 /// </summary>
@@ -55,11 +57,16 @@ internal sealed class StorageCheckProcedure : ICheckProcedure
             collector.Note(CheckNotes.StorageLegacyImportAbandoned);
         }
 
+        // Windows' own health status of the disks (§14.4): ONE read for the whole run, with its own 5 s deadline, after the inspection (an
+        // elevation prompt must not eat into it). It needs no elevation and cannot fail the run: a reading that did not come is a reason.
+        var windows = await DiskHealthReader.ReadAsync(services.Wmi, services.Time, ct).ConfigureAwait(false);
+
         collector.Add(Devices(inspection));
         foreach (var disk in baseline.Disks)
         {
             var drive = inspection.Drives[disk.DriveIndex];
-            collector.AddRange(StorageJudge.Rows(drive, disk, StorageJudge.SubjectOf(drive, disk.DiskId)));
+            var health = windows.Of(drive.PhysicalDriveNumber, drive.Recognition == StorageRecognition.Recognized ? drive.SerialNumber : null);
+            collector.AddRange(StorageJudge.Rows(drive, disk, StorageJudge.SubjectOf(drive, disk.DiskId), health));
         }
     }
 

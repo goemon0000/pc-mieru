@@ -72,12 +72,15 @@ internal static class InspectionParsers
             NvmeCompositeKelvin: BinaryPrimitives.ReadUInt16LittleEndian(page.Slice(1, 2)));
     }
 
-    /// <summary>SATA: only whether the failure-prediction window answered and whether the threshold table was read.</summary>
-    public static StorageInspectionCounters ForAta(bool? predictFailure, bool thresholdsRead) =>
-        new(StorageHealthKind.Sata, null, null, null, false, [], predictFailure, thresholdsRead);
+    /// <summary>
+    /// SATA: only whether the failure-prediction window answered and whether the threshold table was read, and, when it was not and this
+    /// process asked for it, why (<paramref name="thresholdsStatus"/>; ignored when the table was read, because then there is nothing to explain).
+    /// </summary>
+    public static StorageInspectionCounters ForAta(bool? predictFailure, bool thresholdsRead, ValueStatus? thresholdsStatus = null) =>
+        new(StorageHealthKind.Sata, null, null, null, false, [], predictFailure, thresholdsRead, AtaThresholdsStatus: thresholdsRead ? null : thresholdsStatus);
 
     /// <summary>The counters of the bytes in the shape <see cref="IElevatedStorageReader"/> hands out: the NVMe page, or the SMART table with its thresholds after it.</summary>
-    public static StorageInspectionCounters? FromBytes(StorageHealthKind kind, byte[]? bytes, StorageErrorLogCounts? errorLog, bool? predictFailure)
+    public static StorageInspectionCounters? FromBytes(StorageHealthKind kind, byte[]? bytes, StorageErrorLogCounts? errorLog, bool? predictFailure, ValueStatus? thresholdsStatus = null)
     {
         if (bytes is null)
         {
@@ -86,7 +89,7 @@ internal static class InspectionParsers
 
         return kind == StorageHealthKind.Nvme
             ? FromNvme(bytes, errorLog)
-            : ForAta(predictFailure, bytes.Length >= 2 * StorageHealthParsers.SmartPageLength);
+            : ForAta(predictFailure, bytes.Length >= 2 * StorageHealthParsers.SmartPageLength, thresholdsStatus);
     }
 
     public static StorageErrorLogCounts? ErrorLogOf(ReadOnlySpan<byte> page) =>

@@ -1,4 +1,5 @@
 using PcMieru.Checks.Storage;
+using PcMieru.Checks.SystemInfo;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
 using static PcMieru.Checks.Tests.Storage.J;
@@ -24,11 +25,11 @@ public sealed class StorageJudgeTests
     [Fact]
     public void A_healthy_nvme_disk_has_the_rows_of_the_table_in_order()
     {
-        var rows = StorageJudge.Rows(Nvme(), First(), Subject);
+        var rows = Judged(Nvme(), First(), Subject);
 
         Assert.Equal(
             [
-                "storage.capacity", "storage.temperature", "storage.nvme.critical_warning", "storage.nvme.available_spare",
+                "storage.health", "storage.capacity", "storage.temperature", "storage.nvme.critical_warning", "storage.nvme.available_spare",
                 "storage.nvme.spare_threshold", "storage.nvme.percentage_used", "storage.nvme.media_errors", "storage.nvme.error_log_entries",
                 "storage.nvme.unsafe_shutdowns", "storage.nvme.power_cycles", "storage.nvme.power_on_hours", "storage.nvme.data_units_written",
             ],
@@ -41,11 +42,11 @@ public sealed class StorageJudgeTests
     [Fact]
     public void A_healthy_sata_disk_has_the_rows_of_the_table_and_none_for_what_it_does_not_report()
     {
-        var rows = StorageJudge.Rows(HealthyAta(), First(), Subject);
+        var rows = Judged(HealthyAta(), First(), Subject);
 
         // No predict_failure (the window was not read), no 187/196/198 (the drive does not list them).
         Assert.Equal(
-            ["storage.capacity", "storage.temperature", "storage.ata.threshold_status", "storage.ata.5", "storage.ata.197", "storage.ata.199", "storage.ata.9"],
+            ["storage.health", "storage.capacity", "storage.temperature", "storage.ata.threshold_status", "storage.ata.5", "storage.ata.197", "storage.ata.199", "storage.ata.9"],
             rows.Select(static r => r.Id));
         AssertValid(rows);
         Assert.Equal(CheckVerdict.Ok, Overall(rows));
@@ -70,7 +71,7 @@ public sealed class StorageJudgeTests
     [Fact]
     public void The_delta_rows_come_last_and_are_the_baselines()
     {
-        var rows = StorageJudge.Rows(Nvme(media: 2), Compared(Counter("nvme.media_errors", 1, 2), Counter("nvme.power_on_hours", 99, 100)), Subject);
+        var rows = Judged(Nvme(media: 2), Compared(Counter("nvme.media_errors", 1, 2), Counter("nvme.power_on_hours", 99, 100)), Subject);
 
         Assert.Equal(["storage.nvme.media_errors.delta", "storage.nvme.power_on_hours.delta"], rows.Skip(rows.Count - 2).Select(static r => r.Id));
         AssertValid(rows);
@@ -798,26 +799,68 @@ public sealed class StorageJudgeTests
 
     // ---- storage.health ----
 
-    // TODO(DESIGN-A step 5, §14.4): the row comes from Windows' own status (MSFT_PhysicalDisk). Until then there is none, and the disk's
-    // own judged rows are counted once in the overall verdict, never a second time through a roll-up.
+    // DESIGN-A §14.4: the row is Windows' own status (MSFT_PhysicalDisk), one per disk and the first of its rows. It is never a roll-up of the
+    // disk's other rows, so each judged row is counted once in the overall verdict.
 
     [Fact]
-    public void There_is_no_health_row_for_any_disk_yet_and_the_rows_are_counted_once()
+    public void Every_disk_has_one_health_row_first_and_the_rows_are_counted_once()
     {
         var critical = Rows(Nvme(critical: 1));
-        Assert.DoesNotContain("storage.health", critical.Keys);
+        Assert.Equal("storage.health", critical.Keys.First());
+        Is(ItemVerdict.Ok, critical["storage.health"]);
         Is(ItemVerdict.Check, critical["storage.nvme.critical_warning"]);
+        Assert.Equal(1, critical.Values.Count(static r => r.Verdict == ItemVerdict.Check)); // the critical warning alone, not it and a summary of it
 
-        var worn = StorageJudge.Rows(Nvme(used: 95), First(), Subject);
-        Assert.DoesNotContain(worn, static r => r.Id == "storage.health");
-        Assert.Equal(1, worn.Count(static r => r.Verdict == ItemVerdict.Caution)); // the wear row alone, not it and a summary of it
+        var worn = Judged(Nvme(used: 95), First(), Subject);
+        Assert.Equal(1, worn.Count(static r => r.Id == "storage.health"));
+        Assert.Equal(1, worn.Count(static r => r.Verdict == ItemVerdict.Caution)); // the wear row alone
         Assert.Equal(CheckVerdict.Caution, Overall(worn));
 
-        var both = StorageJudge.Rows(Nvme(used: 95, critical: 4), First(), Subject);
+        var both = Judged(Nvme(used: 95, critical: 4), First(), Subject);
         Assert.Equal(1, both.Count(static r => r.Verdict == ItemVerdict.Check));
         Assert.Equal(1, both.Count(static r => r.Verdict == ItemVerdict.Caution));
 
-        Assert.DoesNotContain("storage.health", Rows(HealthyAta()).Keys);
+        Assert.Equal("storage.health", Rows(HealthyAta()).Keys.First());
+    }
+
+    [Fact]
+    public void The_health_row_is_the_windows_reading_with_the_source_wmi_and_adds_exactly_one_item_to_the_verdict()
+    {
+        var healthy = Judged(Nvme(), First(), Subject, DiskHealthVerdict.Healthy);
+        Assert.Equal(CheckValue.Text("healthy"), healthy[0].Value);
+        Assert.Equal(CheckSource.Wmi, healthy[0].Source);
+        Assert.Equal(Subject, healthy[0].Subject);
+        Is(ItemVerdict.Ok, healthy[0]);
+
+        var warning = Judged(Nvme(), First(), Subject, DiskHealthVerdict.Warning);
+        Assert.Equal(CheckValue.Text("warning"), warning[0].Value);
+        Is(ItemVerdict.Caution, warning[0]);
+        Assert.Equal(1, warning.Count(static r => r.Verdict == ItemVerdict.Caution));
+        Assert.Equal(CheckVerdict.Caution, Overall(warning));
+
+        var critical = Judged(Nvme(), First(), Subject, DiskHealthVerdict.Critical);
+        Assert.Equal(CheckValue.Text("critical"), critical[0].Value);
+        Is(ItemVerdict.Check, critical[0]);
+        Assert.Equal(1, critical.Count(static r => r.Verdict == ItemVerdict.Check)); // the SMART rows of this disk are fine: one check, from Windows
+        Assert.Equal(CheckVerdict.Check, Overall(critical));
+        AssertValid(critical);
+    }
+
+    [Theory]
+    [InlineData(CheckReason.Denied)]
+    [InlineData(CheckReason.Timeout)]
+    [InlineData(CheckReason.Error)]
+    [InlineData(CheckReason.Unsupported)]
+    public void A_health_that_windows_did_not_give_is_unavailable_with_its_reason_and_does_not_hide_the_other_rows(CheckReason reason)
+    {
+        var rows = Judged(Nvme(), First(), Subject, DiskHealthVerdict.Unavailable(reason));
+
+        IsMissing(reason, rows[0]);
+        Assert.Equal("storage.health", rows[0].Id);
+        Assert.Equal(CheckSource.Wmi, rows[0].Source);
+        Is(ItemVerdict.Ok, rows.Single(static r => r.Id == "storage.nvme.critical_warning"));
+        AssertValid(rows);
+        Assert.Equal(CheckVerdict.Unavailable, Overall(rows)); // the ranking: an unavailable item outweighs the ok ones
     }
 
     [Fact]
@@ -827,7 +870,7 @@ public sealed class StorageJudgeTests
 
         var rows = Rows(drive);
 
-        Assert.DoesNotContain("storage.health", rows.Keys);
+        Is(ItemVerdict.Ok, rows["storage.health"]); // Windows' reading does not need SMART
         IsMissing(CheckReason.Unsupported, rows["storage.temperature"]);
         IsMissing(CheckReason.Unsupported, rows["storage.ata.threshold_status"]);
     }
@@ -849,6 +892,31 @@ public sealed class StorageJudgeTests
         IsMissing(CheckReason.Error, Rows(drive)["storage.ata.threshold_status"]);
     }
 
+    [Theory]
+    [InlineData(ValueStatus.Denied, CheckReason.Denied)]
+    [InlineData(ValueStatus.Timeout, CheckReason.Timeout)]
+    [InlineData(ValueStatus.Error, CheckReason.Error)]
+    [InlineData(ValueStatus.Unsupported, CheckReason.Unsupported)]
+    [InlineData(ValueStatus.NotCollected, CheckReason.Error)]
+    public void An_unread_threshold_table_has_the_reason_the_read_of_the_thresholds_gave(ValueStatus status, CheckReason reason)
+    {
+        // The IOCTL that reads the thresholds said no for this reason: the row says the same, it is not "unsupported" because it is missing.
+        var drive = Ata([Attr(194, 33)], thresholdsRead: false).EditCounters(c => c with { AtaThresholdsStatus = status });
+
+        var row = Rows(drive)["storage.ata.threshold_status"];
+
+        IsMissing(reason, row);
+        Assert.Equal(CheckSource.Ata, row.Source);
+    }
+
+    [Fact]
+    public void The_status_of_the_thresholds_is_not_used_when_the_table_was_read()
+    {
+        var drive = Ata([Attr(194, 33)]).EditCounters(static c => c with { AtaThresholdsStatus = ValueStatus.Denied });
+
+        Is(ItemVerdict.Ok, Rows(drive)["storage.ata.threshold_status"]);
+    }
+
     // ---- disks that cannot be read ----
 
     [Theory]
@@ -863,25 +931,25 @@ public sealed class StorageJudgeTests
         // A USB bridge or a RAID volume: the disk is there, its health is not.
         var drive = Drives.NoHealth() with { Health = Value.Missing<StorageHealth>(status, "t") };
 
-        var rows = StorageJudge.Rows(drive, J.First(), Subject);
+        var rows = Judged(drive, J.First(), Subject);
 
         AssertValid(rows);
-        Assert.Equal(["storage.capacity", "storage.temperature"], rows.Select(static r => r.Id));
-        IsDec(2000398934016UL, rows[0]);
-        IsMissing(reason, rows[1]);
+        Assert.Equal(["storage.health", "storage.capacity", "storage.temperature"], rows.Select(static r => r.Id)); // Windows still says how the disk is
+        IsDec(2000398934016UL, rows[1]);
+        IsMissing(reason, rows[2]);
         Assert.Equal(CheckVerdict.Unavailable, Overall(rows));
     }
 
     [Fact]
-    public void An_unreadable_slot_has_one_unavailable_temperature_row_and_nothing_else()
+    public void An_unreadable_slot_has_the_health_row_and_one_unavailable_temperature_row_and_nothing_else()
     {
         var slot = Drives.Unreadable();
 
-        var rows = StorageJudge.Rows(slot, First(), StorageJudge.SubjectOf(slot, "disk-2"));
+        var rows = Judged(slot, First(), StorageJudge.SubjectOf(slot, "disk-2"));
 
         AssertValid(rows);
-        var only = Assert.Single(rows);
-        Assert.Equal("storage.temperature", only.Id);
+        Assert.Equal(["storage.health", "storage.temperature"], rows.Select(static r => r.Id)); // Windows' reading, and the one row that says the slot was not read
+        var only = rows[1];
         IsMissing(CheckReason.Error, only);
         Assert.Null(only.Subject!.Model);
         Assert.Equal(CheckVerdict.Unavailable, Overall(rows)); // the slot keeps the overall verdict from reading "ok"

@@ -95,7 +95,7 @@ public sealed class RealStorageInspectionSource(IElevatedStorageReader? elevated
             var evidence = result.Evidence;
             var hasBytes = evidence?.Bytes is not null;
             var confirmation = hasBytes ? InspectionParsers.Confirm(identity, evidence!.Identity) : StorageIdentityConfirmation.NoHealth;
-            var counters = hasBytes ? InspectionParsers.FromBytes(step.Kind, evidence!.Bytes, evidence.ErrorLog, evidence.PredictFailure) : null;
+            var counters = hasBytes ? InspectionParsers.FromBytes(step.Kind, evidence!.Bytes, evidence.ErrorLog, evidence.PredictFailure, evidence.ThresholdsStatus) : null;
 
             // A drive that waited for the Helper was sampled when the batch came back, not when the walk passed it.
             drives.Add(new StorageInspectionDrive(

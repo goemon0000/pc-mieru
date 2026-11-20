@@ -163,6 +163,9 @@ internal sealed class FakeEventLogApi(Func<int, NextResult> next) : IEventLogApi
     private nint _handle = 1000;
     private int _nextCalls;
 
+    /// <summary>The thread the fake was made on: the test's own thread, taken before any await (after one the test may go on a pool thread that a finished worker had).</summary>
+    public int CreatedOnThread { get; } = Environment.CurrentManagedThreadId;
+
     /// <summary>The status EvtQuery answers with; 0 is a result set.</summary>
     public int QueryStatus { get; set; }
 

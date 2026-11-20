@@ -60,8 +60,17 @@ public sealed class StorageCheckRunTests
         Assert.Equal("Samsung SSD 980 PRO 2TB", Row(run, "storage.capacity", "disk-1").Subject!.Model);
         Assert.Equal("WDC WD40EZRZ-00GXCB0", Row(run, "storage.capacity", "disk-2").Subject!.Model);
 
-        // DESIGN-A §13: no "storage.health" row yet (the value will come from Windows' own status, step 5).
-        Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
+        // DESIGN-A §14.4 / §14.1 (step 5b): Windows' own status of each disk is ONE row of that disk, the first of its rows.
+        var health = run.Result.Items.Where(static i => i.Id == "storage.health").ToList();
+        Assert.Equal(["disk-1", "disk-2"], health.Select(static i => i.Subject!.Id));
+        Assert.All(health, static h =>
+        {
+            Assert.Equal(ItemVerdict.Ok, h.Verdict);
+            Assert.Equal(CheckValue.Text("healthy"), h.Value);
+            Assert.Equal(CheckSource.Wmi, h.Source);
+        });
+        Assert.Equal("storage.health", RowsOf(run, "disk-1").First().Id);
+        Assert.Equal("storage.health", RowsOf(run, "disk-2").First().Id);
 
         // The NVMe disk: its 8 compared counters, all first.
         var nvmeDeltas = RowsOf(run, "disk-1").Where(static i => i.Id.EndsWith(".delta", StringComparison.Ordinal)).ToList();
@@ -164,9 +173,11 @@ public sealed class StorageCheckRunTests
         Assert.Equal(CheckEvidenceCode.LikelyCable, Row(run, "storage.ata.199.delta", "disk-2").Evidence!.Code);
         Assert.Equal(ItemVerdict.Ok, Row(run, "storage.ata.197", "disk-2").Verdict);
 
-        // The overall verdict is the worst of all (check > caution > unavailable > ok), from the rows themselves: no roll-up row of each
-        // disk is added, so nothing is counted twice. The checks are the media errors and the reallocated sectors, each with its delta.
-        Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
+        // The overall verdict is the worst of all (check > caution > unavailable > ok), from the rows themselves: the health is one row of
+        // each disk (healthy here) and no roll-up row is added, so nothing is counted twice. The checks are the media errors and the
+        // reallocated sectors, each with its delta.
+        Assert.Equal(2, run.Result.Items.Count(static i => i.Id == "storage.health"));
+        Assert.All(run.Result.Items.Where(static i => i.Id == "storage.health"), static h => Assert.Equal(ItemVerdict.Ok, h.Verdict));
         Assert.Equal(CheckVerdict.Check, run.Result.Verdict);
         Assert.Equal(4, run.Result.Counts.Check);
         Assert.Equal(run.Result.Items.Count(static i => i.Verdict == ItemVerdict.Check), run.Result.Counts.Check);
@@ -236,9 +247,12 @@ public sealed class StorageCheckRunTests
         Assert.Null(weakDelta.Value);
         Assert.Equal(CheckEvidenceCode.BaselineInventoryIncomplete, weakDelta.Evidence!.Code);
 
-        // The slot: one row, unavailable.
-        var slot = Assert.Single(RowsOf(run, "disk-3"));
-        Assert.Equal("storage.temperature", slot.Id); // the one row that keeps the slot in the result and the verdict from reading "ok"
+        // The slot: Windows' health of its drive number (one row, first), and the one row that is unavailable.
+        var slotRows = RowsOf(run, "disk-3").ToList();
+        Assert.Equal(["storage.health", "storage.temperature"], slotRows.Select(static r => r.Id));
+        Assert.Equal(ItemVerdict.Ok, slotRows[0].Verdict);
+        var slot = slotRows[1];
+        Assert.Equal("storage.temperature", slot.Id); // the row that keeps the slot in the result and the verdict from reading "ok"
         Assert.Equal(CheckReason.Error, slot.Reason);
         Assert.Equal(ItemVerdict.Unavailable, slot.Verdict);
         Assert.Null(slot.Value);
@@ -269,7 +283,8 @@ public sealed class StorageCheckRunTests
 
         var run = await RunOnce(rig, raid);
 
-        Assert.Equal(["storage.devices", "storage.capacity", "storage.temperature"], run.Result.Items.Select(static i => i.Id).Where(static id => !id.EndsWith(".delta", StringComparison.Ordinal)));
+        Assert.Equal(["storage.devices", "storage.health", "storage.capacity", "storage.temperature"], run.Result.Items.Select(static i => i.Id).Where(static id => !id.EndsWith(".delta", StringComparison.Ordinal)));
+        Assert.Equal(ItemVerdict.Ok, Row(run, "storage.health", "disk-1").Verdict); // Windows tells the health of a disk the SMART read could not
         var temperature = Row(run, "storage.temperature", "disk-1");
         Assert.Equal(CheckReason.Unsupported, temperature.Reason);
         Assert.Equal(ItemVerdict.Unavailable, temperature.Verdict);
@@ -292,7 +307,7 @@ public sealed class StorageCheckRunTests
         Assert.Equal(run.Result.Items.Count(static i => i.Verdict == ItemVerdict.Ok), counts.Ok);
         Assert.Equal(0, counts.Check);
         Assert.True(counts.Caution >= 1);
-        Assert.Equal(1, counts.Unavailable); // the denied disk's temperature: one row, no second "health" row for the same fact
+        Assert.Equal(1, counts.Unavailable); // the denied disk's temperature: its health is a row of its own (ok), never counted twice
     }
 
     // ---- elevation ----
@@ -616,7 +631,7 @@ public sealed class StorageCheckRunTests
     {
         using var rig = new RunRig();
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.System), null, CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.Memory), null, CancellationToken.None));
         await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.Cpu, TimeSpan.FromSeconds(30)), null, CancellationToken.None));
         Assert.Empty(rig.History.Saved);
     }

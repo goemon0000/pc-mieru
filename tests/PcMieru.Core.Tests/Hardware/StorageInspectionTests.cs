@@ -249,6 +249,68 @@ public class InspectionParserTests
         Assert.Null(InspectionParsers.FromBytes(StorageHealthKind.Sata, null, null, true));
     }
 
+    [Theory]
+    [InlineData(ValueStatus.Denied)]
+    [InlineData(ValueStatus.Timeout)]
+    [InlineData(ValueStatus.Error)]
+    [InlineData(ValueStatus.Unsupported)]
+    public void The_reason_the_thresholds_did_not_come_is_carried_next_to_the_flag(ValueStatus status)
+    {
+        var table = InspectionParsers.FromBytes(StorageHealthKind.Sata, new byte[512], null, null, status)!;
+        var ata = InspectionParsers.ForAta(true, false, status);
+
+        Assert.False(table.AtaThresholdsRead);
+        Assert.Equal(status, table.AtaThresholdsStatus);
+        Assert.Equal(status, ata.AtaThresholdsStatus);
+    }
+
+    [Fact]
+    public void A_table_that_came_has_no_reason_even_when_one_is_handed_in()
+    {
+        var read = InspectionParsers.FromBytes(StorageHealthKind.Sata, new byte[1024], null, null, ValueStatus.Denied)!;
+
+        Assert.True(read.AtaThresholdsRead);
+        Assert.Null(read.AtaThresholdsStatus);
+        Assert.Null(InspectionParsers.ForAta(null, true, ValueStatus.Error).AtaThresholdsStatus);
+    }
+
+    [Fact]
+    public void Without_a_reason_handed_in_the_reason_is_not_said()
+    {
+        // The Helper's answer carries none: "not said", which the checks do not turn into "unsupported".
+        Assert.Null(InspectionParsers.FromBytes(StorageHealthKind.Sata, new byte[512], null, null)!.AtaThresholdsStatus);
+        Assert.Null(InspectionParsers.ForAta(null, false).AtaThresholdsStatus);
+    }
+
+    [Fact]
+    public void An_nvme_read_has_no_thresholds_reason()
+    {
+        var counters = InspectionParsers.FromBytes(StorageHealthKind.Nvme, InspectionFixtures.NvmePage(), new StorageErrorLogCounts(0, 0), null, ValueStatus.Denied)!;
+
+        Assert.Null(counters.AtaThresholdsStatus);
+    }
+
+    [Fact]
+    public void A_thresholds_table_that_came_needs_no_reason()
+    {
+        Assert.Null(RealStorageHealthProvider.ThresholdsStatusOf(new byte[512], 0));
+        Assert.Null(RealStorageHealthProvider.ThresholdsStatusOf(new byte[512], 5)); // an error left over from an earlier call is not the table's
+    }
+
+    [Theory]
+    [InlineData(0, ValueStatus.Unsupported)] // the drive answered, without a table
+    [InlineData(5, ValueStatus.Denied)] // ERROR_ACCESS_DENIED
+    [InlineData(1, ValueStatus.Unsupported)] // ERROR_INVALID_FUNCTION: the bridge does not pass it
+    [InlineData(50, ValueStatus.Unsupported)] // ERROR_NOT_SUPPORTED
+    [InlineData(121, ValueStatus.Timeout)] // ERROR_SEM_TIMEOUT
+    [InlineData(1460, ValueStatus.Timeout)] // ERROR_TIMEOUT
+    [InlineData(31, ValueStatus.Error)] // ERROR_GEN_FAILURE
+    [InlineData(1117, ValueStatus.Error)] // ERROR_IO_DEVICE
+    public void The_reason_of_a_missing_thresholds_table_follows_the_error_of_the_call(int error, ValueStatus expected)
+    {
+        Assert.Equal(expected, RealStorageHealthProvider.ThresholdsStatusOf(null, error));
+    }
+
     [Fact]
     public void The_core_side_error_log_counts_agree_with_the_wire_counter_and_a_short_page_is_not_read()
     {

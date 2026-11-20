@@ -33,10 +33,19 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             var problems = CheckResultValidator.Validate(run.Result);
             Assert.True(problems.Count == 0, string.Join(" | ", problems));
 
-            // Every slot has at least one row with its subject (there is no per-disk "storage.health" row yet), so the slots are the subjects.
+            // Every slot has at least one row with its subject, so the slots are the subjects; and every one of them has exactly ONE
+            // "storage.health" row (Windows' own status, step 5b), the first of its rows: also the disks the SMART read was denied for.
             var devices = Assert.Single(run.Result.Items, static i => i.Id == "storage.devices");
             Assert.Equal(CheckValue.Int(DiskIds(run).Count), devices.Value);
-            Assert.DoesNotContain(run.Result.Items, static i => i.Id == "storage.health");
+            foreach (var id in DiskIds(run))
+            {
+                var rows = run.Result.Items.Where(i => i.Subject?.Id == id).ToList();
+                Assert.Equal("storage.health", rows[0].Id);
+                Assert.Single(rows, static r => r.Id == "storage.health");
+            }
+
+            // Windows answers for at least one disk of this machine (it needs no elevation).
+            Assert.Contains(run.Result.Items, static i => i.Id == "storage.health" && i.Value is not null);
         }
 
         // The file read back by the read-only history is the file that was written.
@@ -113,10 +122,16 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
                 ? "nvme"
                 : rows.Any(static r => r.Id.StartsWith("storage.ata.", StringComparison.Ordinal)) ? "ata" : "none";
 
-            // What the health reading gave: the reason it is missing (denied, error, unsupported, timeout ...) or "readable". The temperature row is
-            // the one every slot has, and it carries the reason of the health reading the disk's rows come from.
+            // What the SMART reading gave: the reason it is missing (denied, error, unsupported, timeout ...) or "readable". The temperature row is
+            // the one every slot has, and it carries the reason of the health reading the disk's protocol rows come from.
             var temperature = rows.FirstOrDefault(static r => r.Id == "storage.temperature");
-            var health = temperature is { Value: null } ? "missing:" + (temperature.Reason?.ToString() ?? "no-reason") : "readable";
+            var smart = temperature is { Value: null } ? "missing:" + (temperature.Reason?.ToString() ?? "no-reason") : "readable";
+
+            // Windows' own status of the disk (the first row): its value, or the reason it is missing. Nothing else about the disk is printed.
+            var windows = rows.FirstOrDefault(static r => r.Id == "storage.health");
+            var windowsText = windows is null
+                ? "no-row"
+                : windows.Value is { Type: CheckValueType.Text } text ? text.AsText + "/" + windows.Verdict : "missing:" + (windows.Reason?.ToString() ?? "no-reason");
             var check = rows.Count(static r => r.Verdict == ItemVerdict.Check);
             var caution = rows.Count(static r => r.Verdict == ItemVerdict.Caution);
             var unavailable = rows.Count(static r => r.Verdict == ItemVerdict.Unavailable);
@@ -125,7 +140,7 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             var codes = deltas.Where(static d => d.Evidence?.Code is not null).Select(static d => d.Evidence!.Code!.Value.ToString()).Distinct().Order();
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"  {id}: protocol={protocol} health={health} check={check} caution={caution} unavailable={unavailable} rows={rows.Count} deltas={deltas.Count} compared={compared} codes=[{string.Join(",", codes)}]"));
+                $"  {id}: protocol={protocol} smart={smart} windows_health={windowsText} check={check} caution={caution} unavailable={unavailable} rows={rows.Count} deltas={deltas.Count} compared={compared} codes=[{string.Join(",", codes)}]"));
         }
     }
 }
