@@ -176,7 +176,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 4. **通し番号は 1 から。** `subject.id` の `cpu-N`・`ram-N`・`gpu-N`・`disk-N`・`volume-N`・`pagefile-N` は全部 1 から。
 5. **増分の型。** `.delta` の元になる行は全部整数（NVMe の予備領域と寿命の消費も整数の %）。`before`・`after` は符号なしの十進の文字列、`.delta` の値は符号つきの十進の文字列。
 6. **比べられなかった `.delta`。** 値 `null`・`verdict: info`・`reason: partial`・`evidence` は `code` だけ（`before`・`after`・`sinceUtc` を持たない）。
-7. **台ごとに効く理由。** `baseline_first`・`baseline_no_identity`・`baseline_duplicate`・`baseline_device_changed`・`baseline_counter_reset`・`baseline_clock`・`baseline_concurrent`・`baseline_read_failed`・`baseline_legacy_refused` は台ごと。どれか 1 つが付いたら、その台の `.delta` は全部 `null` で同じコード。`baseline_missing_counter` だけは行ごと（前の記録にその数が無かった）。
+7. **台ごとに効く理由。** `baseline_inventory_incomplete`・`baseline_first`・`baseline_no_identity`・`baseline_duplicate`・`baseline_device_changed`・`baseline_counter_reset`・`baseline_clock`・`baseline_concurrent`・`baseline_read_failed`・`baseline_legacy_refused` は台ごと。どれか 1 つが付いたら、その台の `.delta` は全部 `null` で同じコード。`baseline_missing_counter` だけは行ごと（前の記録にその数が無かった）。
 8. **根拠のコードを置ける行。** 項目一覧にコードごとの置ける ID を持たせ、§3 と §14 から起こす。`baseline_*` は `.delta` の行だけ、`counter_increased`・`counter_decreased`・`new_bits` は `.delta` とその元の行だけ。
 9. **知っているコードだけ書く。** `notes` のコードも一覧を持ち、書き手は一覧に無いコードを拒む（読み手は形だけ見る）。
 10. **時刻。** 書き手はミリ秒より細かい時刻を拒む（黙って切り捨てない）。履歴の DTO の書き手も同じ。
@@ -257,6 +257,8 @@ Core の `IStorageInspectionSource` は 1 回分のインベントリと、台�
 
 - `StorageCollector` の記述子・容量・列挙を共用する。点検は新しく列挙し、表示キャッシュと健康応答をドライブ番号だけで結合しない。通常権限で健康を試し、結果と同じハンドルで識別子を採る。採取を通じて同一性を確かめられない台は比較と基準値更新を止める。現行の記述子・容量・表示名の組み立ては `src/PcMieru.Core/Hardware/Collectors/StorageCollector.cs:177`、`:184`、`:262`。現行の健康収集は `src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs:57`、`:77`、`:124`、`:219`。
 - 昇格を許された回は通常権限で `denied` の番号だけを `disk-health-all --drives ...` へ渡す。既存の固定要求、nonce、結果ファイルを使う。1 要求の範囲は番号 0～255、最大 16 台。既存 Reader は分割して起動する。点検は自動で次の UAC を重ねず、許可した 1 要求で取得できなかった台を `denied` として残す。根拠は `src/PcMieru.Wire/HelperOperations.cs:41`、`src/PcMieru.Wire/DriveList.cs:6`、`:13`、`src/PcMieru.Core/Hardware/Collectors/HelperStorageReader.cs:43`、`:59`、`src/PcMieru.Core/Management/HelperClient.cs:153`、`:237`。
+- 1 回の採取の中で、事前に読んだ素性と健康を読んだハンドルの素性（6 欄すべて。位置も含む）が違えば、その台は比べない。回をまたいだ比較は §5.2 の位置なしの強い鍵で行うので、差し替えなしの付け替え（ポートの移動）は比較を止めない。記述子が無い枠は鍵を持たないので重複の数に入れず、読めない枠として §5.2 の決まりだけに効く。
+- Helper の応答の大きさ: 1 台分の素性は JSON に書いた形で 2 KB を上限とし、超えたら素性を出さない（その台は比べられない）。最悪の 16 台でも `HelperClient` の上限の半分以下に収める（試験で確かめる）。
 - `DiskOperations` のバッチ応答に `drive.<n>.identity.{serial,uniqueId,location,model,sizeBytes,bus}` を追加する。健康を取得したハンドルで素性を読み直し、採取前の素性と照合する。識別子の不一致、応答の欠落、旧 Helper の識別子なし応答は比較不可。健康だけ出せる場合は「前回と比べられません」を併記する。Helper では比較も保存もしない。既存のバッチキー、バス判別、健康ページは `src/PcMieru.Wire/Privileged/ActionResult.cs:113`、`:130`、`src/PcMieru.Wire/Privileged/DiskOperations.cs:32`、`:88`、`:111`、`:157`。既存の `HealthCommand` の応答は Core で従来の `DriveHealth` に投影する。`src/PcMieru.Cli/Commands/HealthCommand.cs:47`、`src/PcMieru.Core/Hardware/Model/StorageHealth.cs:18`。
 - Core の NVMe Health と ATA SMART の解析を使う。累積 `ErrorLogEntries`、書き込みの生 Data Units、ATA の予告・しきい値の有無を点検側へ渡す。エラーログのページを取得できれば、旧判定に必要な媒体エラー区分だけを取り出す。LBA や生ページは結果へ出さない。USB／RAID で健康情報が取れない場合は `unsupported`。Core の NVMe カウンターと SMART の表は `src/PcMieru.Core/Hardware/Storage/HealthParsers.cs:67`、`:90`、`:99`、`:145`。旧入力は `PL/Storage/DiskReport.cs:61`、`:86`、`:92`。
 - 旧基準値の `Counters` は `ulong`。旧 NVMe パーサーは 128 bit を `ulong.MaxValue` で飽和させる。現在値の表示は精度を保ち、旧値が飽和しているか `ulong` で正確に表せないカウンターは増分を出さない。旧形式は `PL/Storage/Baseline.cs:7`、`PL/Storage/NvmeHealth.cs:90`。
@@ -275,7 +277,7 @@ v2|sn=SN%257%7CA_|uid=eui.0123456789abcdef|model=ATA Example SSD|size=1000204886
 - 記述子の文字列は 旧版と同じ ASCII 抽出と `Trim()`。シリアルは採取時に末尾の `.` を落とす。`_` は残す。型番は製品名がベンダー名で始まらないときベンダー名を前置する。旧方式では `ATA` も前置対象。Core の表示用 `CleanSerial` と `JoinVendorModel` はこの変換と異なるため、鍵には記述子から得た互換用の値を使う。`PL/Storage/DiskReport.cs:26`、`:35`、`PL/Storage/StorageReader.cs:66`、`:73`、`PL/Storage/Baseline.cs:171`、`src/PcMieru.Core/Hardware/Storage/StorageProtocol.cs:118`。
 - `UniqueId` は `IOCTL_STORAGE_QUERY_PROPERTY` の `StorageDeviceIdProperty = 2`。デバイス関連の binary ID のみ。旧版のサイズ・型のフィルターを移し、`eui.` を優先し、次に `naa.`。小文字 hex。全 0／全 FF、ポートの識別子、壊れた記述子は採用しない。`Location` は `IOCTL_SCSI_GET_ADDRESS`（`0x00041018`）。`Port:Path:Target:Lun` の十進表記。読めなければ空。`PL/Storage/StorageProtocol.cs:42`、`:67`、`:97`、`PL/Storage/StorageReader.cs:33`、`:81`。
 - 強い鍵は、有効なシリアルか空でない `UniqueId` があるもの。シリアルの判定は旧版どおり「`0` 以外の ASCII 英数字が 1 文字でもある」。比較は位置なしの強い鍵の完全一致。同時に同じ鍵が出たら `twins.json` に永続化する。過去の双子も比較不可。全台に異なる位置が取れた双子は位置つき鍵で記録だけ続ける。双子情報の書き込みに失敗した回は比較と基準値の更新を見送る。`PL/Storage/Baseline.cs:175`、`:190`、`:279`、`:308`。
-- 連続性は旧版どおり、NVMe の通電時間・書き込み単位、ATA 9 の逆行を見る。NVMe の通電時間だけは経過実時間に 3 時間の余裕を足した上限も見る。時計逆行で `Withheld` になった記録は次の比較元から外す。遅れて届いた回との区別は §14.5 の採取番号 `acq`。今回のインベントリが不完全で重複を除外できないときは差分を出さない。`PL/Storage/Baseline.cs:341`、`:382`、`:407`。
+- 連続性は旧版どおり、NVMe の通電時間・書き込み単位、ATA 9 の逆行を見る。NVMe の通電時間だけは経過実時間に 3 時間の余裕を足した上限も見る。時計逆行で `Withheld` になった記録は次の比較元から外す。遅れて届いた回との区別は §14.5 の採取番号 `acq`。**読めない枠があるとき**（開けない・記述子が無い。番号の欠け＝エラー 2・3 は数えない）は、弱い鍵の台と双子（位置つき鍵）の台だけ差分を出さない（`baseline_inventory_incomplete`）。有効なシリアルか `UniqueId` を持つ強い鍵の台は、知らない台と鍵がぶつからないので比べる。旧 v0.7.4 も読めない台を弱い鍵として残すだけで、他の台の比較は止めなかった。死にかけの台が 1 台あるだけで全部の比較が止まる形にしない。`PL/Storage/Baseline.cs:341`、`:382`、`:407`。
 - 強い鍵の表示番号は `disk-ordinals.json` に保持する。弱い鍵や恒久番号をまだ持たない台は、その結果内で未使用の `disk-N` を割り当てる。弱い鍵と番号の対応は保存しない。番号を履歴間で名寄せする用途には使わない。
 
 ### 5.3 v0.7.4 からの読み取り専用移行
@@ -422,6 +424,8 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 9. **点検 1b55576 の 2 回目で §3.5 を足した**（Opus 点検役の指摘 15 件と、設計の曖昧な所 9 つへの答え）。
 
+10. **点検 19797c3（段 A 手順 3）の後で決めた**（§5.1・§5.2・§14.0・§14.4）。読めない枠は弱い鍵と双子の台だけ比較を止める（`baseline_inventory_incomplete` を足した）。1 回の中の素性の照合は位置も含めた 6 欄、回をまたぐ比較は位置なしの強い鍵。Helper の素性は 1 台 2 KB まで。ログ 0x01 が読めないときは根拠を出さない。
+
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
 旧コードの行は `PL/` が `pl-cloud/src/PartsLife.Checks/`（v0.7.4 `25e4571`）。閾値の境界（`<` か `<=` か）は旧コードどおりで、fixture に境界の値を直書きする。
@@ -435,7 +439,7 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 - 旧の総合判定（`PL/Storage/StorageJudge.cs:11`）は「測れず」を順位から除いていた。新しい総合は仕様 §4.0 の順位（要確認＞注意＞測れず＞OK）で、ここは**意図して変える**。
 - `source` の固定値: `os`、`win32`（GlobalMemoryStatusEx などの Win32 API）、`smbios`、`setupapi`、`dxgi`、`wmi`、`eventlog`、`pdh`、`energy_meter`、`load`、`nvme`、`ata`、`storage_query`、`baseline`。足すときはこの表を直してから。
 - `evidence` の固定キーと型: `code`（下の一覧の文字列）・`before`／`after`（十進の文字列）・`sinceUtc`（UTC ISO 8601）・`newBits`（int）・`totalBytes`（十進の文字列）・`diskId`（`disk-N`）・`efficiencyClass`（int）・`cv`（number。変動係数 ×100）・`clockSteadiness`（number・%）・`warningTempMinutes`／`criticalTempMinutes`（十進の文字列）・`recentMediaErrors`（int）・`recentEntries`（int）・`capacities`（十進の文字列の配列）。
-- `evidence.code` の固定値: `baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_concurrent`、`baseline_missing_counter`、`baseline_read_failed`、`baseline_legacy_refused`、`counter_increased`、`counter_decreased`、`new_bits`、`likely_cable`、`mixed_capacity`、`below_rated`、`above_rated`、`disabled_code22`、`device_error`、`too_short`、`pin_unknown`、`pattern_mismatch`、`compute_mismatch`、`past_threshold_breach`、`current_threshold_breach`、`temp_over_critical_before`、`media_errors_in_log`。
+- `evidence.code` の固定値: `baseline_inventory_incomplete`、`baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_concurrent`、`baseline_missing_counter`、`baseline_read_failed`、`baseline_legacy_refused`、`counter_increased`、`counter_decreased`、`new_bits`、`likely_cable`、`mixed_capacity`、`below_rated`、`above_rated`、`disabled_code22`、`device_error`、`too_short`、`pin_unknown`、`pattern_mismatch`、`compute_mismatch`、`past_threshold_breach`、`current_threshold_breach`、`temp_over_critical_before`、`media_errors_in_log`。
 
 ### 14.1 システム
 
@@ -498,7 +502,7 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 | `storage.ata.threshold_status` | しきい値が読めない → `unavailable`。しきい値 0 の属性は比べない（旧 `PL/Storage/AtaSmart.cs:17`）。今の値 ≤ しきい値の属性がある → `check`（`current_threshold_breach`）。過去に割った（worst ≤ しきい値）→ `caution`（`past_threshold_breach`）。他 `ok` |
 | `storage.ata.predict_failure` | 真 → `check`。偽 → `ok`。この窓口が読めない台では**項目を出さない**（旧は真のときだけ出していた。出さないことで、SMART だけ読める台が毎回「測れず」にならない） |
 
-ログ 0x01 の読み取りは Core と Helper に**足す**（今の PCミエルはヘルスのログ 0x02 だけ。`src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs:114`）。結果へは件数だけを出し、LBA・ページの中身は出さない。§11 の作業順 3 に含める。
+ログ 0x01 が読めない・短いときは根拠の `recentMediaErrors`・`recentEntries` を出さない（0 で埋めない）。直近 16 件と累計 `error_log_entries` は突き合わせない（別の数）。ログ 0x01 の読み取りは Core と Helper に**足す**（今の PCミエルはヘルスのログ 0x02 だけ。`src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs:114`）。結果へは件数だけを出し、LBA・ページの中身は出さない。§11 の作業順 3 に含める。
 
 ### 14.5 増分（`.delta`）
 
