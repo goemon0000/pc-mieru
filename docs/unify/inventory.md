@@ -42,9 +42,9 @@
 | 書き出し | 診断レポート（Markdown/JSON・伏せ字） | ◎ | — | そのまま |
 | 外から | CLI `pcmi`（15 コマンド） | ◎ | △（`--shot` 等の開発用だけ） | 点検を CLI に出すかは仕様で |
 | 外から | MCP（読むだけの 7 ツール） | ◎ | — | 点検の結果を読むツールを足すかは仕様で |
-| 更新 | 自動更新（GitHub Release・許可リスト・SHA256・署名者の一致・ロールバック） | — | ◎（v0.7.3〜） | PCミエルへ持ってくる候補。既存利用者の移行に要る |
+| 更新 | 自動更新（GitHub Release・許可リスト・SHA256・ロールバック。署名者の照合は今の exe が署名済みのときだけ＝`RequireSignature=false` で無署名→無署名も通る） | — | ◎（v0.7.3〜） | PCミエルへ持ってくる候補。既存利用者の移行に要る |
 | 起動 | ログオン時の自動起動（HKCU Run） | — | ◎ | 常駐の窓を持つならいる |
-| 保存 | 設定 | `%LOCALAPPDATA%\PCMieru\gui.ini`（SPEC は `%APPDATA%\settings.json` と書く＝食い違い） | `%APPDATA%\PartsLife\state.json`（PascalCase・壊れたら退避と部分修復） | 物語の保存は state.json をそのまま引き継げる形に |
+| 保存 | 設定 | `%LOCALAPPDATA%\PCMieru\gui.ini`（SPEC.md:133 は `%APPDATA%\PCMieru\settings.json` と書く＝食い違い。統合版の仕様は実装に合わせる） | `%APPDATA%\PartsLife\state.json`（PascalCase・壊れたら退避と部分修復） | 物語の保存は state.json をそのまま引き継げる形に |
 | 保存 | 点検の履歴 | — | `%APPDATA%\PartsLife\checks\`（1 台 200 件） | 引き継ぐ |
 | 言語 | ja/en | ◎（Strings 表・全キー必須の試験） | ◎（`T(ja,en)`・物語は JSON に併記） | PCミエルの表へ寄せる。物語の JSON はそのまま |
 | 見た目 | 明暗のテーマ・文字サイズ | ◎ | — | |
@@ -54,7 +54,8 @@
 
 PCミエルは NOTICE.txt に MIT で次を明記して写している: SensorHost の Nvml.cs・Adlx.cs（sensor-log 枝から）、SensorMapping、
 StorageProtocol・HealthParsers・StorageHealthReader、Wire の StorageProtocol（読み取りコマンドの許可リスト）・DiskOperations、
-AOT exe の `CheckLazyNativeModules`。GpuCounterName の解析もパーツぐらしが元。
+AOT exe の `CheckLazyNativeModules`（NOTICE.txt:25 付近）。GpuCounterName の由来は NOTICE では裏づけが無い。
+**SMART の前回からの増分と履歴（Baseline.cs）・表面スキャン（SurfaceScanner.cs）は写していない**＝移す工数に数える。
 → 点検を作り直すときの下地は PCミエルにもうある。二重に持たず PCミエル側を正にする。
 
 ## 4. 未リリースの物
@@ -78,8 +79,9 @@ AOT exe の `CheckLazyNativeModules`。GpuCounterName の解析もパーツぐ�
 ## 5. 統合の前に知っておくべき食い違い・弱い所
 
 ### 前提の読み違い（仕様の段で直す）
+- 配布物は exe 群に加えて `PCMieru.Core.dll` も必須（publish.ps1:355）。自動更新の交換単位は一式。
 - 「常駐は操作を受けない」は**入力を透過するという意味ではない**。パーツぐらしの窓はドラッグ・右クリック・拡大縮小・ボタンを受ける。README の意味は「ゲームとして選ばせたり育てさせたりしない」。
-- PCミエルは常駐しない。統合して常駐の窓を持つなら、§11 の軽さの合格条件（private bytes < 100MB・定常 CPU < 0.3%・warm 起動 < 1 秒）を常駐の形でどう測るかを決め直す。しかも **§11 は一度も測っていない**（`tools/measure.ps1` がどこにも無い）。パーツぐらしの「CPU 約1.8%・118MB」も自己申告。
+- PCミエルは常駐しない。統合して常駐の窓を持つなら、§11 の軽さの合格条件（private bytes < 100MB・定常 CPU < 0.3%・warm 起動 < 1 秒）を常駐の形でどう測るかを決め直す。しかも **§11 の手順も結果も repo に無い**（`tools/measure.ps1` がどこにも無い）。測るときは全論理 CPU 比と CPU 時間 ms/秒を併記する。パーツぐらしの「CPU 約1.8%・118MB」も自己申告。
 
 ### 設計の論点になる違い
 - 管理者の補助 exe の通信が違う: PCミエル Helper＝要求 1 回で UAC 1 回・結果はファイル（短い処理向け）。パーツぐらし Check.exe＝パイプで進み具合と停止（表面スキャンのような長い処理向け）。精密点検を移すなら PCミエル側に長い処理の道が要る（NetMeter と同じパイプの作法が下地にある）。
@@ -87,6 +89,11 @@ AOT exe の `CheckLazyNativeModules`。GpuCounterName の解析もパーツぐ�
 - 書き出しが 2 つ（PCB1 と pcm-parts/1）。取る道も違う（WMI＋DXGI と SMBIOS＋EDID）。両方ともサイトで生きている。
 
 ### それぞれの弱い所（作り直すときに直す候補）
-- パーツぐらし: タイマーの失敗が累計 60 回で常駐が永久に止まる（MainWindow.xaml.cs 171-181）／保存の失敗を黙って握りつぶす（PartyState.cs 388）／ディスクの種類を起動時 1 回しか取らない／WMI に時間切れが無い・`DriveInfo.IsReady` が切れたネットワークドライブで固まりうる／表面スキャンの同期 ReadFile が途中で止まらない／点検の履歴を Flush せずに書き、壊れていたら黙って初期化する（Baseline.cs 497-520）／EventCounts.cs:22 のフラグ 0x100 が意図どおりか要確認。
+- パーツぐらし: タイマーの失敗が累計 61 回目で常駐が永久に止まる（`_failures > 60`）（MainWindow.xaml.cs 171-181）／保存の失敗を黙って握りつぶす（PartyState.cs 388）／ディスクの種類を起動時 1 回しか取らない／WMI に時間切れが無い・`DriveInfo.IsReady` が切れたネットワークドライブで固まりうる／表面スキャンの同期 ReadFile が途中で止まらない／点検の履歴を Flush せずに書き、壊れていたら黙って初期化する（Baseline.cs 497-520）／EventCounts.cs:22 の 0x100 は「古い順」のフラグで、コメントの TolerateQueryErrors（0x1000）とは違う＝定数の誤り。
 - PCミエル: §11 未計測・配布物 113〜120MB／設定の置き場が SPEC と違う／SPEC の「サイトを開く」メニューが無い＝更新を知る手段が無い／README・インストーラが無い／ARCHITECTURE.md が古い（StubCommand の記述）。
 - 両方: 配布 exe が未署名（パーツぐらしの更新の署名確認は今は実質効いていない）。
+
+## 6. 点検の記録
+
+- 2026-11-20 codex gpt-6.2-sol（session 01a1f791）がコードと 8 点を照合。直したのは設定のパス・署名者の照合の条件・NOTICE の範囲（SMART の増分と表面スキャンは未移植）・0x100 の意味・61 回目・計測の言い方・Core.dll。残りの記述は照合で合っていた。
+- 性能・UAC・サイトの受け入れは誰も実機で確かめていない。
