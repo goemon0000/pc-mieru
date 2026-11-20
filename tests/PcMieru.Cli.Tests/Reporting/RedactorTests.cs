@@ -1,4 +1,7 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using PcMieru.Core;
+using PcMieru.Core.Hardware.Model;
 using PcMieru.Core.Reporting;
 
 namespace PcMieru.Cli.Tests.Reporting;
@@ -103,6 +106,60 @@ public class RedactorTests
         Assert.Equal("<redacted>", inner["machineGuid"]!.GetValue<string>());
         Assert.Equal("<redacted>", inner["productKey"]!.GetValue<string>());
         Assert.Equal("kept", inner["name"]!.GetValue<string>());
+    }
+
+    private static StorageInspectionDrive FakeDriveWithAnIdentity() => new(
+        PhysicalDriveNumber: 3,
+        Recognition: StorageRecognition.Recognized,
+        Model: "Samsung SSD 980 PRO 2TB",
+        SerialNumber: "S6B0FAKE000001A",
+        Firmware: "5B2QGXA7",
+        BusType: 17,
+        SizeBytes: 2000398934016,
+        UniqueId: "eui.0025385b21fake01",
+        Location: "0:0:0:0",
+        SampledAt: DateTimeOffset.UnixEpoch,
+        Health: Value.Denied<StorageHealth>("test", "no access"),
+        Confirmation: StorageIdentityConfirmation.NoHealth,
+        Counters: null);
+
+    [Fact]
+    public void A_disks_unique_id_is_blanked_like_its_serial_number_wherever_it_sits()
+    {
+        // The object the storage check reads. It is never written to a report today, but if one ever is, its identity keys must not leak.
+        var node = JsonSerializer.SerializeToNode(FakeDriveWithAnIdentity(), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+        Assert.Equal("eui.0025385b21fake01", node["uniqueId"]!.GetValue<string>());
+        Assert.Equal("S6B0FAKE000001A", node["serialNumber"]!.GetValue<string>());
+
+        var root = new JsonObject { ["storage"] = new JsonArray(node) };
+        On.RedactJson(root);
+
+        Assert.Equal("<redacted>", node["uniqueId"]!.GetValue<string>());
+        Assert.Equal("<redacted>", node["serialNumber"]!.GetValue<string>());
+        // The rest of the drive is not touched.
+        Assert.Equal("Samsung SSD 980 PRO 2TB", node["model"]!.GetValue<string>());
+        Assert.Equal("5B2QGXA7", node["firmware"]!.GetValue<string>());
+        Assert.Equal(3, node["physicalDriveNumber"]!.GetValue<int>());
+
+        // A wrapped value keeps its status and loses only the value; an empty one stays empty ("no id" is a fact, not a secret).
+        var wrapped = JsonNode.Parse("""{"uniqueId":{"value":"naa.5000c500a1b2c3d4","status":"ok","source":"ioctl"},"other":{"uniqueId":""}}""")!;
+        On.RedactJson(wrapped);
+        Assert.Equal("<redacted>", wrapped["uniqueId"]!["value"]!.GetValue<string>());
+        Assert.Equal("ok", wrapped["uniqueId"]!["status"]!.GetValue<string>());
+        Assert.Equal(string.Empty, wrapped["other"]!["uniqueId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_disks_scsi_location_is_not_blanked_because_location_is_also_the_pci_usb_and_memory_position_of_every_report()
+    {
+        var node = JsonSerializer.SerializeToNode(FakeDriveWithAnIdentity(), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+        var gpu = JsonNode.Parse("""{"location":{"value":"bus 1, device 0, function 0","status":"ok","source":"dxgi"}}""")!;
+
+        On.RedactJson(node);
+        On.RedactJson(gpu);
+
+        Assert.Equal("0:0:0:0", node["location"]!.GetValue<string>());
+        Assert.Equal("bus 1, device 0, function 0", gpu["location"]!["value"]!.GetValue<string>());
     }
 
     [Fact]

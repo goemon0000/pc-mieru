@@ -3,6 +3,7 @@
 
 using System.Buffers.Binary;
 using System.Text;
+using WireProtocol = PcMieru.Wire.StorageProtocol;
 
 namespace PcMieru.Core.Hardware.Storage;
 
@@ -22,7 +23,6 @@ internal static class StorageProtocol
     public const byte NvmeLogErrorInfo = 0x01;
     public const byte NvmeLogHealthInfo = 0x02;
 
-    private const int QueryHeader = 8;
     public const int ProtocolSpecificDataSize = 40;
     public const int ProtocolDataDescriptorSize = 48;
 
@@ -39,21 +39,11 @@ internal static class StorageProtocol
 
     /// <summary>
     /// A Get Log Page request through StorageDeviceProtocolSpecificProperty. Only a log page number and a length can be
-    /// expressed, so the request cannot be turned into a write or a format.
+    /// expressed, so the request cannot be turned into a write or a format. This is the Helper's builder (the one
+    /// <c>PcMieru.Wire</c> uses), not a second copy: only the Error Information (0x01) and SMART / Health (0x02) pages and a length of
+    /// 1 to 4096 bytes can be built, here and there alike; anything else throws <see cref="ArgumentOutOfRangeException"/>.
     /// </summary>
-    public static byte[] BuildNvmeLogQuery(byte logPage, int length)
-    {
-        var buf = new byte[QueryHeader + ProtocolSpecificDataSize + length];
-        var s = buf.AsSpan();
-        BinaryPrimitives.WriteInt32LittleEndian(s[0..], StorageDeviceProtocolSpecificProperty);
-        var p = s[QueryHeader..];
-        BinaryPrimitives.WriteInt32LittleEndian(p[0..], ProtocolTypeNvme);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], NvmeDataTypeLogPage);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[8..], logPage);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[16..], ProtocolSpecificDataSize);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[20..], (uint)length);
-        return buf;
-    }
+    public static byte[] BuildNvmeLogQuery(byte logPage, int length) => WireProtocol.BuildNvmeLogQuery(logPage, length);
 
     /// <summary>Pulls the data out of a STORAGE_PROTOCOL_DATA_DESCRIPTOR. Null when the shape does not match.</summary>
     public static byte[]? ExtractProtocolData(ReadOnlySpan<byte> output, int expectedLength)

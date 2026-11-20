@@ -36,6 +36,7 @@ public sealed class RealStorageInspectionSource(IElevatedStorageReader? elevated
         var rows = new List<Row>();
         var steps = new List<RealStorageHealthProvider.Step>();
         var local = new Dictionary<int, ElevatedDriveRead>();
+        var unreadableSlots = 0;
 
         for (var n = 0; n < StorageCollector.MaxDisks; n++)
         {
@@ -57,24 +58,22 @@ public sealed class RealStorageInspectionSource(IElevatedStorageReader? elevated
                 }
             }
 
-            if (openError != 0)
+            switch (Classify(openError, identity is not null))
             {
-                if (!StorageCollector.IsAbsent(openError))
-                {
-                    rows.Add(Unreadable(number, Probe.FromWin32<StorageHealth>(openError, Source, "the drive"), startedAt));
-                }
-
-                continue;
+                case SlotOutcome.Absent:
+                    continue;
+                case SlotOutcome.Unreadable:
+                    unreadableSlots++;
+                    rows.Add(openError != 0
+                        ? Unreadable(number, Probe.FromWin32<StorageHealth>(openError, Source, "the drive"), startedAt)
+                        : Unreadable(number, Value.Failed<StorageHealth>(Source, "could not identify the drive"), Now()));
+                    continue;
             }
 
-            if (identity is null)
-            {
-                rows.Add(Unreadable(number, Value.Failed<StorageHealth>(Source, "could not identify the drive"), Now()));
-                continue;
-            }
-
-            var step = provider.ReadByBus(path, number, identity.Model, identity.Bus, allowElevation, e => local[number] = e);
-            rows.Add(new Row(number, null, identity, firmware, steps.Count, Now()));
+            // Readable: Classify said the descriptor came back, so there is an identity.
+            var known = identity!;
+            var step = provider.ReadByBus(path, number, known.Model, known.Bus, allowElevation, e => local[number] = e);
+            rows.Add(new Row(number, null, known, firmware, steps.Count, Now()));
             steps.Add(step);
         }
 
@@ -115,7 +114,37 @@ public sealed class RealStorageInspectionSource(IElevatedStorageReader? elevated
                 counters));
         }
 
-        return new StorageInspection(startedAt, drives.All(d => d.Recognition == StorageRecognition.Recognized), drives);
+        return new StorageInspection(startedAt, unreadableSlots, drives);
+    }
+
+    /// <summary>How one slot of the walk (PhysicalDrive0 to 63) came out.</summary>
+    internal enum SlotOutcome
+    {
+        /// <summary>Nobody has this drive number (open error 2 or 3). It is not a drive, so it is not counted anywhere.</summary>
+        Absent,
+
+        /// <summary>
+        /// The slot is there but could not be looked at: the open failed with any error other than 2 or 3 (access denied, sharing violation,
+        /// a dying drive...), or it opened and its descriptor was missing. Counted in <see cref="StorageInspection.UnreadableSlots"/>.
+        /// </summary>
+        Unreadable,
+
+        /// <summary>The device descriptor was read.</summary>
+        Readable,
+    }
+
+    /// <summary>
+    /// The one place that says what an unreadable slot is (DESIGN-A 5.2). <paramref name="openError"/> is the Win32 error of opening the
+    /// drive with no access (0 when it opened); <paramref name="descriptorRead"/> is whether the device descriptor came back.
+    /// </summary>
+    internal static SlotOutcome Classify(int openError, bool descriptorRead)
+    {
+        if (openError != 0)
+        {
+            return StorageCollector.IsAbsent(openError) ? SlotOutcome.Absent : SlotOutcome.Unreadable;
+        }
+
+        return descriptorRead ? SlotOutcome.Readable : SlotOutcome.Unreadable;
     }
 
     private DateTimeOffset Now()

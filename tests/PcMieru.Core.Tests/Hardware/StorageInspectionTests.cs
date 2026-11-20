@@ -687,6 +687,61 @@ public class HelperIdentityBatchTests
     }
 }
 
+/// <summary>What an "unreadable slot" is (DESIGN-A 5.2) and what the inspection says about it.</summary>
+public class UnreadableSlotTests
+{
+    private static readonly DateTimeOffset At = new(2026, 11, 20, 3, 0, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void A_drive_number_nobody_has_is_absent_not_unreadable(int error) =>
+        Assert.Equal(RealStorageInspectionSource.SlotOutcome.Absent, RealStorageInspectionSource.Classify(error, descriptorRead: false));
+
+    [Theory]
+    [InlineData(5)]     // access denied
+    [InlineData(21)]    // device not ready
+    [InlineData(32)]    // sharing violation
+    [InlineData(55)]    // device no longer exists
+    [InlineData(1117)]  // I/O device error
+    [InlineData(1)]
+    public void Any_other_open_failure_is_an_unreadable_slot(int error) =>
+        Assert.Equal(RealStorageInspectionSource.SlotOutcome.Unreadable, RealStorageInspectionSource.Classify(error, descriptorRead: false));
+
+    [Fact]
+    public void A_drive_that_opens_but_gives_no_descriptor_is_unreadable_and_one_with_a_descriptor_is_readable()
+    {
+        Assert.Equal(RealStorageInspectionSource.SlotOutcome.Unreadable, RealStorageInspectionSource.Classify(0, descriptorRead: false));
+        Assert.Equal(RealStorageInspectionSource.SlotOutcome.Readable, RealStorageInspectionSource.Classify(0, descriptorRead: true));
+    }
+
+    [Fact]
+    public async Task The_inspection_carries_the_count_and_the_complete_flag_follows_it()
+    {
+        var drives = (await new FakeStorageInspectionSource().InspectAsync(true)).Drives;
+
+        var complete = new StorageInspection(At, 0, drives);
+        var incomplete = new StorageInspection(At, 2, drives);
+
+        Assert.Equal(0, complete.UnreadableSlots);
+        Assert.True(complete.InventoryComplete);
+        Assert.Equal(2, incomplete.UnreadableSlots);
+        Assert.False(incomplete.InventoryComplete);
+        // The recognised drives are still all there with their own state: an unreadable slot does not blank the others.
+        Assert.Equal(drives.Count, incomplete.Drives.Count);
+        Assert.All(incomplete.Drives, d => Assert.Equal(StorageRecognition.Recognized, d.Recognition));
+    }
+
+    [Fact]
+    public async Task The_fake_has_no_unreadable_slot()
+    {
+        var inspection = await new FakeStorageInspectionSource().InspectAsync(true);
+
+        Assert.Equal(0, inspection.UnreadableSlots);
+        Assert.True(inspection.InventoryComplete);
+    }
+}
+
 public class FakeStorageInspectionTests
 {
     private static readonly DateTime Clock = new(2026, 11, 20, 3, 0, 0, DateTimeKind.Utc);
@@ -754,7 +809,7 @@ public sealed class RealStorageInspectionSmokeTests(ITestOutputHelper output)
     {
         var inspection = await new RealStorageInspectionSource().InspectAsync(allowElevation: false);
 
-        output.WriteLine($"drives: {inspection.Drives.Count}, inventory complete: {inspection.InventoryComplete}");
+        output.WriteLine($"drives: {inspection.Drives.Count}, unreadable slots: {inspection.UnreadableSlots}, inventory complete: {inspection.InventoryComplete}");
         foreach (var d in inspection.Drives)
         {
             output.WriteLine(

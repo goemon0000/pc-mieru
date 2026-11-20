@@ -94,6 +94,8 @@ public enum CheckSource
 public enum CheckEvidenceCode
 {
     // Why a .delta could not be computed (DESIGN-A §14.5). CheckEvidenceCodes.IsBaseline() is true for exactly these.
+    // BaselineInventoryIncomplete is first (the order of §14.0); IsBaseline() relies on BaselineLegacyRefused being the last of the group.
+    BaselineInventoryIncomplete,
     BaselineFirst,
     BaselineNoIdentity,
     BaselineDuplicate,
@@ -127,7 +129,7 @@ public enum CheckEvidenceCode
 
 public static class CheckEvidenceCodes
 {
-    /// <summary>The ten codes that say a .delta was not comparable (value null).</summary>
+    /// <summary>The eleven codes that say a .delta was not comparable (value null).</summary>
     public static bool IsBaseline(CheckEvidenceCode code) => code <= CheckEvidenceCode.BaselineLegacyRefused;
 
     /// <summary>

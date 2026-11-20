@@ -159,7 +159,8 @@ public class RuleTableTests
     {
         IEnumerable<string> rows = code switch
         {
-            CheckEvidenceCode.BaselineFirst or CheckEvidenceCode.BaselineNoIdentity or CheckEvidenceCode.BaselineDuplicate
+            CheckEvidenceCode.BaselineInventoryIncomplete or CheckEvidenceCode.BaselineFirst or CheckEvidenceCode.BaselineNoIdentity
+                or CheckEvidenceCode.BaselineDuplicate
                 or CheckEvidenceCode.BaselineDeviceChanged or CheckEvidenceCode.BaselineCounterReset or CheckEvidenceCode.BaselineClock
                 or CheckEvidenceCode.BaselineConcurrent or CheckEvidenceCode.BaselineMissingCounter or CheckEvidenceCode.BaselineReadFailed
                 or CheckEvidenceCode.BaselineLegacyRefused => Deltas,
@@ -250,6 +251,7 @@ public class RuleTableTests
 
     // One rejection per code family, written out (the loop above is the exhaustive form of the same rule).
     [Theory]
+    [InlineData(CheckEvidenceCode.BaselineInventoryIncomplete, "storage.health")]
     [InlineData(CheckEvidenceCode.BaselineFirst, "storage.temperature")]
     [InlineData(CheckEvidenceCode.BaselineReadFailed, "storage.ata.5")]
     [InlineData(CheckEvidenceCode.CounterIncreased, "storage.temperature")]
@@ -300,6 +302,7 @@ public class RuleTableTests
     }
 
     [Theory]
+    [InlineData(CheckEvidenceCode.BaselineInventoryIncomplete)]
     [InlineData(CheckEvidenceCode.BaselineFirst)]
     [InlineData(CheckEvidenceCode.BaselineNoIdentity)]
     [InlineData(CheckEvidenceCode.BaselineDuplicate)]
@@ -320,6 +323,7 @@ public class RuleTableTests
     }
 
     [Theory]
+    [InlineData(CheckEvidenceCode.BaselineInventoryIncomplete)]
     [InlineData(CheckEvidenceCode.BaselineFirst)]
     [InlineData(CheckEvidenceCode.BaselineNoIdentity)]
     [InlineData(CheckEvidenceCode.BaselineDuplicate)]
@@ -347,6 +351,23 @@ public class RuleTableTests
             CheckKind.Storage,
             NotComparable("storage.ata.5", CheckEvidenceCode.BaselineFirst),
             NotComparable("storage.ata.9", CheckEvidenceCode.BaselineClock));
+    }
+
+    [Fact]
+    public void An_incomplete_inventory_is_about_the_disk_it_is_on_so_a_disk_with_a_strong_key_is_still_compared()
+    {
+        // DESIGN-A §5.2: only weak-key and location-keyed (twin) disks are held back; the others are compared in the same result.
+        IsValid(
+            CheckKind.Storage,
+            NotComparable("storage.ata.5", CheckEvidenceCode.BaselineInventoryIncomplete, Disk1),
+            NotComparable("storage.ata.9", CheckEvidenceCode.BaselineInventoryIncomplete, Disk1),
+            Compared("storage.ata.5", Disk2),
+            Compared("storage.ata.9", Disk2));
+        Fails(
+            "different disk-wide baseline codes",
+            CheckKind.Storage,
+            NotComparable("storage.ata.5", CheckEvidenceCode.BaselineInventoryIncomplete),
+            NotComparable("storage.ata.9", CheckEvidenceCode.BaselineFirst));
     }
 
     [Fact]

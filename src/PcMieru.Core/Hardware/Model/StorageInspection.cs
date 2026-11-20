@@ -116,14 +116,26 @@ public sealed record StorageInspectionDrive(
 }
 
 /// <summary>One fresh enumeration of the physical drives.</summary>
-/// <param name="InventoryComplete">
-/// False when some drive could not be looked at (it opened but its descriptor was unreadable): duplicates cannot be ruled out, so no
-/// increase may be reported from this inspection.
+/// <param name="UnreadableSlots">
+/// How many slots (PhysicalDrive0 to 63) exist but could not be looked at: the open failed with any error other than 2 or 3, or it opened
+/// and its device descriptor was missing. A drive number nobody has (open error 2 or 3) is not a slot and is not counted. Each counted
+/// slot is also in <see cref="Drives"/> as <see cref="StorageRecognition.Unreadable"/>, with no identity. See <see cref="InventoryComplete"/>
+/// for what the number means to the baseline.
 /// </param>
 public sealed record StorageInspection(
     DateTimeOffset SampledAt,
-    bool InventoryComplete,
-    IReadOnlyList<StorageInspectionDrive> Drives);
+    int UnreadableSlots,
+    IReadOnlyList<StorageInspectionDrive> Drives)
+{
+    /// <summary>
+    /// True when every slot that exists was read (<see cref="UnreadableSlots"/> is 0). False is NOT "do not compare anything" (DESIGN-A 5.2):
+    /// an unreadable slot may be a drive that looks like another one (the same model, no serial, no unique id), so a drive whose key leaves
+    /// that doubt open is held back (<c>baseline_inventory_incomplete</c>): one with a weak key (no usable serial and no unique id), and one
+    /// told apart from a twin only by its location. A drive with a usable serial or a unique id has a key no unreadable slot can collide
+    /// with, so it is compared as usual. That is also how v0.7.4 behaved: one dying drive never stopped the other drives' comparisons.
+    /// </summary>
+    public bool InventoryComplete => UnreadableSlots == 0;
+}
 
 /// <summary>
 /// What one drive of an elevated batch came back with, besides its health bytes. A null member means "not delivered": an older Helper,

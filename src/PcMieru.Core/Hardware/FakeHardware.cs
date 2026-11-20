@@ -297,7 +297,7 @@ public sealed class FakeStorageInspectionSource(Func<DateTime>? clock = null) : 
                 sataRead ? StorageIdentityConfirmation.Confirmed : StorageIdentityConfirmation.NoHealth,
                 sataRead ? new StorageInspectionCounters(StorageHealthKind.Sata, null, null, null, false, [], null, true) : null),
         ];
-        return new StorageInspection(at, true, drives);
+        return new StorageInspection(at, 0, drives);
     }
 }
 public sealed class FakeSensorClient : ISensorClient, IFakeImplementation

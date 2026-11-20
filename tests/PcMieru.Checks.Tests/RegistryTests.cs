@@ -249,7 +249,7 @@ public partial class RegistryTests
     {
         Same(
             [
-                "baseline_first", "baseline_no_identity", "baseline_duplicate", "baseline_device_changed", "baseline_counter_reset",
+                "baseline_inventory_incomplete", "baseline_first", "baseline_no_identity", "baseline_duplicate", "baseline_device_changed", "baseline_counter_reset",
                 "baseline_clock", "baseline_concurrent", "baseline_missing_counter", "baseline_read_failed", "baseline_legacy_refused",
                 "counter_increased", "counter_decreased", "new_bits", "likely_cable", "mixed_capacity", "below_rated", "above_rated",
                 "disabled_code22", "device_error", "too_short", "pin_unknown", "pattern_mismatch", "compute_mismatch",
@@ -257,11 +257,11 @@ public partial class RegistryTests
             ],
             SnakeCaseEnum<CheckEvidenceCode>.Names);
 
-        // Exactly the ten baseline_* codes say "not comparable".
+        // Exactly the eleven baseline_* codes say "not comparable".
         var baseline = Enum.GetValues<CheckEvidenceCode>().Where(CheckEvidenceCodes.IsBaseline).Select(SnakeCaseEnum<CheckEvidenceCode>.Name).ToList();
-        Assert.Equal(10, baseline.Count);
+        Assert.Equal(11, baseline.Count);
         Assert.All(baseline, name => Assert.StartsWith("baseline_", name, StringComparison.Ordinal));
-        Assert.Equal(10, SnakeCaseEnum<CheckEvidenceCode>.Names.Count(n => n.StartsWith("baseline_", StringComparison.Ordinal)));
+        Assert.Equal(11, SnakeCaseEnum<CheckEvidenceCode>.Names.Count(n => n.StartsWith("baseline_", StringComparison.Ordinal)));
     }
 
     [Fact]

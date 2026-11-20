@@ -444,32 +444,189 @@ public class DiskIdentityTests
         Assert.Null(DiskIdentity.ReadFrom(data, 2));
     }
 
-    [Fact]
-    public void A_sixteen_drive_batch_with_the_most_the_new_keys_can_hold_stays_far_below_the_result_file_limit()
+    // ---------------------------------------------------------------------------------------------------------------
+    // The size of the batch answer (DESIGN-A 5.1): one drive's identity is at most 2 KB of JSON, or it is left out whole
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The worst a descriptor can do: 1024 bytes, every string offset inside the answer, bytes 36 to 1022 all 0x01 (JSON \u0001, six bytes
+    /// each; a control character is not white space, so Trim keeps it) closed by a NUL at 1023. The vendor starts at 36, the product one
+    /// byte later and the serial at 36 again: the product is shorter than the vendor so it cannot start with it, the model is vendor + " " +
+    /// product (both near the maximum), and the serial is as long as the vendor. Id, location and size are the longest believable ones.
+    /// </summary>
+    private static DiskIdentity WorstCaseIdentityFromADescriptor()
     {
-        // Every drive NVMe, full health page, full error log page, longest believable identity strings: the biggest answer one request can give.
-        var longText = new string('x', 255);
+        var descriptor = new byte[1024];
+        Array.Fill(descriptor, (byte)0x01, 36, 1023 - 36);
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(4), 1024);
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(12), 36);   // vendor: 987 bytes
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(16), 37);   // product: 986 bytes
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(20), 38);   // revision: 985 bytes (shown, never sent)
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(24), 36);   // serial: 987 bytes, overlapping the vendor
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.AsSpan(28), 17);
+
+        var device = new Device(descriptor, Ids((1, 2, 0, Eui)), Geometry(long.MaxValue), Address(8, 255, 255, 255, 255));
+        return DiskIdentity.Read(device.Ioctl, out _)!;
+    }
+
+    private static Dictionary<string, string> NvmeHealthAnswer() => new()
+    {
+        [HelperDataKeys.Bus] = "nvme",
+        [HelperDataKeys.NvmeHealth] = Convert.ToBase64String(Enumerable.Range(0, 512).Select(i => (byte)(i * 7 + 251)).ToArray()),
+        [HelperDataKeys.NvmeErrors] = Convert.ToBase64String(Enumerable.Range(0, 1024).Select(i => (byte)(i * 5 + 191)).ToArray()),
+        [HelperDataKeys.NvmeErrorLogEntries] = "16",
+        [HelperDataKeys.NvmeErrorLogMedia] = "16",
+    };
+
+    /// <summary>What the Helper does per drive (the health keys, then the identity), joined and serialized exactly as a real answer is.</summary>
+    private static (long JsonBytes, IReadOnlyDictionary<string, string> Data, bool[] IdentityWritten) SixteenDriveBatch(Func<int, DiskIdentity> identityOf)
+    {
+        var written = new bool[DriveList.MaxCount];
         var answers = new List<(int Drive, ActionResult Result)>();
         for (var drive = 0; drive < DriveList.MaxCount; drive++)
         {
-            var data = new Dictionary<string, string>
-            {
-                [HelperDataKeys.Bus] = "nvme",
-                [HelperDataKeys.NvmeHealth] = Convert.ToBase64String(Enumerable.Range(0, 512).Select(i => (byte)(i * 7 + 251)).ToArray()),
-                [HelperDataKeys.NvmeErrors] = Convert.ToBase64String(Enumerable.Range(0, 1024).Select(i => (byte)(i * 5 + 191)).ToArray()),
-                [HelperDataKeys.NvmeErrorLogEntries] = "16",
-                [HelperDataKeys.NvmeErrorLogMedia] = "16",
-            };
-            new DiskIdentity(longText, longText, "eui." + new string('a', 32), "255:255:255:255", long.MaxValue, 17).WriteTo(data);
+            var data = NvmeHealthAnswer();
+            written[drive] = identityOf(drive).WriteTo(data);
             answers.Add((drive, ActionResult.Of(OperationCode.Ok, MessageKeys.DiskRead).WithData(data)));
         }
 
         var combined = DiskOperations.CombineHealth(answers);
         var result = new HelperResult("n", "disk-health-all", combined.Code, null, combined.Data is null ? null : new Dictionary<string, string>(combined.Data));
         var json = System.Text.Json.JsonSerializer.Serialize(result, WireJsonContext.Default.HelperResult);
+        var back = System.Text.Json.JsonSerializer.Deserialize(json, WireJsonContext.Default.HelperResult)!;
+        Assert.Equal(combined.Data!.Count, back.Data!.Count);
+        return (Encoding.UTF8.GetByteCount(json), back.Data!, written);
+    }
 
-        Assert.True(Encoding.UTF8.GetByteCount(json) < HelperClient.MaxResultBytes / 2, $"{Encoding.UTF8.GetByteCount(json)} bytes");
-        Assert.Equal(combined.Data!.Count, System.Text.Json.JsonSerializer.Deserialize(json, WireJsonContext.Default.HelperResult)!.Data!.Count);
+    private static bool HasAnyIdentityKey(IReadOnlyDictionary<string, string> data, int drive) =>
+        data.Keys.Any(k => k.StartsWith($"drive.{drive}.identity.", StringComparison.Ordinal));
+
+    [Fact]
+    public void The_worst_descriptor_gives_an_identity_far_over_the_budget_and_sixteen_of_them_would_overflow_the_result_file_without_it()
+    {
+        var identity = WorstCaseIdentityFromADescriptor();
+
+        // The strings really are near the most 1024 bytes can hold (the model uses the overlap twice) and every character costs six bytes.
+        Assert.Equal(987 + 1 + 986, identity.Model.Length);
+        Assert.Equal(987, identity.Serial.Length);
+        Assert.All(identity.Serial, c => Assert.Equal('\u0001', c));
+        Assert.True(identity.JsonBytes() > 17_000, $"{identity.JsonBytes()} bytes");
+        Assert.False(identity.FitsHelperBudget);
+
+        // Written without a budget, sixteen of them are over the limit: that is what the old 'largest answer' test (255-character strings) missed.
+        Assert.True(16L * identity.JsonBytes() > HelperClient.MaxResultBytes, $"{16L * identity.JsonBytes()} bytes");
+    }
+
+    [Fact]
+    public void Sixteen_drives_with_the_worst_descriptor_leave_every_identity_out_and_the_batch_is_at_most_half_the_result_file_limit()
+    {
+        var identity = WorstCaseIdentityFromADescriptor();
+
+        var (jsonBytes, data, written) = SixteenDriveBatch(_ => identity);
+
+        Assert.True(jsonBytes <= HelperClient.MaxResultBytes / 2, $"{jsonBytes} bytes");
+        Assert.All(written, w => Assert.False(w));
+        for (var drive = 0; drive < DriveList.MaxCount; drive++)
+        {
+            // All six keys or none: not one of them, so Core cannot read a half identity, and the health bytes of the drive are still there.
+            Assert.False(HasAnyIdentityKey(data, drive), $"drive {drive}");
+            Assert.Null(DiskIdentity.ReadFrom(data, drive));
+            Assert.True(data.ContainsKey(HelperDataKeys.ForDrive(drive, HelperDataKeys.NvmeHealth)));
+            Assert.True(data.ContainsKey(HelperDataKeys.ForDrive(drive, HelperDataKeys.NvmeErrors)));
+        }
+    }
+
+    [Fact]
+    public void A_drive_over_the_budget_loses_only_its_own_identity_next_to_drives_that_fit()
+    {
+        var worst = WorstCaseIdentityFromADescriptor();
+        var normal = new DiskIdentity("Samsung SSD 980 PRO 2TB", "S6B0FAKE000001A", "eui.0025385b21fake01", "0:0:0:0", 2000398934016, 17);
+
+        var (jsonBytes, data, written) = SixteenDriveBatch(drive => drive % 2 == 0 ? normal : worst);
+
+        Assert.True(jsonBytes <= HelperClient.MaxResultBytes / 2, $"{jsonBytes} bytes");
+        for (var drive = 0; drive < DriveList.MaxCount; drive++)
+        {
+            if (drive % 2 == 0)
+            {
+                Assert.True(written[drive]);
+                Assert.Equal(normal, DiskIdentity.ReadFrom(data, drive));
+            }
+            else
+            {
+                Assert.False(written[drive]);
+                Assert.False(HasAnyIdentityKey(data, drive));
+                Assert.Null(DiskIdentity.ReadFrom(data, drive));
+            }
+        }
+    }
+
+    private static DiskIdentity IdentityOfJsonBytes(int target)
+    {
+        var empty = new DiskIdentity("", "S", "eui.0123456789abcdef", "255:255:255:255", long.MaxValue, 17);
+        return empty with { Model = new string('m', target - empty.JsonBytes()) };
+    }
+
+    [Fact]
+    public void The_budget_is_exactly_two_kilobytes_of_json_and_sixteen_drives_that_just_fit_are_still_at_most_half_the_limit()
+    {
+        Assert.Equal(2048, DiskIdentity.MaxJsonBytes);
+        var exactly = IdentityOfJsonBytes(DiskIdentity.MaxJsonBytes);
+        var oneOver = exactly with { Model = exactly.Model + "m" };
+
+        Assert.Equal(2048, exactly.JsonBytes());
+        Assert.True(exactly.FitsHelperBudget);
+        Assert.Equal(2049, oneOver.JsonBytes());
+        Assert.False(oneOver.FitsHelperBudget);
+        Assert.True(exactly.WriteTo(new Dictionary<string, string>()));
+        var left = new Dictionary<string, string>();
+        Assert.False(oneOver.WriteTo(left));
+        Assert.Empty(left);
+
+        var (jsonBytes, data, written) = SixteenDriveBatch(_ => exactly);
+
+        Assert.True(jsonBytes <= HelperClient.MaxResultBytes / 2, $"{jsonBytes} bytes");
+        Assert.All(written, w => Assert.True(w));
+        Assert.Equal(exactly, DiskIdentity.ReadFrom(data, 15));
+    }
+
+    [Fact]
+    public void The_count_is_the_size_in_the_answer_not_the_length_of_the_text()
+    {
+        // Counted with the serializer's own encoder: a control character, the quote, "<" and "&" are each a six-byte "u00xx" escape,
+        // the backslash is two bytes (a doubled backslash), and a plain letter is one byte.
+        var plain = new DiskIdentity("abcd", "S", "", "", 0, 0);
+        var escaped = plain with { Model = "\u0001\"\\<&" };
+
+        Assert.Equal(plain.JsonBytes() - "abcd".Length + (6 + 6 + 2 + 6 + 6), escaped.JsonBytes());
+
+        // And the count is what the six pairs really take once written out under the longest drive prefix (the serialized map of just
+        // these six has one more byte than the count: its two braces, and no comma after the last pair).
+        foreach (var identity in new[] { plain, escaped, WorstCaseIdentityFromADescriptor(), IdentityOfJsonBytes(2048) })
+        {
+            var written = Encoding.UTF8.GetByteCount(System.Text.Json.JsonSerializer.Serialize(SixPairsWhateverTheirSize(255, identity)));
+            Assert.Equal(identity.JsonBytes() + 1, written);
+        }
+    }
+
+    /// <summary>The six keys of one drive as WriteTo would put them, without the budget (built by hand, so it also works for one that is over it).</summary>
+    private static Dictionary<string, string> SixPairsWhateverTheirSize(int drive, DiskIdentity identity) => new()
+    {
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentitySerial)] = identity.Serial,
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentityUniqueId)] = identity.UniqueId,
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentityLocation)] = identity.Location,
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentityModel)] = identity.Model,
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentitySizeBytes)] = identity.SizeBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        [HelperDataKeys.ForDrive(drive, HelperDataKeys.IdentityBus)] = identity.Bus.ToString(System.Globalization.CultureInfo.InvariantCulture),
+    };
+
+    [Fact]
+    public void An_identity_that_cannot_be_encoded_at_all_is_left_out_rather_than_breaking_the_answer()
+    {
+        var lone = new DiskIdentity("M\ud800", "S", "", "", 1, 11);
+
+        Assert.False(lone.FitsHelperBudget);
+        Assert.False(lone.WriteTo(new Dictionary<string, string>()));
     }
 
     // ---------------------------------------------------------------------------------------------------------------

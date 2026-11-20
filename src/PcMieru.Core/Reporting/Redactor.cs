@@ -26,11 +26,18 @@ public sealed partial class SimpleRedactor : IRedactor
 {
     public const string Placeholder = "<redacted>";
 
-    /// <summary>Under these keys the whole value is replaced (a Value&lt;T&gt; keeps its status, loses its value).</summary>
+    /// <summary>
+    /// Under these keys the whole value is replaced (a Value&lt;T&gt; keeps its status, loses its value).
+    /// "uniqueId" is a disk's own identifier ("eui.&lt;hex&gt;" / "naa.&lt;hex&gt;" out of its device id descriptor): like its serial number
+    /// it belongs to that one drive and nobody else, so it is hidden the same way (the disk identity of DESIGN-A 5.1 carries it).
+    /// The disk's SCSI "location"
+    /// ("Port:Path:Target:Lun") is deliberately NOT here: it names a slot on the controller, not a device, and "location" is also the
+    /// PCI, USB and memory-array position every hardware report shows (a global blank would remove those). It stays readable.
+    /// </summary>
     private static readonly HashSet<string> BlankKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "commandLine", "serialNumber", "macAddress", "ipAddresses", "dnsServers", "ssid",
-        "bssid", "uuid", "machineGuid", "productKey",
+        "bssid", "uuid", "machineGuid", "productKey", "uniqueId",
     };
 
     /// <summary>

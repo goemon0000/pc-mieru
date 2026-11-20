@@ -291,6 +291,7 @@ public class ValidatorTests
     }
 
     [Theory]
+    [InlineData(CheckEvidenceCode.BaselineInventoryIncomplete)]
     [InlineData(CheckEvidenceCode.BaselineFirst)]
     [InlineData(CheckEvidenceCode.BaselineCounterReset)]
     [InlineData(CheckEvidenceCode.BaselineNoIdentity)]
