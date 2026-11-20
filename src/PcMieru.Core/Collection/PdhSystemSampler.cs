@@ -231,45 +231,16 @@ internal sealed class PdhSystemSampler : IDisposable
             return Value.NotCollected<double>(ClockSource, "no baseline yet (first sample)");
         }
 
-        if (!TryReadTotal(_frequency, out var freq, out var why) || !TryReadTotal(_performance, out var perf, out why))
+        if (!PdhReadRule.TryReadTotal(_reader, _frequency, out var freq, out var why)
+            || !PdhReadRule.TryReadTotal(_reader, _performance, out var perf, out why))
         {
             return Value.NotCollected<double>(ClockSource, why);
         }
 
-        // Task Manager's "Speed": the nominal frequency scaled by how far the cores are above or below it (boost goes past 100 %).
-        var mhz = freq * perf / 100.0;
-        return mhz > 0 && double.IsFinite(mhz)
+        // Task Manager's "Speed" (the rule is shared with the CPU check: PdhReadRule.EffectiveMhz).
+        return PdhReadRule.EffectiveMhz(freq, perf) is { } mhz
             ? Value.Ok(mhz, ClockSource)
             : Value.NotCollected<double>(ClockSource, "counter returned no data");
-    }
-
-    private bool TryReadTotal(nint counter, out double value, out string why)
-    {
-        value = 0;
-        why = "counter returned no data";
-        if (!_reader.Read(counter))
-        {
-            why = $"counter read failed (PDH 0x{_reader.Status:X8})";
-            return false;
-        }
-
-        for (var i = 0; i < _reader.Count; i++)
-        {
-            if (!_reader.TryGet(i, out _, out var v, out var cstatus))
-            {
-                continue;
-            }
-
-            if (cstatus is Pdh.CStatusValidData or Pdh.CStatusNewData)
-            {
-                value = v;
-                return true;
-            }
-
-            why = $"counter returned no data (status 0x{cstatus:X8})";
-        }
-
-        return false;
     }
 
     private string? ModelOf(string instance)

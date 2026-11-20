@@ -1,3 +1,4 @@
+using PcMieru.Checks.Load;
 using PcMieru.Checks.Storage;
 using PcMieru.Checks.SystemInfo;
 
@@ -26,9 +27,9 @@ public sealed class CheckRunner : ICheckRunner
     private readonly CheckServices _services;
     private readonly Dictionary<CheckKind, ICheckProcedure> _procedures;
 
-    /// <summary>The runner of these services: the checks this build has (storage and system; CPU and memory follow in later steps).</summary>
+    /// <summary>The runner of these services: the checks this build has (storage, system and CPU; memory follows in a later step).</summary>
     public CheckRunner(CheckServices services)
-        : this(services, [new StorageCheckProcedure(), new SystemCheckProcedure()])
+        : this(services, [new StorageCheckProcedure(), new SystemCheckProcedure(), new CpuCheckProcedure()])
     {
     }
 

@@ -83,6 +83,19 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/SystemInfo/DiskHealthReader.cs
       the disk health verdict rule (HealthStatus and OperationalStatus), from
       the same SystemCheck.cs (JudgeDisk)
+  src/PcMieru.Checks/Load/CpuLoadTest.cs
+      the chunk and its 16 seeds, the counters kept 128 bytes apart and the
+      one-second tick loop, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/CpuLoadTest.cs
+  src/PcMieru.Checks/Load/Steadiness.cs
+      the steadiness score and its verdict boundaries, from the owner's
+      pl-cloud src/PartsLife.Checks/Load/Steadiness.cs
+  src/PcMieru.Core/Hardware/Collectors/LogicalCpuMap.cs
+      the walk over the logical processor records, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/CpuTopology.cs
+  src/PcMieru.Core/Collection/PdhReadRule.cs
+      the package-power instance pick (the _PKG suffix, milliwatts summed, the
+      plausible range), from the owner's pl-sensors Sources.System
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj

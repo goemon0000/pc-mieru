@@ -1,4 +1,5 @@
 using System.Reflection;
+using PcMieru.Checks.Load;
 using PcMieru.Checks.Storage;
 using PcMieru.Core;
 using PcMieru.Checks.SystemInfo;
@@ -13,8 +14,8 @@ namespace PcMieru.Checks;
 /// services (<see cref="CreateLive"/> for the real machine).
 /// <para>
 /// The hardware provider arrived with the system check (<see cref="HardwareFactory"/>), as did the two readers it asks Windows through
-/// (<see cref="Wmi"/> and <see cref="Events"/>, which the storage check's disk health uses too). The CPU test-session factory of §2 arrives
-/// with the CPU and memory checks (DESIGN-A §11 steps 6 and 7).
+/// (<see cref="Wmi"/> and <see cref="Events"/>, which the storage check's disk health uses too). The CPU test-session factory of §2 arrived with
+/// the CPU check (<see cref="CpuSessionFactory"/>); the memory check's follows in DESIGN-A §11 step 7.
 /// </para>
 /// </summary>
 public sealed class CheckServices
@@ -56,6 +57,10 @@ public sealed class CheckServices
     /// </param>
     /// <param name="wmi">The WMI reader of the system check and of the storage check's disk health (null: the real one, <see cref="ManagementWmiReader"/>).</param>
     /// <param name="events">The System-log counter of the system check (null: the real one, <see cref="WevtEventCounter"/>).</param>
+    /// <param name="cpuSessionFactory">
+    /// Makes the test session of one CPU check (null: <see cref="RealCpuTestSession"/>). It is called on the load's own worker, never on the
+    /// caller's thread, once per check, and the session is disposed when the load ends.
+    /// </param>
     internal CheckServices(
         TimeProvider time,
         IStorageInspectionSource storage,
@@ -65,7 +70,8 @@ public sealed class CheckServices
         Func<Guid>? runIds,
         Func<IHardwareProvider>? hardwareFactory = null,
         IWmiReader? wmi = null,
-        IEventCounter? events = null)
+        IEventCounter? events = null,
+        Func<ICpuTestSession>? cpuSessionFactory = null)
     {
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(storage);
@@ -80,10 +86,14 @@ public sealed class CheckServices
         HardwareFactory = hardwareFactory ?? NewRealHardware;
         Wmi = wmi ?? new ManagementWmiReader();
         Events = events ?? new WevtEventCounter();
+        CpuSessionFactory = cpuSessionFactory ?? NewRealCpuSession;
     }
 
     // A provider of the real machine for one system check: it reads nothing until the check asks.
     private static IHardwareProvider NewRealHardware() => new RealHardwareProvider();
+
+    // The real CPU session of one CPU check: it lists the processors and opens its own PDH query, and does both when the check asks, on a worker.
+    private static ICpuTestSession NewRealCpuSession() => new RealCpuTestSession();
 
     /// <summary>The folder of the saved results and of the baseline (<c>&lt;root&gt;\checks</c>, DESIGN-A §4).</summary>
     internal static string ChecksFolder(string root) => Path.Combine(root, "checks");
@@ -126,8 +136,14 @@ public sealed class CheckServices
     internal IEventCounter Events { get; }
 
     /// <summary>
+    /// Makes the test session of one CPU check: the logical processors, the chunk, the pin, the threads, the clock and the check's own PDH
+    /// query (DESIGN-A §2). A unit test gives one with no real load.
+    /// </summary>
+    internal Func<ICpuTestSession> CpuSessionFactory { get; }
+
+    /// <summary>
     /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the real hardware provider,
-    /// WMI and System-log readers (system check; a new hardware provider for every system check), the history under
+    /// WMI and System-log readers (system check; a new hardware provider for every system check), a real CPU session for every CPU check, the history under
     /// <c>&lt;root&gt;\checks</c> and the baseline under <c>&lt;root&gt;\checks\baseline</c> (DESIGN-A §4). <paramref name="root"/> is the
     /// product's data folder (the app passes <c>%LOCALAPPDATA%\PCMieru</c>) and <paramref name="legacyDirectory"/> the v0.7.4 folder or null: both are the caller's
     /// decision, nothing here looks at the user's profile, and nothing is read or created until a run starts. No elevated reader is wired
@@ -144,7 +160,8 @@ public sealed class CheckServices
             NewBaseline(TimeProvider.System, root, legacyDirectory),
             app,
             runIds: null,
-            hardwareFactory: NewRealHardware); // a provider of its own for every system check: nothing cached, no gate held by an abandoned call
+            hardwareFactory: NewRealHardware, // a provider of its own for every system check: nothing cached, no gate held by an abandoned call
+            cpuSessionFactory: NewRealCpuSession); // a session of its own for every CPU check: its PDH query is closed with it
     }
 
     /// <summary>"PCMieru " and the informational version of the assembly without the build metadata ("+sha").</summary>

@@ -136,13 +136,25 @@ public sealed partial class CheckServicesTests
     }
 
     [Fact]
-    public void Live_services_give_a_runner_that_knows_the_system_and_the_storage_checks()
+    public void Live_services_give_a_runner_that_knows_the_system_the_cpu_and_the_storage_checks()
     {
         using var temp = new TempRoot();
 
         var runner = new CheckRunner(CheckServices.CreateLive(temp.Path, null));
 
-        Assert.Equal([CheckKind.System, CheckKind.Storage], runner.SupportedKinds.OrderBy(static k => k));
+        Assert.Equal([CheckKind.System, CheckKind.Cpu, CheckKind.Storage], runner.SupportedKinds.OrderBy(static k => k));
+    }
+
+    [Fact]
+    public void Live_services_have_a_cpu_session_recipe_and_create_nothing_yet()
+    {
+        using var temp = new TempRoot();
+
+        var services = CheckServices.CreateLive(temp.Path, null);
+
+        // Nothing is opened by the services themselves: the factory is only a recipe (the session lists the processors and opens PDH when made).
+        Assert.NotNull(services.CpuSessionFactory);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));
     }
 
     private static CheckServices Make(TempRoot temp, string? app) =>

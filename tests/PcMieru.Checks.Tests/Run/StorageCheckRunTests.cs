@@ -632,7 +632,6 @@ public sealed class StorageCheckRunTests
         using var rig = new RunRig();
 
         await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.Memory), null, CancellationToken.None));
-        await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.Cpu, TimeSpan.FromSeconds(30)), null, CancellationToken.None));
         Assert.Empty(rig.History.Saved);
     }
 
