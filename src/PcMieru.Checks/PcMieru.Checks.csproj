@@ -9,6 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The storage baseline takes the Core inspection types (StorageInspection) as its input (DESIGN-A 5.1). Gui and Cli -> Checks -> Core -> Wire. -->
+    <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Checks.Tests" />
   </ItemGroup>
 

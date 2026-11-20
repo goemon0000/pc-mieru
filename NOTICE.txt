@@ -54,6 +54,15 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/Storage/DiskKey.cs
       the key text, the escaping, the bus names and the usable-serial rule,
       from the owner's pl-sensors BaselineIdentity and BusType
+  src/PcMieru.Checks/Storage/BaselineCounters.cs
+      the counter names, the ATA bit masks, the growth verdicts and the
+      continuity rule, from the owner's pl-sensors Baseline
+  src/PcMieru.Checks/Storage/BaselineRecords.cs
+      the history file shape, SafeName and the file name rule, from the
+      owner's pl-sensors BaselineStore and BaselineIdentity
+  src/PcMieru.Checks/Storage/BaselineEngine.cs
+      what is compared and when (keys, twins, withheld record, trim), from
+      the owner's pl-sensors BaselineStore
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj
