@@ -627,11 +627,13 @@ public sealed class StorageCheckRunTests
     // ---- the request ----
 
     [Fact]
-    public async Task A_request_for_another_kind_is_not_supported_yet()
+    public async Task A_request_for_a_kind_the_runner_has_no_procedure_for_is_not_supported()
     {
+        // Every kind has its procedure in the default list now; a runner with the storage procedure alone has none for the others.
         using var rig = new RunRig();
+        var runner = new CheckRunner(rig.Services, [new StorageCheckProcedure()]);
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => rig.Runner.RunAsync(new CheckRequest(CheckKind.Memory), null, CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => runner.RunAsync(new CheckRequest(CheckKind.Memory), null, CancellationToken.None));
         Assert.Empty(rig.History.Saved);
     }
 

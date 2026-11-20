@@ -12,7 +12,7 @@ namespace PcMieru.Checks.Tests.Run;
 /// <summary>
 /// The seal point of a run (DESIGN-A 2): the moment the procedure returns its rows. A stop that comes after it does not change a completed
 /// run; a stop that the procedure sees makes a stopped run, and a stop that the procedure did not see (it came after the rows were whole and the
-/// procedure did not say "stopped") leaves the run completed. Tested on the three real procedures (storage, system, CPU), each wrapped so that
+/// procedure did not say "stopped") leaves the run completed. Tested on the four real procedures (storage, system, CPU, memory), each wrapped so that
 /// the test cancels at an exact moment: before the real procedure starts, between its return and the wrapper's, or after the wrapper has
 /// returned (on the first reading of the services' clock that follows, which is the runner making the result final).
 /// </summary>
@@ -20,7 +20,7 @@ public sealed class SealPointTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
-    public static TheoryData<CheckKind> Kinds => new() { CheckKind.Storage, CheckKind.System, CheckKind.Cpu };
+    public static TheoryData<CheckKind> Kinds => new() { CheckKind.Storage, CheckKind.System, CheckKind.Cpu, CheckKind.Memory };
 
     // The services' clock: it cancels the run on the first reading of the time after the wrapper has said that the procedure returned.
     private sealed class SealClock(TimeProvider inner) : TimeProvider
@@ -72,7 +72,7 @@ public sealed class SealPointTests
         public Wrapped Wrapped => wrapped;
 
         public Task<CheckRun> RunAsync(CheckKind kind) =>
-            runner.RunAsync(kind == CheckKind.Cpu ? new CheckRequest(kind, TimeSpan.FromSeconds(30)) : new CheckRequest(kind), null, cts.Token).WaitAsync(Patience);
+            runner.RunAsync(kind is CheckKind.Cpu or CheckKind.Memory ? new CheckRequest(kind, TimeSpan.FromSeconds(30)) : new CheckRequest(kind), null, cts.Token).WaitAsync(Patience);
 
         public void Dispose()
         {
@@ -86,7 +86,7 @@ public sealed class SealPointTests
     {
         var cts = new CancellationTokenSource();
         var clock = new SealClock(kind == CheckKind.Storage ? new FakeTime(Drives.T0) : new ManualTimeProvider());
-        var rig = new RunRig(clock: clock, cpuSessionFactory: () => new FakeCpuSession(Cpus.Uniform(2)));
+        var rig = new RunRig(clock: clock, cpuSessionFactory: () => new FakeCpuSession(Cpus.Uniform(2)), memorySessionFactory: () => FakeMemorySession.Planned(4));
         ICheckProcedure procedure;
         switch (kind)
         {
@@ -98,6 +98,9 @@ public sealed class SealPointTests
                 rig.Wmi.Rows("MSFT_PhysicalDisk", FakeWmiReader.MachineDisks());
                 rig.Time.Now = new DateTimeOffset(Hw.Now);
                 procedure = new SystemCheckProcedure();
+                break;
+            case CheckKind.Memory:
+                procedure = new MemoryCheckProcedure();
                 break;
             default:
                 procedure = new CpuCheckProcedure();

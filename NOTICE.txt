@@ -90,6 +90,17 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/Load/Steadiness.cs
       the steadiness score and its verdict boundaries, from the owner's
       pl-cloud src/PartsLife.Checks/Load/Steadiness.cs
+  src/PcMieru.Checks/Load/MemoryTest.cs
+      the plan (the fraction, the cap, the floor, the 64 MiB rounding), the
+      block-by-block growth with a free-memory check, the pattern rotation and
+      the 4 MiB slices, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/MemoryTest.cs
+  src/PcMieru.Checks/Load/Patterns.cs
+      the four patterns, SplitMix and the fill and verify loops, from the
+      owner's pl-cloud src/PartsLife.Checks/Load/Patterns.cs
+  src/PcMieru.Checks/Load/RealMemoryTestSession.cs
+      the aligned allocation, the touch of every page and the memory status
+      call, from the same MemoryTest.cs
   src/PcMieru.Core/Hardware/Collectors/LogicalCpuMap.cs
       the walk over the logical processor records, from the owner's pl-cloud
       src/PartsLife.Checks/Load/CpuTopology.cs

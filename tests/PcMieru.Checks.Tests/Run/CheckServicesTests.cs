@@ -136,13 +136,13 @@ public sealed partial class CheckServicesTests
     }
 
     [Fact]
-    public void Live_services_give_a_runner_that_knows_the_system_the_cpu_and_the_storage_checks()
+    public void Live_services_give_a_runner_that_knows_the_system_the_cpu_the_memory_and_the_storage_checks()
     {
         using var temp = new TempRoot();
 
         var runner = new CheckRunner(CheckServices.CreateLive(temp.Path, null));
 
-        Assert.Equal([CheckKind.System, CheckKind.Cpu, CheckKind.Storage], runner.SupportedKinds.OrderBy(static k => k));
+        Assert.Equal([CheckKind.System, CheckKind.Cpu, CheckKind.Memory, CheckKind.Storage], runner.SupportedKinds.OrderBy(static k => k));
     }
 
     [Fact]

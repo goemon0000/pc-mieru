@@ -27,9 +27,9 @@ public sealed class CheckRunner : ICheckRunner
     private readonly CheckServices _services;
     private readonly Dictionary<CheckKind, ICheckProcedure> _procedures;
 
-    /// <summary>The runner of these services: the checks this build has (storage, system and CPU; memory follows in a later step).</summary>
+    /// <summary>The runner of these services: the checks this build has (storage, system, CPU and memory).</summary>
     public CheckRunner(CheckServices services)
-        : this(services, [new StorageCheckProcedure(), new SystemCheckProcedure(), new CpuCheckProcedure()])
+        : this(services, [new StorageCheckProcedure(), new SystemCheckProcedure(), new CpuCheckProcedure(), new MemoryCheckProcedure()])
     {
     }
 

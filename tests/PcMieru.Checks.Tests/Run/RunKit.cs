@@ -136,7 +136,11 @@ internal sealed class RunRig : IDisposable
     /// would load every core of the machine it runs on). A test that runs a CPU check gives its own, with no real load; only the RealMachine
     /// tests pass <c>() => new RealCpuTestSession()</c> themselves.
     /// </param>
-    public RunRig(bool withLegacy = false, TimeProvider? clock = null, Func<IHardwareProvider>? hardwareFactory = null, Func<ICpuTestSession>? cpuSessionFactory = null)
+    /// <param name="memorySessionFactory">
+    /// The factory of the memory check's test session. Null: a factory that throws, for the same reason (the real one borrows a quarter of the free
+    /// memory). Only the RealMachine tests pass the real memory session's factory themselves.
+    /// </param>
+    public RunRig(bool withLegacy = false, TimeProvider? clock = null, Func<IHardwareProvider>? hardwareFactory = null, Func<ICpuTestSession>? cpuSessionFactory = null, Func<IMemoryTestSession>? memorySessionFactory = null)
     {
         Baseline = new BaselineRig(withLegacy);
         Source = new FakeStorageSource();
@@ -146,12 +150,15 @@ internal sealed class RunRig : IDisposable
         Hardware = new FakeHardware();
         Wmi = FakeWmiReader.Typical(FakeWmiReader.AnyDisks());
         Events = new FakeEventCounter();
-        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, hardwareFactory ?? (() => Hardware), Wmi, Events, cpuSessionFactory ?? NoCpuSession);
+        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, hardwareFactory ?? (() => Hardware), Wmi, Events, cpuSessionFactory ?? NoCpuSession, memorySessionFactory ?? NoMemorySession);
         Runner = new CheckRunner(Services);
     }
 
     /// <summary>The default CPU session factory of a rig: there is none. A CPU check that gets here fails with an internal error and puts no load on the machine.</summary>
     internal static ICpuTestSession NoCpuSession() => throw new InvalidOperationException("the CPU test needs an explicit session");
+
+    /// <summary>The default of a rig: a memory check that was not given a session fails loudly instead of borrowing the machine's real memory.</summary>
+    internal static IMemoryTestSession NoMemorySession() => throw new InvalidOperationException("the memory test needs an explicit session");
 
     public BaselineRig Baseline { get; }
 

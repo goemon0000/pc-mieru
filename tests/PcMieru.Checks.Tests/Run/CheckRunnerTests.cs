@@ -171,11 +171,11 @@ public sealed class CheckRunnerTests
     }
 
     [Fact]
-    public void The_runner_of_the_services_knows_the_system_the_cpu_and_the_storage_checks_and_nothing_else_yet()
+    public void The_runner_of_the_services_knows_the_system_the_cpu_the_memory_and_the_storage_checks()
     {
         using var rig = new RunRig();
 
-        Assert.Equal([CheckKind.System, CheckKind.Cpu, CheckKind.Storage], [.. new CheckRunner(rig.Services).SupportedKinds.OrderBy(static k => k)]);
+        Assert.Equal([CheckKind.System, CheckKind.Cpu, CheckKind.Memory, CheckKind.Storage], [.. new CheckRunner(rig.Services).SupportedKinds.OrderBy(static k => k)]);
     }
 
     // ---- stopped ----
