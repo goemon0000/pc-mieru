@@ -127,6 +127,7 @@ public static class DiskOperations
                         data[HelperDataKeys.SmartThresholds] = Convert.ToBase64String(thresholds);
                     }
 
+                    AddIdentity(data, rw);
                     return ActionResult.Of(OperationCode.Ok, MessageKeys.DiskRead).WithData(data);
                 }
             }
@@ -145,6 +146,7 @@ public static class DiskOperations
                         data[HelperDataKeys.SmartData] = Convert.ToBase64String(vendor);
                         data[HelperDataKeys.SmartSource] = "predict-failure";
                         data[HelperDataKeys.PredictFailure] = predict ? "true" : "false";
+                        AddIdentity(data, read);
                         return ActionResult.Of(OperationCode.Ok, MessageKeys.DiskRead).WithData(data);
                     }
                 }
@@ -158,6 +160,7 @@ public static class DiskOperations
     {
         byte[]? health = null;
         byte[]? errors = null;
+        DiskIdentity? identity = null;
         var denied = false;
         using (var read = Native.CreateFile(path, GenericRead, FileShareReadWrite, 0, OpenExisting, 0, 0))
         {
@@ -171,7 +174,8 @@ public static class DiskOperations
                 denied = health is null && error == Native.ERROR_ACCESS_DENIED;
                 if (health is not null)
                 {
-                    errors = NvmeLog(read, StorageProtocol.NvmeLogErrorInfo, StorageProtocol.NvmeErrorEntryLength * StorageProtocol.NvmeErrorEntryCount, out _);
+                    errors = NvmeLog(read, StorageProtocol.NvmeLogErrorInfo, StorageProtocol.NvmeErrorLogLength, out _);
+                    identity = ReadIdentity(read);
                 }
             }
         }
@@ -186,7 +190,8 @@ public static class DiskOperations
                 health = NvmeLog(rw, StorageProtocol.NvmeLogHealthInfo, StorageProtocol.NvmeHealthLength, out _);
                 if (health is not null)
                 {
-                    errors = NvmeLog(rw, StorageProtocol.NvmeLogErrorInfo, StorageProtocol.NvmeErrorEntryLength * StorageProtocol.NvmeErrorEntryCount, out _);
+                    errors = NvmeLog(rw, StorageProtocol.NvmeLogErrorInfo, StorageProtocol.NvmeErrorLogLength, out _);
+                    identity = ReadIdentity(rw);
                 }
             }
         }
@@ -206,10 +211,26 @@ public static class DiskOperations
         if (errors is not null)
         {
             data[HelperDataKeys.NvmeErrors] = Convert.ToBase64String(errors);
+            if (StorageProtocol.CountNvmeErrorLog(errors) is { } counts)
+            {
+                data[HelperDataKeys.NvmeErrorLogEntries] = counts.Entries.ToString(CultureInfo.InvariantCulture);
+                data[HelperDataKeys.NvmeErrorLogMedia] = counts.MediaErrors.ToString(CultureInfo.InvariantCulture);
+            }
         }
 
+        identity?.WriteTo(data);
         return ActionResult.Of(OperationCode.Ok, MessageKeys.DiskRead).WithData(data);
     }
+
+    /// <summary>
+    /// The disk's identity as this very handle sees it, read AFTER the health bytes were taken through it: Core compares it with what it
+    /// saw before, and the health bytes are only trusted as belonging to that disk when they match. Failing to read it just leaves the
+    /// keys out (the health bytes still go back); the Helper compares and stores nothing.
+    /// </summary>
+    private static DiskIdentity? ReadIdentity(SafeFileHandle handle) =>
+        DiskIdentity.Read((code, input, outputLength) => Query(handle, code, input, outputLength, out _), out _);
+
+    private static void AddIdentity(Dictionary<string, string> data, SafeFileHandle handle) => ReadIdentity(handle)?.WriteTo(data);
 
     private static ActionResult OpenFailure(int drive, int error) => error switch
     {
