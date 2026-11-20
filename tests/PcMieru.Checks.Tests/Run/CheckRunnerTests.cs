@@ -226,19 +226,19 @@ public sealed class CheckRunnerTests
     }
 
     [Fact]
-    public async Task A_cancel_that_comes_while_the_procedure_is_finishing_and_before_it_returns_is_a_stop()
+    public async Task A_cancel_that_a_procedure_ignores_and_returns_whole_rows_after_is_a_completed_run()
     {
         using var rig = new RunRig();
         using var cts = new CancellationTokenSource();
         var runner = With(rig, async (c, _) =>
         {
             c.Collector.Add(Duration());
-            await cts.CancelAsync(); // the stop arrives inside the procedure, before it returns its rows: the seal point has not been reached (SealPointTests has the cancel that comes after it)
+            await cts.CancelAsync(); // the stop arrives inside the procedure, which does not act on it and returns whole rows: only the procedure says "stopped" (MarkStopped)
         });
 
         var run = await Run(runner, ct: cts.Token);
 
-        Assert.Equal(CheckOutcome.Stopped, run.Result.Outcome);
+        Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
         Assert.Null(run.FailureCode);
         Assert.True(run.IsSaved);
     }
@@ -479,6 +479,7 @@ public sealed class CheckRunnerTests
             c.Collector.Add(Duration());
             c.Collector.Add(Duration());
             await cts.CancelAsync();
+            c.Collector.MarkStopped(); // the procedure saw the stop and says so (the runner does not read the token after the return)
         });
 
         var run = await Run(runner, ct: cts.Token);
@@ -639,7 +640,7 @@ public sealed class CheckRunnerTests
     }
 
     [Fact]
-    public async Task Load_reports_are_at_most_one_a_second_and_the_first_always_goes()
+    public async Task Load_reports_are_never_closer_than_0_9_s_and_the_first_always_goes()
     {
         using var rig = new RunRig();
         var time = new TickTime(Drives.T0);
@@ -650,7 +651,8 @@ public sealed class CheckRunnerTests
             [
                 new FakeProcedure(CheckKind.Cpu, (c, _) =>
                 {
-                    foreach (var milliseconds in new[] { 0, 100, 500, 999, 1000, 1400, 1999, 2000, 2001, 3500 })
+                    // 899 is too soon, 900 goes; 1890 (0.99 s after a report) goes, 1400 (0.5 s) does not; 2700 (0.81 s) does not, 2790 (0.9 s) goes.
+                    foreach (var milliseconds in new[] { 0, 100, 500, 899, 900, 1400, 1890, 2000, 2700, 2790, 3500 })
                     {
                         time.Milliseconds = milliseconds;
                         c.Load(milliseconds / 1000.0, 30, recentRate: milliseconds, rateUnit: "chunks/s");
@@ -663,9 +665,9 @@ public sealed class CheckRunnerTests
         await Run(runner, log);
 
         var loads = log.Items.Where(static p => p.Stage == CheckStage.Loading).ToList();
-        Assert.Equal([0.0, 1.0, 2.0, 3.5], loads.Select(static p => p.ElapsedSeconds));
+        Assert.Equal([0.0, 0.9, 1.89, 2.79], loads.Select(static p => p.ElapsedSeconds));
         Assert.All(loads, static p => Assert.Equal(30, p.TargetSeconds));
-        Assert.Equal([0.0, 1000.0, 2000.0, 3500.0], loads.Select(static p => p.RecentRate!.Value));
+        Assert.Equal([0.0, 900.0, 1890.0, 2790.0], loads.Select(static p => p.RecentRate!.Value));
         Assert.All(loads, static p => Assert.Equal("chunks/s", p.RateUnit));
     }
 

@@ -273,7 +273,7 @@ public sealed class CpuLoadStopTests
     }
 
     [Fact]
-    public async Task A_late_reading_followed_by_an_early_one_still_gives_at_most_one_progress_a_second()
+    public async Task A_late_reading_followed_by_an_early_one_still_gives_no_two_progress_reports_within_0_9_s()
     {
         var time = new ManualTimeProvider();
         FakeCpuSession session = null!;
@@ -300,7 +300,7 @@ public sealed class CpuLoadStopTests
         Assert.DoesNotContain(reports, static e => Math.Abs(e - (6 * 1.002)) < 0.001);
         for (var i = 1; i < reports.Count; i++)
         {
-            Assert.True(reports[i] - reports[i - 1] >= 1.0, $"reports {i - 1} and {i} are {reports[i] - reports[i - 1]} s apart");
+            Assert.True(reports[i] - reports[i - 1] >= 0.9, $"reports {i - 1} and {i} are {reports[i] - reports[i - 1]} s apart");
         }
     }
 

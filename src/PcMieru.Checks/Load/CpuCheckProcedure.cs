@@ -11,7 +11,7 @@ namespace PcMieru.Checks.Load;
 /// the runner saves the partial result as a stopped one.</item>
 /// <item>The note <c>cpu.temperature_not_measured</c> is written first, on every CPU result, whatever the outcome: no driver is installed, so
 /// no temperature is read.</item>
-/// <item>Progress goes through <see cref="CheckContext.Load"/>: at most once a second, with the chunks per second of the last second.</item>
+/// <item>Progress goes through <see cref="CheckContext.Load"/>: about once a second (never two within 0.9 s), with the chunks per second of the last second.</item>
 /// </list>
 /// </summary>
 internal sealed class CpuCheckProcedure : ICheckProcedure

@@ -420,16 +420,17 @@ public sealed class CpuLoadTestTests
     public void A_real_stop_waits_for_the_chunk_in_progress_and_leaves_no_thread_alive()
     {
         using var cts = new CancellationTokenSource();
-        var session = new RealThreadSession(Cpus.Uniform(3));
+        // The stop comes when the ninth chunk has finished, not after a fixed time: a busy machine (the whole suite in parallel) may start
+        // the BelowNormal threads late, and a time-based stop then found too few chunks.
+        var session = new RealThreadSession(Cpus.Uniform(3)) { StopAfterChunks = 9, Stop = cts.Cancel };
 
-        cts.CancelAfter(TimeSpan.FromMilliseconds(250));
         var r = CpuLoadTest.Run(session, TimeSpan.FromSeconds(300), null, cts.Token);
 
         Assert.True(r.Stopped);
         Assert.Equal(3, session.Handles.Count);
         Assert.All(session.Handles, static h => Assert.False(h.IsAlive));
         Assert.Equal(session.ChunksStarted, session.ChunksFinished); // no chunk was abandoned half way
-        Assert.True(session.ChunksFinished > 16);
+        Assert.True(session.ChunksFinished >= 9, $"{session.ChunksFinished} chunks finished");
         Assert.Equal(0, r.ComputeErrors);
     }
 
@@ -457,6 +458,10 @@ public sealed class CpuLoadTestTests
 
         public long ChunksFinished => Interlocked.Read(ref _finished);
 
+        public long StopAfterChunks { get; init; } = long.MaxValue;
+
+        public Action? Stop { get; init; }
+
         public IChunkWork Work => new SleepyWork(this);
 
         public ICpuPin Pin { get; } = new AlwaysPin();
@@ -477,7 +482,10 @@ public sealed class CpuLoadTestTests
             {
                 Interlocked.Increment(ref owner._started);
                 Thread.Sleep(2);
-                Interlocked.Increment(ref owner._finished);
+                if (Interlocked.Increment(ref owner._finished) == owner.StopAfterChunks)
+                {
+                    owner.Stop?.Invoke();
+                }
                 return FakeCpuSession.Answer(seed);
             }
         }

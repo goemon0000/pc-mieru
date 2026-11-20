@@ -55,7 +55,9 @@ internal sealed class CheckCollector
 /// <summary>What a procedure sees of its run: the request, the services, the run's ID and clock, the collector, and the way to tell the caller where it is.</summary>
 internal sealed class CheckContext
 {
-    private static readonly TimeSpan LoadReportInterval = TimeSpan.FromSeconds(1);
+    // About once a second, never closer than 0.9 s: the 0.1 s slack lets a reading that comes a little early after a late one (timer
+    // jitter on the load's absolute schedule) still go out, so a 30 s load gives about 30 readings, not 21; a burst is still held back.
+    private static readonly TimeSpan LoadReportInterval = TimeSpan.FromMilliseconds(900);
 
     private readonly CheckProgressPump _pump;
     private readonly Lock _gate = new();
@@ -87,7 +89,7 @@ internal sealed class CheckContext
     public void Stage(CheckStage stage, double targetSeconds = 0) =>
         _pump.Post(new CheckProgress(RunId, stage, ElapsedSeconds(), targetSeconds));
 
-    /// <summary>A load reading: at most one a second (the first one always goes), whatever the procedure's own pace.</summary>
+    /// <summary>A load reading: about one a second and never two within 0.9 s (the first one always goes), whatever the procedure's own pace.</summary>
     public void Load(double elapsedSeconds, double targetSeconds, double? recentRate, string? rateUnit)
     {
         var now = Time.GetTimestamp();

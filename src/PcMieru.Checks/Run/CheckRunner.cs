@@ -90,11 +90,11 @@ public sealed class CheckRunner : ICheckRunner
         {
             await procedure.ExecuteAsync(context, ct).ConfigureAwait(false);
 
-            // The seal point (DESIGN-A 2): the procedure has returned its rows. Whether the run was stopped is read here, once, right after the
-            // return, and decided for good: a stop that comes later (while the result is made final, or saved) does not change a completed run,
-            // whose load is over and whose rows are whole. A stop that came before this point is a stopped run (its rows are partial: the
-            // procedures see the token themselves and say so).
-            var stopped = context.Collector.StoppedByProcedure || ct.IsCancellationRequested;
+            // The seal point (DESIGN-A 2): the procedure has returned its rows. A procedure that returned is stopped only when it says so
+            // (MarkStopped, with its rows made partial); the token is NOT read here. A procedure that returned without saying so has whole rows,
+            // so a stop that came while it was finishing, or after it returned, does not make it "stopped with whole rows" (which could then be
+            // ok overall). A procedure that throws on the stop (storage, system) ends below as stopped.
+            var stopped = context.Collector.StoppedByProcedure;
             return new ProcedureEnd(stopped ? CheckOutcome.Stopped : CheckOutcome.Completed, null, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
