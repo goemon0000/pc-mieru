@@ -69,19 +69,21 @@ public sealed record BaselineRunResult(IReadOnlyList<BaselineDiskOutcome> Disks,
 /// </summary>
 public sealed class BaselineEngine
 {
-    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(15);
+    /// <summary>How long a run waits for the lock, in all, before it gives up (<c>baseline_read_failed</c>). The lock is held for a few file reads and writes.</summary>
+    internal static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromSeconds(15);
 
     private readonly BaselineStore _store;
     private readonly IBaselineLock _lock;
     private readonly ICheckHistoryFileReader _legacyReader;
     private readonly string? _legacyDirectory;
     private readonly TimeProvider _time;
+    private readonly TimeSpan _lockTimeout;
 
     /// <param name="root">The folder that holds <c>baseline\</c>. The caller decides it; nothing here looks at the user's profile.</param>
     /// <param name="legacyDirectory">The v0.7.4 folder (<c>%APPDATA%\PartsLife\checks</c>), opened read-only, or null for no import.</param>
     public BaselineEngine(string root, string? legacyDirectory = null)
         : this(root, legacyDirectory, PhysicalBaselineFileSystem.Instance, PhysicalHistoryFileReader.Instance,
-            new NamedMutexBaselineLock(NamedMutexBaselineLock.CurrentUserId(), root), TimeProvider.System, null)
+            new FileBaselineLock(Path.Combine(root, "baseline")), TimeProvider.System, null)
     {
     }
 
@@ -92,23 +94,25 @@ public sealed class BaselineEngine
         ICheckHistoryFileReader legacyReader,
         IBaselineLock baselineLock,
         TimeProvider time,
-        Action<TimeSpan>? sleep)
+        Action<TimeSpan>? sleep,
+        TimeSpan? lockTimeout = null)
     {
-        _store = new BaselineStore(Path.Combine(root, "baseline"), files, sleep);
+        _time = time;
+        _store = new BaselineStore(Path.Combine(root, "baseline"), files, sleep, time);
         _legacyDirectory = legacyDirectory;
         _legacyReader = legacyReader;
         _lock = baselineLock;
-        _time = time;
+        _lockTimeout = lockTimeout ?? DefaultLockTimeout;
     }
 
     /// <summary>
     /// Takes the next acquisition number (DESIGN-A §14.5): the lock is taken, the per-user sequence is advanced and stored, the lock is
     /// released. Call this before sampling starts. When it cannot be done the ticket is <see cref="BaselineRunTicket.Failed"/> and
-    /// <see cref="Complete"/> compares and records nothing.
+    /// <see cref="Complete"/> compares and records nothing. Like <see cref="Complete"/> it may wait for the lock: not for the UI thread.
     /// </summary>
     public BaselineRunTicket BeginRun()
     {
-        using var held = _lock.TryAcquire(LockTimeout);
+        using var held = _lock.TryAcquire(_lockTimeout);
         if (held is null)
         {
             return new BaselineRunTicket(0, Failed: true);
@@ -121,10 +125,15 @@ public sealed class BaselineEngine
     /// Compares and records the drives of one finished inspection. The lock is taken for this call as a whole: the files are read
     /// again under it, so a run that started later and finished first is noticed (<c>baseline_concurrent</c>).
     /// </summary>
+    /// <remarks>
+    /// Synchronous, with file reads and writes, and it may <b>block for up to the lock deadline</b> (15 seconds) while another run holds
+    /// the lock: it must not be called on the UI thread. When the lock cannot be taken in that time nothing is compared or recorded and
+    /// every drive comes back as <c>baseline_read_failed</c>.
+    /// </remarks>
     public BaselineRunResult Complete(BaselineRunTicket ticket, StorageInspection inspection)
     {
         ArgumentNullException.ThrowIfNull(inspection);
-        IDisposable? held = ticket.Failed ? null : _lock.TryAcquire(LockTimeout);
+        IDisposable? held = ticket.Failed ? null : _lock.TryAcquire(_lockTimeout);
         try
         {
             return new Run(this, ticket, held is not null, inspection).Execute();
@@ -162,6 +171,7 @@ public sealed class BaselineEngine
         private readonly HashSet<string> _twins = new(StringComparer.Ordinal);
         private BaselineMigrationReport _migration = BaselineMigrationReport.None(BaselineMigrationStatus.NotNeeded);
         private bool _stateBlocked;
+        private bool _ignoreImported;
         private bool _twinsWriteFailed;
         private bool _readFailed;
 
@@ -199,6 +209,17 @@ public sealed class BaselineEngine
             {
                 _migration = BaselineMigration.Run(_store, _engine._legacyReader, _engine._legacyDirectory, _now);
                 _stateBlocked = _migration.StopsComparison;
+            }
+
+            if (_canWrite)
+            {
+                // An abandoned import (DESIGN-A §5.3-2) means the old twins could not be trusted: whatever an interrupted earlier run
+                // had already copied from the old side is not used as a base. A marker that cannot be read is treated the same way
+                // (when an old folder is set, the migration has stopped the comparison already).
+                if (_store.ReadMarker() is BaselineMarker.Abandoned or BaselineMarker.Unreadable)
+                {
+                    _ignoreImported = true;
+                }
             }
 
             LoadTwins();
@@ -295,9 +316,11 @@ public sealed class BaselineEngine
                 case BaselineReadStatus.Missing:
                     break;
                 case BaselineReadStatus.Corrupt:
-                    if (_canWrite)
+                    // Kept for a look; the numbering starts again. When it cannot be moved aside it is not written over either:
+                    // the numbers of this run are temporary, as for a write that failed.
+                    if (_canWrite && !_store.Quarantine(BaselineStore.OrdinalsFile, _now))
                     {
-                        _store.Quarantine(BaselineStore.OrdinalsFile, _now); // kept for a look; the numbering starts again
+                        persistable = false;
                     }
 
                     break;
@@ -460,7 +483,20 @@ public sealed class BaselineEngine
             }
 
             var at = CheckTime.TruncateToMilliseconds(drive.SampledAt);
-            var previous = history.Entries.LastOrDefault(static e => !e.Withheld);
+
+            // The last record that may be a base. A record copied from the old folder is left out when that import was abandoned.
+            var previous = history.Entries.LastOrDefault(e => !e.Withheld && !(_ignoreImported && e.Acq == 0));
+
+            // A late sample (§14.5): acq is the order in which the runs began, not the order in which the drives were read, so the base can
+            // have the smaller acq and still have been sampled later than this run's reading. Counters that went back against a base that is
+            // later in time say that this sample is the older one, not that the disk was reset. A time that went back with no counter going
+            // back is not this: it is the clock, below. A record from the old folder (acq 0) is not a run that was going on at the same
+            // time, so it is left out: it cannot make a sample "late", and a clock that jumped forward must not stop the drive for good.
+            if (previous is { Acq: > 0 } && previous.At > at && BaselineCounters.Check(previous, work.Counters, at) == BaselineCounters.Continuity.WentBackwards)
+            {
+                return NotComparable(work, CheckEvidenceCode.BaselineConcurrent);
+            }
+
             BaselineDiskOutcome outcome;
             var withheld = false;
             if (previous is null)
@@ -521,8 +557,9 @@ public sealed class BaselineEngine
                 case BaselineReadStatus.Missing:
                     return true;
                 case BaselineReadStatus.Corrupt:
-                    _store.Quarantine(file, _now);
-                    return true;
+                    // Only when it has been moved aside is there nothing left to lose by writing a new history in its place. When it
+                    // cannot be moved, it is a file that cannot be handled now: no compare and no write, this run (baseline_read_failed).
+                    return _store.Quarantine(file, _now);
                 default:
                     return false;
             }
@@ -612,6 +649,9 @@ public sealed class BaselineEngine
                 if (!BaselineCounters.TryBoth(previous, work.Counters, name, out var before, out var after))
                 {
                     // The earlier record had no such counter, or a clipped one; or this value does not fit in 64 bits: no delta for this row only.
+                    // A current value of ulong.MaxValue or more is "inexact" (a raw number that was clipped, or one that is wider than the
+                    // field): whether it grew cannot be told from a clipped number, and a delta made of it could be a false alarm or hide a
+                    // real one. So it is "this counter is missing" for that row, never a number.
                     counters.Add(new BaselineCounterOutcome(id, CheckEvidenceCode.BaselineMissingCounter, null, null, null, null));
                     continue;
                 }

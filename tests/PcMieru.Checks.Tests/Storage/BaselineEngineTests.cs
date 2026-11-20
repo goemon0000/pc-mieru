@@ -511,6 +511,83 @@ public class BaselineEngineTests
         Assert.Contains(NvmeFile + ".bad-20261120T090000123Z", rig.Names());
     }
 
+    private static string SataFile => Drives.FileNameOf(Drives.SataKey, "WD-WX12A");
+
+    private static string BadNameOf(string name, int attempt) => CheckHistoryNames.BadName(name, T0, attempt);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_damaged_record_that_cannot_be_kept_aside_fails_that_disk_and_is_never_written_over(bool denied)
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Baseline, NvmeFile, "{ this is not a history");
+        var corrupt = File.ReadAllBytes(rig.PathOf(NvmeFile));
+        rig.FailQuarantine(denied ? new UnauthorizedAccessException("denied") : null);
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(), Drives.Sata()));
+
+        // No compare and no write for the disk whose file is damaged and could not be moved out of the way: writing under its name would
+        // destroy the evidence the move was meant to keep.
+        Assert.Equal(CheckEvidenceCode.BaselineReadFailed, result.Disks[0].Code);
+        Assert.All(result.Disks[0].Counters, static c => Assert.Equal(CheckEvidenceCode.BaselineReadFailed, c.Code));
+        Assert.True(result.ReadFailed);
+        BaselineAssert.ValidRows(result);
+        Assert.Equal(corrupt, File.ReadAllBytes(rig.PathOf(NvmeFile)));
+        Assert.DoesNotContain(rig.Names(), static n => n.Contains(".bad-", StringComparison.Ordinal));
+        Assert.DoesNotContain(rig.Names(), static n => n.EndsWith(".tmp", StringComparison.Ordinal));
+        // The other disk is a disk of its own: it is recorded as usual.
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[1].Code);
+        Assert.Equal(1, Entries(rig.Read(SataFile)));
+
+        // Once the move works, the next run keeps the damaged file aside under its "bad" name and starts the disk again.
+        rig.Faults.MoveFault = null;
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), poh: 101), Drives.Sata(at: H(1), hours: 1001)));
+
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, next.Disks[0].Code);
+        Assert.False(next.ReadFailed);
+        Assert.Equal(corrupt, File.ReadAllBytes(rig.PathOf(NvmeFile + ".bad-20261120T090000123Z")));
+        Assert.Equal(1, Entries(rig.Read(NvmeFile)));
+    }
+
+    [Fact]
+    public void A_damaged_record_is_kept_aside_under_the_next_free_name_when_the_first_one_is_taken()
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Baseline, NvmeFile, "{ this is not a history");
+        OldFiles.Put(rig.Baseline, BadNameOf(NvmeFile, 0), "an earlier damaged file");
+        OldFiles.Put(rig.Baseline, BadNameOf(NvmeFile, 1), "another earlier damaged file");
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[0].Code);
+        Assert.False(result.ReadFailed);
+        Assert.Equal("{ this is not a history", rig.Read(NvmeFile + ".bad-20261120T090000123Z-2"));
+        Assert.Equal("an earlier damaged file", rig.Read(BadNameOf(NvmeFile, 0)));
+        Assert.Equal("another earlier damaged file", rig.Read(BadNameOf(NvmeFile, 1)));
+        Assert.Equal(1, Entries(rig.Read(NvmeFile)));
+    }
+
+    [Fact]
+    public void A_damaged_record_with_every_bad_name_taken_fails_the_disk_and_is_not_replaced()
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Baseline, NvmeFile, "{ this is not a history");
+        var corrupt = File.ReadAllBytes(rig.PathOf(NvmeFile));
+        for (var attempt = 0; attempt < 64; attempt++) // the same number of names as the History's quarantine tries
+        {
+            OldFiles.Put(rig.Baseline, BadNameOf(NvmeFile, attempt), "earlier " + attempt);
+        }
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.Equal(CheckEvidenceCode.BaselineReadFailed, result.Disks[0].Code);
+        Assert.True(result.ReadFailed);
+        Assert.Equal(corrupt, File.ReadAllBytes(rig.PathOf(NvmeFile)));
+        Assert.Equal(64, rig.Names().Count(static n => n.Contains(".bad-", StringComparison.Ordinal)));
+        Assert.Equal("earlier 63", rig.Read(BadNameOf(NvmeFile, 63)));
+    }
+
     [Fact]
     public void A_record_that_cannot_be_read_now_fails_the_disk_and_is_left_alone()
     {
@@ -560,6 +637,126 @@ public class BaselineEngineTests
         Assert.Equal(BaselineDiskState.Compared, result.Disks[0].State);
         Assert.False(result.ReadFailed);
         Assert.Equal(2, Entries(rig.Read(NvmeFile)));
+    }
+
+    // ---- temporary files an earlier write left behind ----
+
+    private static void Aged(BaselineRig rig, string name, TimeSpan age, string content = "x")
+    {
+        OldFiles.Put(rig.Baseline, name, content);
+        File.SetLastWriteTimeUtc(rig.PathOf(name), T0.UtcDateTime - age);
+    }
+
+    [Fact]
+    public void Temporary_files_of_an_earlier_write_are_removed_after_a_save_by_name_shape_and_age_only()
+    {
+        using var rig = new BaselineRig();
+        // Removed: the shape of this saver's temporary file, an hour old or more.
+        var stale = new[]
+        {
+            (NvmeFile + ".aaaaaaaaaaaaaaaa.tmp", TimeSpan.FromHours(2)),
+            ("acq-seq.json.bbbbbbbbbbbbbbbb.tmp", TimeSpan.FromDays(5)),
+            ("disk-ordinals.json.cccccccccccccccc.tmp", TimeSpan.FromHours(1)), // exactly at the limit
+            ("imported-v074.json.0123456789abcdef.tmp", TimeSpan.FromHours(30)),
+        };
+
+        // Kept: too young, from the future, not of that shape (a foreign program's, a "bad" file, another name) or not a temporary file.
+        var kept = new[]
+        {
+            (NvmeFile + ".dddddddddddddddd.tmp", TimeSpan.FromMinutes(59)),
+            (SataFile + ".eeeeeeeeeeeeeeee.tmp", TimeSpan.FromHours(-3)),
+            ("notes.tmp", TimeSpan.FromDays(9)),
+            ("report.json.ffffffffffffffff.tmp", TimeSpan.FromDays(9)),
+            (NvmeFile + ".ABCDEF0123456789.tmp", TimeSpan.FromDays(9)), // upper case: not the nonce this saver writes (and not a twin of a stale name on a case-insensitive disk)
+            (NvmeFile + ".aaaaaaaaaaaaaaa.tmp", TimeSpan.FromDays(9)),
+            (NvmeFile + ".aaaaaaaaaaaaaaaag.tmp", TimeSpan.FromDays(9)),
+            (NvmeFile + ".tmp", TimeSpan.FromDays(9)),
+            (BadNameOf(NvmeFile, 0), TimeSpan.FromDays(9)),
+            ("a-note-of-mine.txt", TimeSpan.FromDays(9)),
+        };
+
+        foreach (var (name, age) in stale.Concat(kept))
+        {
+            Aged(rig, name, age);
+        }
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[0].Code);
+        foreach (var (name, _) in stale)
+        {
+            Assert.False(rig.Has(name), name);
+        }
+
+        foreach (var (name, _) in kept)
+        {
+            Assert.True(rig.Has(name), name);
+            Assert.Equal("x", rig.Read(name));
+        }
+    }
+
+    [Fact]
+    public void The_pid_of_a_process_decides_nothing_about_a_temporary_file()
+    {
+        using var rig = new BaselineRig();
+        // A nonce that spells the id of a running process (this one) is no protection: age and shape decide, and a young file stays
+        // whatever it spells.
+        var nonce = Environment.ProcessId.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
+        Aged(rig, $"{NvmeFile}.{nonce}.tmp", TimeSpan.FromDays(3));
+        Aged(rig, $"{SataFile}.{nonce}.tmp", TimeSpan.FromMinutes(5));
+
+        rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.False(rig.Has($"{NvmeFile}.{nonce}.tmp"));
+        Assert.True(rig.Has($"{SataFile}.{nonce}.tmp"));
+    }
+
+    [Fact]
+    public void A_save_that_failed_removes_no_old_temporary_file()
+    {
+        using var rig = new BaselineRig();
+        Aged(rig, NvmeFile + ".aaaaaaaaaaaaaaaa.tmp", TimeSpan.FromDays(2));
+        rig.Files.ReplaceFault = (_, _) => new IOException("disk full");
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.True(result.ReadFailed);
+        Assert.True(rig.Has(NvmeFile + ".aaaaaaaaaaaaaaaa.tmp"));
+        Assert.DoesNotContain(rig.Names(), static n => n.EndsWith(".tmp", StringComparison.Ordinal) && !n.EndsWith(".aaaaaaaaaaaaaaaa.tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_stale_temporary_file_that_cannot_be_deleted_does_not_fail_the_save()
+    {
+        using var rig = new BaselineRig();
+        Aged(rig, NvmeFile + ".aaaaaaaaaaaaaaaa.tmp", TimeSpan.FromDays(2));
+        rig.Faults.DeleteFault = path => Path.GetFileName(path).EndsWith(".aaaaaaaaaaaaaaaa.tmp", StringComparison.Ordinal) ? new IOException("held by a scanner") : null;
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme()));
+
+        Assert.False(result.ReadFailed);
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[0].Code);
+        Assert.True(rig.Has(NvmeFile + ".aaaaaaaaaaaaaaaa.tmp")); // stays for the next save
+        Assert.Equal(1, Entries(rig.Read(NvmeFile)));
+
+        rig.Faults.DeleteFault = null;
+        rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), poh: 101)));
+        Assert.False(rig.Has(NvmeFile + ".aaaaaaaaaaaaaaaa.tmp"));
+    }
+
+    [Fact]
+    public void A_folder_that_cannot_be_listed_does_not_fail_the_save()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(Drives.Inspect(Drives.Nvme(at: T0)));
+        Aged(rig, NvmeFile + ".aaaaaaaaaaaaaaaa.tmp", TimeSpan.FromDays(2));
+        rig.Faults.ListFault = _ => new IOException("sharing violation");
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), poh: 101)));
+
+        Assert.False(result.ReadFailed);
+        Assert.Equal(BaselineDiskState.Compared, result.Disks[0].State);
+        Assert.True(rig.Has(NvmeFile + ".aaaaaaaaaaaaaaaa.tmp"));
     }
 
     [Fact]

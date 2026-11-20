@@ -50,6 +50,54 @@ public sealed record DiskKey(string Key, string Label, bool Strong)
     /// <summary>"%" first, then "|": the order matters, or the "%" of "%7C" would be escaped again.</summary>
     public static string Escape(string s) => s.Replace("%", "%25", StringComparison.Ordinal).Replace("|", "%7C", StringComparison.Ordinal);
 
+    /// <summary>The inverse of <see cref="Escape"/>, read left to right ("%257C" is the text "%7C", not "|").</summary>
+    public static string Unescape(string s)
+    {
+        var text = new StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '%' && i + 2 < s.Length && s[i + 1] == '7' && s[i + 2] == 'C')
+            {
+                text.Append('|');
+                i += 2;
+            }
+            else if (s[i] == '%' && i + 2 < s.Length && s[i + 1] == '2' && s[i + 2] == '5')
+            {
+                text.Append('%');
+                i += 2;
+            }
+            else
+            {
+                text.Append(s[i]);
+            }
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// The key text of a disk with the label that <see cref="Of"/> would have given it, taken from the key alone: the serial when it is
+    /// usable, else the model. For finding out which file name v0.7.4 gave a key that is read back from a file. False when the text is
+    /// not shaped like a key ("v2|sn=...|uid=...|model=...").
+    /// </summary>
+    public static bool TryFromKeyText(string key, out DiskKey diskKey)
+    {
+        diskKey = null!;
+        var parts = key.Split('|');
+        if (parts.Length < 4 || parts[0] != Version
+            || !parts[1].StartsWith("sn=", StringComparison.Ordinal)
+            || !parts[2].StartsWith("uid=", StringComparison.Ordinal)
+            || !parts[3].StartsWith("model=", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var serial = Unescape(parts[1][3..]);
+        var model = Unescape(parts[3][6..]);
+        diskKey = new DiskKey(key, UsableSerial(serial) ? serial : model, parts[2].Length > 4 || UsableSerial(serial));
+        return true;
+    }
+
     /// <summary>
     /// What v0.7.4's <c>BusType.ToString()</c> gave for the STORAGE_BUS_TYPE number: the enum member name, or the decimal number for a
     /// value the enum did not have. Note the odd capitals ("iScsi", "Ieee1394") are the legacy spelling and part of the key.

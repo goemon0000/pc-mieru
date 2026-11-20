@@ -326,6 +326,14 @@ internal sealed class BaselineRig : IDisposable
     public BaselineEngine NewEngine(FakeBaselineLock? baselineLock = null) =>
         new(Root, WithLegacy ? Legacy : null, Files, OldSide, baselineLock ?? new FakeBaselineLock(), Time, static _ => { });
 
+    /// <summary>
+    /// Makes every move of a damaged file to its ".bad-" name fail with <paramref name="fault"/> (an IOException unless given), whatever the
+    /// file: the rename that keeps a damaged file aside is the only move this hook refuses. The moves that write new files still go through.
+    /// </summary>
+    public void FailQuarantine(Exception? fault = null) =>
+        Faults.MoveFault = (_, destination) =>
+            Path.GetFileName(destination).Contains(".bad-", StringComparison.Ordinal) ? fault ?? new IOException("the file is held by another program") : null;
+
     public BaselineRunResult Run(StorageInspection inspection) => Run(Engine, inspection);
 
     public static BaselineRunResult Run(BaselineEngine engine, StorageInspection inspection) => engine.Complete(engine.BeginRun(), inspection);

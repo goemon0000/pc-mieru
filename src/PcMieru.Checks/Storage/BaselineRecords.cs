@@ -71,6 +71,32 @@ internal static class BaselineNames
         return $"disk-{prefix}-{KeyHash(key.Key)}.json";
     }
 
+    /// <summary>
+    /// True for the name of a temporary file this saver makes: the name of one of its files (a history, <c>twins.json</c>,
+    /// <c>imported-twins.json</c>, <c>imported-v074.json</c>, <c>disk-ordinals.json</c>, <c>acq-seq.json</c>), a dot, 16 lower case hex
+    /// digits and ".tmp". Matched in full: any other ".tmp" file is not ours. There is no process id in the name, so none is looked at.
+    /// </summary>
+    public static bool IsOwnTemp(string name)
+    {
+        const string suffix = ".tmp";
+        const int nonceLength = 16;
+        if (!name.EndsWith(suffix, StringComparison.Ordinal) || name.Length < suffix.Length + 1 + nonceLength + 1)
+        {
+            return false;
+        }
+
+        var body = name[..^suffix.Length];
+        var dot = body.Length - nonceLength - 1;
+        if (body[dot] != '.' || !body[(dot + 1)..].All(static c => char.IsAsciiHexDigitLower(c)))
+        {
+            return false;
+        }
+
+        var final = body[..dot];
+        return final is "twins.json" or "imported-twins.json" or "imported-v074.json" or "disk-ordinals.json" or "acq-seq.json"
+            || TryParseFileName(final, out _);
+    }
+
     /// <summary>v1 (before keys) named the file after the serial alone: "disk-&lt;SafeName(serial)&gt;.json".</summary>
     public static string LegacyV1FileName(string serial) => "disk-" + SafeName(serial) + ".json";
 
@@ -453,26 +479,63 @@ internal static class BaselineJson
 
     // ---- imported-v074.json: the completion mark of the migration. Counts only: no key, no serial, no content ----
 
-    public static byte[] WriteMarker(DateTimeOffset completedAt, int histories, int alreadyThere, int skipped, int twins) => WriteSmall(writer =>
+    private const string StatusAbandoned = "abandoned";
+
+    /// <summary>
+    /// The mark of a migration that ran to its end. <paramref name="abandoned"/> writes the other mark, "status": "abandoned": the old
+    /// set of twins could not be trusted, nothing of the old folder was imported (all the counts are 0) and none of it is to be used
+    /// (DESIGN-A §5.3-2). A mark with no "status" is a complete one (what every earlier file is).
+    /// </summary>
+    public static byte[] WriteMarker(DateTimeOffset completedAt, int histories, int alreadyThere, int skipped, int twins, bool abandoned = false) => WriteSmall(writer =>
     {
         writer.WriteString("completedAtUtc", FormatTime(completedAt));
         writer.WriteNumber("histories", histories);
         writer.WriteNumber("alreadyThere", alreadyThere);
         writer.WriteNumber("skippedFiles", skipped);
         writer.WriteNumber("twins", twins);
+        if (abandoned)
+        {
+            writer.WriteString("status", StatusAbandoned);
+        }
     });
 
-    public static bool IsValidMarker(byte[] bytes)
+    /// <summary>True for a real mark. <paramref name="abandoned"/> says which: "status": "abandoned", or (no "status", or "complete") a finished import. Any other status is not a mark this version knows.</summary>
+    public static bool TryReadMarker(byte[] bytes, out bool abandoned)
     {
+        abandoned = false;
         try
         {
             using var document = JsonDocument.Parse(bytes, DocumentOptions);
             var root = document.RootElement;
-            return root.ValueKind == JsonValueKind.Object
-                && IsFormat1(root)
-                && root.TryGetProperty("completedAtUtc", out var at)
-                && at.ValueKind == JsonValueKind.String
-                && at.TryGetDateTimeOffset(out _);
+            if (root.ValueKind != JsonValueKind.Object
+                || !IsFormat1(root)
+                || !root.TryGetProperty("completedAtUtc", out var at)
+                || at.ValueKind != JsonValueKind.String
+                || !at.TryGetDateTimeOffset(out _))
+            {
+                return false;
+            }
+
+            if (!root.TryGetProperty("status", out var status))
+            {
+                return true;
+            }
+
+            if (status.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            switch (status.GetString())
+            {
+                case StatusAbandoned:
+                    abandoned = true;
+                    return true;
+                case "complete":
+                    return true;
+                default:
+                    return false;
+            }
         }
         catch (JsonException)
         {

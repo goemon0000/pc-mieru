@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace PcMieru.Checks.Storage;
 
 internal enum BaselineReadStatus
@@ -24,12 +22,31 @@ internal readonly record struct BaselineRead<T>(BaselineReadStatus Status, T? Va
     public static BaselineRead<T> Of(BaselineReadStatus status) => new(status, null);
 }
 
+/// <summary>What the migration's mark says (<c>imported-v074.json</c>).</summary>
+internal enum BaselineMarker
+{
+    /// <summary>No mark, or one that is not a real mark (damaged, foreign): the migration has not been completed.</summary>
+    None,
+
+    /// <summary>The migration ran to its end: the old folder is imported.</summary>
+    Complete,
+
+    /// <summary>
+    /// The old set of twins could not be trusted, so nothing of the old folder was imported or is used (DESIGN-A §5.3-2): the
+    /// comparison goes on from the baselines of this version alone.
+    /// </summary>
+    Abandoned,
+
+    /// <summary>The mark could not be read now: it may be there and say either.</summary>
+    Unreadable,
+}
+
 /// <summary>
 /// The files of <c>&lt;root&gt;\baseline\</c> (DESIGN-A §4.1, §5.2): one history per disk key, <c>twins.json</c>, <c>imported-twins.json</c>,
-/// <c>imported-v074.json</c> (the migration is complete), <c>disk-ordinals.json</c> and <c>acq-seq.json</c>. Every write goes to a
-/// temporary file first, is flushed to the disk, and is then renamed over the final name (or, for a file that must not be
-/// overwritten, renamed with no replace), so a reader and a crash see a whole old file or a whole new one. Nothing here takes the
-/// lock: the engine holds it around every call.
+/// <c>imported-v074.json</c> (the migration is complete or abandoned), <c>disk-ordinals.json</c>, <c>acq-seq.json</c> and the lock file.
+/// Every write goes to a temporary file first, is flushed to the disk, and is then renamed over the final name (or, for a file that
+/// must not be overwritten, renamed with no replace), so a reader and a crash see a whole old file or a whole new one. Nothing here
+/// takes the lock: the engine holds it around every call.
 /// </summary>
 internal sealed class BaselineStore
 {
@@ -42,16 +59,24 @@ internal sealed class BaselineStore
     /// <summary>A history is at most 200 entries of a few hundred bytes. Anything far beyond that is not one.</summary>
     public const int MaxFileBytes = 4 * 1024 * 1024;
 
+    /// <summary>A temporary file left by a write that never finished is removed once it is this old (the History rule, DESIGN-A §4.1). A write in flight is far younger.</summary>
+    public static readonly TimeSpan TempMaxAge = TimeSpan.FromHours(1);
+
     private const int ReplaceRetries = 4;
+
+    /// <summary>The same number of tries for a free "bad" name as the history's quarantine.</summary>
+    private const int MaxNameAttempts = 64;
 
     private readonly IBaselineFileSystem _files;
     private readonly Action<TimeSpan> _sleep;
+    private readonly TimeProvider _time;
 
-    public BaselineStore(string directory, IBaselineFileSystem files, Action<TimeSpan>? sleep = null)
+    public BaselineStore(string directory, IBaselineFileSystem files, Action<TimeSpan>? sleep = null, TimeProvider? time = null)
     {
         Directory = directory;
         _files = files;
         _sleep = sleep ?? Thread.Sleep;
+        _time = time ?? TimeProvider.System;
     }
 
     public string Directory { get; }
@@ -122,11 +147,18 @@ internal sealed class BaselineStore
             : BaselineRead<Dictionary<string, int>>.Of(BaselineReadStatus.Corrupt);
     }
 
-    /// <summary>True when the migration has been completed: the mark is there and is a real mark.</summary>
-    public bool IsMigrationComplete()
+    /// <summary>What the mark says. A missing or damaged mark is <see cref="BaselineMarker.None"/> (the migration runs and writes a good one); one that cannot be read now is <see cref="BaselineMarker.Unreadable"/>.</summary>
+    public BaselineMarker ReadMarker()
     {
         var raw = ReadBytes(MarkerFile);
-        return raw.Status == BaselineReadStatus.Ok && BaselineJson.IsValidMarker(raw.Value!);
+        return raw.Status switch
+        {
+            BaselineReadStatus.Ok => BaselineJson.TryReadMarker(raw.Value!, out var abandoned)
+                ? (abandoned ? BaselineMarker.Abandoned : BaselineMarker.Complete)
+                : BaselineMarker.None,
+            BaselineReadStatus.Unreadable => BaselineMarker.Unreadable,
+            _ => BaselineMarker.None,
+        };
     }
 
     // ---- writing ----
@@ -176,7 +208,7 @@ internal sealed class BaselineStore
                     }
 
                     done = true;
-                    return;
+                    break;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReplaceRetries && (replace || !_files.Exists(path)))
                 {
@@ -195,25 +227,86 @@ internal sealed class BaselineStore
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // An orphan .tmp is never read as data (a file name is matched in full), so it can wait.
+                    // An orphan .tmp is never read as data (a file name is matched in full): the clean-up after a later save takes it.
                 }
             }
         }
+
+        CleanStaleTemps();
     }
 
-    /// <summary>Renames a file that cannot be used to "&lt;name&gt;.bad-&lt;time&gt;" so it is kept for a look and no longer in the way. Best effort: false when it could not.</summary>
-    public bool Quarantine(string name, DateTimeOffset now)
+    /// <summary>
+    /// Deletes the temporary files an earlier write left behind (a crash, a power cut, a failed delete), after a save that succeeded.
+    /// The History rule (DESIGN-A §4.1): a name of exactly the shape of this saver's temporary file (<see cref="BaselineNames.IsOwnTemp"/>)
+    /// and a last-write time at least <see cref="TempMaxAge"/> before now. The pid is never looked at (there is none in the name); a time in
+    /// the future is not old. No other file is touched: not a history, not a ".bad" file, not the lock file, not a foreign ".tmp". Best
+    /// effort: a file that cannot be listed or deleted just now stays for the next save.
+    /// </summary>
+    private void CleanStaleTemps()
     {
-        var stamp = now.UtcDateTime.ToString("yyyyMMdd'T'HHmmssfff'Z'", CultureInfo.InvariantCulture);
         try
         {
-            _files.Move(PathOf(name), PathOf(name + ".bad-" + stamp));
-            return true;
+            var now = _time.GetUtcNow().UtcDateTime;
+            foreach (var entry in _files.ListFiles(Directory))
+            {
+                if (!BaselineNames.IsOwnTemp(entry.Name) || now - entry.LastWriteUtc < TempMaxAge)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _files.Delete(PathOf(entry.Name));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Held by someone or not ours to delete after all: leave it.
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            // The folder cannot be listed just now: the save itself is done and stays done.
         }
+    }
+
+    /// <summary>
+    /// Moves a file that cannot be used aside as "&lt;name&gt;.bad-&lt;UTC&gt;", then "-1", "-2" ... when that name is taken (the History's
+    /// rule, <see cref="CheckHistoryNames.BadName"/>), so it is kept for a look and no longer in the way. Nothing is ever replaced.
+    /// True when the file is no longer under its name (moved, or already gone); false when it could not be moved: the file is then
+    /// exactly as it was and the caller must not write under that name, because that would overwrite what this was meant to keep.
+    /// </summary>
+    public bool Quarantine(string name, DateTimeOffset now)
+    {
+        var source = PathOf(name);
+        for (var attempt = 0; attempt < MaxNameAttempts; attempt++)
+        {
+            var destination = PathOf(CheckHistoryNames.BadName(name, now, attempt));
+            try
+            {
+                if (_files.Exists(destination))
+                {
+                    continue;
+                }
+
+                _files.Move(source, destination);
+                return true;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return true; // it is gone since it was read: there is nothing left to keep and nothing in the way
+            }
+            catch (IOException) when (_files.Exists(destination))
+            {
+                // Someone took the name between the check and the move: the next name.
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     // ---- the acquisition sequence ----

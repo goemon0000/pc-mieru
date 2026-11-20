@@ -19,10 +19,19 @@ public enum BaselineMigrationStatus
     Incomplete,
 
     /// <summary>
-    /// The set of twins could not be trusted (damaged, unreadable) or the old folder could not be listed, or nothing could be
-    /// written. No mark is written and no disk is compared in this run (<c>baseline_read_failed</c>).
+    /// Something that may pass could not be done just now: the old folder could not be listed, the old set of twins could not be read
+    /// (a sharing violation, a missing permission), the new side's own set of twins or mark could not be read, or nothing could be
+    /// written. No mark is written and no disk is compared in this run (<c>baseline_read_failed</c>); the next run tries again.
     /// </summary>
     Blocked,
+
+    /// <summary>
+    /// The old set of twins is there and read, but its content cannot be trusted (0 bytes, not JSON, not a list of keys, too long). Which
+    /// disks were twins is unknown, so none of the old histories is imported or used (a disk that was one of two is never compared with
+    /// its twin's record), and the mark was written with "status": "abandoned". The comparison goes on in this very run, from the
+    /// baselines of this version alone. Reported by the run that abandoned the import only.
+    /// </summary>
+    Abandoned,
 }
 
 /// <summary>What one run of the import did. Counts only: it never carries a key, a serial or a file name.</summary>
@@ -48,7 +57,7 @@ public sealed class BaselineMigrationReport
     /// <summary>Histories that already had a file in the new folder (the existing one is kept).</summary>
     public int AlreadyThere { get; }
 
-    /// <summary>Old files that were not usable (damaged, a key that does not match its file name) and were left alone.</summary>
+    /// <summary>Old files that were not usable (damaged, a key that does not match its file name, a renamed copy of a history the old folder has under its proper name) and were left alone.</summary>
     public int Skipped { get; }
 
     /// <summary>The number of keys in the old set of twins.</summary>
@@ -72,9 +81,13 @@ internal static class BaselineMigration
 
     public static BaselineMigrationReport Run(BaselineStore store, ICheckHistoryFileReader legacy, string legacyDirectory, DateTimeOffset now)
     {
-        if (store.IsMigrationComplete())
+        switch (store.ReadMarker())
         {
-            return BaselineMigrationReport.None(BaselineMigrationStatus.NotNeeded);
+            case BaselineMarker.Complete:
+            case BaselineMarker.Abandoned:
+                return BaselineMigrationReport.None(BaselineMigrationStatus.NotNeeded); // settled, one way or the other
+            case BaselineMarker.Unreadable:
+                return BaselineMigrationReport.None(BaselineMigrationStatus.Blocked); // it may say "abandoned": do not import over it
         }
 
         IReadOnlyList<HistoryFileEntry> listing;
@@ -99,10 +112,12 @@ internal static class BaselineMigration
         var twinCount = 0;
         if (hasTwins)
         {
-            var twins = ImportTwins(store, legacy, Path.Combine(legacyDirectory, OldTwinsFile), out twinCount);
-            if (twins != TwinsStep.Done)
+            switch (ImportTwins(store, legacy, Path.Combine(legacyDirectory, OldTwinsFile), out twinCount))
             {
-                return new BaselineMigrationReport(BaselineMigrationStatus.Blocked, [], 0, 0, 0, twinCount);
+                case TwinsStep.Stop:
+                    return new BaselineMigrationReport(BaselineMigrationStatus.Blocked, [], 0, 0, 0, twinCount);
+                case TwinsStep.Corrupt:
+                    return Abandon(store, now);
             }
         }
 
@@ -112,7 +127,7 @@ internal static class BaselineMigration
         foreach (var name in histories)
         {
             BaselineNames.TryParseFileName(name, out var hash);
-            switch (ImportHistory(store, legacy, Path.Combine(legacyDirectory, name), name, hash))
+            switch (ImportHistory(store, legacy, legacyDirectory, names, name, hash))
             {
                 case HistoryStep.Copied:
                     copied++;
@@ -147,15 +162,40 @@ internal static class BaselineMigration
         return new BaselineMigrationReport(BaselineMigrationStatus.Complete, [], copied, alreadyThere, skipped, twinCount);
     }
 
+    /// <summary>
+    /// The old set of twins cannot be trusted (<see cref="TwinsStep.Corrupt"/>): nothing of the old folder is imported or used. The mark
+    /// says so ("status": "abandoned", no keys, no contents). The old folder is not touched. A mark that cannot be written is a stop
+    /// like any other write that failed: the next run reads the old set again.
+    /// </summary>
+    private static BaselineMigrationReport Abandon(BaselineStore store, DateTimeOffset now)
+    {
+        try
+        {
+            store.WriteReplace(BaselineStore.MarkerFile, BaselineJson.WriteMarker(now, 0, 0, 0, 0, abandoned: true));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return BaselineMigrationReport.None(BaselineMigrationStatus.Blocked);
+        }
+
+        return BaselineMigrationReport.None(BaselineMigrationStatus.Abandoned);
+    }
+
     private enum TwinsStep
     {
         Done,
+
+        /// <summary>It could not be read or stored now (a sharing violation, a permission, a listing or a write that failed): no mark, no comparison, next run.</summary>
         Stop,
+
+        /// <summary>The old set was read and is not a set of twins: 0 bytes, not JSON, the wrong shape, too long. Retrying reads the same thing.</summary>
+        Corrupt,
     }
 
     /// <summary>
-    /// The old twins go to <c>imported-twins.json</c> without overwriting. A valid file that is already there is reused. A damaged set on
-    /// either side, an unreadable one, or a failed write stops the import (and the comparison) with no mark.
+    /// The old twins go to <c>imported-twins.json</c> without overwriting. A valid file that is already there is reused. An old set that
+    /// cannot be read now, a damaged or unreadable set of the new side, or a failed write stops the import (and the comparison) with no
+    /// mark. An old set that was read but is not a set of twins is <see cref="TwinsStep.Corrupt"/>: the import is abandoned.
     /// </summary>
     private static TwinsStep ImportTwins(BaselineStore store, ICheckHistoryFileReader legacy, string oldPath, out int twinCount)
     {
@@ -169,14 +209,18 @@ internal static class BaselineMigration
         {
             return TwinsStep.Done; // it vanished between the listing and the read: there is no old set
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (InvalidDataException)
+        {
+            return TwinsStep.Corrupt; // far longer than any set of twins
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return TwinsStep.Stop;
         }
 
         if (!BaselineJson.TryParseKeyList(bytes, out var keys))
         {
-            return TwinsStep.Stop;
+            return TwinsStep.Corrupt;
         }
 
         twinCount = keys!.Count;
@@ -216,12 +260,25 @@ internal static class BaselineMigration
         Pending,
     }
 
-    private static HistoryStep ImportHistory(BaselineStore store, ICheckHistoryFileReader legacy, string oldPath, string name, string hash)
+    /// <summary>
+    /// One old history. It is imported when it is whole, its key is a key, and the hash in its file name is the hash of that key. The
+    /// file name must also be exactly the one v0.7.4 gave that key (<see cref="BaselineNames.FileName"/>): a file whose hash is right but
+    /// whose prefix is not (a copy somebody renamed, an old file name rule) is imported under this version's own name for the key, still
+    /// only when there is none yet and never over one, and only when the old folder has no file of the proper name for that key (that
+    /// one is the real history; the renamed one is a copy of unknown age).
+    /// </summary>
+    private static HistoryStep ImportHistory(
+        BaselineStore store,
+        ICheckHistoryFileReader legacy,
+        string legacyDirectory,
+        HashSet<string> legacyNames,
+        string oldName,
+        string hash)
     {
         byte[] bytes;
         try
         {
-            bytes = legacy.ReadAllBytes(oldPath, BaselineStore.MaxFileBytes);
+            bytes = legacy.ReadAllBytes(Path.Combine(legacyDirectory, oldName), BaselineStore.MaxFileBytes);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -239,9 +296,16 @@ internal static class BaselineMigration
         // Old records count as acq 0: they are older than every run of this version.
         if (!BaselineJson.TryParseHistory(bytes, out var history, zeroAcq: true)
             || !BaselineNames.IsValidKey(history!.Key, allowLocation: true)
-            || BaselineNames.KeyHash(history.Key) != hash)
+            || BaselineNames.KeyHash(history.Key) != hash
+            || !DiskKey.TryFromKeyText(history.Key, out var diskKey))
         {
             return HistoryStep.Skipped;
+        }
+
+        var name = BaselineNames.FileName(diskKey);
+        if (name != oldName && legacyNames.Contains(name))
+        {
+            return HistoryStep.Skipped; // the old folder has the file of the proper name for this key: that is the history, this is a copy
         }
 
         if (store.Exists(name))

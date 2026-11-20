@@ -322,14 +322,151 @@ public class BaselineMigrationTests
     [InlineData("{ \"a\": 1 }")]
     [InlineData("[ 5 ]")]
     [InlineData("")]
-    public void A_set_of_twins_that_cannot_be_trusted_stops_the_comparison_with_no_mark_and_leaves_the_old_file_alone(string body)
+    public void A_set_of_twins_that_is_corrupt_abandons_the_import_and_the_comparison_goes_on_from_fresh_baselines(string body)
     {
         using var rig = new BaselineRig();
         OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldSata(rig, new OldEntry(H(-1), SataCounters(900)));
         OldFiles.Put(rig.Legacy, "twins.json", body);
         var before = OldFiles.Snapshot(rig.Legacy);
 
+        var first = rig.Run(Drives.Inspect(Drives.Nvme(media: 4), Drives.Sata(hours: 905)));
+
+        // Which disks were twins is unknown, so no old record is a base: both disks are new, and nothing is "read failed".
+        Assert.Equal(BaselineMigrationStatus.Abandoned, first.Migration.Status);
+        Assert.False(first.Migration.StopsComparison);
+        Assert.False(first.ReadFailed);
+        Assert.All(first.Disks, static d =>
+        {
+            Assert.Equal(BaselineDiskState.NotComparable, d.State);
+            Assert.Equal(CheckEvidenceCode.BaselineFirst, d.Code);
+        });
+        BaselineAssert.ValidRows(first);
+        Assert.Equal(0, first.Migration.Histories + first.Migration.AlreadyThere + first.Migration.Skipped + first.Migration.Twins);
+
+        // The mark says "abandoned" and holds no key, serial or content. No old history and no set of twins was copied.
+        var mark = rig.Read("imported-v074.json");
+        Assert.Contains("\"status\": \"abandoned\"", mark);
+        Assert.Contains("completedAtUtc", mark);
+        foreach (var secret in new[] { "S6B1NJ0R123456", "WD-WX12A", "v2|", "eui.", "Samsung", "nvme.", "ata.", "just some text" })
+        {
+            Assert.DoesNotContain(secret, mark);
+        }
+
+        Assert.False(rig.Has("imported-twins.json"));
+        Assert.Equal(2, rig.DiskFiles().Count);
+        Assert.DoesNotContain("\"acq\": 0", rig.Read(NvmeFile)); // only this run's record is in the new files
+        Assert.Equal(1, Entries(rig.Read(NvmeFile)));
+        Assert.Equal(before, OldFiles.Snapshot(rig.Legacy)); // the old folder is never touched, the broken file included
+
+        // The next run compares with the record of the first one, as for any new disk. The import is not tried again.
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 5, poh: 101), Drives.Sata(at: H(1), hours: 906)));
+        Assert.Equal(BaselineMigrationStatus.NotNeeded, next.Migration.Status);
+        var media = BaselineAssert.Counter(next.Disks[0], "nvme.media_errors");
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
+        Assert.Equal(4UL, media.Before); // not 1: the old record is not the base
+        Assert.Equal(905UL, BaselineAssert.Counter(next.Disks[1], "ata.9").Before);
+
+        // Making the old file whole later does not bring the import back: the mark has settled it.
+        OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
+        var later = rig.Run(Drives.Inspect(Drives.Nvme(at: H(2), media: 5, poh: 102), Drives.Sata(at: H(2), hours: 907)));
+        Assert.Equal(BaselineMigrationStatus.NotNeeded, later.Migration.Status);
+        Assert.Equal(5UL, BaselineAssert.Counter(later.Disks[0], "nvme.media_errors").Before);
+        Assert.False(rig.Has("imported-twins.json"));
+    }
+
+    [Fact]
+    public void Histories_copied_by_an_interrupted_run_are_not_used_when_the_old_twins_turn_out_corrupt()
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldSata(rig, new OldEntry(H(-1), SataCounters(900)));
+        OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
+        // The first run copies the NVMe history and the set of twins, and stops at the SATA history: the old tool holds it. Only the
+        // SATA drive is in this inspection, so the copied NVMe history is not touched by it.
+        rig.OldSide.ReadFault = path => Path.GetFileName(path) == SataFile ? new IOException("sharing violation") : null;
+        var halfway = rig.Run(Drives.Inspect(Drives.Sata(hours: 905)));
+        Assert.Equal(BaselineMigrationStatus.Incomplete, halfway.Migration.Status);
+        Assert.True(rig.Has(NvmeFile));
+        Assert.True(rig.Has("imported-twins.json"));
+        Assert.False(rig.Has("imported-v074.json"));
+        Assert.Contains("\"acq\": 0", rig.Read(NvmeFile));
+
+        // The old set of twins is now found corrupt (it was whole when it was copied): the import is abandoned.
+        rig.OldSide.ReadFault = null;
+        OldFiles.Put(rig.Legacy, "twins.json", "");
+        var abandoned = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 4, poh: 101)));
+
+        // Decision: what the interrupted run copied stays on disk, but the engine does not use it. The NVMe disk is new, not compared
+        // with the old record (media 1), and the old record is not deleted, only left behind.
+        Assert.Equal(BaselineMigrationStatus.Abandoned, abandoned.Migration.Status);
+        Assert.Equal(BaselineDiskState.NotComparable, abandoned.Disks[0].State);
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, abandoned.Disks[0].Code);
+        Assert.False(abandoned.ReadFailed);
+        Assert.Contains("\"status\": \"abandoned\"", rig.Read("imported-v074.json"));
+        var text = rig.Read(NvmeFile);
+        Assert.Equal(2, Entries(text));
+        Assert.Contains("\"acq\": 0", text);
+        Assert.Contains("\"acq\": 2", text);
+
+        // And it stays so: the next run compares with this run's own record, the one before it is skipped as a base.
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(2), media: 6, poh: 102)));
+        Assert.Equal(BaselineMigrationStatus.NotNeeded, next.Migration.Status);
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
+        Assert.Equal(4UL, BaselineAssert.Counter(next.Disks[0], "nvme.media_errors").Before);
+    }
+
+    [Fact]
+    public void A_complete_import_still_uses_the_old_records_as_the_base()
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
+
+        var first = rig.Run(Drives.Inspect(Drives.Nvme(media: 4)));
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 5, poh: 101)));
+
+        Assert.Equal(BaselineMigrationStatus.Complete, first.Migration.Status);
+        Assert.DoesNotContain("abandoned", rig.Read("imported-v074.json"));
+        Assert.Equal(1UL, BaselineAssert.Counter(first.Disks[0], "nvme.media_errors").Before);
+        Assert.Equal(4UL, BaselineAssert.Counter(next.Disks[0], "nvme.media_errors").Before);
+    }
+
+    [Fact]
+    public void An_abandoned_mark_that_cannot_be_written_is_a_stop_and_the_next_run_looks_at_the_old_set_again()
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldFiles.Put(rig.Legacy, "twins.json", "");
+        rig.Files.ReplaceFault = (_, destination) => Path.GetFileName(destination) == "imported-v074.json" ? new IOException("disk full") : null;
+
         var blocked = rig.Run(Drives.Inspect(Drives.Nvme(media: 4)));
+
+        Assert.Equal(BaselineMigrationStatus.Blocked, blocked.Migration.Status);
+        Assert.True(blocked.ReadFailed);
+        Assert.Equal(CheckEvidenceCode.BaselineReadFailed, blocked.Disks[0].Code);
+        Assert.False(rig.Has("imported-v074.json"));
+        Assert.Empty(rig.DiskFiles());
+
+        rig.Files.ReplaceFault = null;
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 4, poh: 101)));
+        Assert.Equal(BaselineMigrationStatus.Abandoned, next.Migration.Status);
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, next.Disks[0].Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_old_twins_file_that_cannot_be_read_now_blocks_the_comparison_and_leaves_no_mark(bool denied)
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
+        rig.OldSide.ReadFault = path => Path.GetFileName(path) == "twins.json"
+            ? denied ? new UnauthorizedAccessException("denied") : new IOException("sharing violation")
+            : null;
+
+        var blocked = rig.Run(Drives.Inspect(Drives.Nvme()));
 
         Assert.Equal(BaselineMigrationStatus.Blocked, blocked.Migration.Status);
         Assert.True(blocked.StopsComparisonForTest());
@@ -339,31 +476,62 @@ public class BaselineMigrationTests
         Assert.False(rig.Has("imported-v074.json"));
         Assert.False(rig.Has("imported-twins.json"));
         Assert.Empty(rig.DiskFiles());
-        Assert.Equal(before, OldFiles.Snapshot(rig.Legacy));
 
-        // The old file is made whole again: the import resumes.
-        OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
-        var resumed = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 4, poh: 101)));
-        Assert.Equal(BaselineMigrationStatus.Complete, resumed.Migration.Status);
-        Assert.Equal(BaselineDiskState.Compared, resumed.Disks[0].State);
+        rig.OldSide.ReadFault = null;
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), poh: 101)));
+        Assert.Equal(BaselineMigrationStatus.Complete, next.Migration.Status);
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
     }
 
     [Fact]
-    public void An_old_twins_file_that_cannot_be_read_now_blocks_the_comparison()
+    public void An_old_twins_file_that_another_program_has_open_blocks_this_run_and_the_next_one_succeeds_once_it_is_let_go()
     {
         using var rig = new BaselineRig();
         OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
         OldFiles.Put(rig.Legacy, "twins.json", OldFiles.Twins());
-        rig.OldSide.ReadFault = path => Path.GetFileName(path) == "twins.json" ? new IOException("sharing violation") : null;
+        var twinsPath = Path.Combine(rig.Legacy, "twins.json");
 
-        var blocked = rig.Run(Drives.Inspect(Drives.Nvme()));
+        StorageInspection Inspect(DateTimeOffset at, ulong poh) => Drives.Inspect(at, [Drives.Nvme(at: at, media: 2, poh: poh)]);
+
+        // A real lock on the real file (no exclusive sharing), not a made-up exception.
+        using (var holder = new FileStream(twinsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var blocked = rig.Run(Inspect(T0, 100));
+
+            Assert.Equal(BaselineMigrationStatus.Blocked, blocked.Migration.Status);
+            Assert.True(blocked.ReadFailed);
+            Assert.Equal(CheckEvidenceCode.BaselineReadFailed, blocked.Disks[0].Code);
+            Assert.False(rig.Has("imported-v074.json"));
+            Assert.False(rig.Has("imported-twins.json"));
+            Assert.Empty(rig.DiskFiles());
+        }
+
+        var next = rig.Run(Inspect(H(1), 101));
+
+        Assert.Equal(BaselineMigrationStatus.Complete, next.Migration.Status);
+        Assert.False(next.ReadFailed);
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
+        Assert.Equal(1UL, BaselineAssert.Counter(next.Disks[0], "nvme.media_errors").Before);
+    }
+
+    [Fact]
+    public void A_mark_that_cannot_be_read_now_blocks_the_import_and_the_comparison_until_it_can()
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        rig.Run(Drives.Inspect(Drives.Nvme(media: 2)));
+        rig.Faults.ReadFault = path => Path.GetFileName(path) == "imported-v074.json" ? new IOException("sharing violation") : null;
+
+        var blocked = rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), media: 2, poh: 101)));
 
         Assert.Equal(BaselineMigrationStatus.Blocked, blocked.Migration.Status);
+        Assert.True(blocked.ReadFailed);
         Assert.Equal(CheckEvidenceCode.BaselineReadFailed, blocked.Disks[0].Code);
-        Assert.False(rig.Has("imported-v074.json"));
 
-        rig.OldSide.ReadFault = null;
-        Assert.Equal(BaselineMigrationStatus.Complete, rig.Run(Drives.Inspect(Drives.Nvme(at: H(1), poh: 101))).Migration.Status);
+        rig.Faults.ReadFault = null;
+        var next = rig.Run(Drives.Inspect(Drives.Nvme(at: H(2), media: 2, poh: 102)));
+        Assert.Equal(BaselineMigrationStatus.NotNeeded, next.Migration.Status);
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
     }
 
     [Theory]
@@ -555,6 +723,74 @@ public class BaselineMigrationTests
         Assert.False(rig.Has(misnamed));
         Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[0].Code);
         Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[1].Code);
+    }
+
+    // A legacy file whose hash is the hash of its key but whose prefix is not what v0.7.4 would have given: somebody renamed or copied it.
+    private static string RenamedNvmeFile => $"disk-RENAMED_BY_HAND-{Drives.HashOf(Drives.NvmeKey)}.json";
+
+    [Fact]
+    public void A_renamed_old_history_is_imported_under_this_versions_own_name_for_the_key()
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Legacy, RenamedNvmeFile, OldFiles.History(Drives.NvmeKey, Model, new OldEntry(H(-2), OldFiles.Nvme(media: 1))));
+        var before = OldFiles.Snapshot(rig.Legacy);
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(media: 4)));
+
+        Assert.Equal(BaselineMigrationStatus.Complete, result.Migration.Status);
+        Assert.Equal(1, result.Migration.Histories);
+        Assert.Equal(0, result.Migration.Skipped);
+        Assert.True(rig.Has(NvmeFile)); // the engine's name, the one it looks the disk up under
+        Assert.False(rig.Has(RenamedNvmeFile)); // the odd name is never copied as it is
+        Assert.Equal(1UL, BaselineAssert.Counter(result.Disks[0], "nvme.media_errors").Before);
+        Assert.Equal(2, Entries(rig.Read(NvmeFile)));
+        Assert.Equal(before, OldFiles.Snapshot(rig.Legacy));
+    }
+
+    [Fact]
+    public void A_renamed_copy_is_skipped_when_the_old_folder_has_the_file_of_the_proper_name_too()
+    {
+        using var rig = new BaselineRig();
+        OldNvme(rig, new OldEntry(H(-2), OldFiles.Nvme(media: 1)));
+        OldFiles.Put(rig.Legacy, RenamedNvmeFile, OldFiles.History(Drives.NvmeKey, Model, new OldEntry(H(-1), OldFiles.Nvme(media: 7))));
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(media: 8)));
+
+        Assert.Equal(1, result.Migration.Histories); // the proper file, whichever of the two is read first
+        Assert.Equal(1, result.Migration.Skipped);
+        Assert.Equal(1UL, BaselineAssert.Counter(result.Disks[0], "nvme.media_errors").Before);
+        Assert.Equal(H(-2), BaselineAssert.Counter(result.Disks[0], "nvme.media_errors").SinceUtc);
+    }
+
+    [Fact]
+    public void A_renamed_old_history_never_overwrites_a_history_the_new_folder_already_has()
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Legacy, RenamedNvmeFile, OldFiles.History(Drives.NvmeKey, Model, new OldEntry(H(-5), OldFiles.Nvme(media: 1, poh: 95))));
+        OldFiles.Put(rig.Baseline, NvmeFile, OldFiles.History(Drives.NvmeKey, Model, new OldEntry(H(-1), OldFiles.Nvme(media: 7, poh: 99, written: 900))));
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(media: 8)));
+
+        Assert.Equal(0, result.Migration.Histories);
+        Assert.Equal(1, result.Migration.AlreadyThere);
+        var media = BaselineAssert.Counter(result.Disks[0], "nvme.media_errors");
+        Assert.Equal(7UL, media.Before); // the file that was there is the base, not the renamed copy (media 1)
+        Assert.Equal(H(-1), media.SinceUtc);
+        Assert.Equal(2, Entries(rig.Read(NvmeFile))); // the one that was there, and this run's
+    }
+
+    [Fact]
+    public void A_history_whose_hash_part_is_not_the_hash_of_its_key_is_skipped_even_with_the_proper_prefix()
+    {
+        using var rig = new BaselineRig();
+        var proper = $"disk-S6B1NJ0R123456-{Drives.HashOf(Drives.SataKey)}.json";
+        OldFiles.Put(rig.Legacy, proper, OldFiles.History(Drives.NvmeKey, Model, new OldEntry(H(-2), OldFiles.Nvme(media: 1))));
+
+        var result = rig.Run(Drives.Inspect(Drives.Nvme(media: 4)));
+
+        Assert.Equal(1, result.Migration.Skipped);
+        Assert.Equal(0, result.Migration.Histories);
+        Assert.Equal(CheckEvidenceCode.BaselineFirst, result.Disks[0].Code);
     }
 
     [Fact]

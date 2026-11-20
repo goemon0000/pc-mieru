@@ -493,4 +493,36 @@ public class BaselineIdentityTests
         Assert.Equal("{ not json", rig.Read("disk-ordinals.json.bad-20261120T090000123Z"));
         Assert.Single(OrdinalsOf(rig));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_damaged_numbering_file_that_cannot_be_kept_aside_is_not_written_over_and_the_numbers_are_temporary(bool denied)
+    {
+        using var rig = new BaselineRig();
+        OldFiles.Put(rig.Baseline, "disk-ordinals.json", "{ not json");
+        var damaged = File.ReadAllBytes(rig.PathOf("disk-ordinals.json"));
+        rig.FailQuarantine(denied ? new UnauthorizedAccessException("denied") : null);
+
+        var first = rig.Run(Drives.Inspect(Drives.Nvme(number: 0), Drives.Sata(number: 1)));
+
+        // The numbers are for this run only, like a numbering file that could not be written. The histories are not the numbering's
+        // business: they are recorded as usual.
+        Assert.Equal(["disk-1", "disk-2"], first.Disks.Select(static d => d.DiskId));
+        Assert.False(first.ReadFailed);
+        Assert.Equal(2, rig.DiskFiles().Count);
+        Assert.Equal(damaged, File.ReadAllBytes(rig.PathOf("disk-ordinals.json"))); // not rewritten: nothing was kept of it
+        Assert.DoesNotContain(rig.Names(), static n => n.Contains(".bad-", StringComparison.Ordinal));
+        Assert.DoesNotContain(rig.Names(), static n => n.EndsWith(".tmp", StringComparison.Ordinal));
+        Assert.DoesNotContain("disk-ordinals.json", rig.Files.Replaces);
+
+        // The move works on the next run: the file is kept aside and the numbers are stored.
+        rig.Faults.MoveFault = null;
+        var second = rig.Run(Drives.Inspect(H(1), [Drives.Nvme(at: H(1), poh: 101, number: 0), Drives.Sata(at: H(1), hours: 1001, number: 1)]));
+
+        Assert.Equal(["disk-1", "disk-2"], second.Disks.Select(static d => d.DiskId));
+        Assert.Equal("{ not json", rig.Read("disk-ordinals.json.bad-20261120T090000123Z"));
+        Assert.Equal(2, OrdinalsOf(rig).Count);
+        Assert.Equal(BaselineDiskState.Compared, second.Disks[0].State);
+    }
 }

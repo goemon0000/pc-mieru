@@ -117,6 +117,149 @@ public class BaselineAcqTests
         Assert.Equal(BaselineDiskState.Compared, result.Disks[1].State);
     }
 
+    // ---- a late sample: numbered after its base, read before it (§14.5) ----
+
+    private static StorageInspection NvmeAt(double hours, ulong poh, ulong written = 1000, ulong media = 0) =>
+        Drives.Inspect(Drives.Nvme(at: H(hours), poh: poh, written: written, media: media));
+
+    /// <summary>
+    /// The run that began first (acq 2) reads its drive late and records first; the run that began after it (acq 3) read the drive
+    /// earlier and comes second: its base has the smaller acq and the later time. Returns the second run's result.
+    /// </summary>
+    private static BaselineRunResult LateSampleAgainst(BaselineRig rig, StorageInspection firstSample, StorageInspection lateSample)
+    {
+        var other = rig.NewEngine();
+        var first = rig.Engine.BeginRun();
+        var second = other.BeginRun();
+        Assert.True(second.Acq > first.Acq);
+        var firstResult = rig.Engine.Complete(first, firstSample);
+        Assert.False(firstResult.ReadFailed);
+        return other.Complete(second, lateSample);
+    }
+
+    [Theory]
+    [InlineData(102UL, 1500UL, 101UL, 1500UL)] // power-on hours went back
+    [InlineData(102UL, 1500UL, 102UL, 1400UL)] // data units written went back
+    public void An_nvme_sample_that_is_earlier_than_its_base_and_whose_counters_went_back_is_concurrent_and_records_nothing(
+        ulong basePoh, ulong baseWritten, ulong latePoh, ulong lateWritten)
+    {
+        using var rig = new BaselineRig();
+        rig.Run(NvmeAt(0, 100));
+
+        var late = LateSampleAgainst(rig, NvmeAt(2, basePoh, baseWritten, media: 5), NvmeAt(1, latePoh, lateWritten, media: 3));
+
+        Assert.Equal(CheckEvidenceCode.BaselineConcurrent, late.Disks[0].Code);
+        Assert.Equal(BaselineDiskState.NotComparable, late.Disks[0].State);
+        Assert.All(late.Disks[0].Counters, static c => Assert.Equal(CheckEvidenceCode.BaselineConcurrent, c.Code));
+        Assert.False(late.ReadFailed);
+        BaselineAssert.ValidRows(late);
+        // Not a counter reset, and nothing recorded: the file holds the first run and the run that read the drive later, and no more.
+        var text = rig.Read(NvmeFile);
+        Assert.Equal(2, Entries(text));
+        Assert.DoesNotContain("\"nvme.media_errors\": 3", text);
+        Assert.DoesNotContain("withheld", text);
+
+        // The next run compares with the sample that was taken last, not with the one thrown away.
+        var next = rig.Run(NvmeAt(3, 103, 1600, media: 6));
+        var media = BaselineAssert.Counter(next.Disks[0], "nvme.media_errors");
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
+        Assert.Equal(5UL, media.Before);
+        Assert.Equal(H(2), media.SinceUtc);
+    }
+
+    [Fact]
+    public void A_sata_sample_that_is_earlier_than_its_base_and_whose_hours_went_back_is_concurrent()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(Drives.Inspect(Drives.Sata(at: T0, hours: 1000)));
+
+        var late = LateSampleAgainst(
+            rig,
+            Drives.Inspect(Drives.Sata(at: H(2), hours: 1002)),
+            Drives.Inspect(Drives.Sata(at: H(1), hours: 1001)));
+
+        Assert.Equal(CheckEvidenceCode.BaselineConcurrent, late.Disks[0].Code);
+        Assert.All(late.Disks[0].Counters, static c => Assert.Equal(CheckEvidenceCode.BaselineConcurrent, c.Code));
+        Assert.Equal(2, Entries(rig.Read(Drives.FileNameOf(Drives.SataKey, "WD-WX12A"))));
+    }
+
+    [Fact]
+    public void A_sample_that_is_earlier_than_its_base_with_no_counter_going_back_follows_the_clock_path()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(NvmeAt(0, 100));
+
+        // Time went back by an hour, the hours went forward by 8: no counter went back, so this is the clock, not an older sample.
+        var late = LateSampleAgainst(rig, NvmeAt(2, 102, media: 5), NvmeAt(1, 110, media: 3));
+
+        Assert.Equal(CheckEvidenceCode.BaselineClock, late.Disks[0].Code);
+        Assert.Equal(3, Entries(rig.Read(NvmeFile)));
+        Assert.Contains("\"withheld\": true", rig.Read(NvmeFile)); // recorded, but never the base of a comparison
+
+        var next = rig.Run(NvmeAt(3, 103, media: 6));
+        Assert.Equal(5UL, BaselineAssert.Counter(next.Disks[0], "nvme.media_errors").Before);
+    }
+
+    [Fact]
+    public void A_sample_that_is_earlier_than_its_base_with_counters_that_did_not_move_back_is_compared_as_before()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(NvmeAt(0, 100));
+
+        var late = LateSampleAgainst(rig, NvmeAt(2, 102, media: 5), NvmeAt(1, 102, media: 5));
+
+        Assert.Equal(BaselineDiskState.Compared, late.Disks[0].State);
+        Assert.NotEqual(CheckEvidenceCode.BaselineConcurrent, late.Disks[0].Code);
+        Assert.Equal(3, Entries(rig.Read(NvmeFile)));
+    }
+
+    [Fact]
+    public void A_true_counter_reset_with_time_moving_forward_is_still_a_counter_reset()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(NvmeAt(0, 100));
+        rig.Run(NvmeAt(1, 101, 1100));
+
+        var reset = rig.Run(NvmeAt(2, 5, 10)); // the hours and the data written went back, a later time than the base
+
+        Assert.Equal(CheckEvidenceCode.BaselineCounterReset, reset.Disks[0].Code);
+        Assert.All(reset.Disks[0].Counters, static c => Assert.Equal(CheckEvidenceCode.BaselineCounterReset, c.Code));
+        Assert.Equal(3, Entries(rig.Read(NvmeFile))); // and the new values are recorded, the base from now on
+        var next = rig.Run(NvmeAt(3, 6, 20));
+        Assert.Equal(BaselineDiskState.Compared, next.Disks[0].State);
+        Assert.Equal(5UL, BaselineAssert.Counter(next.Disks[0], "nvme.power_on_hours").Before);
+    }
+
+    [Fact]
+    public void A_true_counter_reset_in_overlapping_runs_that_finish_in_the_order_they_started_is_a_counter_reset()
+    {
+        using var rig = new BaselineRig();
+        rig.Run(NvmeAt(0, 100));
+        var other = rig.NewEngine();
+
+        var first = rig.Engine.BeginRun();
+        var second = other.BeginRun();
+        rig.Engine.Complete(first, NvmeAt(1, 101));
+        var result = other.Complete(second, NvmeAt(2, 3, 5)); // read later than the base and reset
+
+        Assert.Equal(CheckEvidenceCode.BaselineCounterReset, result.Disks[0].Code);
+    }
+
+    [Fact]
+    public void A_record_of_the_old_tool_is_never_the_base_of_a_late_sample_even_when_it_is_dated_in_the_future()
+    {
+        using var rig = new BaselineRig();
+        // A clock that was ahead when v0.7.4 wrote this: its time is later than every sample of now, and the hours are more than now.
+        OldFiles.Put(rig.Baseline, NvmeFile, OldFiles.History(Drives.NvmeKey, "Samsung SSD 980 PRO 2TB", new OldEntry(H(5), OldFiles.Nvme(poh: 200))));
+
+        var result = rig.Run(NvmeAt(0, 100));
+
+        // It was no run that was going on at the same time (acq 0): the drive is not stopped for as long as the clock is behind that
+        // record, it is a counter reset like any other and the new record becomes the base.
+        Assert.Equal(CheckEvidenceCode.BaselineCounterReset, result.Disks[0].Code);
+        Assert.Equal(BaselineDiskState.Compared, rig.Run(NvmeAt(1, 101)).Disks[0].State);
+    }
+
     [Fact]
     public void Records_from_the_old_tool_count_as_acq_zero_and_never_make_a_run_concurrent()
     {
