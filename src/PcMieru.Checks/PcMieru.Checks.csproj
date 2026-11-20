@@ -4,6 +4,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>PcMieru.Checks</RootNamespace>
+    <!-- Only for the LibraryImport source generator (MoveFileEx in History/CheckHistoryFileSystem.cs); the code has no unsafe block. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

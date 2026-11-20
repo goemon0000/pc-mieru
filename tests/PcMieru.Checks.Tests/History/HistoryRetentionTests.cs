@@ -130,6 +130,98 @@ public sealed class HistoryRetentionTests : IDisposable
         Assert.Equal(0, files.Count("delete"));
     }
 
+    // ---- the file just saved is kept, and is one of the 200 (DESIGN-A §4.1 保持) ----
+
+    [Fact]
+    public async Task A_run_that_ended_before_200_newer_files_is_saved_and_kept_and_the_oldest_of_the_newer_ones_goes()
+    {
+        // 200 valid files, all newer than the run that is saved now (a run that ended long ago but is saved late).
+        PutMemory(101, 300);
+        var old = Kit.Make(CheckKind.Memory, T(-500), Kit.Id(9));
+        var files = new FaultFileSystem();
+        var store = Kit.Store(Root, files: files);
+
+        var state = await store.SaveAsync(old);
+
+        Assert.Equal(CheckSaveStatus.Saved, state.Status);
+        Assert.Equal(Kit.NameOf(old), state.FileName);
+        Assert.True(File.Exists(Path.Combine(Root, Kit.NameOf(old))));
+
+        // 200 valid files remain: the saved one and the 199 newest of the others. The oldest of the others paid for it.
+        Assert.Equal(200, Kit.Names(Root).Length);
+        Assert.Equal(Sorted(Enumerable.Range(102, 199).Select(Memory).Append(Kit.NameOf(old))), Kit.Names(Root));
+        Assert.Equal(1, files.Count("delete"));
+        Assert.Equal(1, files.Count($"delete {Memory(101)}"));
+        Assert.Equal(0, files.Count($"read {Kit.NameOf(old)}")); // the file just saved is not even read by the retention
+
+        // The listing shows it, as the oldest of 200.
+        var page = await store.ListAsync(Kit.All, CancellationToken.None);
+        Assert.Equal(200, page.Entries.Count);
+        Assert.Equal(Kit.Id(9), page.Entries[^1].RunId);
+    }
+
+    [Fact]
+    public void A_kept_file_takes_one_of_the_200_places_whatever_its_age_and_is_never_deleted()
+    {
+        PutMemory(101, 300);
+        var keep = Kit.Put(Root, Kit.Make(CheckKind.Memory, T(-500), Kit.Id(9)));
+
+        var result = Kit.Store(Root).ApplyRetention(CheckKind.Memory, keep);
+
+        Assert.Equal(new CheckRetentionResult(1, 0), result);
+        Assert.Contains(keep, Kit.Names(Root));
+        Assert.DoesNotContain(Memory(101), Kit.Names(Root));
+        Assert.Equal(200, Kit.Names(Root).Length);
+
+        // Without the keep name it is an ordinary old file, one of 201: the oldest, and it goes.
+        var plain = Kit.Store(Root).ApplyRetention(CheckKind.Memory);
+        Assert.Equal(CheckRetentionResult.None, plain);
+
+        Kit.Put(Root, Kit.Make(CheckKind.Memory, T(400), Kit.Id(400)));
+        Assert.Equal(new CheckRetentionResult(1, 0), Kit.Store(Root).ApplyRetention(CheckKind.Memory));
+        Assert.DoesNotContain(keep, Kit.Names(Root));
+    }
+
+    [Fact]
+    public void A_kept_name_that_is_not_in_the_folder_reserves_no_place()
+    {
+        PutMemory(1, 201);
+
+        var result = Kit.Store(Root).ApplyRetention(CheckKind.Memory, Kit.NameOf(CheckKind.Memory, T(999), Kit.Id(999)));
+
+        Assert.Equal(new CheckRetentionResult(1, 0), result);
+        Assert.Equal(200, Kit.Names(Root).Length);
+        Assert.DoesNotContain(Memory(1), Kit.Names(Root));
+    }
+
+    [Fact]
+    public void With_200_files_or_fewer_the_kept_file_changes_nothing()
+    {
+        PutMemory(1, 199);
+        var keep = Kit.Put(Root, Kit.Make(CheckKind.Memory, T(-500), Kit.Id(9)));
+        var files = new FaultFileSystem();
+
+        Assert.Equal(CheckRetentionResult.None, Kit.Store(Root, files: files).ApplyRetention(CheckKind.Memory, keep));
+
+        Assert.Equal(200, Kit.Names(Root).Length);
+        Assert.Equal(0, files.Count("read"));
+        Assert.Equal(0, files.Count("delete"));
+    }
+
+    [Fact]
+    public void A_corrupt_older_file_is_still_never_deleted_when_a_file_is_kept()
+    {
+        PutMemory(101, 300);
+        var keep = Kit.Put(Root, Kit.Make(CheckKind.Memory, T(-500), Kit.Id(9)));
+        Kit.PutText(Root, Memory(1), "{ corrupt");
+
+        var result = Kit.Store(Root).ApplyRetention(CheckKind.Memory, keep);
+
+        Assert.Equal(new CheckRetentionResult(1, 0), result);
+        Assert.Contains(Memory(1), Kit.Names(Root));
+        Assert.Contains(keep, Kit.Names(Root));
+    }
+
     // ---- what retention deletes and what it never touches ----
 
     [Fact]
@@ -225,19 +317,21 @@ public sealed class HistoryRetentionTests : IDisposable
     }
 
     [Fact]
-    public void Only_our_own_old_tmp_files_are_cleaned()
+    public void Only_abandoned_tmp_files_by_name_shape_and_age_are_cleaned_whatever_the_pid()
     {
         var now = Kit.Now;
         var finalName = Memory(1);
         var oneHour = TimeSpan.FromHours(1);
 
-        // Ours (exact name) and old enough: exactly one hour, and three days.
+        // The exact name shape and old enough: exactly one hour, and three days. The pid in the name is not looked at.
         var exactlyOld = Kit.TempNameOf(finalName, 1);
         var longOld = Kit.TempNameOf(Memory(2), 2);
         PutTemp(exactlyOld, now - oneHour);
         PutTemp(longOld, now - TimeSpan.FromDays(3));
+        var otherPid = $"{Memory(6)}.pcmtmp-1-00000006.tmp";
+        PutTemp(otherPid, now - TimeSpan.FromDays(3));
 
-        // Ours but too young: one second short of the hour; and dated in the future.
+        // The right shape but too young: one second short of the hour; and dated in the future.
         var young = Kit.TempNameOf(Memory(3), 3);
         var future = Kit.TempNameOf(Memory(4), 4);
         PutTemp(young, now - oneHour + TimeSpan.FromSeconds(1));
@@ -263,17 +357,18 @@ public sealed class HistoryRetentionTests : IDisposable
             PutTemp(name, longAgo);
         }
 
-        // Ours and old, but held open by a writer: the delete fails and the file stays.
+        // The right shape and old, but held open by a writer: the delete fails and the file stays.
         var held = Kit.TempNameOf(Memory(5), 5);
         var heldPath = PutTemp(held, longAgo);
 
-        int deleted;
+        CheckTempCleanResult cleaned;
         using (new FileStream(heldPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
-            deleted = Kit.Store(Root).CleanStaleTemps();
+            cleaned = Kit.Store(Root).CleanStaleTemps();
         }
 
-        Assert.Equal(2, deleted);
+        Assert.Equal(3, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
         var expected = new[] { young, future, held }.Concat(foreign);
         Assert.Equal(Sorted(expected), Kit.Names(Root));
     }
@@ -308,7 +403,7 @@ public sealed class HistoryRetentionTests : IDisposable
     }
 
     [Fact]
-    public async Task When_the_failed_saves_own_tmp_cannot_be_deleted_it_is_left_for_the_age_rule()
+    public async Task When_the_failed_saves_own_tmp_cannot_be_deleted_it_is_left_and_a_later_clean_up_promotes_it()
     {
         var files = new FaultFileSystem
         {
@@ -323,10 +418,281 @@ public sealed class HistoryRetentionTests : IDisposable
         var leftover = Assert.Single(Kit.Names(Root));
         Assert.Equal(Kit.TempNameOf(Kit.NameOf(result), 1), leftover);
 
-        // A later save, once the leftover is old, removes it.
-        PutTemp(leftover, Kit.Now - TimeSpan.FromHours(2));
-        var next = Kit.Make(CheckKind.Cpu, T(2), Kit.Id(2));
+        // A later save while the leftover is young leaves it alone.
+        var young = Kit.Make(CheckKind.Cpu, T(2), Kit.Id(2));
+        Kit.SetAge(Path.Combine(Root, leftover), Kit.Now - TimeSpan.FromMinutes(5));
+        Assert.Equal(CheckSaveStatus.Saved, (await Kit.Store(Root).SaveAsync(young)).Status);
+        Assert.Equal(Sorted([leftover, Kit.NameOf(young)]), Kit.Names(Root));
+
+        // Once it is old, the next save finds a complete, valid result of the right name and commits it (the write was complete,
+        // only the rename had failed; the failed save reported it, and the file is not lost).
+        Kit.SetAge(Path.Combine(Root, leftover), Kit.Now - TimeSpan.FromHours(2));
+        var next = Kit.Make(CheckKind.Cpu, T(3), Kit.Id(3));
         Assert.Equal(CheckSaveStatus.Saved, (await Kit.Store(Root).SaveAsync(next)).Status);
-        Assert.Equal([Kit.NameOf(next)], Kit.Names(Root));
+        Assert.Equal(Sorted([Kit.NameOf(result), Kit.NameOf(young), Kit.NameOf(next)]), Kit.Names(Root));
+    }
+
+    // ---- promotion of an abandoned .tmp (DESIGN-A §4.1 .tmp の名前と放置の規則) ----
+
+    private static readonly TimeSpan Old = TimeSpan.FromHours(5);
+
+    /// <summary>A leftover written the way a save writes it: the strict bytes of the result, under the .tmp name of <paramref name="finalName"/>, with the age set by hand.</summary>
+    private string PutLeftover(CheckResult body, string finalName, TimeSpan age, int nonce = 1)
+    {
+        var name = Kit.TempNameOf(finalName, nonce);
+        Directory.CreateDirectory(Root);
+        File.WriteAllBytes(Path.Combine(Root, name), Kit.Bytes(body));
+        Kit.SetAge(Path.Combine(Root, name), Kit.Now - age);
+        return name;
+    }
+
+    [Fact]
+    public async Task An_abandoned_complete_result_is_promoted_to_the_committed_file_with_the_same_bytes()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var finalName = Kit.NameOf(result);
+        PutLeftover(result, finalName, Old);
+        var files = new FaultFileSystem();
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.Equal(0, cleaned.Deleted);
+        Assert.Equal(1, cleaned.Promoted);
+        Assert.Equal([CheckKind.Memory], cleaned.PromotedKinds);
+        Assert.Equal([finalName], Kit.Names(Root));
+        Assert.Equal(Kit.Bytes(result), File.ReadAllBytes(Path.Combine(Root, finalName)));
+        Assert.Equal(1, files.Count($"move {Kit.TempNameOf(finalName, 1)} -> {finalName}"));
+        Assert.Equal(0, files.Count("delete"));
+
+        // It is in the history now.
+        var page = await Kit.Store(Root).ListAsync(Kit.All, CancellationToken.None);
+        Assert.Equal([Kit.Id(10)], Kit.RunIds(page));
+    }
+
+    [Fact]
+    public void A_leftover_that_is_not_old_enough_is_neither_promoted_nor_deleted()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var name = PutLeftover(result, Kit.NameOf(result), TimeSpan.FromMinutes(59));
+
+        var cleaned = Kit.Store(Root).CleanStaleTemps();
+
+        Assert.Equal(0, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal([name], Kit.Names(Root));
+    }
+
+    public static IEnumerable<object[]> MismatchedNames()
+    {
+        // The body is a memory result that ended at T(1) with UUID 1; the .tmp name says something else.
+        yield return new object[] { "kind", Kit.NameOf(CheckKind.Cpu, T(1), Kit.Id(1)) };
+        yield return new object[] { "stamp", Kit.NameOf(CheckKind.Memory, T(1).AddMilliseconds(1), Kit.Id(1)) };
+        yield return new object[] { "id", Kit.NameOf(CheckKind.Memory, T(1), Kit.Id(2)) };
+    }
+
+    [Theory]
+    [MemberData(nameof(MismatchedNames))]
+    public void A_leftover_whose_body_does_not_match_the_name_is_deleted_never_promoted(string what, string nameSaysFinal)
+    {
+        var body = Kit.Make(CheckKind.Memory, T(1), Kit.Id(1));
+        PutLeftover(body, nameSaysFinal, Old);
+        var files = new FaultFileSystem();
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.True(what is "kind" or "stamp" or "id");
+        Assert.Equal(1, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Empty(Kit.Names(Root));
+        Assert.Equal(0, files.Count("move "));
+    }
+
+    public static IEnumerable<object[]> InvalidBodies()
+    {
+        yield return new object[] { "not json", "{ corrupt" };
+        yield return new object[] { "empty", string.Empty };
+        yield return new object[] { "a newer format", Kit.Edited(Kit.Make(CheckKind.Memory, T(1), Kit.Id(1)), "\"format\": \"pcm-check/1\"", "\"format\": \"pcm-check/9\"") };
+        yield return new object[] { "an unknown kind", Kit.Edited(Kit.Make(CheckKind.Memory, T(1), Kit.Id(1)), "\"kind\": \"memory\"", "\"kind\": \"gpu\"") };
+        yield return new object[] { "an unknown field", Kit.Edited(Kit.Make(CheckKind.Memory, T(1), Kit.Id(1)), "\"kind\": \"memory\"", "\"surprise\": 1,\n  \"kind\": \"memory\"") };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidBodies))]
+    public void A_leftover_that_does_not_read_strictly_is_deleted_never_promoted(string what, string text)
+    {
+        var finalName = Kit.NameOf(CheckKind.Memory, T(1), Kit.Id(1));
+        var name = Kit.TempNameOf(finalName, 1);
+        Kit.PutText(Root, name, text);
+        Kit.SetAge(Path.Combine(Root, name), Kit.Now - Old);
+
+        var cleaned = Kit.Store(Root).CleanStaleTemps();
+
+        Assert.True(what.Length > 0);
+        Assert.Equal(1, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Empty(Kit.Names(Root));
+    }
+
+    [Theory]
+    [InlineData("another")]
+    [InlineData("same")]
+    public void A_leftover_whose_final_name_exists_is_deleted_and_the_existing_file_is_never_touched(string existing)
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var finalName = Kit.NameOf(result);
+        if (existing == "same")
+        {
+            Kit.Put(Root, result);
+        }
+        else
+        {
+            Kit.PutText(Root, finalName, "SENTINEL: a file of another process");
+        }
+
+        var finalPath = Path.Combine(Root, finalName);
+        Kit.SetAge(finalPath, Kit.Now - TimeSpan.FromMinutes(1));
+        PutLeftover(result, finalName, Old);
+        var before = File.ReadAllBytes(finalPath);
+        var beforeTime = File.GetLastWriteTimeUtc(finalPath);
+        var files = new FaultFileSystem();
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.Equal(1, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal([finalName], Kit.Names(Root));
+        Assert.Equal(before, File.ReadAllBytes(finalPath));
+        Assert.Equal(beforeTime, File.GetLastWriteTimeUtc(finalPath));
+        Assert.Equal(0, files.Count("move "));
+    }
+
+    [Fact]
+    public void A_final_name_taken_by_another_process_during_the_promotion_is_never_overwritten()
+    {
+        // The final name is free when looked at, and is taken just before the rename: the rename itself refuses to replace.
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var finalName = Kit.NameOf(result);
+        PutLeftover(result, finalName, Old);
+        var files = new FaultFileSystem
+        {
+            MoveFault = (_, destination) =>
+            {
+                File.WriteAllText(destination, "SENTINEL: a file of another process");
+                return null;
+            },
+        };
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.Equal(1, files.Count("move "));
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal(1, cleaned.Deleted);
+        Assert.Equal([finalName], Kit.Names(Root));
+        Assert.Equal("SENTINEL: a file of another process", File.ReadAllText(Path.Combine(Root, finalName)));
+    }
+
+    [Fact]
+    public void A_promotion_whose_rename_fails_for_another_reason_leaves_the_leftover_for_the_next_clean_up()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var name = PutLeftover(result, Kit.NameOf(result), Old);
+        var files = new FaultFileSystem { MoveFault = (_, _) => new IOException("device error") };
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.Equal(0, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal(0, files.Count("delete"));
+        Assert.Equal([name], Kit.Names(Root));
+
+        // Next time the rename works.
+        Assert.Equal(1, Kit.Store(Root).CleanStaleTemps().Promoted);
+        Assert.Equal([Kit.NameOf(result)], Kit.Names(Root));
+    }
+
+    [Fact]
+    public void A_promotion_retries_a_rename_that_meets_a_sharing_violation_like_a_save_does()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        PutLeftover(result, Kit.NameOf(result), Old);
+        var calls = 0;
+        var files = new FaultFileSystem { MoveFault = (_, _) => ++calls <= 2 ? Kit.SharingViolation() : null };
+        var delays = new List<TimeSpan>();
+
+        var cleaned = Kit.Store(Root, files: files, sleep: delays.Add).CleanStaleTemps();
+
+        Assert.Equal(1, cleaned.Promoted);
+        Assert.Equal(3, files.Count("move "));
+        Assert.Equal([TimeSpan.FromMilliseconds(25), TimeSpan.FromMilliseconds(50)], delays.ToArray());
+        Assert.Equal([Kit.NameOf(result)], Kit.Names(Root));
+    }
+
+    [Fact]
+    public void A_leftover_that_vanishes_before_it_is_read_is_left_alone_and_counted_as_nothing()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var name = PutLeftover(result, Kit.NameOf(result), Old);
+        var files = new FaultFileSystem
+        {
+            ReadFault = path =>
+            {
+                File.Delete(path);
+                return new FileNotFoundException("gone");
+            },
+        };
+
+        var cleaned = Kit.Store(Root, files: files).CleanStaleTemps();
+
+        Assert.Equal(0, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal(0, files.Count("delete"));
+        Assert.DoesNotContain(name, Kit.Names(Root));
+    }
+
+    [Fact]
+    public void A_leftover_that_is_held_open_is_neither_promoted_nor_deleted()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        var name = PutLeftover(result, Kit.NameOf(result), Old);
+
+        CheckTempCleanResult cleaned;
+        using (new FileStream(Path.Combine(Root, name), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            cleaned = Kit.Store(Root).CleanStaleTemps();
+        }
+
+        Assert.Equal(0, cleaned.Deleted);
+        Assert.Equal(0, cleaned.Promoted);
+        Assert.Equal([name], Kit.Names(Root));
+    }
+
+    [Fact]
+    public async Task A_save_promotes_a_leftover_of_another_kind_and_the_retention_of_that_kind_runs()
+    {
+        PutMemory(1, 200);
+        var newest = Kit.Make(CheckKind.Memory, T(500), Kit.Id(500));
+        PutLeftover(newest, Kit.NameOf(newest), Old);
+        var cpu = Kit.Make(CheckKind.Cpu, T(1), Kit.Id(1));
+
+        var state = await Kit.Store(Root).SaveAsync(cpu);
+
+        Assert.Equal(CheckSaveStatus.Saved, state.Status);
+
+        // The promoted file is the 201st memory file, so the oldest memory file went; the saved cpu file is there.
+        var expected = Enumerable.Range(2, 199).Select(Memory).Append(Kit.NameOf(newest)).Append(Kit.NameOf(cpu));
+        Assert.Equal(Sorted(expected), Kit.Names(Root));
+    }
+
+    [Fact]
+    public async Task A_listing_never_promotes_a_leftover()
+    {
+        var result = Kit.Make(CheckKind.Memory, T(10), Kit.Id(10));
+        PutLeftover(result, Kit.NameOf(result), Old);
+        var before = Kit.Snapshot(Root);
+
+        var page = await Kit.Store(Root).ListAsync(Kit.All, CancellationToken.None);
+
+        Assert.Empty(page.Entries);
+        Assert.Equal(before, Kit.Snapshot(Root));
     }
 }

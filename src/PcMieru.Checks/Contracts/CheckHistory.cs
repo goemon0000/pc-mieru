@@ -52,6 +52,60 @@ public sealed record CheckHistoryEntry(
 /// <summary>A listing problem, one line per code with a count.</summary>
 public sealed record CheckHistoryWarning(string Code, int Count);
 
+/// <summary>What fetching one run came to (DESIGN-A §2): found, no such run, or a file of that run that could not be read.</summary>
+public enum CheckHistoryGetStatus
+{
+    /// <summary>The run's file was read: <see cref="CheckHistoryGetResult.Result"/> is set.</summary>
+    Found,
+
+    /// <summary>No file in the history carries this run ID.</summary>
+    NotFound,
+
+    /// <summary>A file of this run is there but could not be read: <see cref="CheckHistoryGetResult.WarningCode"/> says why.</summary>
+    Unreadable,
+}
+
+/// <summary>
+/// The answer to <c>GetAsync</c>: exactly one of <see cref="CheckHistoryGetResult.Found"/>, <see cref="CheckHistoryGetResult.NotFound"/>
+/// or <see cref="CheckHistoryGetResult.Unreadable"/>. A run whose file exists but cannot be read is never "not found": the MCP tool
+/// answers it with a tool error that carries <see cref="WarningCode"/>, and the CLI exits 1.
+/// </summary>
+public sealed record CheckHistoryGetResult
+{
+    private CheckHistoryGetResult(CheckHistoryGetStatus status, CheckResult? result, string? warningCode)
+    {
+        Status = status;
+        Result = result;
+        WarningCode = warningCode;
+    }
+
+    public CheckHistoryGetStatus Status { get; }
+
+    /// <summary>The stored result. Set only for <see cref="CheckHistoryGetStatus.Found"/>.</summary>
+    public CheckResult? Result { get; }
+
+    /// <summary>One of <see cref="CheckHistoryWarningCodes.All"/>. Set only for <see cref="CheckHistoryGetStatus.Unreadable"/>.</summary>
+    public string? WarningCode { get; }
+
+    public static CheckHistoryGetResult NotFound { get; } = new(CheckHistoryGetStatus.NotFound, null, null);
+
+    public static CheckHistoryGetResult Found(CheckResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return new CheckHistoryGetResult(CheckHistoryGetStatus.Found, result, null);
+    }
+
+    public static CheckHistoryGetResult Unreadable(string warningCode)
+    {
+        if (!CheckHistoryWarningCodes.IsKnown(warningCode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(warningCode), warningCode, "Not one of the history warning codes.");
+        }
+
+        return new CheckHistoryGetResult(CheckHistoryGetStatus.Unreadable, null, warningCode);
+    }
+}
+
 /// <summary>The listing: entries newest first, plus the warnings about files that could not be listed.</summary>
 public sealed record CheckHistoryPage(
     IReadOnlyList<CheckHistoryEntry> Entries,
@@ -67,7 +121,7 @@ public static class CheckHistoryWarningCodes
     /// <summary>Broken JSON, or required fields that disagree.</summary>
     public const string Unreadable = "history_unreadable";
 
-    /// <summary>An unknown "format": a newer version wrote it; the file is kept as it is.</summary>
+    /// <summary>An unknown "format" or an unknown "kind": a newer version wrote it; the file is kept as it is.</summary>
     public const string FutureFormat = "history_future_format";
 
     /// <summary>The file was moved aside (.bad-) by this listing.</summary>

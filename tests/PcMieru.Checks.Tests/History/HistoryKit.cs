@@ -186,7 +186,13 @@ internal sealed class FaultFileSystem : ICheckHistoryFileSystem
 /// <summary>Helpers the history tests share. Expected names are built here with plain .NET formatting, not with the code under test.</summary>
 internal static class Kit
 {
-    /// <summary>The fake "now" of the stores in these tests: 2026-11-21 04:05:06.789 UTC.</summary>
+    /// <summary>
+    /// The fake "now" of the stores in these tests: 2026-11-21 04:05:06.789 UTC. It is fixed, while the files the tests write get the real
+    /// modification time of the machine running them: before this date they look hours old to a clean-up under this clock, after it they
+    /// look as if written in the future. So a test that depends on a file's age sets the file times by hand (<see cref="SetAge"/>) and never
+    /// relies on the real ones, and the tests where several saves run at once must not use this clock at all: a write in flight would look
+    /// old to another save's clean-up (and be promoted or deleted), so they use <see cref="RealClock"/>.
+    /// </summary>
     public static readonly DateTimeOffset Now = new(2026, 11, 21, 4, 5, 6, 789, TimeSpan.Zero);
 
     public const int Pid = 4242;
@@ -310,7 +316,8 @@ internal static class Kit
         FakeTime? time = null,
         ICheckHistoryFileSystem? files = null,
         Func<string>? nonce = null,
-        TimeSpan? tempMaxAge = null) =>
+        TimeSpan? tempMaxAge = null,
+        Action<TimeSpan>? sleep = null) =>
         new(root, new CheckHistoryStoreOptions
         {
             Files = files ?? PhysicalHistoryFileSystem.Instance,
@@ -318,6 +325,9 @@ internal static class Kit
             ProcessId = Pid,
             Nonce = nonce ?? Nonces(),
             TempMaxAge = tempMaxAge ?? CheckHistoryStoreOptions.DefaultTempMaxAge,
+
+            // The tests never wait for a retry; the ones about retries pass a recorder.
+            Sleep = sleep ?? (static _ => { }),
         });
 
     public static ReadOnlyCheckHistory ReadOnly(string root, ICheckHistoryFileReader? files = null) => new(root, files);

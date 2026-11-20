@@ -98,9 +98,36 @@ public sealed class HistoryNamesTests
     [InlineData("foo.tmp", false)]
     [InlineData("memory-" + Stamp + ".json.pcmtmp-4242-0000abcd.tmp", false)]          // no UUID
     [InlineData("", false)]
-    public void Only_the_exact_tmp_shape_of_a_known_kind_is_ours(string name, bool own)
+    public void Only_the_exact_tmp_shape_of_a_known_kind_counts_as_a_write_in_flight(string name, bool own)
     {
         Assert.Equal(own, CheckHistoryNames.IsOwnTemp(name));
+        Assert.Equal(own, CheckHistoryNames.TryParseTemp(name, out _));
+    }
+
+    [Theory]
+    [InlineData("memory", "20261120T030004200Z", "89914ef957814cf7a4f86d58003ddf86", 4242, "0000abcd")]
+    [InlineData("cpu", "20260101T000000000Z", "00000000000040008000000000000001", 1, "00000000")]
+    [InlineData("storage", "20261231T235959999Z", "ffffffffffffffffffffffffffffffff", 2147483647, "ffffffff")]
+    public void The_final_name_a_tmp_name_was_written_for_is_taken_out_of_it_and_the_pid_does_not_matter(string kind, string stamp, string id, int pid, string nonce)
+    {
+        var final = $"{kind}-{stamp}-{id}.json";
+
+        Assert.True(CheckHistoryNames.TryParseTemp(CheckHistoryNames.TempName(final, pid, nonce), out var parsed));
+
+        Assert.Equal(new HistoryFileName(final, kind, stamp, id), parsed);
+
+        // The part taken out is itself a committed name.
+        Assert.True(CheckHistoryNames.TryParse(parsed.Name, out var again));
+        Assert.Equal(parsed, again);
+    }
+
+    [Fact]
+    public void A_name_that_is_not_a_tmp_name_gives_no_final_name()
+    {
+        Assert.False(CheckHistoryNames.TryParseTemp(Final, out var none));
+        Assert.Equal(default, none);
+        Assert.False(CheckHistoryNames.TryParseTemp("gpu-" + Stamp + "-" + Id + ".json.pcmtmp-4242-0000abcd.tmp", out var future));
+        Assert.Equal(default, future);
     }
 
     [Fact]

@@ -53,9 +53,9 @@ public sealed class HistorySaveTests : IDisposable
             entry);
 
         var read = await store.GetAsync(Samples.MemoryRun, CancellationToken.None);
-        Assert.NotNull(read);
-        Assert.Equal(CheckJson.Serialize(result, indented: true), CheckJson.Serialize(read, indented: true));
-        Assert.Null(await store.GetAsync(Kit.Id(77), CancellationToken.None));
+        Assert.Equal(CheckHistoryGetStatus.Found, read.Status);
+        Assert.Equal(CheckJson.Serialize(result, indented: true), CheckJson.Serialize(read.Result!, indented: true));
+        Assert.Equal(CheckHistoryGetStatus.NotFound, (await store.GetAsync(Kit.Id(77), CancellationToken.None)).Status);
     }
 
     [Theory]
@@ -270,6 +270,7 @@ public sealed class HistorySaveTests : IDisposable
 
         Assert.Equal(CheckSaveStatus.Saved, state.Status);
         Assert.Equal([MemoryName], Kit.Names(Root));
+        Assert.True(files.Count("list") >= 2); // the clean-up and the retention both tried and were refused
     }
 
     [Fact]
@@ -300,14 +301,175 @@ public sealed class HistorySaveTests : IDisposable
             Kit.Names(Root));
     }
 
-    [Fact]
-    public async Task A_cancelled_token_stops_a_save_before_it_starts()
-    {
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
+    // ---- no token, never throws ----
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Kit.Store(Root).SaveAsync(Samples.MemoryCheck(), cts.Token));
+    [Fact]
+    public async Task Saving_takes_no_cancellation_token_and_a_missing_result_is_an_invalid_result_not_an_exception()
+    {
+        // A result that is final is saved: there is nothing to cancel, so there is no parameter for it.
+        var onStore = typeof(CheckHistoryStore).GetMethod(nameof(CheckHistoryStore.SaveAsync))!;
+        var onInterface = typeof(ICheckHistoryMaintainer).GetMethod(nameof(ICheckHistoryMaintainer.SaveAsync))!;
+        Assert.Equal([typeof(CheckResult)], onStore.GetParameters().Select(p => p.ParameterType).ToArray());
+        Assert.Equal([typeof(CheckResult)], onInterface.GetParameters().Select(p => p.ParameterType).ToArray());
+        Assert.Equal(typeof(Task<CheckSaveState>), onStore.ReturnType);
+
+        var state = await Kit.Store(Root).SaveAsync(null!);
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal("invalid_result", state.FailureCode);
         Assert.False(Directory.Exists(Root));
+    }
+
+    [Fact]
+    public async Task A_result_that_makes_the_validation_or_the_serialization_throw_is_an_invalid_result()
+    {
+        var broken = Samples.CpuCheck() with { Items = null! };
+
+        var state = await Kit.Store(Root).SaveAsync(broken);
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal("invalid_result", state.FailureCode);
+        Assert.Null(state.FileName);
+        Assert.False(Directory.Exists(Root));
+    }
+
+    public static IEnumerable<object[]> StrayExceptions()
+    {
+        yield return new object[] { "create", new InvalidOperationException("odd") };
+        yield return new object[] { "write", new NotSupportedException("odd") };
+        yield return new object[] { "write", new ObjectDisposedException("file") };
+        yield return new object[] { "flush", new ArgumentException("odd") };
+        yield return new object[] { "flush", new OperationCanceledException("odd") };
+        yield return new object[] { "move", new InvalidOperationException("odd") };
+        yield return new object[] { "move", new FormatException("odd") };
+    }
+
+    [Theory]
+    [MemberData(nameof(StrayExceptions))]
+    public async Task Any_other_exception_while_writing_is_an_io_error_value_and_the_tmp_is_removed(string where, Exception fault)
+    {
+        var files = new FaultFileSystem();
+        switch (where)
+        {
+            case "create": files.CreateNewFault = _ => fault; break;
+            case "write": files.WriteFault = _ => fault; break;
+            case "flush": files.FlushFault = _ => fault; break;
+            case "move": files.MoveFault = (_, _) => fault; break;
+        }
+
+        var state = await Kit.Store(Root, files: files).SaveAsync(Samples.MemoryCheck());
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal("io_error", state.FailureCode);
+        Assert.Contains(fault.GetType().Name, state.Detail, StringComparison.Ordinal);
+        Assert.Empty(Kit.Names(Root));
+    }
+
+    [Fact]
+    public async Task Only_out_of_memory_is_not_caught()
+    {
+        var files = new FaultFileSystem { WriteFault = _ => new OutOfMemoryException() };
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() => Kit.Store(Root, files: files).SaveAsync(Samples.MemoryCheck()));
+    }
+
+    // ---- the final move is retried while the file is held for a moment ----
+
+    private sealed class Sleeps
+    {
+        public List<TimeSpan> Delays { get; } = [];
+
+        public void Record(TimeSpan delay) => Delays.Add(delay);
+
+        public TimeSpan Total => TimeSpan.FromTicks(Delays.Sum(d => d.Ticks));
+    }
+
+    private static Exception Transient(string kind) => kind == "sharing" ? Kit.SharingViolation() : new UnauthorizedAccessException("denied");
+
+    [Theory]
+    [InlineData("sharing")]
+    [InlineData("access")]
+    public async Task A_move_that_fails_twice_and_then_works_is_a_saved_file(string kind)
+    {
+        var files = new FaultFileSystem();
+        var calls = 0;
+        files.MoveFault = (_, _) => ++calls <= 2 ? Transient(kind) : null;
+        var sleeps = new Sleeps();
+        var tmpName = Kit.TempNameOf(MemoryName, 1);
+
+        var state = await Kit.Store(Root, files: files, sleep: sleeps.Record).SaveAsync(Samples.MemoryCheck());
+
+        Assert.Equal(CheckSaveStatus.Saved, state.Status);
+        Assert.Equal(MemoryName, state.FileName);
+        Assert.Equal(3, files.Count($"move {tmpName} -> {MemoryName}"));
+        Assert.Equal([TimeSpan.FromMilliseconds(25), TimeSpan.FromMilliseconds(50)], sleeps.Delays.ToArray());
+        Assert.Equal([MemoryName], Kit.Names(Root));
+        Assert.Equal(0, files.Count("delete")); // the same .tmp was renamed on the third try; nothing was deleted or re-written
+        Assert.Equal(1, files.Count("write"));
+    }
+
+    [Theory]
+    [InlineData("sharing", "io_error")]
+    [InlineData("access", "access_denied")]
+    public async Task A_move_that_always_fails_is_given_up_after_about_a_second_and_leaves_no_file(string kind, string code)
+    {
+        var files = new FaultFileSystem { MoveFault = (_, _) => Transient(kind) };
+        var sleeps = new Sleeps();
+
+        var state = await Kit.Store(Root, files: files, sleep: sleeps.Record).SaveAsync(Samples.MemoryCheck());
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal(code, state.FailureCode);
+        Assert.Equal(CheckHistoryStore.MoveRetryDelays.Length + 1, files.Count("move "));
+        Assert.Equal(CheckHistoryStore.MoveRetryDelays, sleeps.Delays.ToArray());
+        Assert.InRange(sleeps.Total, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1));
+        Assert.Empty(Kit.Names(Root));
+    }
+
+    [Theory]
+    [InlineData("disk")]
+    [InlineData("device")]
+    [InlineData("exists")]
+    public async Task A_move_that_fails_for_any_other_reason_is_not_retried(string kind)
+    {
+        var files = new FaultFileSystem
+        {
+            MoveFault = (_, destination) =>
+            {
+                if (kind == "exists")
+                {
+                    File.WriteAllText(destination, "SENTINEL from another process");
+                    return null;
+                }
+
+                return kind == "disk" ? Kit.DiskFull() : new IOException("device error");
+            },
+        };
+        var sleeps = new Sleeps();
+
+        var state = await Kit.Store(Root, files: files, sleep: sleeps.Record).SaveAsync(Samples.MemoryCheck());
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal(1, files.Count("move "));
+        Assert.Empty(sleeps.Delays);
+    }
+
+    [Fact]
+    public async Task A_tmp_that_another_process_removed_before_the_rename_is_an_io_error_and_commits_nothing()
+    {
+        // The case of a clean-up in another process judging this live write abandoned (after a clock jump or a long sleep).
+        var files = new FaultFileSystem();
+        files.MoveFault = (source, _) =>
+        {
+            File.Delete(source);
+            return null;
+        };
+
+        var state = await Kit.Store(Root, files: files).SaveAsync(Samples.MemoryCheck());
+
+        Assert.Equal(CheckSaveStatus.Failed, state.Status);
+        Assert.Equal("io_error", state.FailureCode);
+        Assert.Empty(Kit.Names(Root));
     }
 
     [Fact]

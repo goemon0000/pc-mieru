@@ -39,7 +39,12 @@ public interface ICheckRunner
 public interface IReadOnlyCheckHistory
 {
     Task<CheckHistoryPage> ListAsync(CheckHistoryQuery query, CancellationToken ct);
-    Task<CheckResult?> GetAsync(Guid runId, CancellationToken ct);
+    Task<CheckHistoryGetResult> GetAsync(Guid runId, CancellationToken ct);
+}
+
+public static class CheckHistory
+{
+    public static IReadOnlyCheckHistory OpenReadOnly(string root);   // MCP に渡す履歴は、これの戻り値だけ（§4.1、§8）
 }
 
 public interface IBuildCodeProvider
@@ -58,9 +63,19 @@ public sealed record CheckHistoryEntry(Guid RunId, CheckKind Kind,
 public sealed record CheckHistoryWarning(string Code, int Count);
 public sealed record CheckHistoryPage(IReadOnlyList<CheckHistoryEntry> Entries,
     IReadOnlyList<CheckHistoryWarning> Warnings);
+
+public enum CheckHistoryGetStatus { Found, NotFound, Unreadable }
+public sealed record CheckHistoryGetResult       // 作れる形は Found(result)／NotFound／Unreadable(code) の 3 つだけ
+{
+    public CheckHistoryGetStatus Status { get; }
+    public CheckResult? Result { get; }           // Found のときだけ
+    public string? WarningCode { get; }           // Unreadable のときだけ。下の 7 コードのいずれか
+}
 ```
 
-  `Warnings.Code` は `history_unreadable`（壊れている・必須欄の不整合）、`history_future_format`（未知の `format`）、`history_quarantined`（今回 `.bad-` へ退避した）、`history_quarantine_failed`（退避できず残した）に、段 A 手順 2 で §4 の「共有違反、権限エラー」用に足した `history_locked`（他のプロセスが握っている）、`history_access_denied`（権限がない）、`history_read_failed`（そのほかの I/O 失敗）を加えた 7 つだけ（この順で並べる）。同じコードは 1 行にまとめて件数を持つ。MCP は退避しないので `history_quarantined` と `history_quarantine_failed` は出さず、残りの 5 つを出す。JSON は camelCase、`kind`・`outcome`・`verdict` は小文字の文字列、`counts` は 5 値のキー。
+  `Warnings.Code` は次の 7 つだけで、この順に並べる。`history_unreadable`（壊れている・必須欄の不整合・名前と本体の食い違い）、`history_future_format`（未知の `format` と未知の `kind` の両方。新しい版が書いたものとして現物を残す）、`history_quarantined`（今回 `.bad-` へ退避した）、`history_quarantine_failed`（退避できず残した）、`history_locked`（他のプロセスが握っている）、`history_access_denied`（権限がない）、`history_read_failed`（そのほかの I/O 失敗）。後ろの 3 つは、段 A 手順 2 で §4 の「共有違反、権限エラー」用に足した。同じコードは 1 行にまとめて件数を持つ。MCP は退避しないので `history_quarantined` と `history_quarantine_failed` は出さず、残りの 5 つを出す。JSON は camelCase、`kind`・`outcome`・`verdict` は小文字の文字列、`counts` は 5 値のキー。
+- 一覧は終了時刻の降順で、同時刻なら UUID の昇順。この「UUID の昇順」は、UUID を `N` 形式（ハイフンなしの小文字 32 桁）にした文字列の序数（Ordinal）比較の昇順で、`Guid` 型の比較ではない。それも同じなら種類名の順。
+- `GetAsync` は、ファイルがあるのに読めない run を「見つからない」と答えない。`Found`、`NotFound`（その UUID のファイルが履歴に無い）、`Unreadable`（ファイルはあるが読めない。`WarningCode` が理由）の 3 通りで返す。履歴フォルダ自体を開けないときは例外 `CheckHistoryFolderException`（§4.1）。
 - `CheckRequest` は `CheckKind`、負荷の `Duration`、記憶媒体の `AllowElevation`。長さは 30／120／300 秒。`AllowElevation` は `storage` に限る。`CheckRun` は `CheckResult` と保存状態を返す。保存の成否と測定の `outcome` は別に扱う。
 - `CheckProgress` は実行 ID、段階、経過秒、目標秒、直近の速度と単位。CPU は `chunks/s`、メモリは書き込み／照合の `MiB/s`。負荷の通知は最大毎秒 1 回。段階変更と最終結果は別に届ける。通知は結果の確定や停止処理を待たせない。
 - `CheckServices` は `IHardwareProvider` と新設する Core の `IStorageInspectionSource`、CPU 点検用測定セッションのファクトリー、時計と保存先を受ける。Windows の依存は組み立て側で差し込む。`IHardwareProvider.GetAsync` と既存 `IStorageHealthProvider` の入口は `src/PcMieru.Core/Contracts/Interfaces.cs:76`、`:84`。現行の採取の振り分けは `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:32`、`:49`。Core の `Value<T>` を採取境界で使い、Checks の結果に変換する。`src/PcMieru.Core/Contracts/Value.cs:14`、`:30`。
@@ -214,18 +229,22 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
     acq-seq.json
 ```
 
-- 履歴の `<UTC>` は `endedAtUtc` の `yyyyMMdd'T'HHmmssfff'Z'`（JSON の時刻と同じミリ秒。**同じ切り捨て済みの値から両方を作る**）。UTC、UUID、種類を本体と照合する。列挙は直下だけ。終了時刻の降順、同時刻なら UUID の順。種類ごとに正常な最新 200 件を残す。基準値は台ごとに最大 200 観測を持ち、時計逆行で保留中なら次の比較元を残す。旧基準値の上限と保留は `PL/Storage/Baseline.cs:223`、`:341`、`:365`。
-- 同じディレクトリの一意な `.tmp` に `CreateNew` で書く。`Flush(true)` 後に閉じて、同一ボリューム上で rename／replace。履歴の初回と移行コピーは上書きなし。基準値の更新は読み取りから比較、書き込みまで、ユーザーと保存先を識別するプロセス間ロックの下で行う。長い採取中はロックを持たない。先に採取した回が遅れて到着した場合は古い値で比較元を更新しない。未確定の `.tmp` は一覧から除き、所有を確認できる残骸だけを後で片付ける。
+- 履歴の `<UTC>` は `endedAtUtc` の `yyyyMMdd'T'HHmmssfff'Z'`（JSON の時刻と同じミリ秒。**同じ切り捨て済みの値から両方を作る**）。UTC、UUID、種類を本体と照合する。列挙は直下だけ。終了時刻の降順、同時刻なら UUID の昇順（`N` 形式の文字列の序数順。§2）。種類ごとに正常な最新 200 件を残す（今保存したファイルは必ず残し、その 200 件の 1 枠を使う。§4.1）。基準値は台ごとに最大 200 観測を持ち、時計逆行で保留中なら次の比較元を残す。旧基準値の上限と保留は `PL/Storage/Baseline.cs:223`、`:341`、`:365`。
+- 同じディレクトリの一意な `.tmp` に `CreateNew` で書く。`Flush(true)` 後に閉じて、同一ボリューム上で rename／replace。履歴の初回と移行コピーは上書きなし。基準値の更新は読み取りから比較、書き込みまで、ユーザーと保存先を識別するプロセス間ロックの下で行う。長い採取中はロックを持たない。先に採取した回が遅れて到着した場合は古い値で比較元を更新しない。未確定の `.tmp` は一覧から除く。放置された一時ファイル（名前の形と経過時間で判断する。pid は見ない）だけを、保存の確定後に片付ける（昇格か削除。細則は §4.1）。履歴の確定は write-through の rename で、同名を置き換えない。
 - 壊れた JSON、必須欄の不整合は GUI／CLI が検出したとき `name.json.bad-<UTC>` に退避する。別ファイルを上書きせず、理由コードと件数を表示する。共有違反、権限エラー、将来の `format` は現物を保持する。退避に失敗しても壊れたファイルへ書き戻さない。MCP は読めない履歴を飛ばして件数を返す。退避も削除も行わない。
 - 保存 I/O の失敗は `CheckRun` の保存状態に出す。確定した結果ファイルを削除して取り消す処理は作らない。基準値を更新できなかった回は次回までの比較元を進めない。履歴保存に先立って確定した基準値は有効な観測として残す。
 
 ### 4.1 結果ストアの細則（段 A 手順 2 で決めた。実装は `src/PcMieru.Checks/History/`）
 
-- **型**。`IReadOnlyCheckHistory`（`ListAsync`、`GetAsync`。MCP に渡すのはこれだけ）と `CheckHistoryStore`（GUI／CLI 用。保存・退避・保持・`.tmp` の片付けを持つ）。MCP 側の `ReadOnlyCheckHistory` は読み取り口 `ICheckHistoryFileReader`（列挙・読み・存在確認だけ）からしか作れず、型の上で保存・退避・削除ができない。保存先・時計・ファイルシステムは注入できる。履歴ファイルにプロセス全体のロックは使わない。読み手は寛容（`Tolerant`）、保存は厳格（`Strict`）。
-- **保存の失敗**は例外にせず `CheckSaveState`（`Saved`／`Failed` と固定コード）で返す。コードは `invalid_result`（検証に通らない）、`already_exists`（同名が既にある。上書きしない）、`access_denied`、`disk_full`、`io_error`。失敗した回は自分の `.tmp` だけを消し、確定済みのファイルは消さない。`CancellationToken` は保存を始める前にだけ見る（書き始めたら最後まで進めて確定させる）。
-- **`.tmp` の名前と所有の規則**。名前は `<種類>-<UTC>-<runId:N>.json.pcmtmp-<pid>-<8 桁の小文字 16 進>.tmp`。次の 2 つを両方満たすものだけを「自分の残骸」として削除する。(1) 名前が全体でこの形に一致し、種類がこの版の知る 4 種のいずれか（新しい版の保存側の残骸は判定しない）。(2) 最終更新が 1 時間以上前（未来の日付は古いと見なさない）。握られていて削除に失敗したものは残す。片付けは保存が確定した後にだけ行い、一覧では行わない。一覧からは `.tmp` は常に除く。それ以外の `.tmp`、`.bad-`、確定名のファイル、他の名前は触らない。
-- **保持が消してよいもの**。保存の確定後、その種類の候補（確定名の形のファイル）が 200 件を超えるときだけ、新しい順に正常（寛容に読めて名前と本体が一致）なものを数え、201 番目以降の正常なファイルだけを削除する。壊れたもの、将来の `format`／`kind`、握られているもの、権限や I/O で読めないもの、他の種類、`.tmp`、`.bad-`、他の名前は削除も退避もしない（退避は一覧の仕事で、保持は警告を消さない）。読めなかったものは正常に数えないので、窓が一時的に 200 件を超えることはあっても、下回ることはない。候補が 200 件以下なら 1 件も読まない。削除に失敗しても保存は成功のまま、失敗は数えるだけ。
-- **一覧の窓**。新しい順に走査し、種類ごとに正常 200 件を超えた分は読まず一覧にも出さない。`Limit` に達したら走査をやめる。そのため窓の外や `Limit` より古い側にある壊れたファイルは、そこまで走査する一覧（`Limit` なしなど）が来るまで見つからず、退避もされない。`Limit` が null は保持分すべて、0 以下は拒否。MCP の `limit`（既定 20、1～200）は `CheckHistoryQuery.ForMcp` で入口に強制する（範囲外は `ArgumentOutOfRangeException`、MCP は tool error にする）。同時刻は UUID の昇順（種類をまたいでも同じ）、それも同じなら種類名の順。
+- **型**。`IReadOnlyCheckHistory`（`ListAsync`、`GetAsync`）と、GUI／CLI 用の `CheckHistoryStore`（`ICheckHistoryMaintainer`。`ListAsync`、`GetAsync`、`SaveAsync` を持ち、退避・保持・`.tmp` の片付けを内部で行う）は別の型で、`CheckHistoryStore` は `IReadOnlyCheckHistory` を実装しない（読み取り専用の口に保存・退避・削除ができる物を渡せない）。MCP に渡す履歴は静的ファクトリー `CheckHistory.OpenReadOnly(root)` の戻り値（`IReadOnlyCheckHistory`）だけで、MCP は `CheckHistoryStore` も `ICheckHistoryMaintainer` も受け取らない。実体の `ReadOnlyCheckHistory` は読み取り口 `ICheckHistoryFileReader`（列挙・読み・存在確認だけ）からしか作れず、その既定の実装 `PhysicalHistoryFileReader` は書き込み用のファイルシステム（`ICheckHistoryFileSystem`）ではない。したがって実体から反射でオブジェクトを辿っても、保存・退避・削除ができる物に行き着かない（試験が `OpenReadOnly` の戻り値のオブジェクトグラフを辿って確かめる）。保存先・時計・ファイルシステムは注入できる。履歴ファイルにプロセス全体のロックは使わない。読み手は寛容（`Tolerant`）、保存は厳格（`Strict`）。
+- **保存**。`SaveAsync(CheckResult)` は `CancellationToken` を取らない（確定した結果は、利用者が停止した後でも保存する）。戻りは常に `CheckSaveState`（`Saved`／`Failed` と固定コード）で、例外にしない（捕まえないのは `OutOfMemoryException` だけ）。コードは `invalid_result`、`already_exists`、`access_denied`、`disk_full`、`io_error` の 5 つ。検証・直列化・読み戻しのどこで何が投げられても `invalid_result`（結果が null、型が崩れている場合を含む）。書き込み側は、確認・`.tmp` の作成・書き込み・`Flush(true)`・rename のどこで何が投げられても捕まえて分類する。`UnauthorizedAccessException` は `access_denied`、空き容量なし（HRESULT の下位 39 か 112）は `disk_full`、確定名が既にあるときは `already_exists`（上書きしない）、それ以外は予想外の例外も含めて `io_error`。失敗した回は自分の `.tmp` だけを消し、確定済みのファイルは消さない。
+- **確定の rename**。`MoveFileEx` を `MOVEFILE_WRITE_THROUGH` で呼ぶ（`MOVEFILE_REPLACE_EXISTING` は付けない）。返った時点で名前の変更がディスクに載り、同名があれば失敗するので、上書きしない。共有違反（HRESULT の下位 32）と権限エラー（同 5）だけは、ウイルス対策やインデクサが閉じた直後のファイルを一瞬握っていることがあるため、25・50・100・200・400 ミリ秒の間隔で最大 5 回（合計 775 ミリ秒）再試行する。それでも通らなければ失敗として返す（`io_error`／`access_denied`）。それ以外の失敗は再試行しない。
+- **`.tmp` の名前と放置された一時ファイルの規則**。名前は `<種類>-<UTC>-<runId:N>.json.pcmtmp-<pid>-<8 桁の小文字 16 進>.tmp`。片付けは所有の確認ではなく「放置された一時ファイル」の判断で、名前の形と経過時間だけで決める（pid は見ない。そのプロセスが生きているかも調べない）。次の 2 つを両方満たすものだけが対象。(1) 名前が全体でこの形に一致し、種類がこの版の知る 4 種のいずれか（新しい版の保存側の残骸は判定しない）。(2) 最終更新が 1 時間以上前（未来の日付は古いと見なさない）。対象はまず**昇格**を試みる。次の 4 つが全部成り立つときだけ、確定の rename と同じ「置き換えない・write-through」の rename で確定名へ移し、履歴の 1 件にする。(a) 本体が厳格（`Strict`）に読めて検証に通る。(b) 本体の種類・終了時刻・UUID が、`.tmp` の名前から導いた確定名のそれと一致する。(c) その確定名のファイルが無い。(d) rename が通る（共有違反と権限エラーは確定と同じ再試行）。(a)(b)(c) のどれかが欠けるときは削除する（確定名のファイルが既にあれば、そのファイルには触れず `.tmp` だけを消す）。握られている・消えた・rename が通らないなど、今は扱えないものは残して次回に回す。昇格した種類にも保持を適用する。片付けは保存が確定した後にだけ行い、一覧では行わない（一覧は `.tmp` を常に除く）。それ以外の `.tmp`、`.bad-`、確定名のファイル、他の名前は触らない。
+- **放置の判断が外れる場合**。経過時間は最終更新と時計の差だけで見るので、書き込み中のプロセスが 1 時間以上止まった（スリープ、時計の跳び）あとで別のプロセスの片付けが走ると、生きているプロセスの `.tmp` を消す、または昇格させることがある。確定したファイルが失われることはない。書き込んでいた側の保存は rename が通らず、消された場合は `io_error`、先に昇格された場合は確定名が既にあるので `already_exists` を返す（結果は履歴に入っている）。逆に、失敗を返した保存が自分の `.tmp` を消せずに残したとき、本体は完全なので、1 時間後の片付けで昇格して履歴に現れることがある。どちらも起きる条件が限られ、結果を失わないので受け入れる。
+- **保持が消してよいもの**。保存の確定後、その種類の候補（確定名の形のファイル）が 200 件を超えるときだけ、新しい順に正常（寛容に読めて名前と本体が一致）なものを数え、枠を超えた正常なファイルだけを削除する。**今保存したファイル（確定名）は消さず、読みもせず、200 件の 1 枠として数える**。そのファイルが他の 200 件より古い終了時刻でも消えない（遅れて保存された古い回は、その分、他の正常ファイルのうち最も古い 1 件が枠を失って削除される）。保存した回は必ず残る。昇格で現れたファイルの種類にも保持を適用する（そちらには保存名が無いので、すべて通常どおりの順位で数える）。壊れたもの、将来の `format`／`kind`、握られているもの、権限や I/O で読めないもの、他の種類、`.tmp`、`.bad-`、他の名前は削除も退避もしない（退避は一覧の仕事で、保持は警告を消さない）。読めなかったものは正常に数えないので、窓が一時的に 200 件を超えることはあっても、下回ることはない。候補が 200 件以下なら 1 件も読まない。削除に失敗しても保存は成功のまま、失敗は数えるだけ。
+- **一覧の窓**。新しい順に走査し、種類ごとに正常 200 件を超えた分は読まず一覧にも出さない。`Limit` に達したら走査をやめる。種類ごとの新しい側から正常 200 件を数えた窓の外にある問題のあるファイル（壊れた、将来の `format`／`kind`、読めない、名前と本体の食い違い）は、どの一覧も読まないので、警告にも退避にもならず、保持も消さない（保持が削除するのは正常に読めたものだけ）。そのまま残り続ける。まれで容量も小さいので受け入れる。窓の内側でも `Limit` より古い側にある壊れたファイルは、そこまで走査する一覧（`Limit` なしなど）が来るまで見つからず、退避もされない。`Limit` が null は保持分すべて、0 以下は拒否。MCP の `limit`（既定 20、1～200）は `CheckHistoryQuery.ForMcp` で入口に強制する（範囲外は `ArgumentOutOfRangeException`、MCP は tool error にする）。同時刻は UUID の昇順（`N` 形式の文字列の序数順。種類をまたいでも同じ）、それも同じなら種類名の順。
+- **フォルダ自体の失敗と、ファイルごとの警告**。履歴フォルダが無いのは空の履歴（`Entries` が空で警告なし）。フォルダを開けない・列挙できない（権限、I/O、パスの不正、パスがファイルである）ときは、`ListAsync` と `GetAsync` が `CheckHistoryFolderException` を投げる。これは `IOException` の派生で、元の例外を `InnerException` に持ち、`HResult` も引き継ぎ、メッセージにパスを入れない。これが唯一のフォルダ単位の失敗で、ファイル 1 つの問題（`history_locked`、`history_access_denied`、`history_read_failed` など）は警告として 1 ページの中に出し、投げない。呼び出し側は両者を区別できる（§8 の終了コード）。
+- **`GetAsync` の結果**。`CheckHistoryGetResult`（§2）で返す。その UUID のファイルが無ければ `NotFound`。あるのに読めなければ `Unreadable` と警告コード（共有違反は `history_locked`、権限は `history_access_denied`、そのほかの I/O は `history_read_failed`、将来の `format`／`kind` は `history_future_format`）で、「見つからない」とは答えない。壊れたファイルは、`OpenReadOnly` の履歴では `history_unreadable`、`CheckHistoryStore` では退避して `history_quarantined`（退避できなければ `history_quarantine_failed`）。退避した後の同じ UUID の `GetAsync` は、ファイルが移ったので `NotFound`。
 - **退避**。GUI／CLI の一覧と `GetAsync` が壊れた JSON、必須欄の不整合、名前と本体の食い違い（種類・終了時刻・UUID のどれか）を見つけたとき `name.json.bad-<UTC>`（現在時刻のミリ秒まで）へ移す。同名があれば `-1`、`-2` と番号を足し、決して上書きしない。rename に失敗したら元のファイルをそのままにして `history_quarantine_failed` と数え、書き戻さない。移す前に消えていたファイルは問題として数えない。`.bad-` のファイルは以後どの列挙にも現れない。
 - **将来の種類**。未知の `format` は `future_format`、未知の `kind` は `future_kind` という理由で、どちらも警告コードは `history_future_format`。どちらも現物を保持する。
 - **理由コード**（件ごとの一覧用。警告コードとは別）は `invalid_content`、`too_large`（8 MiB 超）、`name_kind_mismatch`、`name_time_mismatch`、`name_id_mismatch`、`future_format`、`future_kind`、`sharing_violation`、`permission_denied`、`io_error`、`reader_error`、`vanished`（読む前に消えた。数えない）。
@@ -320,14 +339,14 @@ pcmi parts --code [-o file]
 
 | 終了コード | 段 A での意味 |
 |---|---|
-| `0` | 正常に完了して履歴を保存した、または履歴・PCB1 の取得が成功した。点検の注意、要確認、一部欠測を含む。 |
-| `1` | 実行失敗、停止、結果の保存失敗、履歴を開けない I/O 障害。取得済み結果があれば `--json` で返す。 |
+| `0` | 正常に完了して履歴を保存した、または履歴・PCB1 の取得が成功した。点検の注意、要確認、一部欠測を含む。履歴の一覧は、1 ページを返せたら警告があっても 0（`history_locked`、`history_access_denied`、`history_read_failed` などは件数つきで表示する）。履歴フォルダが無いのも空の履歴で 0。 |
+| `1` | 実行失敗、停止、結果の保存失敗。履歴は、履歴フォルダ自体を開けない・列挙できない障害（`CheckHistoryFolderException`）。回を 1 件取る呼び出しで、ファイルはあるのに読めない（`Unreadable`）ときも 1（警告コードを stderr に出し、「見つからない」とは区別する）。取得済み結果があれば `--json` で返す。 |
 | `2` | コマンド、動詞、引数の誤り。 |
 | `4` | `--elevate` が拒否され、必要だった台を 1 台も読み直せなかった。取得済み結果と個別の理由は返す。 |
 
-空の履歴は成功。値は既存の `ExitCode`（`src/PcMieru.Cli/ExitCode.cs:5`。0 Success・1 Failure・2 BadArguments・4 Denied）をそのまま使い、新しい値は足さない（凍結済みの番号）。停止は既存の Ctrl+C トークンを使う。強制終了までの猶予が点検の後処理を打ち切らないように、CLI の終了経路を点検コマンドと MCP の stdin 待ちで確認する。現行は `src/PcMieru.Cli/Program.cs:42`。
+空の履歴は成功。履歴の終了コードを決めるのは履歴フォルダ自体の失敗だけで、ファイルごとの警告（共有違反、権限、I/O、将来の形式、壊れたファイルの退避）は終了コードを変えない（表示するだけ）。値は既存の `ExitCode`（`src/PcMieru.Cli/ExitCode.cs:5`。0 Success・1 Failure・2 BadArguments・4 Denied）をそのまま使い、新しい値は足さない（凍結済みの番号）。停止は既存の Ctrl+C トークンを使う。強制終了までの猶予が点検の後処理を打ち切らないように、CLI の終了経路を点検コマンドと MCP の stdin 待ちで確認する。現行は `src/PcMieru.Cli/Program.cs:42`。
 
-MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する。`tools/list` の `readOnlyHint: true`。引数は `{kind?, limit?}`（既定 20、1～200）、または `{runId}`。前者は CLI と同じ要約、後者は当時の `pcm-check/1` を `{result}` で返す。存在しない ID は tool error。既存のサイズ制限とキャンセルを適用する。出力は共通 redactor へ通す。チェック履歴は起動時に伏せ字解除が指定されても伏せ字済み。採取、移行、昇格、退避を呼べる型をサーバーに渡さない。現行の境界、注釈、出力は `src/PcMieru.Cli/Mcp/McpServer.cs:19`、`:40`、`:256`、`:324`、`:387`、`src/PcMieru.Cli/Mcp/McpTools.cs:23`、`src/PcMieru.Cli/Commands/McpCommand.cs:23`。境界の固定試験は `tests/PcMieru.Cli.Tests/McpBoundaryTests.cs:43`、`:59`、`:68`、`:84`。
+MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(root)` の戻り値（`IReadOnlyCheckHistory`）だけ。`CheckHistoryStore` は `IReadOnlyCheckHistory` を実装しないので、保存・退避・削除ができる物は型の上で渡せない。`tools/list` の `readOnlyHint: true`。引数は `{kind?, limit?}`（既定 20、1～200）、または `{runId}`。前者は CLI と同じ要約、後者は当時の `pcm-check/1` を `{result}` で返す。`{runId}` の結果は `Found`／`NotFound`／`Unreadable` で、`NotFound`（その UUID の回が無い）は「見つからない」の tool error、`Unreadable`（回はあるが読めない）は別の tool error として警告コード（`history_locked` など）を載せる。「見つからない」とは答えない。履歴フォルダ自体の失敗（`CheckHistoryFolderException`）も tool error。既存のサイズ制限とキャンセルを適用する。出力は共通 redactor へ通す。チェック履歴は起動時に伏せ字解除が指定されても伏せ字済み。採取、移行、昇格、退避を呼べる型をサーバーに渡さない。現行の境界、注釈、出力は `src/PcMieru.Cli/Mcp/McpServer.cs:19`、`:40`、`:256`、`:324`、`:387`、`src/PcMieru.Cli/Mcp/McpTools.cs:23`、`src/PcMieru.Cli/Commands/McpCommand.cs:23`。境界の固定試験は `tests/PcMieru.Cli.Tests/McpBoundaryTests.cs:43`、`:59`、`:68`、`:84`。
 
 ## 9. PCB1 の互換試験
 

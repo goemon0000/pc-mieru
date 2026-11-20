@@ -25,7 +25,7 @@ internal static class CheckHistoryNames
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture);
 
     private static readonly Regex Temp = new(
-        "^(?<kind>" + KindPart + ")-" + StampPart + "-" + IdPart + @"\.json\.pcmtmp-[0-9]{1,10}-[0-9a-f]{8}\.tmp\z",
+        "^(?<final>(?<kind>" + KindPart + ")-(?<stamp>" + StampPart + ")-(?<id>" + IdPart + @")\.json)\.pcmtmp-[0-9]{1,10}-[0-9a-f]{8}\.tmp\z",
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture);
 
     public static bool TryParse(string name, out HistoryFileName parsed)
@@ -49,15 +49,27 @@ internal static class CheckHistoryNames
         string.Create(CultureInfo.InvariantCulture, $"{finalName}.pcmtmp-{processId}-{nonce}.tmp");
 
     /// <summary>
-    /// True for a name this saver makes for a write in flight, and nothing else: exactly the shape above, with a kind this version
-    /// knows (a leftover of a newer version's saver is not ours to judge). This is the first half of the ownership rule for cleaning
-    /// (the second half is the age, see <see cref="CheckHistoryStore"/>): a foreign .tmp file never matches.
+    /// True for a name of the shape this saver makes for a write in flight, and nothing else: exactly the shape above, with a kind
+    /// this version knows (a leftover of a newer version's saver is not ours to judge). This is the first half of the rule for
+    /// cleaning (the second half is the age, see <see cref="CheckHistoryStore"/>). The pid in the name is not looked at: the rule is
+    /// "an abandoned temporary file" by shape and age, not "a file this process owns". A foreign .tmp file never matches.
+    /// <paramref name="final"/> is the committed name the temporary file was written for (kind, stamp and id taken from the name).
     /// </summary>
-    public static bool IsOwnTemp(string name)
+    public static bool TryParseTemp(string name, out HistoryFileName final)
     {
         var match = Temp.Match(name);
-        return match.Success && SnakeCaseEnum<CheckKind>.TryParse(match.Groups["kind"].Value, out _);
+        if (match.Success && SnakeCaseEnum<CheckKind>.TryParse(match.Groups["kind"].Value, out _))
+        {
+            final = new HistoryFileName(match.Groups["final"].Value, match.Groups["kind"].Value, match.Groups["stamp"].Value, match.Groups["id"].Value);
+            return true;
+        }
+
+        final = default;
+        return false;
     }
+
+    /// <summary>True when <paramref name="name"/> has the shape of a write in flight (see <see cref="TryParseTemp"/>).</summary>
+    public static bool IsOwnTemp(string name) => TryParseTemp(name, out _);
 
     /// <summary>The name a corrupt file is moved to: <c>name.bad-&lt;UTC&gt;</c>, then <c>name.bad-&lt;UTC&gt;-1</c>, <c>-2</c> ... when the name is taken.</summary>
     public static string BadName(string name, DateTimeOffset when, int attempt) =>

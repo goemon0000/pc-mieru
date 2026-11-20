@@ -64,6 +64,29 @@ internal sealed record CheckHistoryScan(CheckHistoryPage Page, IReadOnlyList<Che
 internal sealed record CheckHistoryDetail(CheckReading? Reading, CheckHistoryProblem? Problem)
 {
     public CheckResult? Result => Reading?.Result;
+
+    /// <summary>
+    /// The public answer: found; not found (no file carries the ID); or unreadable with the code that says why. The code is the one of
+    /// the listing for the same file: <c>history_quarantined</c> / <c>history_quarantine_failed</c> when the store acted on a corrupt
+    /// file of the run, otherwise the cause (<c>history_unreadable</c>, <c>history_future_format</c>, <c>history_locked</c>, ...).
+    /// </summary>
+    public CheckHistoryGetResult ToResult()
+    {
+        if (Reading is not null)
+        {
+            return CheckHistoryGetResult.Found(Reading.Result);
+        }
+
+        if (Problem is null)
+        {
+            return CheckHistoryGetResult.NotFound;
+        }
+
+        var code = Problem.QuarantinedAs is not null
+            ? CheckHistoryWarningCodes.Quarantined
+            : Problem.QuarantineFailed ? CheckHistoryWarningCodes.QuarantineFailed : Problem.Code;
+        return CheckHistoryGetResult.Unreadable(code);
+    }
 }
 
 /// <summary>
@@ -90,10 +113,25 @@ internal sealed class CheckHistoryScanner
 
     public string PathOf(HistoryFileName file) => Path.Combine(Root, file.Name);
 
-    public IReadOnlyList<HistoryFileEntry> ListFiles() => _files.ListFiles(Root);
+    /// <summary>
+    /// The entries of the history folder. A folder that does not exist is an empty list (the file system says so). A folder that cannot
+    /// be opened or enumerated (permission, I/O error, a path that is a file or is not valid, a fault of the reader) is the one failure
+    /// that is not about a file: it is thrown as <see cref="CheckHistoryFolderException"/>, so a caller can tell it from the warnings.
+    /// </summary>
+    public IReadOnlyList<HistoryFileEntry> ListFiles()
+    {
+        try
+        {
+            return _files.ListFiles(Root);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException or CheckHistoryFolderException))
+        {
+            throw new CheckHistoryFolderException(ex);
+        }
+    }
 
     /// <summary>
-    /// The history files among the entries, newest end time first; equal times by UUID (ascending, as written), then by kind
+    /// The history files among the entries, newest end time first; equal times by UUID (ascending, ordinal order of the N-format string as it is in the file name), then by kind
     /// name so the order never depends on the file system. Only names that are exactly a history file name are candidates:
     /// .tmp files, .bad files, other files are not. <paramref name="kindName"/> limits the list to one kind's name.
     /// </summary>
@@ -180,23 +218,25 @@ internal sealed class CheckHistoryScanner
 
         // The name must agree with the body in kind, end time and UUID (DESIGN-A §4). A disagreement is an inconsistency
         // of the file, which is the same class of fault as a broken field.
-        var result = reading.Result;
+        return NameMismatch(reading.Result, file) is { } mismatch
+            ? new HistoryFileOutcome(HistoryFileState.Unreadable, mismatch, null)
+            : new HistoryFileOutcome(HistoryFileState.Valid, string.Empty, reading);
+    }
+
+    /// <summary>The reason (a <see cref="CheckHistoryReasons"/> value) when the body disagrees with the name in kind, end time or UUID; null when all three agree.</summary>
+    public static string? NameMismatch(CheckResult result, HistoryFileName file)
+    {
         if (SnakeCaseEnum<CheckKind>.Name(result.Kind) != file.Kind)
         {
-            return new HistoryFileOutcome(HistoryFileState.Unreadable, CheckHistoryReasons.NameKindMismatch, null);
+            return CheckHistoryReasons.NameKindMismatch;
         }
 
         if (CheckTime.FileStamp(result.EndedAtUtc) != file.Stamp)
         {
-            return new HistoryFileOutcome(HistoryFileState.Unreadable, CheckHistoryReasons.NameTimeMismatch, null);
+            return CheckHistoryReasons.NameTimeMismatch;
         }
 
-        if (!string.Equals(result.RunId.ToString("N"), file.Id, StringComparison.Ordinal))
-        {
-            return new HistoryFileOutcome(HistoryFileState.Unreadable, CheckHistoryReasons.NameIdMismatch, null);
-        }
-
-        return new HistoryFileOutcome(HistoryFileState.Valid, string.Empty, reading);
+        return string.Equals(result.RunId.ToString("N"), file.Id, StringComparison.Ordinal) ? null : CheckHistoryReasons.NameIdMismatch;
     }
 
     /// <summary>The warning code a not-valid state is reported under.</summary>

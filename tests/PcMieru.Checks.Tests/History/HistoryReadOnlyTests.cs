@@ -24,19 +24,19 @@ public sealed class HistoryReadOnlyTests : IDisposable
         public IReadOnlyList<HistoryFileEntry> ListFiles(string directory)
         {
             _calls.Add("list");
-            return PhysicalHistoryFileSystem.Instance.ListFiles(directory);
+            return PhysicalHistoryFileReader.Instance.ListFiles(directory);
         }
 
         public byte[] ReadAllBytes(string path, int maxBytes)
         {
             _calls.Add("read");
-            return PhysicalHistoryFileSystem.Instance.ReadAllBytes(path, maxBytes);
+            return PhysicalHistoryFileReader.Instance.ReadAllBytes(path, maxBytes);
         }
 
         public bool Exists(string path)
         {
             _calls.Add("exists");
-            return PhysicalHistoryFileSystem.Instance.Exists(path);
+            return PhysicalHistoryFileReader.Instance.Exists(path);
         }
     }
 
@@ -87,10 +87,10 @@ public sealed class HistoryReadOnlyTests : IDisposable
         CheckHistoryPage all;
         CheckHistoryPage memoryOnly;
         CheckHistoryPage limited;
-        CheckResult? gotValid;
-        CheckResult? gotCorrupt;
-        CheckResult? gotLocked;
-        CheckResult? gotNothing;
+        CheckHistoryGetResult gotValid;
+        CheckHistoryGetResult gotCorrupt;
+        CheckHistoryGetResult gotLocked;
+        CheckHistoryGetResult gotNothing;
         using (new FileStream(Path.Combine(Root, lockedName), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
             before = Kit.Snapshot(Root);
@@ -106,7 +106,6 @@ public sealed class HistoryReadOnlyTests : IDisposable
         }
 
         Assert.Equal(before, after);
-        Assert.Equal(before.Count, after.Count);
 
         // The two valid runs, newest end time first; the other files are skipped and counted, never moved.
         Assert.Equal([validCpu, validMemory], Kit.RunIds(all));
@@ -123,10 +122,18 @@ public sealed class HistoryReadOnlyTests : IDisposable
         Assert.Equal([validCpu], Kit.RunIds(limited));
         Assert.Equal(["history_unreadable=4", "history_future_format=2", "history_locked=1"], Kit.WarningLines(limited));
 
-        Assert.Equal(validMemory, gotValid?.RunId);
-        Assert.Null(gotCorrupt);
-        Assert.Null(gotLocked);
-        Assert.Null(gotNothing);
+        // Get: found; a file that exists but cannot be read is Unreadable with its code, never "not found"; no file at all is not found.
+        Assert.Equal(CheckHistoryGetStatus.Found, gotValid.Status);
+        Assert.Equal(validMemory, gotValid.Result?.RunId);
+        Assert.Null(gotValid.WarningCode);
+        Assert.Equal(CheckHistoryGetStatus.Unreadable, gotCorrupt.Status);
+        Assert.Equal("history_unreadable", gotCorrupt.WarningCode);
+        Assert.Null(gotCorrupt.Result);
+        Assert.Equal(CheckHistoryGetStatus.Unreadable, gotLocked.Status);
+        Assert.Equal("history_locked", gotLocked.WarningCode);
+        Assert.Equal(CheckHistoryGetStatus.NotFound, gotNothing.Status);
+        Assert.Null(gotNothing.WarningCode);
+        Assert.Null(gotNothing.Result);
     }
 
     [Fact]
@@ -175,7 +182,7 @@ public sealed class HistoryReadOnlyTests : IDisposable
         Assert.Empty(page.Entries);
         Assert.Empty(page.Warnings);
         Assert.False(Directory.Exists(Root));
-        Assert.Null(await Kit.ReadOnly(Root).GetAsync(Kit.Id(1), CancellationToken.None));
+        Assert.Equal(CheckHistoryGetStatus.NotFound, (await Kit.ReadOnly(Root).GetAsync(Kit.Id(1), CancellationToken.None)).Status);
         Assert.False(Directory.Exists(Root));
     }
 
@@ -246,29 +253,135 @@ public sealed class HistoryReadOnlyTests : IDisposable
         Assert.True(typeof(ICheckHistoryFileReader).IsAssignableFrom(typeof(ICheckHistoryFileSystem)));
         Assert.False(typeof(ICheckHistoryFileSystem).IsAssignableFrom(typeof(ICheckHistoryFileReader)));
 
-        const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-        foreach (var type in new[] { typeof(ReadOnlyCheckHistory), typeof(CheckHistoryScanner) })
-        {
-            foreach (var constructor in type.GetConstructors(all))
-            {
-                Assert.DoesNotContain(constructor.GetParameters(), p => typeof(ICheckHistoryFileSystem).IsAssignableFrom(p.ParameterType));
-            }
+        // The real reading implementation is its own class: it is not the real writing one, and is not a writing file system.
+        Assert.False(typeof(ICheckHistoryFileSystem).IsAssignableFrom(typeof(PhysicalHistoryFileReader)));
+        Assert.Equal(["Exists", "ListFiles", "ReadAllBytes"], PublicInstanceMethodNames(typeof(PhysicalHistoryFileReader)));
 
-            foreach (var field in type.GetFields(all))
-            {
-                Assert.False(typeof(ICheckHistoryFileSystem).IsAssignableFrom(field.FieldType), $"{type.Name}.{field.Name}");
-                Assert.False(typeof(CheckHistoryStore).IsAssignableFrom(field.FieldType), $"{type.Name}.{field.Name}");
-            }
+        AssertCannotWrite(Kit.ReadOnly(Root));
+        Assert.Equal(["GetAsync", "ListAsync"], typeof(IReadOnlyCheckHistory).GetMethods().Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    }
+
+    // ---- the one way in: CheckHistory.OpenReadOnly ----
+
+    [Fact]
+    public void OpenReadOnly_gives_the_read_only_history_and_that_object_has_no_path_to_a_writing_file_system()
+    {
+        var history = CheckHistory.OpenReadOnly(Root);
+
+        Assert.IsType<ReadOnlyCheckHistory>(history);
+        AssertCannotWrite(history);
+
+        // Opening neither creates nor touches the folder.
+        Assert.False(Directory.Exists(Root));
+        Assert.Throws<ArgumentException>(() => CheckHistory.OpenReadOnly(" "));
+        Assert.Throws<ArgumentNullException>(() => CheckHistory.OpenReadOnly(null!));
+    }
+
+    [Fact]
+    public async Task OpenReadOnly_reads_the_same_history_as_the_stores_listing()
+    {
+        Populate();
+        var before = Kit.Snapshot(Root);
+
+        var viaFactory = await CheckHistory.OpenReadOnly(Root).ListAsync(Kit.All, CancellationToken.None);
+        var viaKit = await Kit.ReadOnly(Root).ListAsync(Kit.All, CancellationToken.None);
+
+        Assert.Equal(Kit.RunIds(viaKit), Kit.RunIds(viaFactory));
+        Assert.Equal(Kit.WarningLines(viaKit), Kit.WarningLines(viaFactory));
+        Assert.Equal(before, Kit.Snapshot(Root));
+    }
+
+    [Fact]
+    public void The_store_is_not_a_read_only_history_and_nothing_else_public_is()
+    {
+        // The store (which saves, moves aside and deletes) can never be passed where the read-only history is expected.
+        Assert.False(typeof(IReadOnlyCheckHistory).IsAssignableFrom(typeof(CheckHistoryStore)));
+        Assert.DoesNotContain(typeof(IReadOnlyCheckHistory), typeof(CheckHistoryStore).GetInterfaces());
+        Assert.False((object)Kit.Store(Root) is IReadOnlyCheckHistory);
+        Assert.Contains(typeof(ICheckHistoryMaintainer), typeof(CheckHistoryStore).GetInterfaces());
+
+        // And the other way: the read-only history cannot be cast to something that writes.
+        Assert.False(typeof(ICheckHistoryMaintainer).IsAssignableFrom(typeof(ReadOnlyCheckHistory)));
+        Assert.False(typeof(ICheckHistoryMaintainer).IsAssignableFrom(typeof(IReadOnlyCheckHistory)));
+
+        // The only public implementation of the read-only interface is none: CheckHistory.OpenReadOnly is the only way to one.
+        var exported = typeof(CheckHistory).Assembly.GetExportedTypes();
+        Assert.DoesNotContain(exported, t => t.IsClass && !t.IsAbstract && typeof(IReadOnlyCheckHistory).IsAssignableFrom(t));
+        Assert.Equal(
+            ["OpenReadOnly"],
+            typeof(CheckHistory).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly).Select(m => m.Name).ToArray());
+        Assert.Equal(typeof(IReadOnlyCheckHistory), typeof(CheckHistory).GetMethod(nameof(CheckHistory.OpenReadOnly))!.ReturnType);
+    }
+
+    private const BindingFlags AllMembers = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+    private static string[] PublicInstanceMethodNames(Type type) =>
+        [.. type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly).Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal)];
+
+    /// <summary>
+    /// The guard: nothing the object is built from, directly or through other objects of this assembly, is a writing file system, a
+    /// new-file handle or a store, and it offers no method that changes anything. Looks at the runtime object, so it applies to whatever
+    /// a factory really returns.
+    /// </summary>
+    private static void AssertCannotWrite(object history)
+    {
+        var type = history.GetType();
+        foreach (var constructor in type.GetConstructors(AllMembers))
+        {
+            Assert.DoesNotContain(constructor.GetParameters(), p => typeof(ICheckHistoryFileSystem).IsAssignableFrom(p.ParameterType));
         }
 
-        // And it offers nothing that changes anything: its own methods are the listing, the read and the scan behind the listing.
-        var methods = typeof(ReadOnlyCheckHistory).GetMethods(all)
+        foreach (var held in typeof(CheckHistoryScanner).GetConstructors(AllMembers))
+        {
+            Assert.DoesNotContain(held.GetParameters(), p => typeof(ICheckHistoryFileSystem).IsAssignableFrom(p.ParameterType));
+        }
+
+        // Its own methods are the listing, the read and the scan behind the listing.
+        var methods = type.GetMethods(AllMembers)
             .Where(m => m.GetCustomAttribute<CompilerGeneratedAttribute>() is null && !m.Name.StartsWith('<'))
             .Select(m => m.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(["GetAsync", "ListAsync", "Scan"], methods);
-        Assert.Contains(typeof(IReadOnlyCheckHistory), typeof(ReadOnlyCheckHistory).GetInterfaces());
-        Assert.Equal(["GetAsync", "ListAsync"], typeof(IReadOnlyCheckHistory).GetMethods().Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.Contains(typeof(IReadOnlyCheckHistory), type.GetInterfaces());
+
+        // The object graph: every object reachable through instance fields (the walk goes into objects of this assembly only).
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<object>();
+        pending.Push(history);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (!seen.Add(current))
+            {
+                continue;
+            }
+
+            var currentType = current.GetType();
+            Assert.False(current is ICheckHistoryFileSystem, $"reachable: {currentType.Name} is a writing file system");
+            Assert.False(current is ICheckHistoryNewFile, $"reachable: {currentType.Name} is a new-file handle");
+            Assert.False(current is CheckHistoryStore, $"reachable: {currentType.Name} is a store");
+            Assert.False(current is ICheckHistoryMaintainer, $"reachable: {currentType.Name} is a maintainer");
+
+            if (currentType.Assembly != typeof(CheckHistory).Assembly)
+            {
+                continue;
+            }
+
+            for (var t = currentType; t is not null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var field in t.GetFields(AllMembers).Where(f => !f.IsStatic))
+                {
+                    Assert.False(typeof(ICheckHistoryFileSystem).IsAssignableFrom(field.FieldType), $"{currentType.Name}.{field.Name}");
+                    Assert.False(typeof(CheckHistoryStore).IsAssignableFrom(field.FieldType), $"{currentType.Name}.{field.Name}");
+                    if (!field.FieldType.IsValueType && field.GetValue(current) is { } value)
+                    {
+                        pending.Push(value);
+                    }
+                }
+            }
+        }
+
+        Assert.Contains(seen, o => o is ICheckHistoryFileReader);
     }
 }

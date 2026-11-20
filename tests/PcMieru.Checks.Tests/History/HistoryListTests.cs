@@ -494,18 +494,97 @@ public sealed class HistoryListTests : IDisposable
         var store = Store();
 
         var found = await store.GetAsync(Kit.Id(1), CancellationToken.None);
-        Assert.NotNull(found);
-        Assert.Equal(CheckJson.Serialize(good, indented: true), CheckJson.Serialize(found, indented: true));
+        Assert.Equal(CheckHistoryGetStatus.Found, found.Status);
+        Assert.Equal(CheckJson.Serialize(good, indented: true), CheckJson.Serialize(found.Result!, indented: true));
+        Assert.Null(found.WarningCode);
 
-        Assert.Null(await store.GetAsync(Kit.Id(404), CancellationToken.None));
+        var missing = await store.GetAsync(Kit.Id(404), CancellationToken.None);
+        Assert.Equal(CheckHistoryGetStatus.NotFound, missing.Status);
+        Assert.Null(missing.Result);
+        Assert.Null(missing.WarningCode);
 
         var detailFuture = store.GetDetail(Kit.Id(3), CancellationToken.None);
         Assert.Null(detailFuture.Result);
         Assert.Equal("history_future_format", detailFuture.Problem?.Code);
         Assert.True(File.Exists(Path.Combine(Root, futureName)));
+        var future = await store.GetAsync(Kit.Id(3), CancellationToken.None);
+        Assert.Equal(CheckHistoryGetStatus.Unreadable, future.Status);
+        Assert.Equal("history_future_format", future.WarningCode);
 
-        Assert.Null(await store.GetAsync(Kit.Id(2), CancellationToken.None));
+        // A corrupt file is moved aside by the store, and says so: Unreadable with history_quarantined (never "not found").
+        var set = await store.GetAsync(Kit.Id(2), CancellationToken.None);
+        Assert.Equal(CheckHistoryGetStatus.Unreadable, set.Status);
+        Assert.Equal("history_quarantined", set.WarningCode);
         Assert.False(File.Exists(Path.Combine(Root, corrupt)));
         Assert.True(File.Exists(Path.Combine(Root, $"{corrupt}.bad-{Kit.NowStamp}")));
+    }
+
+    [Fact]
+    public async Task A_corrupt_file_the_store_cannot_move_aside_is_unreadable_with_history_quarantine_failed()
+    {
+        var corrupt = Kit.PutText(Root, Kit.NameOf(CheckKind.Cpu, T(20), Kit.Id(2)), "{ corrupt");
+        var files = new FaultFileSystem { MoveFault = (_, _) => new UnauthorizedAccessException("denied") };
+
+        var result = await Store(files).GetAsync(Kit.Id(2), CancellationToken.None);
+
+        Assert.Equal(CheckHistoryGetStatus.Unreadable, result.Status);
+        Assert.Equal("history_quarantine_failed", result.WarningCode);
+        Assert.True(File.Exists(Path.Combine(Root, corrupt)));
+    }
+
+    [Theory]
+    [InlineData("access", "history_access_denied")]
+    [InlineData("sharing", "history_locked")]
+    [InlineData("other", "history_read_failed")]
+    public async Task A_run_whose_file_cannot_be_read_is_unreadable_with_the_code_not_not_found_in_both_histories(string fault, string code)
+    {
+        var name = Kit.Put(Root, Kit.Make(CheckKind.Cpu, T(10), Kit.Id(1)));
+        var files = new FaultFileSystem
+        {
+            ReadFault = path => Path.GetFileName(path) != name
+                ? null
+                : fault switch
+                {
+                    "access" => (Exception)new UnauthorizedAccessException("denied"),
+                    "sharing" => Kit.SharingViolation(),
+                    _ => new IOException("device error"),
+                },
+        };
+        var before = Kit.Snapshot(Root);
+
+        var viaStore = await Store(files).GetAsync(Kit.Id(1), CancellationToken.None);
+        var viaReadOnly = await Kit.ReadOnly(Root, files).GetAsync(Kit.Id(1), CancellationToken.None);
+
+        foreach (var result in new[] { viaStore, viaReadOnly })
+        {
+            Assert.Equal(CheckHistoryGetStatus.Unreadable, result.Status);
+            Assert.Equal(code, result.WarningCode);
+            Assert.Null(result.Result);
+        }
+
+        Assert.Equal(before, Kit.Snapshot(Root));
+    }
+
+    [Fact]
+    public void The_get_result_is_built_only_through_its_three_shapes()
+    {
+        Assert.Equal(CheckHistoryGetStatus.NotFound, CheckHistoryGetResult.NotFound.Status);
+
+        var found = CheckHistoryGetResult.Found(Samples.MemoryCheck());
+        Assert.Equal(CheckHistoryGetStatus.Found, found.Status);
+        Assert.NotNull(found.Result);
+
+        foreach (var code in CheckHistoryWarningCodes.All)
+        {
+            var unreadable = CheckHistoryGetResult.Unreadable(code);
+            Assert.Equal(CheckHistoryGetStatus.Unreadable, unreadable.Status);
+            Assert.Equal(code, unreadable.WarningCode);
+            Assert.Null(unreadable.Result);
+        }
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => CheckHistoryGetResult.Unreadable("history_something_else"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CheckHistoryGetResult.Unreadable(null!));
+        Assert.Throws<ArgumentNullException>(() => CheckHistoryGetResult.Found(null!));
+        Assert.Equal(7, CheckHistoryWarningCodes.All.Count);
     }
 }
