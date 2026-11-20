@@ -134,6 +134,12 @@ internal sealed class FakeMemorySession : IMemoryTestSession
 
     public bool Disposed { get; private set; }
 
+    /// <summary>
+    /// The real-time backstops the run armed through the clock (DESIGN-A §6.2), in order. None of them fires on wall time: a test calls
+    /// <see cref="FakeBackstop.Fire"/> to say "the real time has run out".
+    /// </summary>
+    public List<FakeBackstop> Backstops { get; } = [];
+
     ILoadThreadStarter IMemoryTestSession.Threads => new FakeThreadStarter(this);
 
     ILoadClock IMemoryTestSession.Clock => new FakeLoadClock(this);
@@ -177,6 +183,13 @@ internal sealed class FakeMemorySession : IMemoryTestSession
     }
 
     public void Dispose() => Disposed = true;
+
+    private FakeBackstop Arm(TimeSpan delay, Action callback)
+    {
+        var backstop = new FakeBackstop(delay, callback);
+        Backstops.Add(backstop);
+        return backstop;
+    }
 
     private bool Wait(TimeSpan wait, CancellationToken ct)
     {
@@ -285,6 +298,40 @@ internal sealed class FakeMemorySession : IMemoryTestSession
         public TimeSpan Elapsed(long since) => owner.Time.GetElapsedTime(since);
 
         public bool WaitCancelled(TimeSpan wait, CancellationToken ct) => owner.Wait(wait, ct);
+
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => owner.Arm(delay, callback);
+    }
+}
+
+/// <summary>A real-time callback of the fake clock: it records what it was asked for and fires only when a test says so, never on wall time.</summary>
+internal sealed class FakeBackstop(TimeSpan delay, Action callback) : IDisposable
+{
+    public TimeSpan Delay => delay;
+
+    public bool Disposed { get; private set; }
+
+    public int Fired { get; private set; }
+
+    /// <summary>The real time ran out: the callback runs now, on the calling thread (unless the backstop was disposed first, like a real timer).</summary>
+    public void Fire()
+    {
+        if (!Disposed)
+        {
+            Fired++;
+            callback();
+        }
+    }
+
+    public void Dispose() => Disposed = true;
+}
+
+/// <summary>The backstop of a fake clock that has none to give: it never fires, and disposing it does nothing.</summary>
+internal sealed class NeverFires : IDisposable
+{
+    public static readonly NeverFires Instance = new();
+
+    public void Dispose()
+    {
     }
 }
 

@@ -85,4 +85,11 @@ internal interface ILoadClock
 
     /// <summary>Waits for <paramref name="wait"/> or until <paramref name="ct"/> is cancelled. True when it was cancelled.</summary>
     bool WaitCancelled(TimeSpan wait, CancellationToken ct);
+
+    /// <summary>
+    /// Calls <paramref name="callback"/> once, on another thread, when <paramref name="delay"/> of real time has passed: the backstop of a loop
+    /// that is stuck. Disposing the result cancels it. The real clock fires it on wall time; a fake clock never does (a test fires it by hand or
+    /// not at all), so a slow machine cannot trip it in the middle of a test that moves its own time.
+    /// </summary>
+    IDisposable CallAfter(TimeSpan delay, Action callback);
 }

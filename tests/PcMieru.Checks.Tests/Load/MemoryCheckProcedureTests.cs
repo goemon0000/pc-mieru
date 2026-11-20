@@ -352,7 +352,8 @@ public sealed class MemoryCheckProcedureTests
         Assert.Empty(CheckResultValidator.Validate(run.Result));
         Assert.Equal([CheckNotes.MemoryBorrowedRegionOnly, CheckNotes.MemoryPressure], run.Result.Notes);
         Assert.Equal(CheckValue.Dec(0), Row(run, "memory.borrowed").Value);
-        Assert.Null(Row(run, "memory.passes").Value);
+        Assert.Equal(CheckValue.Int(0), Row(run, "memory.passes").Value); // a count, always: nothing borrowed is 0 passes
+        Assert.Null(Row(run, "memory.passes").Reason);
         var mismatches = Row(run, "memory.mismatches");
         Assert.Equal(ItemVerdict.Unavailable, mismatches.Verdict);
         Assert.Null(mismatches.Value);
@@ -364,6 +365,94 @@ public sealed class MemoryCheckProcedureTests
         Assert.Empty(session.WorkThreads);
         Assert.Equal(0, session.AllocateCalls);
         Assert.True(session.Disposed);
+    }
+
+    // A planned session of four blocks, changed by the script, run to its end on a rig of its own.
+    private static async Task<(CheckRun Run, FakeMemorySession Session)> RunPlanned(Action<FakeMemorySession> script)
+    {
+        var session = FakeMemorySession.Planned(4);
+        script(session);
+        using var rig = new RunRig(memorySessionFactory: () => session);
+        return (await Run(rig), session);
+    }
+
+    [Fact]
+    public async Task A_free_memory_that_cannot_be_read_before_the_first_block_gives_the_rows_of_an_unreadable_start_and_no_pressure_note()
+    {
+        // Reading 1 is the start, reading 2 is the one before block 1: whichever of them Windows cannot answer, nothing is known and nothing
+        // was borrowed. The run is the same in what rests on the memory it borrowed, and neither makes a note about pressure.
+        var (atStart, startSession) = await RunPlanned(static s => s.StatusUnreadable = static n => n == 1);
+        var (atGrowth, growthSession) = await RunPlanned(static s => s.StatusUnreadable = static n => n == 2);
+
+        foreach (var (run, session) in new[] { (atStart, startSession), (atGrowth, growthSession) })
+        {
+            Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+            Assert.Null(run.FailureCode);
+            Assert.True(run.IsSaved);
+            Assert.Empty(CheckResultValidator.Validate(run.Result));
+            Assert.Equal([CheckNotes.MemoryBorrowedRegionOnly], run.Result.Notes);
+            Assert.Equal(CheckValue.Dec(0), Row(run, "memory.borrowed").Value);
+            Assert.Equal(CheckValue.Int(0), Row(run, "memory.passes").Value);
+            Assert.Null(Row(run, "memory.passes").Reason);
+            Assert.Equal(ItemVerdict.Unavailable, Row(run, "memory.mismatches").Verdict);
+            Assert.Null(Row(run, "memory.mismatches").Value);
+            Assert.Equal(CheckReason.Partial, Row(run, "memory.mismatches").Reason);
+            Assert.Null(Row(run, "memory.write_rate").Value);
+            Assert.Null(Row(run, "memory.verify_rate").Value);
+            Assert.DoesNotContain(run.Result.Items, static i => i.Verdict == ItemVerdict.Ok);
+            Assert.Equal(0, session.AllocateCalls);
+            Assert.Empty(session.WorkThreads);
+            Assert.True(session.Disposed);
+        }
+
+        Assert.Equal(atStart.Result.Verdict, atGrowth.Result.Verdict);
+        Assert.NotEqual(CheckVerdict.Ok, atGrowth.Result.Verdict);
+        foreach (var id in new[] { "memory.borrowed", "memory.passes", "memory.verified", "memory.mismatches", "memory.write_rate", "memory.verify_rate" })
+        {
+            var a = Row(atStart, id);
+            var b = Row(atGrowth, id);
+            Assert.Equal((a.Value, a.Verdict, a.Reason), (b.Value, b.Verdict, b.Reason));
+        }
+
+        // The one thing that differs: an unreadable start does not know the total and the free memory at the start; a later reading that fails does.
+        Assert.Null(Row(atStart, "memory.total").Value);
+        Assert.Equal(CheckReason.Error, Row(atStart, "memory.total").Reason);
+        Assert.Equal(CheckValue.Dec(8UL << 30), Row(atGrowth, "memory.total").Value);
+        Assert.NotNull(Row(atGrowth, "memory.available_at_start").Value);
+    }
+
+    [Fact]
+    public async Task A_free_memory_that_cannot_be_read_after_some_blocks_ends_the_growth_and_the_run_is_whole_with_the_blocks_it_has()
+    {
+        var (run, session) = await RunPlanned(static s => s.StatusUnreadable = static n => n == 3); // the reading before block 2
+
+        Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+        Assert.Null(run.FailureCode);
+        Assert.True(run.IsSaved);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+        Assert.Equal([CheckNotes.MemoryBorrowedRegionOnly], run.Result.Notes); // no pressure note
+        Assert.Equal(CheckValue.Dec((ulong)Block), Row(run, "memory.borrowed").Value);
+        Assert.True(Row(run, "memory.passes").Value!.AsInt > 0);
+        Assert.Equal(CheckValue.Int(0), Row(run, "memory.mismatches").Value);
+        Assert.Equal(ItemVerdict.Ok, Row(run, "memory.mismatches").Verdict);
+        Assert.Equal(CheckVerdict.Ok, run.Result.Verdict);
+        Assert.Equal(1, session.AllocateCalls);
+        Assert.Equal(120, session.Waits); // the whole 30 seconds
+        MemoryEvents.AssertJoinedThenFreed(session);
+    }
+
+    [Fact]
+    public async Task A_free_memory_that_cannot_be_read_during_the_run_still_stops_it_with_the_pressure_note()
+    {
+        var (run, session) = await RunPlanned(static s => s.StatusUnreadable = static n => n == 8); // after the four blocks: the loop's third reading
+
+        Assert.Equal(CheckOutcome.Stopped, run.Result.Outcome);
+        Assert.Null(run.FailureCode);
+        Assert.True(run.IsSaved);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+        Assert.Equal([CheckNotes.MemoryBorrowedRegionOnly, CheckNotes.MemoryPressure], run.Result.Notes);
+        Assert.DoesNotContain(run.Result.Items, static i => i.Verdict == ItemVerdict.Ok);
+        MemoryEvents.AssertJoinedThenFreed(session);
     }
 
     [Fact]
@@ -492,6 +581,36 @@ public sealed class MemoryCheckProcedureTests
         await Run(rig, progress: log);
 
         Assert.Equal(10, log.Items.Count(static p => p.RecentRate is not null));
+    }
+
+    [Fact]
+    public async Task A_slow_allocation_shows_its_progress_through_the_gate_without_a_rate_and_without_a_unit()
+    {
+        // Six blocks of half a second each, on the load clock and on the service clock alike: the allocation is 3 s long. The gate lets a reading
+        // through when 0.9 s have passed on the service clock since the last one, and the allocation offers one about every second.
+        var serviceClock = new ManualTimeProvider();
+        var session = FakeMemorySession.Planned(6);
+        session.AllocateCost = TimeSpan.FromMilliseconds(500);
+        session.OnAllocate = _ => serviceClock.Advance(TimeSpan.FromMilliseconds(500));
+        session.AfterAdvance = _ => serviceClock.Advance(TimeSpan.FromMilliseconds(250));
+        using var rig = new RunRig(clock: serviceClock, memorySessionFactory: () => session);
+        var log = new ProgressLog();
+
+        var run = await Run(rig, progress: log);
+
+        Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+        var loading = log.Items.Where(static p => p.Stage == CheckStage.Loading && p.ElapsedSeconds > 0).ToList(); // not the stage notification: it is at 0
+        var allocation = loading.TakeWhile(static p => p.RecentRate is null).ToList();
+        Assert.True(allocation.Count >= 2, $"{allocation.Count} readings without a rate while the blocks were borrowed");
+        Assert.All(allocation, static p =>
+        {
+            Assert.Null(p.RateUnit); // no rate, so no unit either
+            Assert.Equal(30, p.TargetSeconds);
+            Assert.InRange(p.ElapsedSeconds, 0.9, 3.0 + 1e-6);
+        });
+        Assert.Contains(loading, static p => p.RecentRate is not null); // and the loop's own readings with a rate follow
+        Assert.All(loading.Where(static p => p.RecentRate is not null), static p => Assert.Equal("MiB/s", p.RateUnit));
+        Assert.Equal(loading.OrderBy(static p => p.ElapsedSeconds).Select(static p => p.ElapsedSeconds), loading.Select(static p => p.ElapsedSeconds));
     }
 
     [Fact]
@@ -644,22 +763,86 @@ public sealed class MemoryCheckProcedureTests
         Assert.Equal(CheckRunFailureCodes.InternalError, run.FailureCode);
     }
 
+    // The guards below read the source of the test files. The names they look for are built from pieces, so that this file does not contain them.
+    private static readonly Regex RealSessionMade = new(@"new\s+(global::)?([A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*" + "Real" + "MemoryTestSession" + @"\b");
+
+    // The live wiring of the services (it makes the real memory session when a memory check is run): the factory of the live services, the
+    // name of the private method that makes the real session, and a memory factory that is given as null (the default is the real session).
+    private static readonly Regex LiveWiring = new("Create" + "Live" + @"\s*\(|NewReal" + "MemorySession" + @"\b|memorySessionFactory\s*:\s*null\b");
+
+    private static readonly Regex MemoryKind = new(@"\bCheckKind\s*\.\s*Memory\b");
+
+    internal static bool MakesTheRealSession(string source) => RealSessionMade.IsMatch(source);
+
+    /// <summary>
+    /// A file that has the live wiring in it and also names the memory kind somewhere that is not a list of the kinds a runner supports. A check
+    /// of the memory kind on live services borrows the memory of the machine that runs the tests.
+    /// </summary>
+    internal static bool RunsMemoryOnTheLiveServices(string source)
+    {
+        var withoutTheListsOfKinds = string.Join('\n', source.Split('\n').Where(static line => !line.Contains("SupportedKinds", StringComparison.Ordinal)));
+        return LiveWiring.IsMatch(source) && MemoryKind.IsMatch(withoutTheListsOfKinds);
+    }
+
+    // Every source file of the tests but the real machine class of the memory check (and what the build leaves in obj and bin).
+    private static IEnumerable<string> TestSources(string root) =>
+        Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(static f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            .Where(static f => !Path.GetFileName(f).Equals("MemoryRealMachineTests.cs", StringComparison.Ordinal));
+
     [Fact]
     public void No_test_but_the_real_machine_class_makes_a_real_memory_session()
     {
-        // Static guard: nothing but MemoryRealMachineTests may write "new" and the name of the real session, with or without a namespace in front
-        // of it. The name is built here so that this file does not contain it.
-        var pattern = new Regex(@"new\s+(global::)?([A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*" + "Real" + "MemoryTestSession" + @"\b");
+        // Static guard: nothing but MemoryRealMachineTests may write "new" and the name of the real session, with or without a namespace in front of it.
         var root = TestsRoot();
-        var offenders = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(static f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-                && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            .Where(static f => !Path.GetFileName(f).Equals("MemoryRealMachineTests.cs", StringComparison.Ordinal))
-            .Where(f => pattern.IsMatch(File.ReadAllText(f)))
+        var offenders = TestSources(root)
+            .Where(static f => MakesTheRealSession(File.ReadAllText(f)))
             .Select(f => Path.GetRelativePath(root, f))
             .ToList();
 
         Assert.True(offenders.Count == 0, "a test makes a real memory session: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public void No_test_but_the_real_machine_class_runs_a_memory_check_on_the_live_services()
+    {
+        // The other way to borrow the machine's memory: the live services make the real session by themselves. A file that builds them may not
+        // also run (or name) the memory kind, except in a list of supported kinds, which runs nothing.
+        var root = TestsRoot();
+        var offenders = TestSources(root)
+            .Where(static f => RunsMemoryOnTheLiveServices(File.ReadAllText(f)))
+            .Select(f => Path.GetRelativePath(root, f))
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "a test runs a memory check on the live services: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public void The_guards_flag_what_they_are_meant_to_flag_and_leave_the_rest_alone()
+    {
+        // The guards are patterns over source text, so they are tried on text: made here from pieces, never written out.
+        var live = "var services = CheckServices." + "Create" + "Live(temp.Path, legacyDirectory: null);\n";
+        var nullFactory = "var services = new CheckServices(time, source, history, baseline, app, ids, memorySessionFactory: " + "null);\n";
+        var privateFactory = "var services = new CheckServices(time, source, history, baseline, app, ids, memorySessionFactory: NewReal" + "MemorySession);\n";
+        var runsMemory = "await runner.RunAsync(new CheckRequest(CheckKind.Memory), null, ct);\n";
+
+        Assert.True(RunsMemoryOnTheLiveServices(live + runsMemory));
+        Assert.True(RunsMemoryOnTheLiveServices(live + "var kind = CheckKind . Memory;\n"));
+        Assert.True(RunsMemoryOnTheLiveServices(nullFactory + runsMemory));
+        Assert.True(RunsMemoryOnTheLiveServices(privateFactory + runsMemory));
+        Assert.True(RunsMemoryOnTheLiveServices(runsMemory + "\n" + live)); // the order does not matter
+
+        Assert.False(RunsMemoryOnTheLiveServices(live + "Assert.Equal([CheckKind.Cpu, CheckKind.Memory], runner.SupportedKinds.OrderBy(k => k));\n")); // a list of kinds runs nothing
+        Assert.False(RunsMemoryOnTheLiveServices(live + "await runner.RunAsync(new CheckRequest(CheckKind.Cpu), null, ct);\n"));
+        Assert.False(RunsMemoryOnTheLiveServices(live + "var kind = CheckKind.MemoryLeak;\n")); // another name that starts the same
+        Assert.False(RunsMemoryOnTheLiveServices("var services = new CheckServices(time, source, history, baseline, app, ids, memorySessionFactory: () => fake);\n" + runsMemory));
+        Assert.False(RunsMemoryOnTheLiveServices(runsMemory)); // no live services in it
+
+        var made = "var session = new " + "Real" + "MemoryTestSession();\n";
+        Assert.True(MakesTheRealSession(made));
+        Assert.True(MakesTheRealSession("var session = new PcMieru.Checks.Load." + "Real" + "MemoryTestSession();\n"));
+        Assert.False(MakesTheRealSession("var session = FakeMemorySession.Planned(4);\n"));
     }
 
     private static string TestsRoot()

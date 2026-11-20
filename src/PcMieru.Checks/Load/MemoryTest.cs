@@ -95,15 +95,22 @@ internal static class MemoryTest
     internal const int ReportEveryReadings = 4;
 
     /// <summary>
-    /// A reading of the progress needs at least this much time since the last one. The readings are on an absolute schedule from the start of the
-    /// run, so after a long allocation several of them are late and come at once: a rate over the few milliseconds between them is noise, so
-    /// that reading is skipped and the next one reports over the longer window.
+    /// While the blocks are being borrowed (the free memory is not read on the schedule then) a reading of the progress, with no rate, goes out
+    /// when this much time has passed since the last one, so that the screen does not stand still through a long allocation on a big machine.
+    /// </summary>
+    internal static readonly TimeSpan AllocationReportInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// A reading of the progress needs at least this much time since the last one: a rate over a shorter window is noise. (The readings are on
+    /// an absolute schedule from the start of the run, but the first one after the allocation is the next one after now, never one of the
+    /// past-due ones: see <see cref="ControlLoop"/>.)
     /// </summary>
     internal static readonly TimeSpan MinReportWindow = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
-    /// How long after the deadline the stop flag is set whatever the control loop is doing (real time): the backstop for a loop that is stuck, so
-    /// that no thread keeps writing into the machine's memory longer than it was asked to.
+    /// How long after the deadline the stop flag is set whatever the control loop is doing: the backstop for a loop that is stuck, so that no
+    /// thread keeps writing into the machine's memory longer than it was asked to. It is armed through the session's clock
+    /// (<see cref="ILoadClock.CallAfter"/>): the real clock fires it on wall time, a fake clock only when the test says so.
     /// </summary>
     internal static readonly TimeSpan DeadlineGrace = TimeSpan.FromSeconds(1);
 
@@ -129,7 +136,11 @@ internal static class MemoryTest
     /// Runs the test for <paramref name="duration"/> from now (the allocation counts) or until <paramref name="ct"/> is cancelled, then stops every
     /// thread at its slice boundary, joins them all and only then frees the blocks. Blocking: call it on a worker.
     /// </summary>
-    /// <param name="onTick">Called about once a second with the elapsed seconds and the MiB/s since the last call (never over a window shorter than <see cref="MinReportWindow"/>). It must not block.</param>
+    /// <param name="onTick">
+    /// Called about once a second with the elapsed seconds and the MiB/s since the last call (never over a window shorter than
+    /// <see cref="MinReportWindow"/>). While the blocks are still being borrowed it is called about once a second with a null rate (nothing is
+    /// being processed yet). It must not block.
+    /// </param>
     /// <param name="sliceWords">The size of a slice in words (a test gives a small one to get several slices in a small block).</param>
     /// <exception cref="CheckRunFailedException">A work thread faulted (a write, a read or the pattern threw; out of memory too), or a block could not be freed. That is the check's own failure, not a finding about the memory.</exception>
     public static MemoryLoadResult Run(IMemoryTestSession session, TimeSpan duration, Action<double, double?>? onTick, CancellationToken ct, int sliceWords = DefaultSliceWords)
@@ -141,9 +152,10 @@ internal static class MemoryTest
         var result = new MemoryLoadResult { BlockBytes = blockBytes };
         var stop = new MemoryStop();
 
-        // Two things set the stop flag besides the end of the control loop, and neither waits for the loop: the cancel, and the deadline.
+        // Two things set the stop flag besides the end of the control loop, and neither waits for the loop: the cancel, and the deadline. The
+        // deadline's backstop is armed through the clock, so that it runs on real time only in a real run (a fake clock never fires it by itself).
         using var stopOnCancel = ct.Register(stop.Request);
-        using var stopAtDeadline = new Timer(_ => stop.Request(), null, duration + DeadlineGrace, Timeout.InfiniteTimeSpan);
+        using var stopAtDeadline = clock.CallAfter(duration + DeadlineGrace, stop.Request);
 
         if (session.ReadStatus() is not { } start)
         {
@@ -159,7 +171,9 @@ internal static class MemoryTest
         var floor = FloorBytes(result.TotalBytes);
         var wantedBlocks = PlanBytes(result.AvailableAtStartBytes, result.TotalBytes, DefaultFraction, null, blockBytes) / blockBytes;
 
-        var blocks = new List<IMemoryBlock>();
+        // Sized for the whole plan: Add never has to grow the list, so nothing can fail between "the block exists" and "the list holds it" (a block
+        // that was allocated and then lost would be memory that nothing frees).
+        var blocks = new List<IMemoryBlock>((int)Math.Min(wantedBlocks, int.MaxValue));
         var workers = new List<ILoadThread>();
         MemoryPasses? passes = null;
         Exception? firstFault = null;
@@ -167,11 +181,13 @@ internal static class MemoryTest
         var stopped = false;
         var pressure = false;
         var deadlineInAllocation = false;
+        var growthUnreadable = false;
         var freeFailed = false;
         TimeSpan elapsedAtEnd;
         try
         {
             // Grow block by block. A block is touched when it is allocated, so the free memory has really fallen before it is read again.
+            var lastProgress = TimeSpan.Zero;
             for (long i = 0; i < wantedBlocks; i++)
             {
                 if (ct.IsCancellationRequested)
@@ -186,9 +202,15 @@ internal static class MemoryTest
                     break;
                 }
 
-                if (session.ReadStatus() is not { } now || ToLong(now.AvailableBytes) - blockBytes < floor)
+                if (session.ReadStatus() is not { } now)
                 {
-                    break; // the next block would take the machine under the floor (or Windows cannot say): stop growing here
+                    growthUnreadable = true; // Windows cannot say: stop growing here (what that means for the run is decided after the loop)
+                    break;
+                }
+
+                if (ToLong(now.AvailableBytes) - blockBytes < floor)
+                {
+                    break; // the next block would take the machine under the floor: stop growing here
                 }
 
                 IMemoryBlock block;
@@ -201,7 +223,15 @@ internal static class MemoryTest
                     break; // the allocator has no more to give: that is the end of the growth, not a failure
                 }
 
-                blocks.Add(block);
+                blocks.Add(block); // the list was sized for the whole plan: this does not allocate, so it cannot fail with the block in hand
+
+                // The schedule of the control loop has not begun: say that the run is alive (no rate yet), about once a second.
+                var elapsed = clock.Elapsed(startStamp);
+                if (elapsed - lastProgress >= AllocationReportInterval)
+                {
+                    onTick?.Invoke(elapsed.TotalSeconds, null);
+                    lastProgress = elapsed;
+                }
             }
 
             if (!stopped && !deadlineInAllocation && blocks.Count > 0)
@@ -232,6 +262,8 @@ internal static class MemoryTest
             stop.Request();
             foreach (var worker in workers)
             {
+                // If a Join throws, the exception leaves this block and the frees below are skipped, on purpose: a leaked block is a cost of
+                // memory, a block freed under a thread that may still be writing to it is a crash (or a silent write into someone else's memory).
                 worker.Join();
             }
 
@@ -265,7 +297,10 @@ internal static class MemoryTest
         result.Workers = workers.Count;
         result.Seconds = elapsedAtEnd.TotalSeconds;
         result.Stopped = stopped;
-        result.Pressure = pressure || (blocks.Count == 0 && !stopped && !deadlineInAllocation);
+
+        // Nothing could be borrowed because the machine had no room: that is pressure. If it is because Windows stopped answering, it is the
+        // same as not being able to read the memory at the start: not a finding, and no note. (With some blocks borrowed the run went on.)
+        result.Pressure = pressure || (blocks.Count == 0 && !stopped && !deadlineInAllocation && !growthUnreadable);
         if (passes is not null)
         {
             result.Passes = passes.Passes;
@@ -279,7 +314,9 @@ internal static class MemoryTest
         return result;
     }
 
-    // Every 0.25 s, on an absolute schedule: the stop, a fault, the end of the time, the free memory (read here and nowhere else) and the progress.
+    // Every 0.25 s, on an absolute schedule from the start of the run: the stop, a fault, the end of the time, the free memory (read here and
+    // nowhere else) and the progress. The schedule starts at the next reading after now, not at the first: the readings that fell due while
+    // the blocks were being borrowed are not made up for (a burst of reads of the status at once, and a progress reading with no time in it).
     private static (bool Stopped, bool Pressure) ControlLoop(
         IMemoryTestSession session,
         MemoryPasses passes,
@@ -293,7 +330,7 @@ internal static class MemoryTest
         var clock = session.Clock;
         var lastReport = clock.Elapsed(startStamp);
         var lastBytes = passes.ProcessedBytes;
-        for (var tick = 1; ; tick++)
+        for (var tick = (lastReport.Ticks / ReadInterval.Ticks) + 1; ; tick++)
         {
             // Reading k is due k intervals after the start (but never after the end of the time): a wait that oversleeps does not push the
             // readings after it later, it only shortens the next wait.

@@ -38,9 +38,11 @@ internal static class MemoryJudge
         // Zero is a real answer here: nothing could be borrowed. It is not partial (the run is not "cut short" by it): the rows that rest on
         // the verification say so.
         items.Add(Bytes("memory.borrowed", r.BorrowedBytes, CheckSource.Load, stopped));
-        items.Add(r.Passes > 0
-            ? CheckItem.Create("memory.passes", CheckValue.Int(r.Passes), ItemVerdict.Info, CheckSource.Load, stopped ? CheckReason.Partial : null)
-            : CheckItem.Create("memory.passes", null, ItemVerdict.Info, CheckSource.Load, CheckReason.Partial));
+        // A count, always, and 0 too: the passes that were finished over the whole borrowed range. Partial when the run was stopped, and when
+        // some bytes were verified but not one pass was finished (a count of 0 that stands for "cut short", not for "nothing to do"). Nothing
+        // borrowed is a plain 0 with no reason, like memory.borrowed.
+        var passesPartial = stopped || (r.Passes == 0 && r.VerifiedBytes > 0);
+        items.Add(CheckItem.Create("memory.passes", CheckValue.Int(r.Passes), ItemVerdict.Info, CheckSource.Load, passesPartial ? CheckReason.Partial : null));
 
         // No verified byte is a value of 0 that says "nothing was checked": partial, whether the run was stopped or not.
         items.Add(Bytes("memory.verified", r.VerifiedBytes, CheckSource.Load, stopped || r.VerifiedBytes <= 0));

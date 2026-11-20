@@ -179,10 +179,15 @@ public sealed class MemoryRealMachineTests(ITestOutputHelper output)
             CultureInfo.InvariantCulture,
             $"  borrowed_gib={(borrowed is null ? 0 : Bytes(borrowed) / (double)(1L << 30)):0.00} verified_gib={(verified is null ? 0 : Bytes(verified) / (double)(1L << 30)):0.00} passes={Shown(passes)} write_rate={Shown(write)}MiB/s verify_rate={Shown(verify)}MiB/s mismatches={Shown(mismatches)}"));
         var readings = log.Items.Where(static p => p.RecentRate is not null).ToList();
-        var stages = log.Items.Where(static p => p.RecentRate is null).Select(static p => p.Stage.ToString());
+        var stages = log.Items.Where(static p => p.RecentRate is null).Select(static p => p.Stage.ToString()).Distinct();
         output.WriteLine(string.Create(
             CultureInfo.InvariantCulture,
             $"  progress: readings={readings.Count} first_rate={readings.FirstOrDefault()?.RecentRate:0}MiB/s stages=[{string.Join(",", stages)}]"));
+        // The reports without a rate that the allocation made (the stage notification of Loading is one of the rate-less reports, and is not one of them).
+        var allocationReports = Math.Max(0, log.Items.Count(static p => p.Stage == CheckStage.Loading && p.RecentRate is null) - 1);
+        output.WriteLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"  allocation_progress: reports_without_rate={allocationReports}"));
         output.WriteLine(string.Create(
             CultureInfo.InvariantCulture,
             $"  private_bytes: before={privateBefore / Mib} MiB after={privateAfter / Mib} MiB"));

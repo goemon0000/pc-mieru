@@ -25,6 +25,9 @@ internal sealed class MemoryPasses
 {
     private static readonly PatternKind[] Kinds = Enum.GetValues<PatternKind>();
 
+    /// <summary>The longest an idle thread waits for the phase to end before it looks at the stop flag again.</summary>
+    private const int IdleWaitMilliseconds = 1;
+
     private readonly object _gate = new();
     private readonly IReadOnlyList<IMemoryBlock> _blocks;
     private readonly IMemoryTestSession _session;
@@ -113,25 +116,19 @@ internal sealed class MemoryPasses
         {
             if (_cursor >= _slicesPerPhase)
             {
-                slice = -1; // every slice of the phase is taken and some are not done yet: the one who finishes the last opens the next phase
-                kind = default;
-                seed = 0;
-                verifying = false;
+                // Every slice of the phase is taken and some are not done yet: the one who finishes the last opens the next phase and wakes
+                // this thread (EndPhase). It sleeps in the wait, not on the lock: a thread that spun here would take the lock from the ones
+                // that are trying to report their slices, at every phase end. The wait is short so that the stop flag and the deadline are
+                // looked at again within about one slice (the control loop sets the flag without the lock and cannot wake this thread).
+                Monitor.Wait(_gate, IdleWaitMilliseconds);
+                return true;
             }
-            else
-            {
-                slice = _cursor++;
-                _inFlight++;
-                kind = _kind;
-                seed = _seed;
-                verifying = _verifying;
-            }
-        }
 
-        if (slice < 0)
-        {
-            Thread.Yield();
-            return true;
+            slice = _cursor++;
+            _inFlight++;
+            kind = _kind;
+            seed = _seed;
+            verifying = _verifying;
         }
 
         var block = (int)(slice / _slicesPerBlock);
@@ -224,6 +221,7 @@ internal sealed class MemoryPasses
         _cursor = 0;
         _phaseBytes = 0;
         _phaseStart = _lastDone;
+        Monitor.PulseAll(_gate); // wakes the threads that found every slice taken (see Step)
     }
 
     private void Fold(bool verifying, long bytes, double seconds)

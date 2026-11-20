@@ -238,6 +238,8 @@ internal sealed class FakeCpuSession : ICpuTestSession
         public TimeSpan Elapsed(long since) => owner.Time.GetElapsedTime(since);
 
         public bool WaitCancelled(TimeSpan wait, CancellationToken ct) => owner.Wait(wait, ct);
+
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => NeverFires.Instance; // the CPU run keeps its own backstop; nothing here fires on wall time
     }
 }
 

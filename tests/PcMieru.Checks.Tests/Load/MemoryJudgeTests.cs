@@ -212,7 +212,7 @@ public sealed class MemoryJudgeTests
     }
 
     [Fact]
-    public void A_stop_before_one_pass_is_over_has_no_passes_row_value_but_keeps_what_was_verified()
+    public void A_stop_before_one_pass_is_over_says_zero_passes_as_a_partial_count_and_keeps_what_was_verified()
     {
         var load = Healthy();
         load.Stopped = true;
@@ -223,10 +223,39 @@ public sealed class MemoryJudgeTests
         var items = Judge(load);
 
         var passes = Row(items, "memory.passes");
-        Assert.Null(passes.Value);
+        Assert.Equal(CheckValue.Int(0), passes.Value); // a count, never a missing value
         Assert.Equal(CheckReason.Partial, passes.Reason);
         Assert.Equal(CheckValue.Dec((ulong)(2000 * Mib)), Row(items, "memory.verified").Value);
         Assert.Equal(ItemVerdict.Unavailable, Row(items, "memory.mismatches").Verdict);
+    }
+
+    [Fact]
+    public void A_run_that_was_not_stopped_but_verified_some_bytes_without_finishing_a_pass_says_zero_passes_as_partial()
+    {
+        // The deadline came in the middle of the first verify: nobody stopped the run, but 0 passes then stands for "cut short".
+        var load = Healthy();
+        load.Stopped = false;
+        load.Passes = 0;
+        load.VerifiedBytes = 2000 * Mib;
+
+        var passes = Row(Judge(load), "memory.passes");
+
+        Assert.Equal(CheckValue.Int(0), passes.Value);
+        Assert.Equal(CheckReason.Partial, passes.Reason);
+    }
+
+    [Fact]
+    public void A_whole_run_says_its_passes_as_a_count_with_no_reason_and_a_stopped_one_with_the_reason_partial()
+    {
+        var whole = Row(Judge(Healthy()), "memory.passes");
+        Assert.Equal(CheckValue.Int(12), whole.Value);
+        Assert.Null(whole.Reason);
+
+        var load = Healthy();
+        load.Stopped = true;
+        var stopped = Row(Judge(load), "memory.passes");
+        Assert.Equal(CheckValue.Int(12), stopped.Value);
+        Assert.Equal(CheckReason.Partial, stopped.Reason);
     }
 
     // ---- nothing verified ----
@@ -311,8 +340,8 @@ public sealed class MemoryJudgeTests
         Assert.Equal(CheckValue.Dec(0), borrowed.Value);
         Assert.Equal(ItemVerdict.Info, borrowed.Verdict);
         Assert.Null(borrowed.Reason); // the run was not cut short: it could not borrow
-        Assert.Null(Row(items, "memory.passes").Value);
-        Assert.Equal(CheckReason.Partial, Row(items, "memory.passes").Reason);
+        Assert.Equal(CheckValue.Int(0), Row(items, "memory.passes").Value); // a count: nothing borrowed is 0 passes, not "missing"
+        Assert.Null(Row(items, "memory.passes").Reason); // and no reason: like memory.borrowed, nothing was cut short
         Assert.Equal(ItemVerdict.Unavailable, Row(items, "memory.mismatches").Verdict);
         Assert.Null(Row(items, "memory.mismatches").Value);
         Assert.Null(Row(items, "memory.write_rate").Value);

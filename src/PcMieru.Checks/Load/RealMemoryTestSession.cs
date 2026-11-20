@@ -44,14 +44,16 @@ internal sealed class RealMemoryTestSession : IMemoryTestSession
             {
                 Volatile.Write(ref bytes[offset], 0);
             }
+
+            // Inside the try, as the last thing in it: the wrapper is an allocation too (and can fail with OutOfMemoryException like any), and
+            // until it exists nothing but this method owns the 64 MiB. Once it is returned the wrapper owns them and nothing can throw any more.
+            return new NativeBlock((nint)block, checked((int)(BlockBytes / sizeof(ulong))));
         }
         catch
         {
             NativeMemory.AlignedFree(block);
             throw;
         }
-
-        return new NativeBlock((nint)block, checked((int)(BlockBytes / sizeof(ulong))));
     }
 
     public ulong NextSeed() => (ulong)Random.Shared.NextInt64();

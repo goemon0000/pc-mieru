@@ -12,7 +12,7 @@ namespace PcMieru.Checks.Load;
 /// throw), so the runner saves the partial result as a stopped one.</item>
 /// <item>A fall of the free memory under half the floor stops the run the same way and adds the note <c>memory.pressure</c>; so does a run that
 /// could not borrow one block.</item>
-/// <item>Progress goes through <see cref="CheckContext.Load"/>: about once a second (never two within 0.9 s), with the MiB/s of the last second.</item>
+/// <item>Progress goes through <see cref="CheckContext.Load"/>: about once a second (never two within 0.9 s), with the MiB/s of the last second (during the allocation of the memory: with no rate yet).</item>
 /// </list>
 /// </summary>
 internal sealed class MemoryCheckProcedure : ICheckProcedure
@@ -66,7 +66,7 @@ internal sealed class MemoryCheckProcedure : ICheckProcedure
         return MemoryTest.Run(
             session,
             duration,
-            (elapsedSeconds, mibPerSecond) => context.Load(elapsedSeconds, duration.TotalSeconds, mibPerSecond, "MiB/s"),
+            (elapsedSeconds, mibPerSecond) => context.Load(elapsedSeconds, duration.TotalSeconds, mibPerSecond, mibPerSecond is null ? null : "MiB/s"), // no rate (the allocation): no unit either
             ct);
     }
 }

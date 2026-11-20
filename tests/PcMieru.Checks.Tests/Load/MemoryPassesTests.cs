@@ -270,6 +270,8 @@ public sealed class MemoryPassesTests
         public TimeSpan Elapsed(long since) => TimeSpan.Zero;
 
         public bool WaitCancelled(TimeSpan wait, CancellationToken ct) => throw new NotSupportedException();
+
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => throw new NotSupportedException();
     }
 
     private sealed class ArrayBlock : IMemoryBlock
@@ -336,5 +338,73 @@ public sealed class MemoryPassesTests
         var oneRange = 6 * Block;
         Assert.InRange(passes.WriteBytes - (passes.Passes * oneRange), 0, oneRange);
         Assert.InRange(passes.VerifiedBytes - (passes.Passes * oneRange), 0, oneRange);
+    }
+
+    // A block whose Words() does not return until the test lets it: a thread that is inside a slice for as long as the test wants.
+    private sealed class GatedBlock : IMemoryBlock
+    {
+        private readonly ulong[] _cells = new ulong[Block / sizeof(ulong)];
+
+        public ManualResetEventSlim Entered { get; } = new();
+
+        public ManualResetEventSlim Release { get; } = new();
+
+        public Span<ulong> Words(int firstWord, int count)
+        {
+            Entered.Set();
+            Release.Wait(TimeSpan.FromSeconds(60));
+            return _cells.AsSpan(firstWord, count);
+        }
+
+        public void Free()
+        {
+        }
+    }
+
+    [Fact]
+    public void Threads_that_find_every_slice_taken_wait_for_the_phase_to_end_and_do_not_spin_and_they_still_end_at_the_stop_flag()
+    {
+        // One block, one slice. One thread is inside the slice (held by the gate); three others find nothing to take. A thread that spun on the
+        // lock here (Yield and try again) would call Step a million times in the 200 ms and take the lock from the thread that has to report the
+        // slice. Waiting in short sleeps, each calls it about once a millisecond. The bound is relative to the time that really passed, not to a
+        // fixed number, so a slow machine does not break it. The stop flag must still end the waiting threads while the slice is not done.
+        var session = new StillSession();
+        var gated = new GatedBlock();
+        var stop = new MemoryStop();
+        var passes = new MemoryPasses(new List<IMemoryBlock> { gated }, session, stop, 0, TimeSpan.FromHours(1), sliceWords: 8192);
+        var working = new Thread(() => passes.Step()) { IsBackground = true };
+        working.Start();
+        Assert.True(gated.Entered.Wait(TimeSpan.FromSeconds(30)), "the working thread never took the slice");
+
+        long calls = 0;
+        var idle = Enumerable.Range(0, 3).Select(_ => new Thread(() =>
+        {
+            do
+            {
+                Interlocked.Increment(ref calls);
+            }
+            while (passes.Step());
+        })
+        { IsBackground = true }).ToList();
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        foreach (var thread in idle)
+        {
+            thread.Start();
+        }
+
+        Thread.Sleep(200);
+        var made = Interlocked.Read(ref calls);
+        var elapsedMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+        stop.Request();
+        foreach (var thread in idle)
+        {
+            Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "a waiting thread did not end at the stop flag");
+        }
+
+        gated.Release.Set();
+        Assert.True(working.Join(TimeSpan.FromSeconds(30)), "the working thread did not end");
+        Assert.True(made <= 6 * (elapsedMilliseconds + 10), $"three idle threads called Step {made} times in {elapsedMilliseconds:F0} ms");
+        Assert.Equal(Block, passes.ProcessedBytes); // the slice that was held was reported once, when it was let go
     }
 }

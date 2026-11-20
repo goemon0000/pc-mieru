@@ -323,6 +323,8 @@ public sealed class CpuLoadStopTests
             Release.Wait();
             return false;
         }
+
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => NeverFires.Instance;
     }
 
     private sealed class RealWorld(IReadOnlyList<LogicalCpu> cpus, ILoadClock clock) : ICpuTestSession

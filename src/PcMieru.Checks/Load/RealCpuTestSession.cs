@@ -216,4 +216,6 @@ internal sealed class RealLoadClock : ILoadClock
     public TimeSpan Elapsed(long since) => Stopwatch.GetElapsedTime(since);
 
     public bool WaitCancelled(TimeSpan wait, CancellationToken ct) => ct.WaitHandle.WaitOne(wait);
+
+    public IDisposable CallAfter(TimeSpan delay, Action callback) => new Timer(_ => callback(), null, delay, Timeout.InfiniteTimeSpan);
 }

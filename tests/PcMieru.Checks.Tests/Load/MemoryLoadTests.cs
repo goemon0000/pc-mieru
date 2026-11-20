@@ -154,16 +154,18 @@ public sealed class MemoryLoadTests
 
         // Every fourth reading, but not the last one (it is the end): at 1, 2, 3 and 4 s. 48 slices of 64 KiB (3 MiB) in every second.
         Assert.Equal(4, ticks.Count);
+        Assert.All(ticks, static t => Assert.NotNull(t.Rate)); // an allocation that takes no time has no report of its own
         Assert.Equal([1.012, 2.012, 3.012, 4.012], ticks.Select(static t => Math.Round(t.Seconds, 3)));
         Assert.Equal(3.0 / 1.012, ticks[0].Rate!.Value, 6);
         Assert.All(ticks.Skip(1), static t => Assert.Equal(3.0, t.Rate!.Value, 6));
     }
 
     [Fact]
-    public void The_late_readings_that_come_at_once_after_a_long_allocation_do_not_make_a_progress_rate_out_of_a_tiny_window()
+    public void The_readings_that_fell_due_during_a_long_allocation_are_not_made_up_for_and_no_progress_rate_comes_out_of_a_tiny_window()
     {
-        // The loop starts at 1.6 s (four blocks of 0.4 s), so its first six readings are late and come at once. The reading of the progress that
-        // is one of them has no time behind it: it is skipped, and the first one that goes out covers at least the shortest window.
+        // The loop starts at 1.6 s (four blocks of 0.4 s). The six readings that fell due before it (0.25 to 1.5 s) are not read afterwards: the
+        // first reading is the next one after now (1.75 s). The allocation says that it is alive with one report of its own (at 1.2 s, no rate);
+        // the first rated reading of the progress covers at least the shortest window.
         var s = FakeMemorySession.Planned(4);
         s.AllocateCost = TimeSpan.FromMilliseconds(400);
         var ticks = new List<(double Seconds, double? Rate)>();
@@ -171,13 +173,17 @@ public sealed class MemoryLoadTests
         _ = Go(s, onTick: (seconds, rate) => ticks.Add((seconds, rate)));
 
         var window = MemoryTest.MinReportWindow.TotalSeconds;
-        Assert.NotEmpty(ticks);
-        Assert.All(ticks, static t => Assert.True(t.Rate > 0, "a progress rate that is missing or not positive"));
-        Assert.True(ticks[0].Seconds - 1.6 >= window, $"the first progress reading covers {ticks[0].Seconds - 1.6} s");
-        for (var i = 1; i < ticks.Count; i++)
+        var rated = ticks.Where(static t => t.Rate is not null).ToList();
+        Assert.Equal([1.2], ticks.Where(static t => t.Rate is null).Select(static t => Math.Round(t.Seconds, 3)));
+        Assert.NotEmpty(rated);
+        Assert.All(rated, static t => Assert.True(t.Rate > 0, "a progress rate that is not positive"));
+        Assert.True(rated[0].Seconds - 1.6 >= window, $"the first progress reading covers {rated[0].Seconds - 1.6} s");
+        for (var i = 1; i < rated.Count; i++)
         {
-            Assert.True(ticks[i].Seconds - ticks[i - 1].Seconds >= window, $"readings {i - 1} and {i} are {ticks[i].Seconds - ticks[i - 1].Seconds} s apart");
+            Assert.True(rated[i].Seconds - rated[i - 1].Seconds >= window, $"readings {i - 1} and {i} are {rated[i].Seconds - rated[i - 1].Seconds} s apart");
         }
+
+        Assert.Equal(1 + 4 + 13, s.StatusReads); // the start, one before each block, and the readings from 1.75 s to 4.75 s: no catch-up reads
     }
 
     // ---- a bit that changes ----
@@ -486,12 +492,57 @@ public sealed class MemoryLoadTests
         Assert.Equal(0, s.AllocateCalls);
     }
 
+    // The three places where Windows can fail to say how much memory is free: the start (above), the growth (below, with no block and with
+    // some) and the run itself (A_free_memory_that_cannot_be_read_during_the_run_is_taken_as_pressure).
+
+    [Fact]
+    public void Windows_that_cannot_say_how_much_memory_is_free_before_the_first_block_is_treated_like_an_unreadable_start_and_not_as_pressure()
+    {
+        var s = FakeMemorySession.Planned(4);
+        s.StatusUnreadable = static n => n == 2; // the reading before block 1
+
+        var r = Go(s);
+
+        Assert.True(r.StatusKnown); // the start was read: the total and the free memory at the start are known
+        Assert.Equal(0, r.Blocks);
+        Assert.Equal(0, r.Workers);
+        Assert.False(r.Stopped);
+        Assert.False(r.Pressure); // the machine did not say that it needs its memory: nothing is known, and no note is made of it
+        Assert.Equal(2, s.StatusReads);
+        Assert.Equal(0, s.AllocateCalls);
+        Assert.Empty(s.WorkThreads);
+        Assert.Equal(0, r.Passes);
+        Assert.Equal(0, r.VerifiedBytes);
+        Assert.Null(r.VerifyRate);
+    }
+
+    [Fact]
+    public void Windows_that_cannot_say_how_much_memory_is_free_after_some_blocks_ends_the_growth_and_the_run_goes_on_with_them()
+    {
+        var s = FakeMemorySession.Planned(4);
+        s.StatusUnreadable = static n => n == 3; // the reading before block 2
+
+        var r = Go(s);
+
+        Assert.True(r.StatusKnown);
+        Assert.Equal(1, r.Blocks);
+        Assert.Equal(1, s.AllocateCalls); // the growth stopped for good: block 2 was not asked for, and block 3 neither
+        Assert.Equal(4, r.Workers);
+        Assert.False(r.Stopped);
+        Assert.False(r.Pressure);
+        Assert.Equal(20, s.Waits); // the whole time
+        Assert.True(r.Passes > 0);
+        Assert.Equal(0, r.Mismatches);
+        MemoryEvents.AssertJoinedThenFreed(s);
+    }
+
     // ---- the time ----
 
     [Fact]
     public void The_deadline_counts_from_the_start_and_the_allocation_is_in_it()
     {
-        // 0.4 s for every block: the four blocks take 1.6 s of the 5, and the loop's first six readings (due at 0.25 to 1.5 s) are already late.
+        // 0.4 s for every block: the four blocks take 1.6 s of the 5, and the six readings due at 0.25 to 1.5 s are over before the loop starts
+        // (they are not read afterwards: the loop begins at the next one, 1.75 s).
         var s = FakeMemorySession.Planned(4);
         s.AllocateCost = TimeSpan.FromMilliseconds(400);
 
@@ -664,5 +715,123 @@ public sealed class MemoryLoadTests
         Assert.Equal(2, s.Blocks.Count);
         Assert.All(s.Blocks, static b => Assert.Equal(1, b.FreeCalls)); // freed in the finally
         Assert.Empty(s.WorkThreads);
+    }
+
+    [Fact]
+    public void A_progress_callback_that_throws_during_the_allocation_leaves_no_block_behind()
+    {
+        // The list of blocks is sized for the plan, so adding a block cannot fail; what can still come after a block is in the list is the
+        // callback (a sink that breaks). Every block that was borrowed up to then is freed once, and no thread was started.
+        var s = SlowAllocation();
+
+        _ = Assert.Throws<InvalidOperationException>(() => { _ = Go(s, onTick: static (_, _) => throw new InvalidOperationException("the sink broke"), duration: Ten); });
+
+        Assert.NotEmpty(s.Blocks);
+        Assert.All(s.Blocks, static b => Assert.Equal(1, b.FreeCalls));
+        Assert.Empty(s.WorkThreads);
+    }
+
+    // ---- the progress while the blocks are borrowed ----
+
+    private static readonly TimeSpan Ten = TimeSpan.FromSeconds(10);
+
+    // Six blocks of half a second each: the allocation takes 3 s of the 10, and no work thread exists until it is over.
+    private static FakeMemorySession SlowAllocation()
+    {
+        var s = FakeMemorySession.Planned(6);
+        s.AllocateCost = TimeSpan.FromMilliseconds(500);
+        return s;
+    }
+
+    [Fact]
+    public void A_long_allocation_reports_its_progress_without_a_rate_about_once_a_second_while_it_goes_on()
+    {
+        var s = SlowAllocation();
+        var ticks = new List<(double Seconds, double? Rate, int WaitsSoFar)>();
+
+        var r = Go(s, onTick: (seconds, rate) => ticks.Add((seconds, rate, s.Waits)), duration: Ten);
+
+        var allocation = ticks.Where(static t => t.Rate is null).ToList();
+        Assert.True(allocation.Count >= 2, $"{allocation.Count} reports without a rate during the allocation");
+        Assert.All(allocation, static t => Assert.Equal(0, t.WaitsSoFar)); // the control loop had not waited once: it was the allocation that spoke
+        Assert.All(allocation, static t => Assert.InRange(t.Seconds, 0.0, 3.0 + 1e-6));
+        for (var i = 1; i < allocation.Count; i++)
+        {
+            Assert.True(
+                allocation[i].Seconds - allocation[i - 1].Seconds >= MemoryTest.AllocationReportInterval.TotalSeconds - 1e-6,
+                $"reports {i - 1} and {i} are {allocation[i].Seconds - allocation[i - 1].Seconds} s apart");
+        }
+
+        Assert.Equal(allocation.Count, ticks.TakeWhile(static t => t.Rate is null).Count()); // all of them came before the first rated one
+        Assert.Equal(6, r.Blocks);
+        Assert.False(r.Stopped);
+    }
+
+    [Fact]
+    public void The_readings_that_fell_due_during_a_three_second_allocation_are_not_read_in_a_burst_after_it()
+    {
+        var s = SlowAllocation();
+
+        _ = Go(s, duration: Ten);
+
+        // The start and one reading before each of the six blocks; then the readings of the loop from 3.25 s to 9.75 s (27 of them: the one at
+        // 10 s is the end). A loop that began at its first reading would read the twelve that fell due in the allocation as well.
+        Assert.Equal(7 + 27, s.StatusReads);
+        Assert.Equal(28, s.Waits);
+        Assert.All(s.WaitLengths, static w => Assert.InRange(w, TimeSpan.FromTicks(1), MemoryTest.ReadInterval)); // a wait is never longer than one reading
+    }
+
+    [Fact]
+    public void The_first_rated_progress_after_a_long_allocation_comes_within_about_one_second_of_its_end()
+    {
+        var s = SlowAllocation();
+        var ticks = new List<(double Seconds, double? Rate)>();
+
+        _ = Go(s, onTick: (seconds, rate) => ticks.Add((seconds, rate)), duration: Ten);
+
+        var first = ticks.First(static t => t.Rate is not null);
+        var sinceAllocation = first.Seconds - (6 * 0.5);
+        Assert.True(first.Rate > 0);
+        Assert.InRange(sinceAllocation, MemoryTest.MinReportWindow.TotalSeconds, 1.0 + MemoryTest.ReadInterval.TotalSeconds);
+    }
+
+    // ---- the real-time backstop ----
+
+    [Fact]
+    public void The_backstop_of_the_deadline_is_armed_through_the_clock_after_the_grace_and_never_fires_in_a_fake_run()
+    {
+        var s = FakeMemorySession.Planned(4);
+
+        var r = Go(s);
+
+        var backstop = Assert.Single(s.Backstops);
+        Assert.Equal(Five + MemoryTest.DeadlineGrace, backstop.Delay);
+        Assert.Equal(TimeSpan.FromSeconds(1), MemoryTest.DeadlineGrace); // what a real run gets
+        Assert.Equal(0, backstop.Fired);
+        Assert.True(backstop.Disposed); // the run's end takes it away
+        Assert.False(r.Stopped);
+        Assert.Equal(20, s.Waits);
+        Assert.Equal(30, r.Passes); // the run was whole: nothing but the test could have stopped it early
+    }
+
+    [Fact]
+    public void A_backstop_that_fires_sets_the_stop_flag_and_every_thread_ends_at_its_next_slice()
+    {
+        var s = FakeMemorySession.Planned(4);
+        s.OnWait = n =>
+        {
+            if (n == 5)
+            {
+                s.Backstops.Single().Fire(); // the real time ran out while the loop was stuck
+            }
+        };
+
+        var r = Go(s);
+
+        Assert.Equal(1, s.Backstops.Single().Fired);
+        Assert.Equal(4 * 12, s.Accesses); // four waits of work and nothing after the backstop
+        Assert.Equal(6, r.Passes);
+        MemoryEvents.AssertJoinedThenFreed(s);
+        Assert.All(s.WorkThreads, static t => Assert.Equal(0, t.StepsDuringJoin));
     }
 }
