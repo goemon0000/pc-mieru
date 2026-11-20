@@ -8,8 +8,12 @@ This folder is self-contained: it carries the .NET runtime, so no separate
   Copyright (c) .NET Foundation and Contributors. MIT License.
   https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
 
-PC Mieru has no other third-party runtime dependency (no NuGet package is
-shipped; every native call is a P/Invoke into a Windows system DLL, and the
+System.Management and System.CodeDom (the WMI questions of the system check)
+  Copyright (c) .NET Foundation and Contributors. MIT License.
+  https://github.com/dotnet/runtime
+
+PC Mieru has no other third-party runtime dependency (no other NuGet package is
+shipped; every other native call is a P/Invoke into a Windows system DLL, and the
 vendor GPU libraries nvml.dll and amdadlx64.dll are loaded from System32 at
 run time and are not redistributed here).
 
@@ -63,6 +67,12 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/Storage/BaselineEngine.cs
       what is compared and when (keys, twins, withheld record, trim), from
       the owner's pl-sensors BaselineStore
+  src/PcMieru.Checks/SystemInfo/EventCountQuery.cs
+      the provider names, the level sets and the Kernel-Power event id, from
+      the owner's parts-life EventCounts
+  src/PcMieru.Checks/SystemInfo/NativeEventLogApi.cs
+      the wevtapi calls (EvtQuery, EvtNext, EvtClose) and the batch loop, from
+      the owner's parts-life EventCounts
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj
