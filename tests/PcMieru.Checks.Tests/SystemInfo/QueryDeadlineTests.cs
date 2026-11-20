@@ -81,10 +81,13 @@ public sealed class QueryDeadlineTests
 
     [Theory]
     [InlineData(5_000_000, 5000)]
-    [InlineData(1_200, 2)] // 1.2 ms rounds up: a native timeout of 1 ms would come back too early, 2 ms never too late
+    [InlineData(2_900, 2)] // 2.9 ms rounds down: a native timeout of 3 ms would run past the deadline, 2 ms never does
+    [InlineData(2_000, 2)]
+    [InlineData(1_999, 1)]
+    [InlineData(1_200, 1)]
     [InlineData(400, 1)] // under a millisecond is still 1, because 0 means "do not wait" to the Windows calls
     [InlineData(0, 1)]
-    public void Remaining_milliseconds_round_up_and_are_at_least_one(long remainingMicroseconds, int expectedMs)
+    public void Remaining_milliseconds_round_down_and_are_at_least_one(long remainingMicroseconds, int expectedMs)
     {
         var clock = new ManualTimeProvider(frequency: 1_000_000); // microsecond ticks
         var deadline = QueryDeadline.After(clock, TimeSpan.FromSeconds(10));

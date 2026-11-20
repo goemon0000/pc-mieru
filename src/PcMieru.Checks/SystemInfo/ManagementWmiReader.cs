@@ -5,9 +5,10 @@ namespace PcMieru.Checks.SystemInfo;
 
 /// <summary>
 /// The real WMI reader: the whole question (connect, execute, enumerate, map every row) runs on a worker thread of the WMI lane, and
-/// the caller waits for it only until the deadline, on the monotonic clock. The executor is also given the time that is left, as the
-/// timeout of the connection and of the enumeration, so a call that honours it comes back by itself; a call that does not is
-/// left on its thread, holds its slot until it returns, and its late rows are dropped.
+/// the caller waits for it only until the deadline, on the monotonic clock. The executor is also given the time that is left as the
+/// per-Next timeout of the enumeration (the connect has no timeout of its own, see <see cref="ManagementWmiExecutor"/>), so a call that
+/// honours it comes back by itself; a call that does not (or a connect that waits for WMI's own maximum, about two minutes) is left on
+/// its thread, holds its SLOT until it returns, and its late rows are dropped. The caller is never held by it.
 /// </summary>
 internal sealed class ManagementWmiReader : IWmiReader
 {

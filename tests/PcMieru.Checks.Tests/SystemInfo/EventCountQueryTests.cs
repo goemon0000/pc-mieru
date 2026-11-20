@@ -86,6 +86,13 @@ public sealed class EventCountQueryTests
     }
 
     [Fact]
+    public void A_window_end_that_is_not_utc_is_refused()
+    {
+        Assert.Throws<ArgumentException>(() => EventCountQuery.WindowStartFor(new DateTime(2026, 11, 21, 12, 0, 0, DateTimeKind.Local)));
+        Assert.Throws<ArgumentException>(() => EventCountQuery.WindowStartFor(new DateTime(2026, 11, 21, 12, 0, 0, DateTimeKind.Unspecified)));
+    }
+
+    [Fact]
     public void A_start_that_is_not_utc_is_refused()
     {
         Assert.Throws<ArgumentException>(() => EventCountQuery.Create(EventCountKind.Disk, new DateTime(2026, 11, 14, 3, 4, 5, DateTimeKind.Local)));

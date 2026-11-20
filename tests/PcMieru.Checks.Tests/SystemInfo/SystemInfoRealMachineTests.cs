@@ -65,6 +65,64 @@ public sealed class SystemInfoRealMachineTests(ITestOutputHelper output)
         output.WriteLine("lanes: event log held 0, wmi held 0");
     }
 
+    /// <summary>
+    /// Every provider name in the fixed table of <see cref="EventCountQuery"/> is a provider this machine knows. A misspelt name is a valid
+    /// XPath that matches nothing, so the count would be a quiet 0 for ever; this is the only thing that would show it. Read only: the
+    /// publisher metadata is opened and closed, and for a classic (pre-manifest) provider such as "disk" the registry key of the System
+    /// log source is looked at.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "RealMachine")]
+    public void Every_provider_name_of_the_event_table_is_registered_on_the_System_log()
+    {
+        var names = EventCountQuery.AllKinds
+            .SelectMany(kind => EventCountQuery.Create(kind, EventCountQuery.WindowStartFor(DateTime.UtcNow)).Providers)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(7, names.Length); // WHEA-Logger, disk, Ntfs, Microsoft-Windows-Ntfs, stornvme, volmgr, Kernel-Power
+
+        // The check itself must be able to say no: a misspelling of a real name is neither a publisher nor a classic source.
+        const string Misspelt = "Microsoft-Windows-WHEA-Loger";
+        Assert.False(PublisherMetadata.Opens(Misspelt) || ClassicSourceKeyExists(Misspelt), "the check cannot tell a misspelt provider from a real one");
+
+        foreach (var name in names)
+        {
+            var viaMetadata = PublisherMetadata.Opens(name);
+            var viaRegistry = ClassicSourceKeyExists(name);
+            output.WriteLine($"provider {name}: publisher metadata {(viaMetadata ? "yes" : "no")}, classic source key {(viaRegistry ? "yes" : "no")}");
+            Assert.True(viaMetadata || viaRegistry, $"the provider '{name}' is not registered on this machine: a count of it would be 0 for ever");
+        }
+    }
+
+    private static bool ClassicSourceKeyExists(string name)
+    {
+        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\EventLog\System\" + name, writable: false);
+        return key is not null;
+    }
+
+    /// <summary>EvtOpenPublisherMetadata and EvtClose, only to ask whether a provider name is registered.</summary>
+    private static class PublisherMetadata
+    {
+        public static bool Opens(string provider)
+        {
+            var handle = EvtOpenPublisherMetadata(0, provider, null, 0, 0);
+            if (handle == 0)
+            {
+                return false;
+            }
+
+            _ = EvtClose(handle);
+            return true;
+        }
+
+        [System.Runtime.InteropServices.DllImport("wevtapi.dll", EntryPoint = "EvtOpenPublisherMetadata", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern nint EvtOpenPublisherMetadata(nint session, string publisherId, string? logFilePath, int locale, int flags);
+
+        [System.Runtime.InteropServices.DllImport("wevtapi.dll", EntryPoint = "EvtClose")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool EvtClose(nint handle);
+    }
+
     /// <summary>The real wevtapi, with the XPath of the query replaced by another fixed one (a test seam only: the counter itself never takes a text from outside).</summary>
     private sealed class WholeWindowApi(IEventLogApi inner, string xpath) : IEventLogApi
     {

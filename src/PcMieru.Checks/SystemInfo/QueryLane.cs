@@ -7,11 +7,18 @@ internal delegate void LaneThreadStarter(string name, Action body);
 internal class LaneJob
 {
     private int _abandoned;
+    private int _slotReleased;
 
     /// <summary>True once the caller has stopped waiting. The work should wind down at its next safe point; whatever it returns is dropped.</summary>
     public bool IsAbandoned => Volatile.Read(ref _abandoned) != 0;
 
     private protected void MarkAbandoned() => Volatile.Write(ref _abandoned, 1);
+
+    /// <summary>
+    /// True for the first caller only. The slot of a call is given back once, by whoever gets here first (the worker when its work has
+    /// returned, or the lane when no worker could be started): a starter that ran the body and then threw would otherwise give it back twice.
+    /// </summary>
+    internal bool ClaimSlotRelease() => Interlocked.Exchange(ref _slotReleased, 1) == 0;
 }
 
 /// <summary>
@@ -82,8 +89,9 @@ internal sealed class QueryLane
         }
         catch (Exception)
         {
-            // No thread could be made, so nothing will ever give the slot back: do it here.
-            ReleaseSlot();
+            // No thread could be made, so nothing will ever give the slot back: do it here. If the starter ran the body before it threw,
+            // the body gave the slot back already, and this is then a no-op (the release is once per call).
+            ReleaseSlot(call);
             return Task.FromResult(CheckReading<T>.Failed());
         }
 
@@ -123,7 +131,7 @@ internal sealed class QueryLane
 
         // The Windows call has returned (or never started): only now is the slot free. Before the caller is told, so that the caller's next
         // request does not find the slot of the call it just waited for still taken.
-        ReleaseSlot();
+        ReleaseSlot(call);
         call.TryComplete(reading);
     }
 
@@ -144,7 +152,13 @@ internal sealed class QueryLane
         }
     }
 
-    private void ReleaseSlot() => Interlocked.Decrement(ref _held);
+    private void ReleaseSlot(LaneJob call)
+    {
+        if (call.ClaimSlotRelease())
+        {
+            Interlocked.Decrement(ref _held);
+        }
+    }
 
     private static void StartBackgroundThread(string name, Action body)
     {

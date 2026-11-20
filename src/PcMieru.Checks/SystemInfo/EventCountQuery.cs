@@ -67,12 +67,16 @@ internal sealed class EventCountQuery
     private EventCountQuery(EventCountKind kind, string itemId, string[] providers, int[] levels, int? eventId, DateTime windowStartUtc)
     {
         Kind = kind;
+        Providers = providers;
         ItemId = itemId;
         WindowStartUtc = windowStartUtc;
         XPath = BuildXPath(providers, levels, eventId, windowStartUtc);
     }
 
     public EventCountKind Kind { get; }
+
+    /// <summary>The provider names the count is of (the fixed table above). Shown so that a test can check each one is registered on this machine.</summary>
+    internal IReadOnlyList<string> Providers { get; }
 
     /// <summary>The item id of the registry (CheckItemRegistry) this count is the value of.</summary>
     public string ItemId { get; }
@@ -112,8 +116,19 @@ internal sealed class EventCountQuery
         };
     }
 
-    /// <summary>The start of the 7-day window that ends at <paramref name="nowUtc"/>.</summary>
-    public static DateTime WindowStartFor(DateTime nowUtc) => nowUtc.ToUniversalTime() - Window;
+    /// <summary>
+    /// The start of the 7-day window that ends at <paramref name="nowUtc"/>, which must be a UTC time (as for <see cref="Create"/>): a Local
+    /// or Unspecified value is refused, never converted by a guess about which zone it was meant in.
+    /// </summary>
+    public static DateTime WindowStartFor(DateTime nowUtc)
+    {
+        if (nowUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("The end of the window must be a UTC time.", nameof(nowUtc));
+        }
+
+        return nowUtc - Window;
+    }
 
     // Provider, levels, event id, then the time: the order of the old query. Only fixed text and one timestamp go in.
     private static string BuildXPath(string[] providers, int[] levels, int? eventId, DateTime windowStartUtc)

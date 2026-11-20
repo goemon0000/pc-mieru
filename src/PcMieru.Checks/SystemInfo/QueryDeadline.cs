@@ -54,12 +54,14 @@ internal sealed class QueryDeadline
     public bool IsExpired => Remaining <= TimeSpan.Zero;
 
     /// <summary>
-    /// What is left, in whole milliseconds rounded up and at least 1, for a Windows call that takes a timeout in milliseconds
-    /// (0 would mean "do not wait" and -1 "wait for ever"). Call it only after <see cref="IsExpired"/> was false.
+    /// What is left, in whole milliseconds rounded DOWN and at least 1, for a Windows call that takes a timeout in milliseconds
+    /// (0 would mean "do not wait" and -1 "wait for ever"). Rounded down so that the call never runs past the deadline: it may come back
+    /// up to a millisecond early, and the minimum of 1 is the only case that can run over it (by less than a millisecond). Call it only
+    /// after <see cref="IsExpired"/> was false.
     /// </summary>
     public int RemainingMilliseconds()
     {
-        var ms = Math.Ceiling(Remaining.TotalMilliseconds);
+        var ms = Math.Floor(Remaining.TotalMilliseconds);
         return (int)Math.Clamp(ms, 1, int.MaxValue);
     }
 

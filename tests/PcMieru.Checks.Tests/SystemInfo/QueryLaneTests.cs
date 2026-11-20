@@ -246,6 +246,35 @@ public sealed class QueryLaneTests
     }
 
     [Fact]
+    public async Task A_starter_that_runs_the_body_and_then_throws_gives_the_slot_back_once()
+    {
+        // The body runs to the end (and releases its slot), then the starter throws: the lane's own release must not be a second one.
+        var lane = new QueryLane("Probe", slots: 2, start: (_, body) =>
+        {
+            body();
+            throw new InvalidOperationException("the starter failed after the body ran");
+        });
+        var clock = new ManualTimeProvider();
+
+        var reading = await lane.RunAsync(_ => CheckReading<int>.Ok(1), QueryTest.Deadline(clock), CancellationToken.None);
+
+        Assert.Equal(CheckReason.Error, reading.Reason);
+        Assert.Equal(0, lane.Held); // never -1: a slot given back twice would let a third call in
+        Assert.Equal(CheckReason.Error, (await lane.RunAsync(_ => CheckReading<int>.Ok(2), QueryTest.Deadline(clock), CancellationToken.None)).Reason);
+        Assert.Equal(0, lane.Held);
+    }
+
+    [Fact]
+    public void The_slot_of_a_call_is_claimed_for_release_once()
+    {
+        var call = new LaneCall<int>();
+
+        Assert.True(call.ClaimSlotRelease());
+        Assert.False(call.ClaimSlotRelease());
+        Assert.False(call.ClaimSlotRelease());
+    }
+
+    [Fact]
     public async Task Many_callers_at_once_never_run_more_than_the_slots_and_are_either_served_or_refused()
     {
         var lane = new QueryLane("Probe", slots: 2);
