@@ -101,6 +101,30 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Checks/Load/RealMemoryTestSession.cs
       the aligned allocation, the touch of every page and the memory status
       call, from the same MemoryTest.cs
+  src/PcMieru.Checks/Build/BuildConfig.cs
+      the part record and the category list with its order, from the owner's
+      pl-cloud src/PartsLife.Checks/Build/BuildConfig.cs
+  src/PcMieru.Checks/Build/BuildRules.cs
+      every rule, table, regular expression and limit of the configuration
+      code, from the owner's pl-cloud src/PartsLife.Checks/Build/BuildRules.cs
+  src/PcMieru.Checks/Build/BuildCode.cs
+      the PCB1 format, the order and omission rules, the merge of equal parts
+      and the limits, byte for byte, from the owner's pl-cloud
+      src/PartsLife.Checks/Build/BuildCode.cs
+  src/PcMieru.Checks/Build/BuildCollector.cs
+      the sources, their order and "a category that cannot be read stays
+      empty", from the owner's pl-cloud
+      src/PartsLife.Checks/Build/BuildCollector.cs
+  src/PcMieru.Checks/Build/WindowsBuildReaders.cs
+      the WMI questions, their order and fall-backs, from the same
+      BuildCollector.cs and the owner's pl-cloud
+      src/PartsLife.Checks/SystemInfo/SystemCheck.cs (ReadCpus)
+  src/PcMieru.Checks/Build/DxgiGpuReader.cs
+      the DXGI walk, the adapter description layout and the PCI address from
+      D3DKMT, from the owner's pl-cloud src/PartsLife.Checks/Gpu/GpuAdapters.cs
+  src/PcMieru.Checks/Build/GpuAliasRule.cs
+      the alias rule for a graphics card seen twice, from the owner's pl-cloud
+      src/Shared/GpuAliasRule.cs
   src/PcMieru.Core/Hardware/Collectors/LogicalCpuMap.cs
       the walk over the logical processor records, from the owner's pl-cloud
       src/PartsLife.Checks/Load/CpuTopology.cs

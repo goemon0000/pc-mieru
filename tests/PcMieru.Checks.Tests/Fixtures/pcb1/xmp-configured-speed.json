@@ -1,0 +1,61 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "cpu": [
+      {
+        "n": "Intel(R) Core(TM) i7-14700K"
+      }
+    ],
+    "ram": [
+      {
+        "n": "CMK64GX5M2B5600Z40",
+        "cap": 32,
+        "spd": 5600,
+        "t": "DDR5",
+        "mfr": "Corsair",
+        "q": 2
+      },
+      {
+        "n": "F4-3200C16-16GVK",
+        "cap": 16,
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "G Skill Intl",
+        "q": 2
+      },
+      {
+        "n": "HX426C16FB3/16",
+        "cap": 16,
+        "spd": 2666,
+        "t": "DDR4",
+        "mfr": "Kingston"
+      },
+      {
+        "n": "DDR3 TEST STICK 1600",
+        "cap": 4,
+        "spd": 1600,
+        "t": "DDR3"
+      },
+      {
+        "n": "RATED UNKNOWN 8GB",
+        "cap": 8,
+        "spd": 3000,
+        "t": "DDR4",
+        "mfr": "Samsung"
+      },
+      {
+        "n": "LPDDR5 TEST 16GB",
+        "cap": 16,
+        "spd": 6400,
+        "t": "LPDDR5"
+      },
+      {
+        "n": "NO CAPACITY",
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "Corsair"
+      }
+    ]
+  }
+}

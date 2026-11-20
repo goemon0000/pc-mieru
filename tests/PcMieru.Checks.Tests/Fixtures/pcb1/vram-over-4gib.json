@@ -1,0 +1,40 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "cpu": [
+      {
+        "n": "Intel(R) Core(TM) i9-14900K"
+      }
+    ],
+    "gpu": [
+      {
+        "n": "NVIDIA GeForce RTX 5070",
+        "vram": 12
+      },
+      {
+        "n": "NVIDIA GeForce RTX 3080 Ti",
+        "vram": 12
+      },
+      {
+        "n": "AMD Radeon RX 7900 XTX",
+        "vram": 24
+      },
+      {
+        "n": "Intel(R) Arc(TM) A770 Graphics",
+        "vram": 16
+      },
+      {
+        "n": "NVIDIA GeForce GTX 1060 6GB",
+        "vram": 6
+      },
+      {
+        "n": "NVIDIA GeForce GTX 970",
+        "vram": 4
+      },
+      {
+        "n": "NVIDIA GeForce GT 710"
+      }
+    ]
+  }
+}

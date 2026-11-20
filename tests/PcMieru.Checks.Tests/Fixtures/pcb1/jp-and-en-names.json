@@ -1,0 +1,76 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "cpu": [
+      {
+        "n": "AMD Ryzen 7 5800X 8-Core Processor"
+      },
+      {
+        "n": "インテル(R) Core(TM) i7-14700K プロセッサー"
+      }
+    ],
+    "gpu": [
+      {
+        "n": "NVIDIA GeForce RTX 5070",
+        "vram": 12
+      },
+      {
+        "n": "ＡＭＤ Ｒａｄｅｏｎ テスト用",
+        "vram": 8
+      }
+    ],
+    "motherboard": [
+      {
+        "n": "株式会社テスト製作所 試験用 マザーボード Ｚ７９０ （全角空白入り）",
+        "mfr": "株式会社テスト製作所"
+      }
+    ],
+    "ram": [
+      {
+        "n": "テスト 16GB DDR4-3200",
+        "cap": 16,
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "Corsair"
+      },
+      {
+        "n": "F4-3200C16-16GVK",
+        "cap": 16,
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "G Skill Intl"
+      }
+    ],
+    "ssd": [
+      {
+        "n": "Samsung SSD 980 PRO 1TB",
+        "cap": 1000,
+        "t": "nvme"
+      }
+    ],
+    "hdd": [
+      {
+        "n": "東芝 ハードディスク MG04ACA200E",
+        "cap": 2000,
+        "t": "sata"
+      }
+    ],
+    "monitor": [
+      {
+        "n": "日本語モニター 27型"
+      },
+      {
+        "n": "UG27PJ"
+      },
+      {
+        "n": "\uD842\uDFB7野家 Display ＆ \u003CTest\u003E"
+      }
+    ],
+    "optical-drive": [
+      {
+        "n": "パイオニア BDR-212 テスト"
+      }
+    ]
+  }
+}

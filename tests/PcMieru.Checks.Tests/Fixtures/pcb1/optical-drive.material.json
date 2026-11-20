@@ -1,0 +1,38 @@
+{
+  "cpus": [],
+  "board": null,
+  "memory": [],
+  "gpus": [],
+  "disks": [],
+  "monitors": [],
+  "opticals": [
+    {
+      "name": "HL-DT-ST BD-RE WH16NS60",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ASUS DRW-24D5MT",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_ASUS&PROD_DRW-24D5MT\\4&2"
+    },
+    {
+      "name": "Msft Virtual DVD-ROM",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_MSFT&PROD_VIRTUAL_DVD-ROM\\2&1"
+    },
+    {
+      "name": "ASUS SDRW-08U9M-U",
+      "pnpDeviceId": "USBSTOR\\CDROM&VEN_ASUS&PROD_SDRW-08U9M-U\\1"
+    },
+    {
+      "name": "VMware Virtual SATA CDRW Drive",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_VMWARE&PROD_VIRTUAL_SATA_CDRW\\1"
+    },
+    {
+      "name": "ASUS DRW-24D5MT",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_ASUS&PROD_DRW-24D5MT\\4&3"
+    },
+    {
+      "name": "",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_NONE\\1"
+    }
+  ]
+}

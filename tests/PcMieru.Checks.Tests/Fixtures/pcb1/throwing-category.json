@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "cpu": [
+      {
+        "n": "AMD Ryzen 7 5800X 8-Core Processor"
+      }
+    ],
+    "ram": [
+      {
+        "n": "F4-3200C16-16GVK",
+        "cap": 16,
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "G Skill Intl",
+        "q": 2
+      }
+    ],
+    "ssd": [
+      {
+        "n": "Samsung SSD 980 PRO 1TB",
+        "cap": 1000,
+        "t": "nvme"
+      }
+    ],
+    "optical-drive": [
+      {
+        "n": "HL-DT-ST BD-RE WH16NS60"
+      }
+    ]
+  }
+}

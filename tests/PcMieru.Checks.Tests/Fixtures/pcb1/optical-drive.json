@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "optical-drive": [
+      {
+        "n": "HL-DT-ST BD-RE WH16NS60"
+      },
+      {
+        "n": "ASUS DRW-24D5MT",
+        "q": 2
+      }
+    ]
+  }
+}

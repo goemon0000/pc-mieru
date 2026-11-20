@@ -1,0 +1,93 @@
+{
+  "cpus": [
+    "Intel(R) Core(TM) i7-14700K"
+  ],
+  "board": null,
+  "memory": [
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 2133
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 2133
+    },
+    {
+      "partNumber": "HX426C16FB3/16",
+      "manufacturer": "0198",
+      "capacity": 17179869184,
+      "speed": 2666,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "DDR3 TEST STICK 1600",
+      "manufacturer": "Unknown",
+      "capacity": 4294967296,
+      "speed": 1600,
+      "smbiosType": 0,
+      "memoryType": 24,
+      "configuredSpeed": 1600
+    },
+    {
+      "partNumber": "RATED UNKNOWN 8GB",
+      "manufacturer": "80CE",
+      "capacity": 8589934592,
+      "speed": 0,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 3000
+    },
+    {
+      "partNumber": "LPDDR5 TEST 16GB",
+      "manufacturer": "",
+      "capacity": 17179869184,
+      "speed": 6400,
+      "smbiosType": 35,
+      "memoryType": 0,
+      "configuredSpeed": 6400
+    },
+    {
+      "partNumber": "NO CAPACITY",
+      "manufacturer": "Corsair",
+      "capacity": 0,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 3200
+    }
+  ],
+  "gpus": [],
+  "disks": [],
+  "monitors": [],
+  "opticals": []
+}

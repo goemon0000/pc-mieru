@@ -1,0 +1,61 @@
+{
+  "cpus": [
+    "AMD Ryzen 7 5800X 8-Core Processor"
+  ],
+  "board": {
+    "manufacturer": "ASUSTeK COMPUTER INC.",
+    "product": "TUF GAMING X670E-PLUS WIFI"
+  },
+  "memory": [
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    }
+  ],
+  "gpus": [
+    {
+      "name": "NVIDIA GeForce RTX 5070",
+      "dedicatedBytes": 12817793024,
+      "onPciBus": true
+    }
+  ],
+  "disks": [
+    {
+      "name": "Samsung SSD 980 PRO 1TB",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    }
+  ],
+  "monitors": [
+    {
+      "name": "UG27PJ",
+      "active": true
+    }
+  ],
+  "opticals": [
+    {
+      "name": "HL-DT-ST BD-RE WH16NS60",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    }
+  ],
+  "throws": [
+    "board",
+    "gpus",
+    "monitors"
+  ]
+}
