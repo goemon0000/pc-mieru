@@ -255,6 +255,51 @@ public sealed class FakeStorageHealthProvider : IStorageHealthProvider, IFakeImp
         ]);
 }
 
+/// <summary>The storage check's input for tests and the skeleton: the same two drives as <see cref="FakeStorageHealthProvider"/>, with a fixed identity. Never read from this PC.</summary>
+public sealed class FakeStorageInspectionSource(Func<DateTime>? clock = null) : IStorageInspectionSource, IFakeImplementation
+{
+    public async Task<StorageInspection> InspectAsync(bool allowElevation, CancellationToken ct = default)
+    {
+        var health = await new FakeStorageHealthProvider().ReadAsync(allowElevation, ct).ConfigureAwait(false);
+        var now = clock?.Invoke() ?? DateTime.UtcNow;
+        var at = new DateTimeOffset(DateTime.SpecifyKind(now, DateTimeKind.Utc));
+        var nvme = health[0].Health;
+        var sata = health[1].Health;
+        var sataRead = sata.Status == ValueStatus.Ok;
+        IReadOnlyList<StorageInspectionDrive> drives =
+        [
+            new StorageInspectionDrive(
+                0,
+                StorageRecognition.Recognized,
+                "Samsung SSD 980 PRO 2TB",
+                "S6B0FAKE000001A",
+                "5B2QGXA7",
+                17,
+                2000398934016,
+                "eui.0025385b21fake01",
+                string.Empty,
+                at,
+                nvme,
+                StorageIdentityConfirmation.Confirmed,
+                new StorageInspectionCounters(StorageHealthKind.Nvme, new U128(24UL), new U128(94140625UL), new StorageErrorLogCounts(0, 0), false, [], null, false)),
+            new StorageInspectionDrive(
+                1,
+                StorageRecognition.Recognized,
+                "ATA ST4000DM004-2CV104",
+                "ZFN0FAKE",
+                "0001",
+                11,
+                4000787030016,
+                string.Empty,
+                "1:0:0:0",
+                at,
+                sata,
+                sataRead ? StorageIdentityConfirmation.Confirmed : StorageIdentityConfirmation.NoHealth,
+                sataRead ? new StorageInspectionCounters(StorageHealthKind.Sata, null, null, null, false, [], null, true) : null),
+        ];
+        return new StorageInspection(at, true, drives);
+    }
+}
 public sealed class FakeSensorClient : ISensorClient, IFakeImplementation
 {
     public Task<Value<IReadOnlyList<GpuSensorReading>>> ReadGpuAsync(CancellationToken ct = default)
@@ -292,6 +337,7 @@ public static class HardwareModule
         {
             registry.Set<IHardwareProvider>(new FakeHardwareProvider(options.Clock));
             registry.Set<IStorageHealthProvider>(new FakeStorageHealthProvider());
+            registry.Set<IStorageInspectionSource>(new FakeStorageInspectionSource(options.Clock));
             registry.Set<ISensorClient>(new FakeSensorClient());
             return;
         }
@@ -300,7 +346,9 @@ public static class HardwareModule
         registry.Set<ISensorClient>(sensors);
         registry.Set<IHardwareProvider>(new RealHardwareProvider(options.Clock, sensors));
         // The Helper is registered by the Management module, which comes after this one: look it up when a read needs it, not now.
-        registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider(new HelperStorageReader(() => registry.TryGet<IHelperClient>(out var helper) ? helper : null)));
+        var elevatedReader = new HelperStorageReader(() => registry.TryGet<IHelperClient>(out var helper) ? helper : null);
+        registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider(elevatedReader));
+        registry.Set<IStorageInspectionSource>(new RealStorageInspectionSource(elevatedReader, options.Clock));
     }
 }
 

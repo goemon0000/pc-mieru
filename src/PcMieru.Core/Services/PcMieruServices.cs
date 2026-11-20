@@ -90,6 +90,8 @@ public sealed class PcMieruServices : IDisposable
 
     public IStorageHealthProvider StorageHealth => _registry.Get<IStorageHealthProvider>();
 
+    public IStorageInspectionSource StorageInspection => _registry.Get<IStorageInspectionSource>();
+
     public ISensorClient Sensors => _registry.Get<ISensorClient>();
 
     public IProcessControl ProcessControl => _registry.Get<IProcessControl>();

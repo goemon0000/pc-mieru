@@ -42,6 +42,18 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Wire/Privileged/DiskOperations.cs
       the open / retry / fallback order follows the owner's pl-sensors
       StorageReader
+  src/PcMieru.Wire/Privileged/DiskIdentity.cs
+      the order of the four identity queries and what is kept of each, from
+      the owner's pl-sensors StorageReader.ReadOne
+  src/PcMieru.Core/Hardware/Storage/InspectionParsers.cs
+      the NVMe counter offsets and the ulong saturation rule, from the
+      owner's pl-sensors NvmeHealth.Parse
+  src/PcMieru.Core/Hardware/Collectors/StorageInspectionReader.cs
+      the walk over the physical drives, from the owner's pl-sensors
+      StorageReader
+  src/PcMieru.Checks/Storage/DiskKey.cs
+      the key text, the escaping, the bus names and the usable-serial rule,
+      from the owner's pl-sensors BaselineIdentity and BusType
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj

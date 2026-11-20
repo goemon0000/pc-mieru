@@ -7,6 +7,8 @@ using Microsoft.Win32.SafeHandles;
 using PcMieru.Core.Hardware.Model;
 using PcMieru.Core.Hardware.Native;
 using PcMieru.Core.Hardware.Storage;
+using DiskIdentity = PcMieru.Wire.DiskIdentity;
+using WireProtocol = PcMieru.Wire.StorageProtocol;
 
 namespace PcMieru.Core.Hardware;
 
@@ -32,6 +34,18 @@ public interface IElevatedStorageReader
 
         return all;
     }
+
+    /// <summary>
+    /// Like <see cref="ReadRawManyAsync"/> but each drive also brings what the reader knows besides the bytes: the identity it saw on
+    /// the handle the bytes came through, and the error log counts. A reader that cannot tell (this default) answers with the bytes
+    /// only, and the caller then treats the identity as not confirmed. Added after the first release: an implementation that does
+    /// not know it keeps working through this default.
+    /// </summary>
+    async Task<IReadOnlyDictionary<int, ElevatedDriveRead>> ReadManyAsync(IReadOnlyList<(int PhysicalDriveNumber, StorageHealthKind Kind)> drives, CancellationToken ct)
+    {
+        var raw = await ReadRawManyAsync(drives, ct).ConfigureAwait(false);
+        return raw.ToDictionary(p => p.Key, p => new ElevatedDriveRead(p.Value, null, null, null));
+    }
 }
 
 /// <summary>
@@ -54,6 +68,9 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     /// </summary>
     internal sealed record Step(int Number, string Model, StorageHealthKind Kind, Value<StorageHealth>? Health);
 
+    /// <summary>One drive's health and, when the bytes behind it were taken, what came with them (identity on the same handle, error log counts).</summary>
+    internal sealed record Resolved(DriveHealth Health, ElevatedDriveRead? Evidence);
+
     public Task<IReadOnlyList<DriveHealth>> ReadAsync(bool allowElevation, CancellationToken ct) =>
         Task.Run(async () =>
         {
@@ -71,16 +88,27 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     /// Every drive that waits for administrator rights is read by ONE call to the elevated reader, so the user sees one UAC prompt
     /// whether the PC has one such drive or five. Drives that already have an answer keep it, and the order of the list does not change.
     /// </summary>
-    internal static async Task<IReadOnlyList<DriveHealth>> ResolveAsync(IReadOnlyList<Step> steps, IElevatedStorageReader? elevated, CancellationToken ct)
+    internal static async Task<IReadOnlyList<DriveHealth>> ResolveAsync(IReadOnlyList<Step> steps, IElevatedStorageReader? elevated, CancellationToken ct) =>
+        (await ResolveWithEvidenceAsync(steps, null, elevated, ct).ConfigureAwait(false)).Select(r => r.Health).ToList();
+
+    /// <summary>
+    /// <see cref="ResolveAsync"/> that also keeps, for each drive, the evidence taken together with its bytes: <paramref name="local"/>
+    /// for a drive read in this process (by drive number), the elevated reader's answer for a drive it read. A drive without bytes has no evidence.
+    /// </summary>
+    internal static async Task<IReadOnlyList<Resolved>> ResolveWithEvidenceAsync(
+        IReadOnlyList<Step> steps,
+        IReadOnlyDictionary<int, ElevatedDriveRead>? local,
+        IElevatedStorageReader? elevated,
+        CancellationToken ct)
     {
         var waiting = steps.Where(s => s.Health is null).ToList();
-        IReadOnlyDictionary<int, byte[]?>? raw = null;
+        IReadOnlyDictionary<int, ElevatedDriveRead>? many = null;
         Exception? failure = null;
         if (waiting.Count > 0 && elevated is not null)
         {
             try
             {
-                raw = await elevated.ReadRawManyAsync(waiting.Select(s => (s.Number, s.Kind)).ToList(), ct).ConfigureAwait(false);
+                many = await elevated.ReadManyAsync(waiting.Select(s => (s.Number, s.Kind)).ToList(), ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
             {
@@ -88,18 +116,21 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             }
         }
 
-        var list = new List<DriveHealth>(steps.Count);
+        var list = new List<Resolved>(steps.Count);
         foreach (var step in steps)
         {
             if (step.Health is { } known)
             {
-                list.Add(new DriveHealth(step.Number, step.Model, known));
+                ElevatedDriveRead? own = null;
+                local?.TryGetValue(step.Number, out own);
+                list.Add(new Resolved(new DriveHealth(step.Number, step.Model, known), own));
                 continue;
             }
 
             var source = "helper:" + step.Kind;
-            byte[]? bytes = null;
-            raw?.TryGetValue(step.Number, out bytes);
+            ElevatedDriveRead? read = null;
+            many?.TryGetValue(step.Number, out read);
+            var bytes = read?.Bytes;
             Value<StorageHealth> health;
             if (failure is not null)
             {
@@ -115,7 +146,7 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
                 health = new Value<StorageHealth>(parsed.Data, parsed.Status, parsed.Source + " via helper", parsed.Detail);
             }
 
-            list.Add(new DriveHealth(step.Number, step.Model, health));
+            list.Add(new Resolved(new DriveHealth(step.Number, step.Model, health), bytes is null ? null : read));
         }
 
         return list;
@@ -138,17 +169,26 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             return new Step(number, string.Empty, StorageHealthKind.Sata, Value.Failed<StorageHealth>("ioctl:StorageDeviceProperty", "could not identify the drive"));
         }
 
-        var model = StorageProtocol.JoinVendorModel(desc.Vendor, desc.Product);
+        return ReadByBus(path, number, StorageProtocol.JoinVendorModel(desc.Vendor, desc.Product), desc.BusType, allowElevation, null);
+    }
+
+    /// <summary>
+    /// Health of one drive whose bus is known. <paramref name="evidence"/> (when given) receives what the read took through the same
+    /// handle the health bytes came through: the bytes, the identity read AFTER them, the NVMe error log counts. It is called at most once,
+    /// and not at all when no bytes were taken here. Nothing about the health answer changes because of it.
+    /// </summary>
+    internal Step ReadByBus(string path, int number, string model, int busType, bool allowElevation, Action<ElevatedDriveRead>? evidence)
+    {
         Value<StorageHealth>? health;
         var kind = StorageHealthKind.Sata;
-        switch (desc.BusType)
+        switch (busType)
         {
             case 17:
                 kind = StorageHealthKind.Nvme;
-                health = ReadNvme(path, allowElevation);
+                health = ReadNvme(path, allowElevation, evidence);
                 break;
             case 3 or 11:
-                health = ReadSata(path, number, allowElevation);
+                health = ReadSata(path, number, allowElevation, evidence);
                 break;
             default:
                 health = Value.Unsupported<StorageHealth>("ioctl:StorageDeviceProperty", "health data is only read for NVMe and SATA drives; USB bridges, RAID and virtual disks are not guessed");
@@ -159,7 +199,7 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     }
 
     /// <summary>Null means "only the elevated Helper can read this one": the drive is then handed to the batch in <see cref="ResolveAsync"/>.</summary>
-    private Value<StorageHealth>? ReadNvme(string path, bool allowElevation)
+    private Value<StorageHealth>? ReadNvme(string path, bool allowElevation, Action<ElevatedDriveRead>? evidence)
     {
         const string source = "ioctl:StorageDeviceProtocolSpecificProperty";
         var sawDenied = false;
@@ -199,13 +239,22 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             }
 
             var parsed = StorageHealthParsers.FromNvmeLogPage(page);
+            if (evidence is not null)
+            {
+                // Only after the health page is in hand, and on this very handle: the error log counts, then the identity.
+                var logQuery = StorageProtocol.BuildNvmeLogQuery(StorageProtocol.NvmeLogErrorInfo, WireProtocol.NvmeErrorLogLength);
+                var log = Ioctl.Call(h, Ioctl.QueryProperty, logQuery, logQuery.Length, out _);
+                var logPage = log is null ? null : StorageProtocol.ExtractProtocolData(log, WireProtocol.NvmeErrorLogLength);
+                evidence(new ElevatedDriveRead(page, ReadIdentity(h), logPage is null ? null : InspectionParsers.ErrorLogOf(logPage), null));
+            }
+
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source}, handle access: {label}", parsed.Detail);
         }
 
         return NeedsHelper(allowElevation, sawDenied, source);
     }
 
-    private Value<StorageHealth>? ReadSata(string path, int number, bool allowElevation)
+    private Value<StorageHealth>? ReadSata(string path, int number, bool allowElevation, Action<ElevatedDriveRead>? evidence)
     {
         const string source = "ioctl:SMART_RCV_DRIVE_DATA";
         if (IsElevated())
@@ -226,6 +275,12 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
 
             var thresholds = SmartTable(h, StorageProtocol.SmartReadThresholds, (byte)number, out _);
             var parsed = StorageHealthParsers.FromSmartTables(data, thresholds);
+            if (evidence is not null)
+            {
+                var both = thresholds is null ? data : [.. data, .. thresholds];
+                evidence(new ElevatedDriveRead(both, ReadIdentity(h), null, null));
+            }
+
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source} (elevated process)", parsed.Detail);
         }
 
@@ -247,6 +302,10 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             ? Value.Denied<StorageHealth>(source, "Windows requires administrator rights for this drive's health data")
             : null;
     }
+
+    /// <summary>The identity as this handle sees it (v0.7.4's extraction), for the comparison with the one read before.</summary>
+    internal static DiskIdentity? ReadIdentity(SafeFileHandle h) =>
+        DiskIdentity.Read((code, input, outputLength) => Ioctl.Call(h, code, input.Length == 0 ? null : input, outputLength, out _), out _);
 
     private static bool IsElevated()
     {
