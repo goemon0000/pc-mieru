@@ -17,17 +17,27 @@ public sealed record CheckCounts(int Ok, int Caution, int Check, int Unavailable
     public static CheckCounts From(IEnumerable<CheckItem> items)
     {
         ArgumentNullException.ThrowIfNull(items);
+        return FromVerdicts(items.Select(static item => item.Verdict));
+    }
+
+    /// <summary>
+    /// The same count over verdicts alone. A reader that skips the rows it does not know still reads every row's verdict,
+    /// so it can check the stored counts against all rows (DESIGN-A §3.5-11).
+    /// </summary>
+    public static CheckCounts FromVerdicts(IEnumerable<ItemVerdict> verdicts)
+    {
+        ArgumentNullException.ThrowIfNull(verdicts);
         int ok = 0, caution = 0, check = 0, unavailable = 0, info = 0;
-        foreach (var item in items)
+        foreach (var verdict in verdicts)
         {
-            switch (item.Verdict)
+            switch (verdict)
             {
                 case ItemVerdict.Ok: ok++; break;
                 case ItemVerdict.Caution: caution++; break;
                 case ItemVerdict.Check: check++; break;
                 case ItemVerdict.Unavailable: unavailable++; break;
                 case ItemVerdict.Info: info++; break;
-                default: throw new ArgumentOutOfRangeException(nameof(items), item.Verdict, "Unknown item verdict.");
+                default: throw new ArgumentOutOfRangeException(nameof(verdicts), verdict, "Unknown item verdict.");
             }
         }
 

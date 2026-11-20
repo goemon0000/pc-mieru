@@ -111,8 +111,8 @@ internal static class Samples
 
     public static CheckResult CpuCheck()
     {
-        var cpu0 = new CheckSubject("cpu-0");
         var cpu1 = new CheckSubject("cpu-1");
+        var cpu2 = new CheckSubject("cpu-2");
 
         List<CheckItem> items =
         [
@@ -122,10 +122,10 @@ internal static class Samples
             I("cpu.throughput", N(39.97), ItemVerdict.Info, CheckSource.Load),
             I("cpu.steadiness", N(96.25), ItemVerdict.Ok, CheckSource.Load, evidence: new CheckEvidence { Cv = 2.5 }),
             I("cpu.variation", N(2.5), ItemVerdict.Info, CheckSource.Load),
-            I("cpu.logical_throughput", N(2.5), ItemVerdict.Info, CheckSource.Load, subject: cpu0),
-            I("cpu.logical_throughput", N(1.5), ItemVerdict.Info, CheckSource.Load, subject: cpu1),
-            I("cpu.peer_ratio", N(100), ItemVerdict.Ok, CheckSource.Load, subject: cpu0, evidence: new CheckEvidence { EfficiencyClass = 0 }),
-            I("cpu.peer_ratio", N(60), ItemVerdict.Caution, CheckSource.Load, subject: cpu1, evidence: new CheckEvidence { EfficiencyClass = 0 }),
+            I("cpu.logical_throughput", N(2.5), ItemVerdict.Info, CheckSource.Load, subject: cpu1),
+            I("cpu.logical_throughput", N(1.5), ItemVerdict.Info, CheckSource.Load, subject: cpu2),
+            I("cpu.peer_ratio", N(100), ItemVerdict.Ok, CheckSource.Load, subject: cpu1, evidence: new CheckEvidence { EfficiencyClass = 0 }),
+            I("cpu.peer_ratio", N(60), ItemVerdict.Caution, CheckSource.Load, subject: cpu2, evidence: new CheckEvidence { EfficiencyClass = 0 }),
             I("cpu.effective_clock", N(4100.5), ItemVerdict.Ok, CheckSource.Pdh, evidence: new CheckEvidence { ClockSteadiness = 98.5 }),
             I("cpu.utilization", N(99.1), ItemVerdict.Info, CheckSource.Pdh),
             I("cpu.package_power", null, ItemVerdict.Info, CheckSource.EnergyMeter, CheckReason.Unsupported),
@@ -168,14 +168,14 @@ internal static class Samples
         [
             I("storage.devices", Int(2), ItemVerdict.Info, CheckSource.StorageQuery),
 
-            // disk-1: NVMe
+            // disk-1: NVMe. baseline_missing_counter is about one row (the last record had no spare), so the other deltas are compared (DESIGN-A §3.5-7).
             I("storage.health", T("healthy"), ItemVerdict.Ok, CheckSource.StorageQuery, subject: disk1),
             I("storage.capacity", D("2000398934016"), ItemVerdict.Info, CheckSource.StorageQuery, subject: disk1),
             I("storage.temperature", N(41), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.critical_warning", Int(0), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
-            I("storage.nvme.available_spare", N(100), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
+            I("storage.nvme.available_spare", Int(100), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.spare_threshold", N(10), ItemVerdict.Info, CheckSource.Nvme, subject: disk1),
-            I("storage.nvme.percentage_used", N(3), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
+            I("storage.nvme.percentage_used", Int(3), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.media_errors", D("0"), ItemVerdict.Ok, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.error_log_entries", D("15"), ItemVerdict.Caution, CheckSource.Nvme, subject: disk1, evidence: CheckEvidence.OfCode(CheckEvidenceCode.CounterIncreased)),
             I("storage.nvme.unsafe_shutdowns", D("45"), ItemVerdict.Info, CheckSource.Nvme, subject: disk1),
@@ -183,15 +183,15 @@ internal static class Samples
             I("storage.nvme.power_on_hours", D("9100"), ItemVerdict.Info, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.data_units_written", D("123456789"), ItemVerdict.Info, CheckSource.Nvme, subject: disk1),
             I("storage.nvme.critical_warning.delta", SD("0"), ItemVerdict.Ok, CheckSource.Baseline, subject: disk1, evidence: Delta("0", "0")),
-            I("storage.nvme.available_spare.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk1, NotComparable(CheckEvidenceCode.BaselineFirst)),
+            I("storage.nvme.available_spare.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk1, NotComparable(CheckEvidenceCode.BaselineMissingCounter)),
             I("storage.nvme.percentage_used.delta", SD("0"), ItemVerdict.Info, CheckSource.Baseline, subject: disk1, evidence: Delta("3", "3")),
             I("storage.nvme.media_errors.delta", SD("0"), ItemVerdict.Ok, CheckSource.Baseline, subject: disk1, evidence: Delta("0", "0")),
             I("storage.nvme.error_log_entries.delta", SD("3"), ItemVerdict.Caution, CheckSource.Baseline, subject: disk1, evidence: Delta("12", "15", CheckEvidenceCode.CounterIncreased)),
             I("storage.nvme.unsafe_shutdowns.delta", SD("1"), ItemVerdict.Info, CheckSource.Baseline, subject: disk1, evidence: Delta("44", "45")),
             I("storage.nvme.power_on_hours.delta", SD("12"), ItemVerdict.Info, CheckSource.Baseline, subject: disk1, evidence: Delta("9088", "9100")),
-            I("storage.nvme.data_units_written.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk1, NotComparable(CheckEvidenceCode.BaselineCounterReset)),
+            I("storage.nvme.data_units_written.delta", SD("89"), ItemVerdict.Info, CheckSource.Baseline, subject: disk1, evidence: Delta("123456700", "123456789")),
 
-            // disk-2: SATA
+            // disk-2: SATA, never recorded before. baseline_first is about the whole disk: every .delta of it is null with the same code (DESIGN-A §3.5-7).
             I("storage.health", T("healthy"), ItemVerdict.Ok, CheckSource.StorageQuery, subject: disk2),
             I("storage.capacity", D("500107862016"), ItemVerdict.Info, CheckSource.StorageQuery, subject: disk2),
             I("storage.temperature", N(35.5), ItemVerdict.Ok, CheckSource.Ata, subject: disk2),
@@ -201,9 +201,9 @@ internal static class Samples
             I("storage.ata.197", D("0"), ItemVerdict.Ok, CheckSource.Ata, subject: disk2),
             I("storage.ata.199", D("5"), ItemVerdict.Caution, CheckSource.Ata, subject: disk2, evidence: CheckEvidence.OfCode(CheckEvidenceCode.LikelyCable)),
             I("storage.ata.9", D("21000"), ItemVerdict.Info, CheckSource.Ata, subject: disk2),
-            I("storage.ata.5.delta", SD("0"), ItemVerdict.Ok, CheckSource.Baseline, subject: disk2, evidence: Delta("0", "0")),
-            I("storage.ata.197.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk2, NotComparable(CheckEvidenceCode.BaselineNoIdentity)),
-            I("storage.ata.199.delta", SD("2"), ItemVerdict.Caution, CheckSource.Baseline, subject: disk2, evidence: Delta("3", "5", CheckEvidenceCode.LikelyCable)),
+            I("storage.ata.5.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk2, NotComparable(CheckEvidenceCode.BaselineFirst)),
+            I("storage.ata.197.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk2, NotComparable(CheckEvidenceCode.BaselineFirst)),
+            I("storage.ata.199.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk2, NotComparable(CheckEvidenceCode.BaselineFirst)),
             I("storage.ata.9.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk2, NotComparable(CheckEvidenceCode.BaselineFirst)),
         ];
 
@@ -229,7 +229,8 @@ internal static class Samples
             CheckEvidence? evidence = spec.IsDelta ? new CheckEvidence { Before = "1", After = "3", SinceUtc = Start } : null;
             CheckValue value = spec.ValueType switch
             {
-                CheckValueType.Int => CheckValue.Int(1),
+                // A device status of 0, so the same GPU's driver rows are judged (DESIGN-A §14.0).
+                CheckValueType.Int => CheckValue.Int(spec.Id == CheckItemRegistry.GpuDeviceStatusId ? 0 : 1),
                 CheckValueType.Number => CheckValue.Number(1.5),
                 CheckValueType.Dec => CheckValue.Dec("1"),
                 CheckValueType.SignedDec => CheckValue.SignedDec("2"),

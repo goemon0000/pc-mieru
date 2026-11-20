@@ -129,4 +129,10 @@ public static class CheckEvidenceCodes
 {
     /// <summary>The ten codes that say a .delta was not comparable (value null).</summary>
     public static bool IsBaseline(CheckEvidenceCode code) => code <= CheckEvidenceCode.BaselineLegacyRefused;
+
+    /// <summary>
+    /// The baseline codes that are about one disk as a whole (DESIGN-A §3.5-7): once one is on a disk, every .delta of that
+    /// disk is null with the same code. Only baseline_missing_counter is about one row (the earlier record lacked that number).
+    /// </summary>
+    public static bool IsPerDisk(CheckEvidenceCode code) => IsBaseline(code) && code != CheckEvidenceCode.BaselineMissingCounter;
 }

@@ -18,7 +18,7 @@ public enum SubjectKind
     /// <summary>Not repeated: the item has no subject.</summary>
     None,
 
-    /// <summary>A logical CPU: "cpu-N" (N from 0).</summary>
+    /// <summary>A logical CPU: "cpu-N" (N from 1).</summary>
     Cpu,
 
     /// <summary>A physical disk: "disk-N".</summary>
@@ -51,7 +51,10 @@ public static class SubjectKinds
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 
-    /// <summary>"prefix-N" with N a canonical non-negative integer (no sign, no leading zeros).</summary>
+    /// <summary>
+    /// "prefix-N" with N a canonical positive integer (no sign, no leading zeros). Every kind starts at 1, "cpu-N" too
+    /// (DESIGN-A §3.5-4).
+    /// </summary>
     public static bool IsValidId(SubjectKind kind, string? id)
     {
         var prefix = Prefix(kind);
@@ -61,7 +64,7 @@ public static class SubjectKinds
         }
 
         var number = id.AsSpan(prefix.Length + 1);
-        if (number.Length > 9 || (number.Length > 1 && number[0] == '0'))
+        if (number.Length > 9 || number[0] == '0')
         {
             return false;
         }
@@ -101,8 +104,9 @@ public sealed record CheckItemSpec(
 
     /// <summary>
     /// Whether a judged ID may carry verdict info. Only the two DESIGN-A §14.0 exceptions: a .delta without a value
-    /// (not comparable), and the GPU driver rows when the device status is not 0. The producer decides when; the
-    /// registry and the validator only allow it. An info ID is always info.
+    /// (not comparable), and the GPU driver rows when the device status is not 0. The validator enforces both
+    /// directions of each (a .delta is info exactly when it has no value; a GPU driver row is info exactly when the same
+    /// GPU's device status is non-zero). An info ID is always info.
     /// </summary>
     public bool MayBeInfo => Class == ItemClass.Info || IsDelta || InfoWhenGpuStatusNonZero;
 }
@@ -118,6 +122,7 @@ public static class CheckItemRegistry
 
     private static readonly Dictionary<string, CheckItemSpec> ById = new(StringComparer.Ordinal);
     private static readonly List<CheckItemSpec> Ordered = [];
+    private static readonly Dictionary<CheckEvidenceCode, HashSet<string>> CodeRows = [];
 
     static CheckItemRegistry()
     {
@@ -191,9 +196,10 @@ public static class CheckItemRegistry
         Add(sto, "storage.capacity", CheckValueType.Dec, "B", ItemClass.Info, disk);
         Add(sto, "storage.temperature", CheckValueType.Number, "°C", ItemClass.Judged, disk);
         Add(sto, "storage.nvme.critical_warning", CheckValueType.Int, "bits", ItemClass.Judged, disk);
-        Add(sto, "storage.nvme.available_spare", CheckValueType.Number, "%", ItemClass.Judged, disk);
+        // The source rows of a .delta are all integers (DESIGN-A §3.5-5), so the spare and the wear are whole percents.
+        Add(sto, "storage.nvme.available_spare", CheckValueType.Int, "%", ItemClass.Judged, disk);
         Add(sto, "storage.nvme.spare_threshold", CheckValueType.Number, "%", ItemClass.Info, disk);
-        Add(sto, "storage.nvme.percentage_used", CheckValueType.Number, "%", ItemClass.Judged, disk);
+        Add(sto, "storage.nvme.percentage_used", CheckValueType.Int, "%", ItemClass.Judged, disk);
         Add(sto, "storage.nvme.media_errors", CheckValueType.Dec, "count", ItemClass.Judged, disk);
         Add(sto, "storage.nvme.error_log_entries", CheckValueType.Dec, "count", ItemClass.Judged, disk);
         Add(sto, "storage.nvme.unsafe_shutdowns", CheckValueType.Dec, "count", ItemClass.Info, disk);
@@ -225,10 +231,27 @@ public static class CheckItemRegistry
         }
 
         AddDelta("storage.ata.9", judged: false);
+
+        BuildEvidenceCodeRows();
     }
+
+    /// <summary>The ID whose value (the device status code of one GPU) decides whether that GPU's driver rows are info (DESIGN-A §14.0).</summary>
+    public const string GpuDeviceStatusId = "system.gpu.device_status";
 
     /// <summary>Every registered ID, in the order of the design tables.</summary>
     public static IReadOnlyList<CheckItemSpec> All => Ordered;
+
+    /// <summary>
+    /// Whether an evidence code may be carried by this item ID (DESIGN-A §3 "根拠のコードを置ける行", §3.5-8, §14). A code
+    /// that is not placed anywhere never passes. The reader of an older version that meets an ID or a code it does not
+    /// know skips the row (it never asks this about it).
+    /// </summary>
+    public static bool AllowsEvidenceCode(string? id, CheckEvidenceCode code) =>
+        id is not null && CodeRows.TryGetValue(code, out var rows) && rows.Contains(id);
+
+    /// <summary>The IDs that may carry an evidence code, sorted. Empty for a code that is not placed anywhere.</summary>
+    public static IReadOnlyList<string> RowsFor(CheckEvidenceCode code) =>
+        CodeRows.TryGetValue(code, out var rows) ? rows.Order(StringComparer.Ordinal).ToArray() : [];
 
     public static bool TryGet(string? id, out CheckItemSpec spec)
     {
@@ -266,6 +289,62 @@ public static class CheckItemRegistry
         var spec = new CheckItemSpec(id, kind, type, unit, cls, subject, DeltaOf: null, allowedText, gpuStatus);
         ById.Add(id, spec);
         Ordered.Add(spec);
+    }
+
+    // The row of each evidence code, from DESIGN-A §3 ("根拠のコードを置ける行"), §3.3, §14.1-§14.5. A code is placed only
+    // on the rows the design uses it for; a new row or a new use is a change to this table (and to the design).
+    private static void BuildEvidenceCodeRows()
+    {
+        foreach (var spec in Ordered.Where(static s => s.IsDelta).ToArray())
+        {
+            // baseline_*: the .delta rows only (why this counter was not compared).
+            foreach (var code in Enum.GetValues<CheckEvidenceCode>().Where(CheckEvidenceCodes.IsBaseline))
+            {
+                Place(code, spec.Id);
+            }
+
+            // counter_increased / counter_decreased: the .delta row and the absolute row it belongs to.
+            Place(CheckEvidenceCode.CounterIncreased, spec.Id, spec.DeltaOf!);
+            Place(CheckEvidenceCode.CounterDecreased, spec.Id, spec.DeltaOf!);
+        }
+
+        // new_bits: the warning bits that newly came up (DESIGN-A §14.5), on the delta and on the row it belongs to.
+        Place(CheckEvidenceCode.NewBits, "storage.nvme.critical_warning.delta", "storage.nvme.critical_warning");
+
+        // "likely cable" is the ATA 199 finding, on the absolute row (§14.4) and on its delta (§3.3).
+        Place(CheckEvidenceCode.LikelyCable, "storage.ata.199", "storage.ata.199.delta");
+
+        Place(CheckEvidenceCode.MixedCapacity, "system.memory.modules");
+        Place(CheckEvidenceCode.BelowRated, "system.memory.configured_speed");
+        Place(CheckEvidenceCode.AboveRated, "system.memory.configured_speed");
+        Place(CheckEvidenceCode.DisabledCode22, GpuDeviceStatusId);
+        Place(CheckEvidenceCode.DeviceError, GpuDeviceStatusId);
+        Place(CheckEvidenceCode.TooShort, "cpu.steadiness");
+        Place(CheckEvidenceCode.PinUnknown, "cpu.peer_ratio");
+        Place(CheckEvidenceCode.PatternMismatch, "memory.mismatches");
+        Place(CheckEvidenceCode.ComputeMismatch, "cpu.compute_errors");
+        Place(CheckEvidenceCode.PastThresholdBreach, "storage.ata.threshold_status");
+        Place(CheckEvidenceCode.CurrentThresholdBreach, "storage.ata.threshold_status");
+        Place(CheckEvidenceCode.TempOverCriticalBefore, "storage.temperature");
+        Place(CheckEvidenceCode.MediaErrorsInLog, "storage.nvme.error_log_entries");
+    }
+
+    private static void Place(CheckEvidenceCode code, params string[] ids)
+    {
+        if (!CodeRows.TryGetValue(code, out var rows))
+        {
+            CodeRows.Add(code, rows = new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        foreach (var id in ids)
+        {
+            if (!ById.ContainsKey(id))
+            {
+                throw new InvalidOperationException($"Evidence code {code} is placed on '{id}', which is not a registered item ID.");
+            }
+
+            rows.Add(id);
+        }
     }
 
     private static void AddDelta(string counterId, bool judged)

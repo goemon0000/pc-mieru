@@ -182,7 +182,7 @@ public class SerializationTests
         Assert.Equal(JsonValueKind.Number, Value("storage.temperature", "disk-2").ValueKind); // number
         Assert.Equal(JsonValueKind.False, Value("storage.ata.predict_failure", "disk-2").ValueKind); // bool
         Assert.Equal(JsonValueKind.String, Value("storage.health", "disk-1").ValueKind); // text
-        Assert.Equal(JsonValueKind.Null, Value("storage.nvme.data_units_written.delta", "disk-1").ValueKind); // not comparable
+        Assert.Equal(JsonValueKind.Null, Value("storage.ata.5.delta", "disk-2").ValueKind); // not comparable
     }
 
     [Fact]
@@ -259,12 +259,66 @@ public class SerializationTests
         Assert.Contains("\"startedAtUtc\":\"2026-11-20T03:00:00.000Z\"", json, StringComparison.Ordinal);
         Assert.Contains("\"endedAtUtc\":\"2026-11-20T03:00:04.200Z\"", json, StringComparison.Ordinal);
 
-        // A clock reading with 7 digits is cut to milliseconds before it goes into a result (the file name keeps all 7, §4).
+        // A clock reading with 7 digits is cut to milliseconds by the producer (CheckTime.TruncateToMilliseconds) before it goes
+        // into a result; the file name (§4) is made from the same cut time, so name and JSON can never disagree.
         var local = new DateTimeOffset(2026, 11, 20, 12, 0, 0, TimeSpan.FromHours(9)).AddTicks(1_234_567);
         var cut = CheckTime.TruncateToMilliseconds(local);
         Assert.Equal("2026-11-20T03:00:00.123Z", CheckTime.Format(cut));
         Assert.True(CheckTime.IsCanonical(cut));
         Assert.False(CheckTime.IsCanonical(local));
+    }
+
+    [Fact]
+    public void The_file_stamp_is_the_json_time_with_the_separators_taken_out()
+    {
+        var local = new DateTimeOffset(2026, 11, 20, 12, 0, 0, TimeSpan.FromHours(9)).AddTicks(1_234_567);
+        var stamp = CheckTime.FileStamp(local);
+
+        Assert.Equal("20261120T030000123Z", stamp);
+        Assert.Equal(19, stamp.Length);
+
+        // Same instant, same milliseconds: strip "-" and ":" and "." from the JSON time and it is the file stamp.
+        var json = CheckTime.Format(CheckTime.TruncateToMilliseconds(local));
+        Assert.Equal(json.Replace("-", string.Empty, StringComparison.Ordinal).Replace(":", string.Empty, StringComparison.Ordinal).Replace(".", string.Empty, StringComparison.Ordinal), stamp);
+
+        // And it matches the time the result really carries.
+        var result = Samples.MemoryCheck();
+        Assert.Equal("20261120T030000000Z", CheckTime.FileStamp(result.StartedAtUtc));
+        Assert.Equal("20261120T030004200Z", CheckTime.FileStamp(result.EndedAtUtc));
+        using var doc = JsonDocument.Parse(CheckJson.Serialize(result));
+        var started = doc.RootElement.GetProperty("startedAtUtc").GetString()!;
+        Assert.Equal(started.Replace("-", string.Empty, StringComparison.Ordinal).Replace(":", string.Empty, StringComparison.Ordinal).Replace(".", string.Empty, StringComparison.Ordinal), CheckTime.FileStamp(result.StartedAtUtc));
+    }
+
+    [Fact]
+    public void The_writer_rejects_a_sub_millisecond_time_instead_of_cutting_it()
+    {
+        var ok = Samples.MemoryCheck();
+
+        // In a result (the validator says so first)...
+        var ex = Assert.Throws<CheckFormatException>(() => CheckJson.Serialize(ok with { EndedAtUtc = ok.EndedAtUtc.AddTicks(1) }));
+        Assert.Contains("endedAtUtc must be UTC with millisecond precision", ex.Message, StringComparison.Ordinal);
+
+        // ...in evidence...
+        var delta = CheckItem.Create(
+            "storage.nvme.media_errors.delta",
+            CheckValue.SignedDec("0"),
+            ItemVerdict.Ok,
+            CheckSource.Baseline,
+            subject: new CheckSubject("disk-1"),
+            evidence: new CheckEvidence { Before = "1", After = "1", SinceUtc = Samples.Start.AddTicks(7) });
+        var storage = CheckResult.Create(Samples.App, Samples.StorageRun, CheckKind.Storage, Samples.Start, Samples.Start, CheckOutcome.Completed, [delta]);
+        Assert.Throws<CheckFormatException>(() => CheckJson.Serialize(storage));
+
+        // ...and in the history page, which has no validator: the time converter itself refuses.
+        var entry = CheckHistoryEntry.From(ok) with { StartedAtUtc = ok.StartedAtUtc.AddTicks(1) };
+        Assert.Throws<CheckFormatException>(() => CheckJson.SerializeHistory(new CheckHistoryPage([entry], [])));
+        var offset = CheckHistoryEntry.From(ok) with { StartedAtUtc = ok.StartedAtUtc.ToOffset(TimeSpan.FromHours(9)) };
+        Assert.Throws<CheckFormatException>(() => CheckJson.SerializeHistory(new CheckHistoryPage([offset], [])));
+
+        // A whole-millisecond time passes.
+        var fine = CheckHistoryEntry.From(ok) with { StartedAtUtc = ok.StartedAtUtc.AddMilliseconds(3) };
+        Assert.Contains("2026-11-20T03:00:00.003Z", CheckJson.SerializeHistory(new CheckHistoryPage([fine], [])), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -311,7 +365,7 @@ public class SerializationTests
     [InlineData("\"source\":\"load\",\"reason\":null},{\"id\":\"memory.total\"", "\"source\":\"load\"},{\"id\":\"memory.total\"", "missing key 'reason'")]
     [InlineData("\"app\":\"PCMieru 0.4.0\",", "", "missing key 'app'")]
     // enum strings are lowercase
-    [InlineData("\"kind\":\"memory\"", "\"kind\":\"Memory\"", "unknown kind 'Memory'")]
+    [InlineData("\"kind\":\"memory\"", "\"kind\":\"Memory\"", "kind 'Memory' is not a lowercase name")]
     [InlineData("\"outcome\":\"stopped\"", "\"outcome\":\"STOPPED\"", "unknown outcome 'STOPPED'")]
     [InlineData("\"outcome\":\"stopped\"", "\"outcome\":2", "must be a string")]
     // dec and signed dec are canonical strings
@@ -327,6 +381,22 @@ public class SerializationTests
     [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":1.5,\"unit\":\"count\"", "JSON integer")]
     [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":true,\"unit\":\"count\"", "JSON integer")]
     [InlineData("\"value\":4.2,", "\"value\":\"4.2\",", "finite JSON number")]
+    // numbers are read only in the form the writer writes them (§3.5-3): no 6400.0, no exponent, no -0, no leading zero
+    [InlineData("\"value\":6400,", "\"value\":6400.0,", "finite JSON number")]
+    [InlineData("\"value\":6400,", "\"value\":6.4e3,", "finite JSON number")]
+    [InlineData("\"value\":6400,", "\"value\":6400e0,", "finite JSON number")]
+    [InlineData("\"value\":6400,", "\"value\":6.400e3,", "finite JSON number")]
+    [InlineData("\"value\":4.2,", "\"value\":4.20,", "finite JSON number")]
+    [InlineData("\"value\":4.2,", "\"value\":0.42e1,", "finite JSON number")]
+    [InlineData("\"value\":4.2,", "\"value\":-0,", "finite JSON number")]
+    [InlineData("\"value\":4.2,", "\"value\":-0.0,", "finite JSON number")]
+    [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":1.0,\"unit\":\"count\"", "JSON integer")]
+    [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":1e0,\"unit\":\"count\"", "JSON integer")]
+    [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":-0,\"unit\":\"count\"", "JSON integer")]
+    [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":100e-2,\"unit\":\"count\"", "JSON integer")]
+    [InlineData("\"info\":8", "\"info\":8.0", "JSON integer")]
+    // a count, a bit mask, a status code and an age in days cannot be negative (§3.5-3)
+    [InlineData("\"value\":1,\"unit\":\"count\"", "\"value\":-1,\"unit\":\"count\"", "a value in 'count' cannot be negative")]
     // times
     [InlineData("\"startedAtUtc\":\"2026-11-20T03:00:00.000Z\"", "\"startedAtUtc\":\"2026-11-20T03:00:00Z\"", "UTC time")]
     [InlineData("\"startedAtUtc\":\"2026-11-20T03:00:00.000Z\"", "\"startedAtUtc\":\"2026-11-20T12:00:00.000+09:00\"", "UTC time")]
@@ -350,8 +420,8 @@ public class SerializationTests
     [InlineData("{\"id\":\"memory.duration\",", "{\"id\":\"memory.duration\",\"subject\":{\"id\":\"ram-1\"},", "must not have a subject")]
     [InlineData("{\"code\":\"pattern_mismatch\"}", "{}", "evidence must be omitted rather than empty")]
     [InlineData("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"pattern_mismatch\",\"before\":5}", "must be a string")]
-    [InlineData("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"baseline_first\"}", "baseline evidence codes belong to storage items")]
-    [InlineData("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"pattern_mismatch\",\"newBits\":1}", "newBits is evidence of storage.nvme.critical_warning.delta only")]
+    [InlineData("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"baseline_first\"}", "cannot be carried by this item")]
+    [InlineData("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"pattern_mismatch\",\"newBits\":1}", "newBits is evidence of storage.nvme.critical_warning and its .delta only")]
     [InlineData("\"memory.duration\",\"value\":4.2,\"unit\":\"s\",\"verdict\":\"info\"", "\"memory.duration\",\"value\":4.2,\"unit\":\"s\",\"verdict\":\"ok\"", "observation-only item must have verdict info")]
     // result-level
     [InlineData("\"runId\":\"89914ef9-5781-4cf7-a4f8-6d58003ddf86\"", "\"runId\":\"89914EF9-5781-4CF7-A4F8-6D58003DDF86\"", "lowercase UUID")]
@@ -442,6 +512,262 @@ public class SerializationTests
         var bytes = Encoding.UTF8.GetBytes(Base);
         Assert.Equal(Base, CheckJson.Serialize(CheckJson.Deserialize(bytes)));
         Assert.Throws<CheckFormatException>(() => CheckJson.Deserialize("{"u8));
+    }
+
+    // ---- tolerant reading: the history, listing and MCP path (DESIGN-A §3 "読み手の寛容さ", §3.5-1, §3.5-11) ----
+
+    private static readonly JsonSerializerOptions Relaxed = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    // The base memory result with one more row in front, and the matching count raised so the file is consistent.
+    private static string WithExtraRow(string rowJson, string verdictKey)
+    {
+        var node = JsonNode.Parse(Base)!.AsObject();
+        node["items"]!.AsArray().Insert(0, JsonNode.Parse(rowJson));
+        var counts = node["counts"]!.AsObject();
+        counts[verdictKey] = counts[verdictKey]!.GetValue<int>() + 1;
+        return node.ToJsonString(Relaxed);
+    }
+
+    private const string FutureRow = "{\"id\":\"memory.latency\",\"value\":1,\"unit\":\"ms\",\"verdict\":\"ok\",\"source\":\"load\",\"reason\":null}";
+
+    private static CheckReading Tolerant(string json) => CheckJson.Read(json, CheckReadMode.Tolerant);
+
+    private static void TolerantRejects(string json, string fragment)
+    {
+        var ex = Assert.Throws<CheckFormatException>(() => Tolerant(json));
+        Assert.True(
+            ex.Problems.Any(p => p.Contains(fragment, StringComparison.Ordinal)),
+            $"expected a problem containing '{fragment}', got: {string.Join(" | ", ex.Problems)}");
+        Assert.False(ex.IsFromFutureVersion, "a broken file must not be mistaken for a newer version's file");
+    }
+
+    [Theory]
+    [MemberData(nameof(FixtureNames))]
+    public void A_file_this_version_wrote_reads_the_same_in_both_modes(string name)
+    {
+        var text = Fixture.Read(name);
+        var strict = CheckJson.Deserialize(text);
+        var tolerant = Tolerant(text);
+
+        Assert.Equal(0, tolerant.SkippedItems);
+        Assert.Equal(0, tolerant.SkippedNotes);
+        Assert.Equal(CheckJson.Serialize(strict), CheckJson.Serialize(tolerant.Result));
+    }
+
+    [Fact]
+    public void An_item_id_this_version_does_not_know_is_skipped_by_the_tolerant_reader_and_refused_by_the_strict_one()
+    {
+        var json = WithExtraRow(FutureRow, "ok");
+
+        var ex = Assert.Throws<CheckFormatException>(() => CheckJson.Deserialize(json));
+        Assert.Contains("unknown item ID 'memory.latency'", ex.Message, StringComparison.Ordinal);
+        Assert.False(ex.IsFromFutureVersion); // strict: a broken file, not a "newer version" signal
+
+        var reading = Tolerant(json);
+        Assert.Equal(1, reading.SkippedItems);
+        Assert.Equal(9, reading.Result.Items.Count);
+        Assert.DoesNotContain(reading.Result.Items, i => i.Id == "memory.latency");
+
+        // The stored counts and overall verdict are used as written: the skipped row is in them.
+        Assert.Equal(new CheckCounts(1, 0, 1, 0, 8), reading.Result.Counts);
+        Assert.Equal(CheckVerdict.Check, reading.Result.Verdict);
+    }
+
+    [Fact]
+    public void A_source_this_version_does_not_know_skips_the_row_in_tolerant_mode_only()
+    {
+        var json = Mutate("\"source\":\"load\"", "\"source\":\"gpu\"");
+
+        Rejects(json, "unknown source 'gpu'");
+        var reading = Tolerant(json);
+        Assert.Equal(1, reading.SkippedItems);
+        Assert.DoesNotContain(reading.Result.Items, i => i.Id == "memory.duration"); // the first row had that source
+        Assert.Equal(new CheckCounts(0, 0, 1, 0, 8), reading.Result.Counts);
+    }
+
+    [Fact]
+    public void An_evidence_code_this_version_does_not_know_skips_the_row_in_tolerant_mode_only()
+    {
+        var json = Mutate("\"code\":\"pattern_mismatch\"", "\"code\":\"stuck_bit\"");
+
+        Rejects(json, "unknown evidence code 'stuck_bit'");
+        var reading = Tolerant(json);
+        Assert.Equal(1, reading.SkippedItems);
+        Assert.DoesNotContain(reading.Result.Items, i => i.Id == "memory.mismatches");
+
+        // That row was the one "check": the stored overall verdict stays check, and it is checked against the skipped row too.
+        Assert.Equal(CheckVerdict.Check, reading.Result.Verdict);
+        Assert.Equal(new CheckCounts(0, 0, 1, 0, 8), reading.Result.Counts);
+    }
+
+    [Fact]
+    public void Counts_and_the_overall_verdict_are_checked_against_every_row_the_skipped_ones_included()
+    {
+        // The skipped row is a "check". Counts and verdict that only add up without it are a broken file.
+        var node = JsonNode.Parse(Mutate("\"code\":\"pattern_mismatch\"", "\"code\":\"stuck_bit\""))!.AsObject();
+        node["counts"] = JsonNode.Parse("{\"ok\":0,\"caution\":0,\"check\":0,\"unavailable\":0,\"info\":8}");
+        node["verdict"] = "unavailable";
+        TolerantRejects(node.ToJsonString(Relaxed), "do not match the items");
+
+        // A skipped row that was not counted is a broken file too.
+        var uncounted = JsonNode.Parse(WithExtraRow(FutureRow, "ok"))!.AsObject();
+        uncounted["counts"]!.AsObject()["ok"] = 0;
+        TolerantRejects(uncounted.ToJsonString(Relaxed), "do not match the items");
+
+        // The overall verdict that does not follow from the rows (the skipped one included) is refused.
+        var wrongOverall = JsonNode.Parse(WithExtraRow(FutureRow, "ok"))!.AsObject();
+        wrongOverall["verdict"] = "ok";
+        TolerantRejects(wrongOverall.ToJsonString(Relaxed), "does not match the items");
+    }
+
+    [Fact]
+    public void An_unknown_key_is_ignored_by_the_tolerant_reader_and_refused_by_the_strict_one()
+    {
+        var json = Mutate("{\"format\"", "{\"extra\":1,\"format\"");
+        json = json.Replace("\"info\":8}", "\"info\":8,\"later\":2}", StringComparison.Ordinal);
+        json = json.Replace("\"reason\":null}", "\"reason\":null,\"note\":\"x\"}", StringComparison.Ordinal);
+        json = json.Replace("{\"code\":\"pattern_mismatch\"}", "{\"code\":\"pattern_mismatch\",\"detail\":\"x\"}", StringComparison.Ordinal);
+
+        Assert.Throws<CheckFormatException>(() => CheckJson.Deserialize(json));
+
+        var reading = Tolerant(json);
+        Assert.Equal(0, reading.SkippedItems);
+        Assert.Equal(CheckJson.Serialize(CheckJson.Deserialize(Base)), CheckJson.Serialize(reading.Result)); // nothing of the unknown keys is kept
+    }
+
+    [Fact]
+    public void An_unknown_key_in_a_subject_is_ignored_when_tolerant()
+    {
+        var storage = CheckJson.Serialize(Samples.StorageCheck());
+        var json = storage.Replace("\"subject\":{\"id\":\"disk-1\"", "\"subject\":{\"vendor\":\"x\",\"id\":\"disk-1\"", StringComparison.Ordinal);
+        Assert.NotEqual(storage, json);
+
+        Assert.Throws<CheckFormatException>(() => CheckJson.Deserialize(json));
+        Assert.Equal(storage, CheckJson.Serialize(Tolerant(json).Result));
+    }
+
+    [Fact]
+    public void A_kind_this_version_does_not_know_is_a_newer_versions_file_in_both_modes()
+    {
+        var json = Mutate("\"kind\":\"memory\"", "\"kind\":\"gpu\"");
+
+        var strict = Assert.Throws<CheckFormatException>(() => CheckJson.Deserialize(json));
+        Assert.Equal("gpu", strict.UnknownKind);
+        Assert.True(strict.IsFromFutureVersion);
+        Assert.Null(strict.UnknownFormat);
+
+        var tolerant = Assert.Throws<CheckFormatException>(() => Tolerant(json));
+        Assert.Equal("gpu", tolerant.UnknownKind);
+        Assert.True(tolerant.IsFromFutureVersion);
+
+        Assert.False(CheckJson.TryRead(json, CheckReadMode.Tolerant, out var reading, out var error));
+        Assert.Null(reading);
+        Assert.Equal("gpu", error!.UnknownKind);
+
+        // An unknown format is a newer version too, and a plainly broken file is neither.
+        Assert.True(Assert.Throws<CheckFormatException>(() => Tolerant(Mutate("pcm-check/1", "pcm-check/2"))).IsFromFutureVersion);
+        Assert.False(Assert.Throws<CheckFormatException>(() => Tolerant("{")).IsFromFutureVersion);
+        Assert.False(Assert.Throws<CheckFormatException>(() => Tolerant(Mutate("\"kind\":\"memory\"", "\"kind\":\"GPU\""))).IsFromFutureVersion);
+    }
+
+    [Fact]
+    public void A_new_verdict_reason_or_outcome_still_fails_in_tolerant_mode_because_it_means_pcm_check_2()
+    {
+        TolerantRejects(Mutate("\"verdict\":\"check\",\"source\"", "\"verdict\":\"fail\",\"source\""), "unknown itemverdict 'fail'");
+        TolerantRejects(Mutate("\"reason\":\"partial\",\"evidence\"", "\"reason\":\"mystery\",\"evidence\""), "unknown reason 'mystery'");
+        TolerantRejects(Mutate("\"outcome\":\"stopped\"", "\"outcome\":\"paused\""), "unknown outcome 'paused'");
+        TolerantRejects(Mutate("\"verdict\":\"check\",\"counts\"", "\"verdict\":\"stale\",\"counts\""), "unknown verdict 'stale'");
+
+        // The verdict and the reason of a row of an unknown ID are checked as well: a skipped row is still a row.
+        TolerantRejects(WithExtraRow(FutureRow.Replace("\"verdict\":\"ok\"", "\"verdict\":\"fail\"", StringComparison.Ordinal), "ok"), "unknown itemverdict 'fail'");
+        TolerantRejects(WithExtraRow(FutureRow.Replace("\"reason\":null", "\"reason\":\"mystery\"", StringComparison.Ordinal), "ok"), "unknown reason 'mystery'");
+    }
+
+    [Fact]
+    public void A_wrong_type_a_missing_required_field_and_a_non_canonical_number_still_fail_in_tolerant_mode()
+    {
+        TolerantRejects(Mutate("\"value\":4.2,", "\"value\":\"4.2\","), "finite JSON number");
+        TolerantRejects(Mutate("\"value\":6400,", "\"value\":6400.0,"), "finite JSON number");
+        TolerantRejects(Mutate("\"info\":8", "\"info\":8.0"), "JSON integer");
+        TolerantRejects(Mutate("\"app\":\"PCMieru 0.4.0\",", string.Empty), "missing key 'app'");
+        TolerantRejects(Mutate("\"source\":\"load\",\"reason\":null},{\"id\":\"memory.total\"", "\"source\":\"load\"},{\"id\":\"memory.total\""), "missing key 'reason'");
+        TolerantRejects(Mutate("\"startedAtUtc\":\"2026-11-20T03:00:00.000Z\"", "\"startedAtUtc\":\"2026-11-20T03:00:00Z\""), "UTC time");
+        TolerantRejects(Mutate("\"runId\":\"89914ef9-5781-4cf7-a4f8-6d58003ddf86\"", "\"runId\":\"89914EF9-5781-4CF7-A4F8-6D58003DDF86\""), "lowercase UUID");
+        TolerantRejects(Mutate("\"kind\":\"memory\",", "\"kind\":\"memory\",\"kind\":\"memory\","), "duplicate key 'kind'");
+
+        // A row of an ID this version knows is held to every rule even when tolerant.
+        TolerantRejects(Mutate("\"unit\":\"s\"", "\"unit\":\"ms\""), "unit must be 's'");
+        TolerantRejects(Mutate("\"verdict\":\"info\",\"source\":\"load\",\"reason\":null},{\"id\":\"memory.total\"", "\"verdict\":\"ok\",\"source\":\"load\",\"reason\":null},{\"id\":\"memory.total\""), "must have verdict info");
+    }
+
+    [Theory]
+    [InlineData("memory.latency")]
+    [InlineData("Memory.latency")]
+    [InlineData("memory")]
+    [InlineData("memory..latency")]
+    [InlineData(".memory")]
+    [InlineData("memory.latency.")]
+    [InlineData("memory latency")]
+    [InlineData("")]
+    public void Only_a_dotted_lowercase_id_counts_as_a_row_of_a_newer_version(string id)
+    {
+        var json = WithExtraRow(FutureRow.Replace("memory.latency", id, StringComparison.Ordinal), "ok");
+        if (id == "memory.latency")
+        {
+            Assert.Equal(1, Tolerant(json).SkippedItems);
+        }
+        else
+        {
+            TolerantRejects(json, "unknown item ID");
+        }
+    }
+
+    [Fact]
+    public void A_well_formed_note_this_version_does_not_know_is_dropped_by_the_tolerant_reader_and_refused_by_the_strict_one()
+    {
+        var json = Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"memory.borrowed_region_only\",\"memory.future_note\",\"cpu.other\"]");
+
+        Rejects(json, "note 'memory.future_note' is not a known note");
+
+        var reading = Tolerant(json);
+        Assert.Equal(["memory.borrowed_region_only"], reading.Result.Notes.ToArray());
+        Assert.Equal(2, reading.SkippedNotes);
+        Assert.Equal(0, reading.SkippedItems);
+
+        // A note that is not even of the form area.snake_code is broken in both modes, and a duplicate is too.
+        TolerantRejects(Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"Bad Note\"]"), "not of the form area.snake_code");
+        TolerantRejects(Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"memory.borrowed_region_only\",\"memory.borrowed_region_only\"]"), "appears twice");
+    }
+
+    [Fact]
+    public void The_strict_reader_accepts_the_four_known_notes_and_nothing_else()
+    {
+        foreach (var note in new[] { "cpu.temperature_not_measured", "memory.borrowed_region_only", "memory.pressure", "storage.baseline_read_failed" })
+        {
+            var json = Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"" + note + "\"]");
+            Assert.Equal([note], CheckJson.Deserialize(json).Notes.ToArray());
+        }
+
+        Rejects(Mutate("\"notes\":[\"memory.borrowed_region_only\"]", "\"notes\":[\"memory.something_new\"]"), "is not a known note");
+        Assert.Throws<CheckFormatException>(() => CheckJson.Serialize(Samples.MemoryCheck() with { Notes = ["memory.something_new"] }));
+    }
+
+    [Fact]
+    public void Reading_tolerantly_from_bytes_and_through_TryRead_agree()
+    {
+        var json = WithExtraRow(FutureRow, "ok");
+        var bytes = Encoding.UTF8.GetBytes(json);
+
+        var viaBytes = CheckJson.Read(bytes, CheckReadMode.Tolerant);
+        Assert.Equal(1, viaBytes.SkippedItems);
+
+        Assert.True(CheckJson.TryRead(json, CheckReadMode.Tolerant, out var reading, out var error));
+        Assert.Null(error);
+        Assert.Equal(1, reading!.SkippedItems);
+
+        Assert.False(CheckJson.TryRead(json, CheckReadMode.Strict, out var none, out var why));
+        Assert.Null(none);
+        Assert.Contains("unknown item ID", why!.Message, StringComparison.Ordinal);
     }
 
     // ---- the writer holds the same rules ----

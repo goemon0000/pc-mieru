@@ -159,7 +159,8 @@ public partial class RegistryTests
             ("memory.write_rate", CheckValueType.Number, "MiB/s"),
             ("storage.temperature", CheckValueType.Number, "°C"),
             ("storage.nvme.critical_warning", CheckValueType.Int, "bits"),
-            ("storage.nvme.available_spare", CheckValueType.Number, "%"),
+            ("storage.nvme.available_spare", CheckValueType.Int, "%"),
+            ("storage.nvme.percentage_used", CheckValueType.Int, "%"),
             ("storage.nvme.media_errors", CheckValueType.Dec, "count"),
             ("storage.nvme.power_on_hours", CheckValueType.Dec, "h"),
             ("storage.nvme.data_units_written", CheckValueType.Dec, "nvme_data_unit"),
@@ -211,7 +212,17 @@ public partial class RegistryTests
     [Theory]
     [InlineData(SubjectKind.Ram, "ram-1", true)]
     [InlineData(SubjectKind.Ram, "ram-12", true)]
-    [InlineData(SubjectKind.Disk, "disk-0", true)]
+    [InlineData(SubjectKind.Disk, "disk-1", true)]
+    [InlineData(SubjectKind.Disk, "disk-0", false)]
+    [InlineData(SubjectKind.Ram, "ram-0", false)]
+    [InlineData(SubjectKind.Cpu, "cpu-0", false)]
+    [InlineData(SubjectKind.Cpu, "cpu-1", true)]
+    [InlineData(SubjectKind.Cpu, "cpu-2", true)]
+    [InlineData(SubjectKind.Gpu, "gpu-0", false)]
+    [InlineData(SubjectKind.Volume, "volume-0", false)]
+    [InlineData(SubjectKind.Pagefile, "pagefile-0", false)]
+    [InlineData(SubjectKind.Disk, "disk-10", true)]
+    [InlineData(SubjectKind.Disk, "disk-00", false)]
     [InlineData(SubjectKind.Ram, "gpu-1", false)]
     [InlineData(SubjectKind.Ram, "ram-", false)]
     [InlineData(SubjectKind.Ram, "ram-01", false)]

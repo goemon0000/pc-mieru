@@ -3,7 +3,7 @@ namespace PcMieru.Checks.Tests;
 /// <summary>The overall verdict (SPEC-unify §4.0, DESIGN-A §3): the worst of the judged items, check > caution > unavailable > ok.</summary>
 public class VerdictTests
 {
-    // One token per item. A trailing "~" is reason partial (a value that is there but did not finish).
+    // One token per item. A trailing "~" is reason partial (a value that is there but did not finish); "ok~" does not exist.
     //   ok caution check unavail  a judged item          info  an observation-only item
     private static CheckItem Make(string token)
     {
@@ -12,10 +12,11 @@ public class VerdictTests
 
         return name switch
         {
+            "ok" when partial => throw new ArgumentException("An ok item has no reason (DESIGN-A §3.5-2): " + token),
             "ok" => Judged(ItemVerdict.Ok, partial),
             "caution" => Judged(ItemVerdict.Caution, partial),
             "check" => Judged(ItemVerdict.Check, partial),
-            "unavail" => new CheckItem("cpu.compute_errors", null, null, "count", ItemVerdict.Unavailable, CheckSource.Load, partial ? CheckReason.Partial : CheckReason.Error),
+            "unavail" => new CheckItem("cpu.compute_errors", null, partial ? CheckValue.Int(0) : null, "count", ItemVerdict.Unavailable, CheckSource.Load, partial ? CheckReason.Partial : CheckReason.Error),
             "info" => new CheckItem("cpu.duration", null, partial ? CheckValue.Number(1) : null, "s", ItemVerdict.Info, CheckSource.Load, partial ? CheckReason.Partial : CheckReason.Unsupported),
             _ => throw new ArgumentException(token),
         };
@@ -42,26 +43,22 @@ public class VerdictTests
     // unavailable ranks above ok but below caution
     [InlineData("ok ok ok unavail", CheckVerdict.Unavailable)]
     [InlineData("unavail caution", CheckVerdict.Caution)]
-    // an item that did not finish (partial) cannot say ok: it counts as unavailable...
-    [InlineData("ok~", CheckVerdict.Unavailable)]
-    [InlineData("ok~ ok", CheckVerdict.Unavailable)]
-    [InlineData("ok ok~ ok", CheckVerdict.Unavailable)]
+    // an item that did not finish (partial) says unavailable (an "ok" with a reason does not exist: DESIGN-A §3.5-2, see the validator tests)...
     [InlineData("unavail~", CheckVerdict.Unavailable)]
     [InlineData("unavail~ ok", CheckVerdict.Unavailable)]
     // ...unless it already found a caution or a check, which stays
     [InlineData("caution~", CheckVerdict.Caution)]
     [InlineData("caution~ ok", CheckVerdict.Caution)]
     [InlineData("check~", CheckVerdict.Check)]
-    [InlineData("check~ ok~ unavail", CheckVerdict.Check)]
-    [InlineData("ok~ caution", CheckVerdict.Caution)]
-    [InlineData("ok~ check", CheckVerdict.Check)]
+    [InlineData("check~ unavail~ unavail", CheckVerdict.Check)]
+    [InlineData("unavail~ caution", CheckVerdict.Caution)]
+    [InlineData("unavail~ check", CheckVerdict.Check)]
     // observation-only items never count, with or without a value, partial or not
     [InlineData("info", CheckVerdict.Unavailable)]
     [InlineData("info info info", CheckVerdict.Unavailable)]
     [InlineData("info~", CheckVerdict.Unavailable)]
     [InlineData("info ok", CheckVerdict.Ok)]
     [InlineData("info~ ok", CheckVerdict.Ok)]
-    [InlineData("info ok~", CheckVerdict.Unavailable)]
     [InlineData("info caution info", CheckVerdict.Caution)]
     // no items at all: nothing was judged
     [InlineData("", CheckVerdict.Unavailable)]
@@ -75,10 +72,16 @@ public class VerdictTests
     }
 
     [Fact]
-    public void An_item_that_says_ok_with_a_reason_is_not_a_complete_reading()
+    public void An_ok_item_with_a_reason_is_rejected_not_repaired_by_Overall()
     {
+        // DESIGN-A §3.5-2: an ok item has no reason. Overall is a plain worst-of and does not rescue such an item (it used
+        // to turn it into unavailable); the validator refuses it, so neither the writer nor the reader lets it through.
         var item = new CheckItem("cpu.compute_errors", null, CheckValue.Int(0), "count", ItemVerdict.Ok, CheckSource.Load, CheckReason.Partial);
-        Assert.Equal(CheckVerdict.Unavailable, CheckVerdicts.Overall([item]));
+        Assert.Equal(CheckVerdict.Ok, CheckVerdicts.Overall([item]));
+
+        var result = CheckResult.Create(Samples.App, Samples.CpuRun, CheckKind.Cpu, Samples.Start, Samples.Start.AddSeconds(1), CheckOutcome.Completed, [item]);
+        Assert.Contains(CheckResultValidator.Validate(result), p => p.Contains("ok cannot carry a reason", StringComparison.Ordinal));
+        Assert.Throws<CheckFormatException>(() => CheckJson.Serialize(result));
     }
 
     [Fact]

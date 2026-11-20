@@ -8,11 +8,11 @@
   "outcome": "completed",
   "verdict": "caution",
   "counts": {
-    "ok": 15,
-    "caution": 4,
+    "ok": 14,
+    "caution": 3,
     "check": 0,
     "unavailable": 0,
-    "info": 16
+    "info": 18
   },
   "items": [
     {
@@ -211,7 +211,7 @@
       "source": "baseline",
       "reason": "partial",
       "evidence": {
-        "code": "baseline_first"
+        "code": "baseline_missing_counter"
       }
     },
     {
@@ -306,13 +306,15 @@
         "id": "disk-1",
         "model": "Samsung SSD 980 PRO 2TB"
       },
-      "value": null,
+      "value": "89",
       "unit": "nvme_data_unit",
       "verdict": "info",
       "source": "baseline",
-      "reason": "partial",
+      "reason": null,
       "evidence": {
-        "code": "baseline_counter_reset"
+        "before": "123456700",
+        "after": "123456789",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
       }
     },
     {
@@ -432,15 +434,13 @@
         "id": "disk-2",
         "model": "CT500MX500SSD1"
       },
-      "value": "0",
+      "value": null,
       "unit": "smart_raw",
-      "verdict": "ok",
+      "verdict": "info",
       "source": "baseline",
-      "reason": null,
+      "reason": "partial",
       "evidence": {
-        "before": "0",
-        "after": "0",
-        "sinceUtc": "2026-11-17T03:00:00.000Z"
+        "code": "baseline_first"
       }
     },
     {
@@ -455,7 +455,7 @@
       "source": "baseline",
       "reason": "partial",
       "evidence": {
-        "code": "baseline_no_identity"
+        "code": "baseline_first"
       }
     },
     {
@@ -464,16 +464,13 @@
         "id": "disk-2",
         "model": "CT500MX500SSD1"
       },
-      "value": "2",
+      "value": null,
       "unit": "smart_raw",
-      "verdict": "caution",
+      "verdict": "info",
       "source": "baseline",
-      "reason": null,
+      "reason": "partial",
       "evidence": {
-        "code": "likely_cable",
-        "before": "3",
-        "after": "5",
-        "sinceUtc": "2026-11-17T03:00:00.000Z"
+        "code": "baseline_first"
       }
     },
     {

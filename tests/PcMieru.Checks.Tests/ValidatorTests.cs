@@ -76,25 +76,61 @@ public class ValidatorTests
     }
 
     [Fact]
-    public void The_gpu_driver_rows_may_be_info_when_the_device_is_not_working_exception_2()
+    public void The_gpu_driver_rows_are_info_exactly_when_the_device_status_of_the_same_gpu_is_not_0_exception_2()
     {
-        // The producer decides when (device status not 0); the registry only allows it, for these two IDs.
-        IsValid(
-            CheckKind.System,
-            CheckItem.Create("system.gpu.driver_age", CheckValue.Int(900), ItemVerdict.Info, CheckSource.Win32, subject: Gpu1),
-            CheckItem.Create("system.gpu.generic_driver", CheckValue.Bool(true), ItemVerdict.Info, CheckSource.Win32, subject: Gpu1));
+        CheckItem Status(int code, CheckSubject? gpu = null) =>
+            CheckItem.Create("system.gpu.device_status", CheckValue.Int(code), code == 0 ? ItemVerdict.Ok : ItemVerdict.Check, CheckSource.Setupapi, subject: gpu ?? Gpu1);
+        CheckItem Age(ItemVerdict verdict, CheckSubject? gpu = null) =>
+            CheckItem.Create("system.gpu.driver_age", CheckValue.Int(900), verdict, CheckSource.Win32, subject: gpu ?? Gpu1);
+        CheckItem Generic(ItemVerdict verdict, CheckSubject? gpu = null) =>
+            CheckItem.Create("system.gpu.generic_driver", CheckValue.Bool(true), verdict, CheckSource.Win32, subject: gpu ?? Gpu1);
 
-        // The same rows judged are fine too.
-        IsValid(
-            CheckKind.System,
-            CheckItem.Create("system.gpu.driver_age", CheckValue.Int(900), ItemVerdict.Caution, CheckSource.Win32, subject: Gpu1),
-            CheckItem.Create("system.gpu.generic_driver", CheckValue.Bool(true), ItemVerdict.Ok, CheckSource.Win32, subject: Gpu1));
+        // Status 43 (not 0): the two driver rows are info.
+        IsValid(CheckKind.System, Status(43), Age(ItemVerdict.Info), Generic(ItemVerdict.Info));
+
+        // Status 0: the same rows are judged.
+        IsValid(CheckKind.System, Status(0), Age(ItemVerdict.Caution), Generic(ItemVerdict.Ok));
+
+        // Status not 0 but the rows are judged, and status 0 but the rows are info: both are refused.
+        Fails("the device status of this GPU is not 0, so this row must be info", CheckKind.System, Status(43), Age(ItemVerdict.Caution), Generic(ItemVerdict.Info));
+        Fails("the device status of this GPU is not 0, so this row must be info", CheckKind.System, Status(22), Age(ItemVerdict.Info), Generic(ItemVerdict.Ok));
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, Status(0), Age(ItemVerdict.Info), Generic(ItemVerdict.Ok));
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, Status(0), Age(ItemVerdict.Caution), Generic(ItemVerdict.Info));
+
+        // With no status row at all there is nothing that is "not 0", so info is refused.
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, Age(ItemVerdict.Info));
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, Generic(ItemVerdict.Info));
+
+        // A status that could not be read (unavailable, no value) is not "not 0" either.
+        var unreadable = CheckItem.Create("system.gpu.device_status", null, ItemVerdict.Unavailable, CheckSource.Setupapi, CheckReason.Denied, Gpu1);
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, unreadable, Age(ItemVerdict.Info));
+        IsValid(CheckKind.System, unreadable, Age(ItemVerdict.Caution));
+
+        // The decision is per GPU: gpu-2 failing says nothing about gpu-1.
+        var gpu2 = new CheckSubject("gpu-2", "Another GPU");
+        IsValid(CheckKind.System, Status(0), Status(43, gpu2), Age(ItemVerdict.Ok), Age(ItemVerdict.Info, gpu2));
+        Fails("this row is info only when the device status of the same GPU is not 0", CheckKind.System, Status(0), Status(43, gpu2), Age(ItemVerdict.Info), Age(ItemVerdict.Info, gpu2));
 
         // The status row itself is never info.
         Fails(
             "a judged item cannot have verdict info",
             CheckKind.System,
             CheckItem.Create("system.gpu.device_status", CheckValue.Int(0), ItemVerdict.Info, CheckSource.Setupapi, subject: Gpu1));
+        Fails(
+            "a judged item cannot have verdict info",
+            CheckKind.System,
+            CheckItem.Create("system.gpu.device_status", CheckValue.Int(43), ItemVerdict.Info, CheckSource.Setupapi, subject: Gpu1));
+    }
+
+    [Fact]
+    public void No_other_judged_item_may_be_info_even_next_to_a_failing_gpu()
+    {
+        var status = CheckItem.Create("system.gpu.device_status", CheckValue.Int(43), ItemVerdict.Check, CheckSource.Setupapi, subject: Gpu1);
+        Fails(
+            "a judged item cannot have verdict info",
+            CheckKind.System,
+            status,
+            CheckItem.Create("system.os.uptime", CheckValue.Number(1), ItemVerdict.Info, CheckSource.Os));
     }
 
     [Fact]
@@ -110,14 +146,19 @@ public class ValidatorTests
     [Fact]
     public void Info_never_changes_the_overall_verdict_even_for_a_check_looking_row()
     {
-        // A GPU driver row downgraded to info (exception 2) must not move the overall verdict.
-        var result = Result(
-            CheckKind.System,
-            CheckItem.Create("system.os.uptime", CheckValue.Number(10), ItemVerdict.Ok, CheckSource.Os),
-            CheckItem.Create("system.gpu.driver_age", CheckValue.Int(9000), ItemVerdict.Info, CheckSource.Win32, subject: Gpu1));
-        Assert.Equal(CheckVerdict.Ok, result.Verdict);
-        Assert.Equal(new CheckCounts(1, 0, 0, 0, 1), result.Counts);
+        // A GPU driver row downgraded to info (exception 2) must not move the overall verdict: the failing device status is
+        // the only "check", and taking the info row away changes nothing.
+        var status = CheckItem.Create("system.gpu.device_status", CheckValue.Int(43), ItemVerdict.Caution, CheckSource.Setupapi, subject: Gpu1);
+        var uptime = CheckItem.Create("system.os.uptime", CheckValue.Number(10), ItemVerdict.Ok, CheckSource.Os);
+        var driver = CheckItem.Create("system.gpu.driver_age", CheckValue.Int(9000), ItemVerdict.Info, CheckSource.Win32, subject: Gpu1);
+        var result = Result(CheckKind.System, uptime, status, driver);
+        Assert.Equal(CheckVerdict.Caution, result.Verdict);
+        Assert.Equal(new CheckCounts(1, 1, 0, 0, 1), result.Counts);
         Assert.Empty(CheckResultValidator.Validate(result));
+        Assert.Equal(CheckVerdict.Caution, CheckVerdicts.Overall([uptime, status]));
+
+        // With nothing else judged, an info row alone leaves "unavailable" (no judged item), never ok.
+        Assert.Equal(CheckVerdict.Unavailable, CheckVerdicts.Overall([driver]));
     }
 
     // ---- DESIGN-A §3 / §14.0: value and reason ----
@@ -146,12 +187,16 @@ public class ValidatorTests
     }
 
     [Fact]
-    public void An_ok_item_with_partial_is_valid_and_counts_as_unavailable_overall()
+    public void An_ok_item_with_partial_is_rejected_not_counted_as_unavailable()
     {
-        var result = Result(CheckKind.Memory, CheckItem.Create("memory.mismatches", CheckValue.Int(0), ItemVerdict.Ok, CheckSource.Load, CheckReason.Partial));
-        Assert.Empty(CheckResultValidator.Validate(result));
-        Assert.Equal(CheckVerdict.Unavailable, result.Verdict);
-        Assert.Equal(new CheckCounts(1, 0, 0, 0, 0), result.Counts); // the item says ok; the overall verdict is the function's
+        // The old rule let "ok + partial" through and read it as unavailable. §3.5-2: a value that did not finish is caution,
+        // check or unavailable; ok means a complete reading, so ok + a reason is a producer bug and the writer refuses it.
+        var item = CheckItem.Create("memory.mismatches", CheckValue.Int(0), ItemVerdict.Ok, CheckSource.Load, CheckReason.Partial);
+        Fails("ok cannot carry a reason", CheckKind.Memory, item);
+
+        var result = Result(CheckKind.Memory, item);
+        Assert.Equal(CheckVerdict.Ok, result.Verdict); // Overall is a plain function of the verdicts; it does not repair the row
+        Assert.Throws<CheckFormatException>(() => CheckJson.Serialize(result));
     }
 
     [Fact]
@@ -180,7 +225,7 @@ public class ValidatorTests
     [Fact]
     public void Number_and_count_values_are_checked()
     {
-        Fails("a count cannot be negative", CheckKind.Memory, CheckItem.Create("memory.mismatches", CheckValue.Int(-1), ItemVerdict.Ok, CheckSource.Load));
+        Fails("a value in 'count' cannot be negative", CheckKind.Memory, CheckItem.Create("memory.mismatches", CheckValue.Int(-1), ItemVerdict.Ok, CheckSource.Load));
 
         // A number that is not finite cannot be made at all (the factory refuses), so it never reaches a result.
         Assert.Throws<ArgumentOutOfRangeException>(() => CheckValue.Number(double.NaN));
@@ -338,7 +383,7 @@ public class ValidatorTests
     public void Baseline_codes_belong_to_storage_items_only()
     {
         Fails(
-            "baseline evidence codes belong to storage items",
+            "cannot be carried by this item",
             CheckKind.Memory,
             CheckItem.Create("memory.mismatches", CheckValue.Int(1), ItemVerdict.Check, CheckSource.Load, evidence: CheckEvidence.OfCode(CheckEvidenceCode.BaselineFirst)));
         IsValid(
@@ -347,11 +392,18 @@ public class ValidatorTests
     }
 
     [Fact]
-    public void New_bits_are_evidence_of_the_critical_warning_delta_only()
+    public void New_bits_are_evidence_of_the_critical_warning_row_and_its_delta_only()
     {
         var evidence = new CheckEvidence { Before = "0", After = "2", SinceUtc = Since, NewBits = 2 };
         IsValid(CheckKind.Storage, Delta("storage.nvme.critical_warning", CheckValue.SignedDec("2"), ItemVerdict.Check, evidence));
-        Fails("newBits is evidence of storage.nvme.critical_warning.delta only", CheckKind.Storage, Delta("storage.nvme.media_errors", CheckValue.SignedDec("2"), ItemVerdict.Caution, evidence));
+        IsValid(
+            CheckKind.Storage,
+            CheckItem.Create("storage.nvme.critical_warning", CheckValue.Int(2), ItemVerdict.Check, CheckSource.Nvme, subject: Disk1, evidence: new CheckEvidence { Code = CheckEvidenceCode.NewBits, NewBits = 2 }));
+        Fails(
+            "newBits is evidence of storage.nvme.critical_warning and its .delta only",
+            CheckKind.Storage,
+            CheckItem.Create("storage.nvme.media_errors", CheckValue.Dec("2"), ItemVerdict.Caution, CheckSource.Nvme, subject: Disk1, evidence: new CheckEvidence { NewBits = 2 }));
+        Fails("newBits is evidence of storage.nvme.critical_warning and its .delta only", CheckKind.Storage, Delta("storage.nvme.media_errors", CheckValue.SignedDec("2"), ItemVerdict.Caution, evidence));
         Fails("evidence integers cannot be negative", CheckKind.Storage, Delta("storage.nvme.critical_warning", CheckValue.SignedDec("2"), ItemVerdict.Check, evidence with { NewBits = -1 }));
     }
 
