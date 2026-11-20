@@ -81,7 +81,7 @@ public sealed record CheckHistoryGetResult       // 作れる形は Found(result
 - `CheckServices` は `IHardwareProvider` と新設する Core の `IStorageInspectionSource`、CPU 点検用測定セッションのファクトリー、時計と保存先を受ける。Windows の依存は組み立て側で差し込む。`IHardwareProvider.GetAsync` と既存 `IStorageHealthProvider` の入口は `src/PcMieru.Core/Contracts/Interfaces.cs:76`、`:84`。現行の採取の振り分けは `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:32`、`:49`。Core の `Value<T>` を採取境界で使い、Checks の結果に変換する。`src/PcMieru.Core/Contracts/Value.cs:14`、`:30`。
 - GUI はウィンドウにつき実行を 1 本持つ。実行・採取・WMI・履歴操作・PCB1 の収集と保存はバックグラウンドで行う。UI は進捗と結果の描画、ダイアログ、クリップボードを担当する。`Task.Run` より前に同期 I/O を置かない。明示的な GC を呼ばない。負荷のサンプルは独立したセッションで採り、`SamplerLoop` に設定要求を出さない。GUI の既存接続は `src/PcMieru.Gui/Data/SnapshotPump.cs:37`、`:222`、`:249`。
 - 停止は実行ごとの `CancellationTokenSource` を使う。CPU スレッドの join とメモリの解放を待ってから「停止」にする。停止時点までに確認できた異常は残す。途中の集計は `partial`。期限超過で Windows の問い合わせから先に戻るときは結果を封印し、遅れて返った値を捨てる。ネイティブ呼び出しの残存は §6 の実行枠で管理する。
-- 結果の確定点は一つ。確定前の停止は `stopped`、実行全体が成立しない障害は `failed`、個別の欠測を含め所定の処理を終えた回は `completed`。開始した回は停止・失敗も保存対象。確定後の書き込みには利用者の停止トークンを渡さない。保存に失敗した場合も画面に結果を残す。書き手の誤りで厳しい検証を通らなかった結果は保存せず、`failed`・`result_invalid` の空の結果だけを保存する。元の結果は `CheckRun` に（保存しない物として）残して画面に出し、元の失敗コードと最初の問題を診断に持つ。
+- 結果の確定点は一つ。手順が行を返した時点が確定点で、その後に届いた停止は `completed` を変えない（負荷は終わっている。行を partial にせず、総合も変えない）。確定前の停止は `stopped` で、その回の行はすべて `partial`（`ok` の行は `unavailable`）にするので、止めた回の総合は `ok` にならない。実行全体が成立しない障害は `failed`、個別の欠測を含め所定の処理を終えた回は `completed`。開始した回は停止・失敗も保存対象。確定後の書き込みには利用者の停止トークンを渡さない。保存に失敗した場合も画面に結果を残す。書き手の誤りで厳しい検証を通らなかった結果は保存せず、`failed`・`result_invalid` の空の結果だけを保存する。元の結果は `CheckRun` に（保存しない物として）残して画面に出し、元の失敗コードと最初の問題を診断に持つ。
 
 ## 3. `pcm-check/1`
 
@@ -316,7 +316,7 @@ WMI は固定の問い合わせごとに接続、実行、全件列挙・変換�
 ### 6.2 CPU とメモリ
 
 - CPU は論理 CPU ごとに `BelowNormal` の専用スレッドを 1 本。group と CPU 番号で pin し、pin の成否を持つ。既知の入力に対するチャンクの答えを照合する。停止はチャンク境界。負荷が残っている間は完了を通知しない。旧チャンク、pin、停止と join は `PL/Load/CpuLoadTest.cs:53`、`:79`、`:92`、`:105`、`:124`、`:147`。
-- 点検専用 PDH クエリに `\Processor Information(_Total)\Processor Frequency` と `\Processor Information(_Total)\% Processor Performance` を登録し、同じ収集時点の 2 値で `frequency × performance / 100` を計算する。欠測や不正なサンプルを 0 MHz にしない。現行 `PdhSystemSampler` はすでに両方を登録している（u0.3 までの「片方だけ」は誤りで、u0.4 で直した）。既存の読み取り規則を共用し、クエリは別インスタンスにする。`PL/Load/ClockSampler.cs:22`、`:38`、`src/PcMieru.Core/Collection/PdhSystemSampler.cs:44`、`:224`、`:246`。
+- 点検専用 PDH クエリに `\Processor Information(_Total)\Processor Frequency` と `\Processor Information(_Total)\% Processor Performance` を登録し、同じ収集時点の 2 値で `frequency × performance / 100` を計算する。欠測や不正なサンプルを 0 MHz にしない。現行 `PdhSystemSampler` はすでに両方を登録している（u0.3 までの「片方だけ」は誤りで、u0.4 で直した）。既存の読み取り規則を共用し、クエリは別インスタンスにする。PDH の採取が固まっても停止と所定時間の終わりは遅らせない（停止トークンと絶対の締め切りで負荷を止め、採取は負荷の制御から切り離す）。毎秒の刻みは開始からの絶対時刻で数え、ずれを溜めない（毎秒 1 回の通知の門が早すぎた 1 回を落としてよい）。負荷スレッドから漏れた例外（メモリ不足を含む）は黙って捨てず、その回を `failed` にする。試験では CPU のセッションを明示して渡し、本物のセッションを使えるのは RealMachine の試験だけにする。`PL/Load/ClockSampler.cs:22`、`:38`、`src/PcMieru.Core/Collection/PdhSystemSampler.cs:44`、`:224`、`:246`。
 - CPU パッケージ電力は `\Energy Meter(*)\Power` のパッケージインスタンスだけを読み、確認済みの mW を合計して W にする。列挙、単位、サンプルが確かめられなければ測れず。参考実装は後段ブランチの `pl-sensors/src/PartsLife.Checks/Recording/Sources.System.cs:12`、`:45`、`:189`。移すのはパッケージの選別と換算規則。CPU 温度は読まない（項目を置かず note だけ。§3.2）。
 - メモリは空きの既定 25%、最大 50%。`max(1 GiB, 物理容量の10%)` を空け、64 MiB ごとに確保してページを触る。実行中も空きを監視し、下限に達したら `stopped` と `memory.pressure`。停止・期限は小区画で確認する。確保済み範囲は `finally` で解放する。旧計画、空き監視と解放は `PL/Load/MemoryTest.cs:52`、`:61`、`:91`、`:121`、`:169`。
 
@@ -430,7 +430,9 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 12. **点検 1fa342a・97858af（段 A 手順 4b）の後で決めた**（§2・§3・§14.4）。基準値は `checks\baseline\`（§4 のまま。実装が `PCMieru\baseline` に置いていた）。`storage.health` は Windows の状態から作り、SMART からまとめない（実装は手順 5 の期限つき WMI と一緒）。NVMe の温度は旧どおり Kelvin − 273 の整数。検証を通らない結果は元の結果を画面に残す。注記 `storage.legacy_import_abandoned` を足した。
 
-13. **点検 88a1549・7da6884（段 A 手順 5b）の後で決めた**（§3.1・§14.1）。媒体の入っていない枠は台にもボリュームにも数えない。`system.pagefile.automatic` は機械全体の 1 行。MSFT_PhysicalDisk にその台の行が無いのは `unsupported`（2 行・失敗は `error`）。シリアルは Core と同じ規則で揃える。`disk-N` は種類ごとの番号。あわせて実装側で、Core の機器採取の待ち（`Invalidate` のロックを含む）を呼び出し側のスレッドで行わない・前の回の採取が戻っていない分類は待たずに `timeout`・PCI の位置を持たない GPU（Basic Render・仮想の画面）の状態は `unsupported`。
+13. **点検 88a1549・7da6884（段 A 手順 5b）の後で決めた**（§3.1・§14.1）。媒体の入っていない枠は台にもボリュームにも数えない。`system.pagefile.automatic` は機械全体の 1 行。MSFT_PhysicalDisk にその台の行が無いのは `unsupported`（2 行・失敗は `error`）。シリアルは Core と同じ規則で揃える。`disk-N` は種類ごとの番号。媒体なしは容量 0 か Windows のエラー 21・1112 だけ（他の読み取りエラーは入っているカードの故障かもしれないので数える。586435f）。あわせて実装側で、Core の機器採取の待ち（`Invalidate` のロックを含む）を呼び出し側のスレッドで行わない・前の回の採取が戻っていない分類は待たずに `timeout`・PCI の位置を持たない GPU（Basic Render・仮想の画面）の状態は `unsupported`。
+
+14. **点検 385ebe0（段 A 手順 6）の後で決めた**（§2・§6.2・§14.2）。確定点は手順が行を返した時点で、その後の停止は `completed` を変えない。止めた回の行は `partial`。`cv` の表示は ×100・閾値は比のまま。偶数個の中央値は上側で、pin できた CPU だけで取る。`pin_unknown` と照合 0 回は `partial`。PDH が固まっても負荷は止まる。刻みは絶対時刻。負荷スレッドの例外は `failed`。試験の既定のセッションは本物にしない。
 
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
@@ -472,10 +474,10 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 | ID | 判定 |
 |---|---|
-| `cpu.compute_errors` | 1 以上 → `check`（`compute_mismatch`）。照合 0 回 → `unavailable` |
-| `cpu.steadiness` | 旧 `Steadiness.Judge` の 1 判定（`PL/Load/Steadiness.cs:31`）: 持続率 < 70 → `check`、< 90 または変動係数 > 0.10 → `caution`、他 `ok`。根拠に `cv`。立ち上がりの 2 個を除いて 6 個未満 → `unavailable`（`reason: partial`、`too_short`） |
+| `cpu.compute_errors` | 1 以上 → `check`（`compute_mismatch`）。照合 0 回 → `unavailable`（`reason: partial`） |
+| `cpu.steadiness` | 旧 `Steadiness.Judge` の 1 判定（`PL/Load/Steadiness.cs:31`）: 持続率 < 70 → `check`、< 90 または変動係数 > 0.10 → `caution`、他 `ok`。根拠に `cv`（`cv` と `cpu.variation` は ×100 の % で出し、0.10 の閾値は ×100 する前の比で判定する。旧どおり）。立ち上がりの 2 個を除いて 6 個未満 → `unavailable`（`reason: partial`、`too_short`） |
 | `cpu.variation` | `info`（`cpu.steadiness` の判定の材料。独立には判定しない） |
-| `cpu.peer_ratio`（各論理 CPU） | 同じ効率クラスの中央値（偶数個なら上側＝`ElementAt(n/2)`）の 75% 未満 → `caution`。中央値 0 → `unavailable`。pin の成否が分からない → `unavailable`（`pin_unknown`）。論理 CPU が 1 個なら項目を出さない |
+| `cpu.peer_ratio`（各論理 CPU） | 同じ効率クラスの中央値（偶数個なら上側＝`ElementAt(n/2)`）の 75% 未満 → `caution`。中央値 0 → `unavailable`。pin の成否が分からない → `unavailable`（`reason: partial`・`pin_unknown`。Windows が pin を断った場合と、例外・未実行で分からない場合の両方）。中央値は pin できた CPU だけで取る。論理 CPU が 1 個なら項目を出さない |
 | `cpu.effective_clock` | 値は取れたサンプルの平均。全サンプルでクロックが取れて持続性が計算できたときだけ判定: クロックの持続率 < 85 → `caution`、他 `ok`（根拠 `clockSteadiness`）。平均は取れたが持続性が出ない → 値はそのまま `unavailable`・`reason: partial`。1 つも取れない → `null`・`unsupported` |
 
 ### 14.3 メモリ
