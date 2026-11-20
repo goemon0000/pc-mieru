@@ -81,7 +81,7 @@ public sealed record CheckHistoryGetResult       // 作れる形は Found(result
 - `CheckServices` は `IHardwareProvider` と新設する Core の `IStorageInspectionSource`、CPU 点検用測定セッションのファクトリー、時計と保存先を受ける。Windows の依存は組み立て側で差し込む。`IHardwareProvider.GetAsync` と既存 `IStorageHealthProvider` の入口は `src/PcMieru.Core/Contracts/Interfaces.cs:76`、`:84`。現行の採取の振り分けは `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:32`、`:49`。Core の `Value<T>` を採取境界で使い、Checks の結果に変換する。`src/PcMieru.Core/Contracts/Value.cs:14`、`:30`。
 - GUI はウィンドウにつき実行を 1 本持つ。実行・採取・WMI・履歴操作・PCB1 の収集と保存はバックグラウンドで行う。UI は進捗と結果の描画、ダイアログ、クリップボードを担当する。`Task.Run` より前に同期 I/O を置かない。明示的な GC を呼ばない。負荷のサンプルは独立したセッションで採り、`SamplerLoop` に設定要求を出さない。GUI の既存接続は `src/PcMieru.Gui/Data/SnapshotPump.cs:37`、`:222`、`:249`。
 - 停止は実行ごとの `CancellationTokenSource` を使う。CPU スレッドの join とメモリの解放を待ってから「停止」にする。停止時点までに確認できた異常は残す。途中の集計は `partial`。期限超過で Windows の問い合わせから先に戻るときは結果を封印し、遅れて返った値を捨てる。ネイティブ呼び出しの残存は §6 の実行枠で管理する。
-- 結果の確定点は一つ。確定前の停止は `stopped`、実行全体が成立しない障害は `failed`、個別の欠測を含め所定の処理を終えた回は `completed`。開始した回は停止・失敗も保存対象。確定後の書き込みには利用者の停止トークンを渡さない。保存に失敗した場合も画面に結果を残す。
+- 結果の確定点は一つ。確定前の停止は `stopped`、実行全体が成立しない障害は `failed`、個別の欠測を含め所定の処理を終えた回は `completed`。開始した回は停止・失敗も保存対象。確定後の書き込みには利用者の停止トークンを渡さない。保存に失敗した場合も画面に結果を残す。書き手の誤りで厳しい検証を通らなかった結果は保存せず、`failed`・`result_invalid` の空の結果だけを保存する。元の結果は `CheckRun` に（保存しない物として）残して画面に出し、元の失敗コードと最初の問題を診断に持つ。
 
 ## 3. `pcm-check/1`
 
@@ -93,7 +93,7 @@ UTF-8 の JSON オブジェクト。キーと列挙値は英語。表示用の�
 | `kind`, `startedAtUtc`, `endedAtUtc` | `system\|cpu\|memory\|storage`（段 A は GPU を作らない。`gpu` は門を開く版で足す）。時刻は UTC ISO 8601（`Z`）。経過時間と期限の計算には単調時計を使う。 |
 | `outcome`, `verdict`, `counts` | `completed\|stopped\|failed`。結果全体の `verdict` は 4 値 `ok\|caution\|check\|unavailable`。項目の `verdict` は `info` を足した 5 値。`counts` は 5 値それぞれのキーを持つ非負整数（`info` を含む）。 |
 | `items` | `{id, subject?, value, unit, verdict, source, reason, evidence?}` の配列。`id` は表の固定値。反復項目の `subject` は `{id, model?}`。同じ結果内で `(id, subject.id)` は一意。ディスク以外の反復にも `ram-1`、`gpu-1`、`volume-1`、`pagefile-1` などの通し番号を使う。ドライブ文字やパスは入れない。 |
-| `notes` | 固定コードの配列。例 `memory.borrowed_region_only`、`storage.baseline_read_failed`。表示文は読み手が引く。 |
+| `notes` | 固定コードの配列。例 `memory.borrowed_region_only`、`storage.baseline_read_failed`、`storage.legacy_import_abandoned`（§5.3-2 で旧データを取り込まずに移行を見送った回。旧の履歴が使われなかったことを利用者に知らせる）。表示文は読み手が引く。 |
 
 `reason` は完全に測れたら `null`。途中の値なら値は非 `null` のまま `reason: partial` を併せて持つ（これだけが値と理由の併存を許す）。`value: null` の場合は必ず `unsupported`（対応や公開がない）、`denied`（権限拒否・UAC 拒否）、`timeout`（期限超過）、`error`（読み取り・検証失敗）、`partial`（停止・不足・比較不能）のいずれか。`source` は `smbios`、`setupapi`、`win32`、`wmi`、`eventlog`、`pdh`、`load`、`nvme`、`ata`、`baseline` などの固定コード。`evidence` は項目ごとの固定キーを持つ。例 `code: "counter_increased"`、`code: "baseline_duplicate"`。任意の診断文を通さない。
 
@@ -428,6 +428,8 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 11. **点検 4bbea0c（段 A 手順 4a）の後で決めた**（§4・§5.3・§14.5）。基準値のロックはフォルダの中のロック用ファイル。退避（`.bad`）に失敗したファイルは書き戻さず、その台は `baseline_read_failed`。旧双子集合は一時的な失敗なら再試行、中身が壊れていれば旧履歴を取り込まず移行を見送りで完了。`acq` が新しくても、カウンターが逆行し比較元の方が時刻が後なら遅れた採取として記録しない。
 
+12. **点検 1fa342a・97858af（段 A 手順 4b）の後で決めた**（§2・§3・§14.4）。基準値は `checks\baseline\`（§4 のまま。実装が `PCMieru\baseline` に置いていた）。`storage.health` は Windows の状態から作り、SMART からまとめない（実装は手順 5 の期限つき WMI と一緒）。NVMe の温度は旧どおり Kelvin − 273 の整数。検証を通らない結果は元の結果を画面に残す。注記 `storage.legacy_import_abandoned` を足した。
+
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
 旧コードの行は `PL/` が `pl-cloud/src/PartsLife.Checks/`（v0.7.4 `25e4571`）。閾値の境界（`<` か `<=` か）は旧コードどおりで、fixture に境界の値を直書きする。
@@ -495,8 +497,8 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 | ID | 判定 |
 |---|---|
-| `storage.health` | §14.1 の `system.storage.health` と同じ決まり |
-| `storage.temperature` | NVMe: 現在温度が読めない → 累計にかかわらず `unavailable`（旧どおり）。≥ 80 → `check`、≥ 70 → `caution`、他 `ok`。ただし危険温度超過の累計分 > 0 なら少なくとも `caution`（`temp_over_critical_before`、根拠 `warningTempMinutes`・`criticalTempMinutes`。Core の `HardwareDetails.cs:159` が既に読んでいる）。ATA: 194、無ければ 190 の値が 1〜127 のとき ≥ 70 → `check`、≥ 60 → `caution`、他 `ok`。範囲外・無し → `unavailable` |
+| `storage.health` | §14.1 の `system.storage.health` と同じ決まり。値は Windows の `MSFT_PhysicalDisk`（`ROOT\Microsoft\Windows\Storage`）の HealthStatus・OperationalStatus で、SMART の行から作らない（温度などが二重に数えられ、Windows が異常と言うのに「健康」と書く形になるため）。台との対応は `DeviceId` ＝ ドライブ番号で引き、両方にシリアルがあれば一致を確かめる（違えば `unavailable`）。問い合わせは §6.1 の期限つき。読めない・期限切れは `unavailable` |
+| `storage.temperature` | NVMe の値と判定は Kelvin の整数から 273 を引いた整数（旧 `NvmeHealth.cs:42`。273.15 を引くと 343 K が 69.85 になり境目で判定が 1 段下がる）。NVMe: 現在温度が読めない → 累計にかかわらず `unavailable`（旧どおり）。≥ 80 → `check`、≥ 70 → `caution`、他 `ok`。ただし危険温度超過の累計分 > 0 なら少なくとも `caution`（`temp_over_critical_before`、根拠 `warningTempMinutes`・`criticalTempMinutes`。Core の `HardwareDetails.cs:159` が既に読んでいる）。ATA: 194、無ければ 190 の値が 1〜127 のとき ≥ 70 → `check`、≥ 60 → `caution`、他 `ok`。範囲外・無し → `unavailable` |
 | `storage.nvme.critical_warning` | 0 以外 → `check`、0 → `ok` |
 | `storage.nvme.available_spare` | しきい値 > 0 かつ 予備 < しきい値 → `check`。予備 < しきい値 + 10 → `caution`。他 `ok` |
 | `storage.nvme.percentage_used` | ≥ 100 → `check`、≥ 90 → `caution`、他 `ok` |
