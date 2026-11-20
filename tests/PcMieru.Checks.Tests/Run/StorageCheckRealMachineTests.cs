@@ -141,6 +141,13 @@ public sealed class StorageCheckRealMachineTests(ITestOutputHelper output)
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"  {id}: protocol={protocol} smart={smart} windows_health={windowsText} check={check} caution={caution} unavailable={unavailable} rows={rows.Count} deltas={deltas.Count} compared={compared} codes=[{string.Join(",", codes)}]"));
+
+            // The health of the NVMe log, row by row: the value and its verdict, or the reason it is missing (numbers of the log only, no name of the disk).
+            foreach (var row in rows.Where(static r => r.Id.StartsWith("storage.nvme.", StringComparison.Ordinal) && !r.Id.EndsWith(".delta", StringComparison.Ordinal)))
+            {
+                var shown = row.Value is null ? "missing:" + (row.Reason?.ToString() ?? "no-reason") : row.Value.ToString() + "/" + row.Verdict;
+                output.WriteLine($"    {row.Id}={shown}");
+            }
         }
     }
 }

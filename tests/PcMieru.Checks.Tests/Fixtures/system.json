@@ -350,9 +350,6 @@
     },
     {
       "id": "system.pagefile.automatic",
-      "subject": {
-        "id": "pagefile-1"
-      },
       "value": true,
       "unit": null,
       "verdict": "info",

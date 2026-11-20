@@ -1,6 +1,7 @@
 using System.Text;
 using PcMieru.Checks.SystemInfo;
 using PcMieru.Checks.Tests.SystemInfo;
+using PcMieru.Core;
 using PcMieru.Core.Hardware;
 using PcMieru.Core.Hardware.Model;
 
@@ -27,9 +28,9 @@ public sealed class SystemCheckRunTests
     private static IEnumerable<CheckItem> EventRows(CheckRun run) => run.Result.Items.Where(static i => i.Id.StartsWith("system.eventlog.", StringComparison.Ordinal));
 
     /// <summary>A rig whose machine is healthy: the drives Core lists are the drives WMI lists, with the same serials, at the moment the fake machine is at.</summary>
-    private static RunRig Rig(ManualTimeProvider? clock = null)
+    private static RunRig Rig(ManualTimeProvider? clock = null, Func<IHardwareProvider>? hardwareFactory = null)
     {
-        var rig = new RunRig(clock: clock);
+        var rig = new RunRig(clock: clock, hardwareFactory: hardwareFactory);
         rig.Wmi.Rows("MSFT_PhysicalDisk", FakeWmiReader.MachineDisks());
         rig.Time.Now = new DateTimeOffset(Hw.Now);
         return rig;
@@ -98,7 +99,7 @@ public sealed class SystemCheckRunTests
         // One GPU with the status of its own controller, one page file, the eleven counts of the event log.
         Assert.Equal(CheckValue.Int(0), Row(run, "system.gpu.device_status", "gpu-1").Value);
         Assert.Equal(CheckValue.Int(1), Row(run, "system.pagefile.count").Value);
-        Assert.Equal(CheckValue.Bool(true), Row(run, "system.pagefile.automatic", "pagefile-1").Value);
+        Assert.Equal(CheckValue.Bool(true), Row(run, "system.pagefile.automatic").Value);
         Assert.Equal(11, EventRows(run).Count());
         Assert.All(EventRows(run), static e =>
         {
@@ -148,13 +149,13 @@ public sealed class SystemCheckRunTests
     // ---- what the run does and does not do ----
 
     [Fact]
-    public async Task The_hardware_is_read_fresh_every_run_and_each_category_is_asked_once()
+    public async Task Each_category_of_the_hardware_is_asked_once_per_run_and_the_provider_is_never_invalidated()
     {
         using var rig = Rig();
 
         await Run(rig);
 
-        Assert.Equal(1, rig.Hardware.Invalidations);
+        Assert.Equal(0, rig.Hardware.Invalidations); // Invalidate takes the gates an abandoned call may hold: a run never calls it
         Assert.Equal(
             new[] { HardwareCategory.Cpu, HardwareCategory.Memory, HardwareCategory.Gpu, HardwareCategory.Storage, HardwareCategory.Os },
             rig.Hardware.Asked.Order());
@@ -163,7 +164,146 @@ public sealed class SystemCheckRunTests
 
         await Run(rig);
 
-        Assert.Equal(2, rig.Hardware.Invalidations);
+        Assert.Equal(0, rig.Hardware.Invalidations);
+        Assert.Equal(10, rig.Hardware.Asked.Count);
+    }
+
+    [Fact]
+    public async Task Every_run_gets_a_provider_of_its_own_from_the_factory_and_none_is_invalidated()
+    {
+        var made = new List<FakeHardware>();
+        using var rig = Rig(hardwareFactory: () =>
+        {
+            var provider = new FakeHardware();
+            lock (made)
+            {
+                made.Add(provider);
+            }
+
+            return provider;
+        });
+
+        var first = await Run(rig);
+        var second = await Run(rig);
+
+        Assert.Equal(CheckOutcome.Completed, first.Result.Outcome);
+        Assert.Equal(CheckOutcome.Completed, second.Result.Outcome);
+        Assert.Equal(2, made.Count);
+        Assert.All(made, static provider =>
+        {
+            Assert.Equal(0, provider.Invalidations);
+            Assert.Equal(5, provider.Asked.Count);
+        });
+    }
+
+    /// <summary>A provider whose every call blocks the thread that makes it until the test lets go: Invalidate, and GetAsync before it returns a task.</summary>
+    private sealed class BlockingHardware : IHardwareProvider
+    {
+        private int _asked;
+        private int _invalidations;
+
+        public ManualResetEventSlim Release { get; } = new();
+
+        public int Asked => Volatile.Read(ref _asked);
+
+        public int Invalidations => Volatile.Read(ref _invalidations);
+
+        public Task<HardwareInfo> GetAsync(HardwareCategory category, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _asked);
+            Release.Wait();
+            return Task.FromResult(Hw.Machine());
+        }
+
+        public void Invalidate()
+        {
+            Interlocked.Increment(ref _invalidations);
+            Release.Wait();
+        }
+    }
+
+    [Fact]
+    public async Task A_provider_that_blocks_everywhere_does_not_hold_the_start_and_the_run_ends_at_the_hardware_deadline()
+    {
+        var clock = new ManualTimeProvider();
+        var blocking = new BlockingHardware();
+        try
+        {
+            using var rig = Rig(clock, () => blocking);
+
+            // The start is made on a thread of its own, so that a start that blocks fails this test instead of hanging it.
+            Task<CheckRun>? task = null;
+            var starter = new Thread(() => task = Run(rig)) { IsBackground = true };
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            starter.Start();
+            Assert.True(starter.Join(QueryTest.Patience), "the start of the run blocked on the provider");
+            watch.Stop();
+            Assert.NotNull(task);
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "the start of the run took long: " + watch.Elapsed);
+
+            // The five calls block on their workers; the clock runs to the deadline of the hardware group (10 s) and the run ends there.
+            Assert.True(QueryTest.Eventually(() => blocking.Asked == 5), "the provider was not asked for all five categories");
+            Assert.True(QueryTest.Eventually(() =>
+            {
+                clock.Advance(OneSecond);
+                return task!.IsCompleted;
+            }), "the run did not end although the clock ran on");
+            var run = await task!;
+
+            Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+            Assert.Equal(0, blocking.Invalidations); // never asked to invalidate: that is the call that would have blocked the caller
+            Assert.Equal(CheckVerdict.Unavailable, run.Result.Verdict);
+            foreach (var id in new[] { "system.os.version", "system.cpu.model", "system.memory.modules", "system.gpu.adapters", "system.storage.devices" })
+            {
+                var row = Row(run, id);
+                Assert.Null(row.Value);
+                Assert.Equal(CheckReason.Timeout, row.Reason);
+            }
+
+            Assert.Equal(ItemVerdict.Unavailable, Row(run, "system.memory.modules").Verdict); // a judged row; the others are info rows and stay info
+
+            Assert.Equal(CheckValue.Int(1), Row(run, "system.pagefile.count").Value); // WMI and the event log are not held by it
+            Assert.Empty(CheckResultValidator.Validate(run.Result));
+        }
+        finally
+        {
+            blocking.Release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task A_factory_that_blocks_does_not_hold_the_start_either()
+    {
+        var clock = new ManualTimeProvider();
+        using var release = new ManualResetEventSlim();
+        try
+        {
+            using var rig = Rig(clock, () =>
+            {
+                release.Wait();
+                return new FakeHardware();
+            });
+
+            Task<CheckRun>? task = null;
+            var starter = new Thread(() => task = Run(rig)) { IsBackground = true };
+            starter.Start();
+            Assert.True(starter.Join(QueryTest.Patience), "the start of the run blocked on the factory");
+            Assert.True(QueryTest.Eventually(() =>
+            {
+                clock.Advance(OneSecond);
+                return task!.IsCompleted;
+            }), "the run did not end although the clock ran on");
+            var run = await task!;
+
+            Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+            Assert.Null(Row(run, "system.os.version").Value);
+            Assert.Equal(CheckReason.Timeout, Row(run, "system.os.version").Reason);
+            Assert.Equal(CheckVerdict.Unavailable, run.Result.Verdict);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     [Fact]
@@ -382,6 +522,48 @@ public sealed class SystemCheckRunTests
     }
 
     [Fact]
+    public async Task A_category_whose_call_of_an_earlier_run_has_not_returned_is_a_timeout_at_once_and_no_second_call_is_made()
+    {
+        var clock = new ManualTimeProvider();
+        using var rig = Rig(clock);
+        var never = new TaskCompletionSource<HardwareInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Hardware.Then(HardwareCategory.Memory, _ => never.Task);
+        int Asked(HardwareCategory category) => rig.Hardware.Asked.Count(c => c == category);
+
+        // The first run waits for it to its deadline.
+        var first = Run(rig);
+        Assert.True(QueryTest.Eventually(() => rig.Hardware.Asked.Count == 5), "the provider was not asked for all five categories");
+        Assert.True(QueryTest.Eventually(() =>
+        {
+            clock.Advance(OneSecond);
+            return first.IsCompleted;
+        }), "the first run did not end although the clock ran on");
+        await first;
+        Assert.Equal(1, Asked(HardwareCategory.Memory));
+        Assert.True(rig.Services.HardwareCalls.IsRunning(HardwareCategory.Memory));
+
+        // The second run does not move the clock at all: the memory is a timeout at once, with no call, and the others are asked as ever.
+        var second = await Run(rig).WaitAsync(QueryTest.Patience);
+
+        Assert.Equal(1, Asked(HardwareCategory.Memory));
+        Assert.Equal(2, Asked(HardwareCategory.Os));
+        Assert.Equal(2, Asked(HardwareCategory.Storage));
+        var modules = Row(second, "system.memory.modules");
+        Assert.Equal(ItemVerdict.Unavailable, modules.Verdict);
+        Assert.Equal(CheckReason.Timeout, modules.Reason);
+        Assert.Equal(CheckValue.Int(2), Row(second, "system.storage.devices").Value);
+        Assert.Empty(CheckResultValidator.Validate(second.Result));
+
+        // The call comes back at last: the slot is free, and the next run asks again.
+        never.SetResult(Hw.Machine());
+        Assert.True(QueryTest.Eventually(() => !rig.Services.HardwareCalls.IsRunning(HardwareCategory.Memory)), "the call was not forgotten when it returned");
+        var third = await Run(rig).WaitAsync(QueryTest.Patience);
+
+        Assert.Equal(2, Asked(HardwareCategory.Memory));
+        Assert.Equal(CheckValue.Int(2), Row(third, "system.memory.modules").Value);
+    }
+
+    [Fact]
     public async Task When_no_category_of_the_hardware_comes_the_run_still_completes_with_unavailable_rows()
     {
         var run = await RunWith(static rig =>
@@ -423,6 +605,54 @@ public sealed class SystemCheckRunTests
         Assert.Null(first.Value);
         Assert.NotNull(first.Reason);
         Assert.Equal(ItemVerdict.Ok, Row(run, "system.storage.health", "disk-2").Verdict);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+    }
+
+    [Fact]
+    public async Task A_drive_with_no_row_in_a_health_query_that_worked_is_unavailable_as_unsupported_and_not_an_error()
+    {
+        var run = await RunWith(static rig => rig.Wmi.Rows("MSFT_PhysicalDisk", FakeWmiReader.Disk("1", Hw.SerialOfDisk1)));
+
+        var first = Row(run, "system.storage.health", "disk-1");
+        Assert.Equal(ItemVerdict.Unavailable, first.Verdict);
+        Assert.Equal(CheckReason.Unsupported, first.Reason);
+        Assert.Equal(ItemVerdict.Ok, Row(run, "system.storage.health", "disk-2").Verdict);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+    }
+
+    [Fact]
+    public async Task A_slot_with_no_media_is_not_counted_has_no_health_row_and_its_volume_has_no_free_row()
+    {
+        var run = await RunWith(static rig =>
+        {
+            rig.Hardware.Machine = Hw.Machine(storage:
+            [
+                Hw.Disk(0, "Samsung SSD 980 PRO 2TB", Hw.SerialOfDisk0, Hw.Volume("C:", 2_000_000_000_000, 1_000_000_000_000)),
+                Hw.RemovableSlot(1, Hw.V(0L), Hw.Volume("E:", 3_000_000_000_000, 1_000_000_000_000)),
+                Hw.Disk(2, "WDC WD40EZRZ-00GXCB0", Hw.SerialOfDisk1, Hw.Volume("D:", 4_000_000_000_000, 2_000_000_000_000)),
+            ]);
+            // Windows lists the two disks by their drive numbers (the card reader has no row).
+            rig.Wmi.Rows("MSFT_PhysicalDisk", FakeWmiReader.Disk("0", Hw.SerialOfDisk0), FakeWmiReader.Disk("2", Hw.SerialOfDisk1));
+        });
+
+        Assert.Equal(CheckValue.Int(2), Row(run, "system.storage.devices").Value);
+        Assert.Equal(2, run.Result.Items.Count(static i => i.Id == "system.storage.health"));
+        Assert.DoesNotContain(run.Result.Items, static i => i.Id == "system.storage.health" && i.Subject!.Id == "disk-3");
+        Assert.Equal(2, run.Result.Items.Count(static i => i.Id == "system.storage.free"));
+        Assert.Equal("disk-2", Row(run, "system.storage.free", "volume-2").Evidence!.DiskId);
+        Assert.Equal(CheckVerdict.Ok, run.Result.Verdict);
+        Assert.Empty(CheckResultValidator.Validate(run.Result));
+    }
+
+    [Fact]
+    public async Task A_slot_core_could_not_open_stays_counted_and_its_health_is_unavailable()
+    {
+        var run = await RunWith(static rig => rig.Hardware.Machine = Hw.Machine(storage: [.. Hw.TwoDisks(), Hw.UnreadableDisk(2)]));
+
+        Assert.Equal(CheckValue.Int(3), Row(run, "system.storage.devices").Value);
+        var third = Row(run, "system.storage.health", "disk-3");
+        Assert.Equal(ItemVerdict.Unavailable, third.Verdict);
+        Assert.NotNull(third.Reason);
         Assert.Empty(CheckResultValidator.Validate(run.Result));
     }
 

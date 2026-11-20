@@ -187,8 +187,7 @@ public partial class RegistryTests
             ("system.gpu.model", SubjectKind.Gpu), ("system.gpu.driver_version", SubjectKind.Gpu), ("system.gpu.driver_age", SubjectKind.Gpu),
             ("system.gpu.device_status", SubjectKind.Gpu), ("system.gpu.generic_driver", SubjectKind.Gpu),
             ("system.storage.health", SubjectKind.Disk), ("system.storage.free", SubjectKind.Volume),
-            ("system.pagefile.automatic", SubjectKind.Pagefile), ("system.pagefile.allocated", SubjectKind.Pagefile),
-            ("system.pagefile.current", SubjectKind.Pagefile), ("system.pagefile.peak", SubjectKind.Pagefile),
+            ("system.pagefile.allocated", SubjectKind.Pagefile), ("system.pagefile.current", SubjectKind.Pagefile), ("system.pagefile.peak", SubjectKind.Pagefile),
             ("cpu.logical_throughput", SubjectKind.Cpu), ("cpu.peer_ratio", SubjectKind.Cpu),
             ("storage.health", SubjectKind.Disk), ("storage.capacity", SubjectKind.Disk), ("storage.temperature", SubjectKind.Disk),
             ("storage.nvme.media_errors", SubjectKind.Disk), ("storage.ata.199", SubjectKind.Disk),
@@ -199,8 +198,8 @@ public partial class RegistryTests
             Assert.Equal(subject, CheckItemRegistry.Get(id).Subject);
         }
 
-        // The totals (a count) are one row, not repeated.
-        foreach (var id in new[] { "system.memory.modules", "system.gpu.adapters", "system.storage.devices", "system.pagefile.count", "storage.devices", "memory.total", "cpu.duration" })
+        // The totals (a count) are one row, not repeated; so is "automatic", which is a property of the machine, not of a page file (§3.1).
+        foreach (var id in new[] { "system.memory.modules", "system.gpu.adapters", "system.storage.devices", "system.pagefile.count", "system.pagefile.automatic", "storage.devices", "memory.total", "cpu.duration" })
         {
             Assert.Equal(SubjectKind.None, CheckItemRegistry.Get(id).Subject);
         }

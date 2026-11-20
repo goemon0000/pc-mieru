@@ -122,7 +122,10 @@ internal static class SystemInputsBuilder
 
     // The adapters of Core, in the order Core lists them. Each one's device status comes from the video controller of the same PCI vendor and
     // device (the PNP id of WMI has them as VEN_xxxx&DEV_xxxx; Core has them as "VVVV:DDDD"). A status is only taken when the pairing is
-    // certain: as many controllers as Core adapters with that id, all saying the same code. Anything else is an error, not a guess.
+    // certain: as many controllers as Core adapters with that id, all saying the same code. An adapter that cannot be paired at all (no PCI
+    // id or place, or no controller of a PCI id like it: the Basic Render Driver, a Hyper-V synthetic adapter, an indirect or virtual display)
+    // has no status because Windows has none to give: unsupported, not an error (DESIGN-A §3.1). Only a real ambiguity (some controllers
+    // match, but not as many as adapters, or they disagree, or one of them has no code) is an error, never a guess.
     private static CheckReading<IReadOnlyList<GpuInput>> Gpus(CheckReading<IReadOnlyList<GpuHardware>> gpus, CheckReading<IReadOnlyList<VideoControllerRow>> controllers)
     {
         if (!gpus.HasValue)
@@ -139,7 +142,7 @@ internal static class SystemInputsBuilder
                 CoreReadings.Text(gpu.Name),
                 CoreReadings.Text(gpu.DriverVersion),
                 DriverDate(gpu.DriverDate),
-                DeviceStatus(keys[i], keys, controllers)));
+                DeviceStatus(gpu, keys[i], keys, controllers)));
         }
 
         return CheckReading<IReadOnlyList<GpuInput>>.Ok(list);
@@ -158,8 +161,18 @@ internal static class SystemInputsBuilder
             : CheckReading<DateOnly>.Failed();
     }
 
-    private static CheckReading<int> DeviceStatus(string? key, IReadOnlyList<string?> allKeys, CheckReading<IReadOnlyList<VideoControllerRow>> controllers)
+    private static CheckReading<int> DeviceStatus(GpuHardware gpu, string? key, IReadOnlyList<string?> allKeys, CheckReading<IReadOnlyList<VideoControllerRow>> controllers)
     {
+        // An adapter with no PCI id (a software adapter) or no PCI place (a virtual or remote copy of one) has no controller of its own to
+        // ask: that is the same whatever WMI answered, so it comes before the controllers.
+        var pciId = CoreReadings.Of(gpu.PciId);
+        if (pciId.Reason == CheckReason.Unsupported
+            || key is { Length: 0 }
+            || gpu.Details?.PciLocation is { Status: ValueStatus.Unsupported })
+        {
+            return CheckReading<int>.Missing(CheckReason.Unsupported);
+        }
+
         if (!controllers.HasValue)
         {
             return CheckReading<int>.Missing(controllers.Reason!.Value);
@@ -167,7 +180,8 @@ internal static class SystemInputsBuilder
 
         if (key is null)
         {
-            return CheckReading<int>.Failed();
+            // Core's own read of the id failed or was denied: the reason is Core's.
+            return CheckReading<int>.Missing(pciId.Reason!.Value);
         }
 
         var sameAdapters = allKeys.Count(k => string.Equals(k, key, StringComparison.Ordinal));
@@ -180,7 +194,13 @@ internal static class SystemInputsBuilder
             }
         }
 
-        if (codes.Count != sameAdapters || codes.Count == 0 || codes.Any(static c => c is null) || codes.Distinct().Count() != 1)
+        if (codes.Count == 0)
+        {
+            // No controller of this vendor and device on a PCI id: the adapter is not one WMI lists as a PCI device.
+            return CheckReading<int>.Missing(CheckReason.Unsupported);
+        }
+
+        if (codes.Count != sameAdapters || codes.Any(static c => c is null) || codes.Distinct().Count() != 1)
         {
             return CheckReading<int>.Failed();
         }
@@ -218,6 +238,8 @@ internal static class SystemInputsBuilder
     private sealed record DiskOrder(CheckReading<IReadOnlyList<DiskInput>> Disks, IReadOnlyList<StorageDevice> Order);
 
     // The drives in the order of their numbers (the numbers are only of this run; they are never written, and "disk-1" is the place in this order).
+    // A slot with no media is not a drive of this machine (DESIGN-A §3.1): it is left out here, so it is not counted, has no health row, and
+    // its volumes (if the slot says it has any) have no free-space row; the places of "disk-N" are those of the drives that are counted.
     private static DiskOrder Disks(CheckReading<IReadOnlyList<StorageDevice>> storage, DiskHealthReading health)
     {
         if (!storage.HasValue)
@@ -225,7 +247,7 @@ internal static class SystemInputsBuilder
             return new DiskOrder(CheckReading<IReadOnlyList<DiskInput>>.Missing(storage.Reason!.Value), []);
         }
 
-        var order = storage.Value.OrderBy(static d => d.PhysicalDriveNumber).ToList();
+        var order = storage.Value.Where(static d => !HasNoMedia(d)).OrderBy(static d => d.PhysicalDriveNumber).ToList();
         var disks = new List<DiskInput>(order.Count);
         foreach (var drive in order)
         {
@@ -236,6 +258,23 @@ internal static class SystemInputsBuilder
         }
 
         return new DiskOrder(CheckReading<IReadOnlyList<DiskInput>>.Ok(disks), order);
+    }
+
+    /// <summary>
+    /// A removable drive that was opened and read, and answered "no size": an empty card-reader slot. It is told by three of Core's own
+    /// readings together: the device descriptor was read (<see cref="StorageDevice.Details"/> is there; a slot Core could not open or read has none
+    /// and is "unreadable", which is not this), the descriptor says the media is removable (<see cref="StorageDetails.Removable"/> is true), and the
+    /// capacity is zero or did not come (<see cref="StorageDevice.CapacityBytes"/>: 0, or not read because Windows says there is no medium).
+    /// A capacity that was denied or timed out is not "no medium": it is a drive that could not be asked, so it stays in the list.
+    /// </summary>
+    internal static bool HasNoMedia(StorageDevice drive)
+    {
+        if (drive.Details is not { } details || details.Removable is not { Status: ValueStatus.Ok, Data: true })
+        {
+            return false;
+        }
+
+        return drive.CapacityBytes is { Status: ValueStatus.Ok, Data: 0 } || drive.CapacityBytes.Status is ValueStatus.Error or ValueStatus.Unsupported;
     }
 
     // The volumes in the order of their letters (a letter is only used to sort and to join; it is never written). A volume that sits on

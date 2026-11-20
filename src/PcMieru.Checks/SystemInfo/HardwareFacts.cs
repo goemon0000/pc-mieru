@@ -55,18 +55,29 @@ internal sealed record HardwareFacts(
     /// on the check's own clock). A category that has not answered by then is a timeout and its late answer is thrown away: the provider
     /// is asked to stop, and a call that cannot be stopped goes on in the background with nobody listening. It never throws for a
     /// category that failed (a stop by the caller is the only exception, and it is passed on).
+    /// <para>
+    /// The provider comes from <paramref name="hardware"/>, a factory that is called on a worker, never on the caller's thread, and only
+    /// when a call is to be made: each run of the system check can have a provider of its own, with nothing cached and no gate held by a
+    /// call of an earlier run. The provider is never asked to <see cref="IHardwareProvider.Invalidate"/>: its gates are the ones an
+    /// abandoned call may be holding. A category whose call of an earlier run is still running (<paramref name="calls"/>) is a timeout at
+    /// once and no new call is made for it (DESIGN-A 6.1: abandoned calls do not pile up).
+    /// </para>
     /// </summary>
-    public static async Task<HardwareFacts> ReadAsync(IHardwareProvider hardware, TimeProvider time, CancellationToken ct)
+    public static async Task<HardwareFacts> ReadAsync(Func<IHardwareProvider> hardware, HardwareCalls calls, TimeProvider time, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(hardware);
+        ArgumentNullException.ThrowIfNull(calls);
         ArgumentNullException.ThrowIfNull(time);
         var deadline = QueryDeadline.After(time, Budget);
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var os = AskAsync(hardware, HardwareCategory.Os, deadline, cancel.Token, ct);
-        var cpu = AskAsync(hardware, HardwareCategory.Cpu, deadline, cancel.Token, ct);
-        var memory = AskAsync(hardware, HardwareCategory.Memory, deadline, cancel.Token, ct);
-        var gpus = AskAsync(hardware, HardwareCategory.Gpu, deadline, cancel.Token, ct);
-        var storage = AskAsync(hardware, HardwareCategory.Storage, deadline, cancel.Token, ct);
+
+        // One provider for the five calls of this run, made on a worker by the first call that needs it.
+        var provider = new Lazy<Task<IHardwareProvider>>(() => Task.Run(hardware, CancellationToken.None), LazyThreadSafetyMode.ExecutionAndPublication);
+        var os = AskAsync(provider, calls, HardwareCategory.Os, deadline, cancel.Token, ct);
+        var cpu = AskAsync(provider, calls, HardwareCategory.Cpu, deadline, cancel.Token, ct);
+        var memory = AskAsync(provider, calls, HardwareCategory.Memory, deadline, cancel.Token, ct);
+        var gpus = AskAsync(provider, calls, HardwareCategory.Gpu, deadline, cancel.Token, ct);
+        var storage = AskAsync(provider, calls, HardwareCategory.Storage, deadline, cancel.Token, ct);
         try
         {
             await Task.WhenAll(os, cpu, memory, gpus, storage).ConfigureAwait(false);
@@ -85,14 +96,36 @@ internal sealed record HardwareFacts(
             Pick(storage.Result, static h => h.Storage));
     }
 
+    /// <summary>
+    /// The same, for one provider that is given (a shared one: it is used as it is, never invalidated, and nothing is remembered between
+    /// two reads). This is for the tests of the reading itself; the system check goes through the services' factory and their registry.
+    /// </summary>
+    internal static Task<HardwareFacts> ReadAsync(IHardwareProvider hardware, TimeProvider time, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(hardware);
+        return ReadAsync(() => hardware, new HardwareCalls(), time, ct);
+    }
+
     private static CheckReading<T> Pick<T>(CheckReading<HardwareInfo> info, Func<HardwareInfo, Value<T>> category) =>
         info.HasValue ? CoreReadings.Of(category(info.Value)) : CheckReading<T>.Missing(info.Reason!.Value);
 
     private static async Task<CheckReading<HardwareInfo>> AskAsync(
-        IHardwareProvider hardware, HardwareCategory category, QueryDeadline deadline, CancellationToken stopCall, CancellationToken ct)
+        Lazy<Task<IHardwareProvider>> provider, HardwareCalls calls, HardwareCategory category, QueryDeadline deadline, CancellationToken stopCall, CancellationToken ct)
     {
-        // Task.Run: a provider whose call blocks before it returns a task must not hold the caller.
-        var call = Task.Run(() => hardware.GetAsync(category, stopCall), CancellationToken.None);
+        // Task.Run: the factory and a provider whose call blocks before it returns a task must not hold the caller.
+        var call = calls.TryStart(category, () => Task.Run(
+            async () =>
+            {
+                var hardware = await provider.Value.ConfigureAwait(false);
+                return await hardware.GetAsync(category, stopCall).ConfigureAwait(false);
+            },
+            CancellationToken.None));
+        if (call is null)
+        {
+            // The call of an earlier run for this category has not returned: no second one is made behind it (DESIGN-A 6.1).
+            return CheckReading<HardwareInfo>.TimedOut();
+        }
+
         try
         {
             var info = await call.WaitAsync(deadline.RemainingAtLeastOneMillisecond(), deadline.Time, ct).ConfigureAwait(false);

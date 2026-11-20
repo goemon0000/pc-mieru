@@ -556,6 +556,11 @@ public sealed class SystemJudgeTests
         Assert.Equal(CheckValue.Int(0), count.Value);
         Assert.Equal(ItemVerdict.Caution, count.Verdict);
         Assert.DoesNotContain(none, static i => i.Id == "system.pagefile.peak");
+        // With no page file at all the machine-wide automatic row is still there, once, with no subject (DESIGN-A 3.1).
+        var automatic = Row(none, "system.pagefile.automatic");
+        Assert.Null(automatic.Subject);
+        Assert.Equal(CheckValue.Bool(true), automatic.Value);
+        Assert.Equal(ItemVerdict.Info, automatic.Verdict);
 
         var one = Judge(SI.Healthy());
         Assert.Equal(CheckValue.Int(1), Row(one, "system.pagefile.count").Value);
@@ -579,15 +584,17 @@ public sealed class SystemJudgeTests
     }
 
     [Fact]
-    public void The_sizes_are_in_bytes_and_the_automatic_row_is_one_per_file()
+    public void The_sizes_are_in_bytes_and_the_automatic_row_is_one_machine_wide_row_with_no_subject()
     {
         var items = WithPageFile(new PageFileInput(4096, 100, 500), automatic: false);
 
         Assert.Equal(CheckValue.Dec(4096UL * 1048576UL), Row(items, "system.pagefile.allocated", "pagefile-1").Value);
         Assert.Equal(CheckValue.Dec(100UL * 1048576UL), Row(items, "system.pagefile.current", "pagefile-1").Value);
-        var automatic = Row(items, "system.pagefile.automatic", "pagefile-1");
+        var automatic = Row(items, "system.pagefile.automatic");
+        Assert.Null(automatic.Subject);
         Assert.Equal(CheckValue.Bool(false), automatic.Value);
         Assert.Equal(ItemVerdict.Info, automatic.Verdict);
+        Assert.Single(items, static i => i.Id == "system.pagefile.automatic");
         Assert.Equal(ItemVerdict.Info, Row(items, "system.pagefile.allocated", "pagefile-1").Verdict);
     }
 
@@ -615,12 +622,13 @@ public sealed class SystemJudgeTests
         var items = Judge(SI.Healthy() with { PageFiles = CheckReading<IReadOnlyList<PageFileInput>>.Missing(CheckReason.Denied) });
 
         Missing(Row(items, "system.pagefile.count"), CheckReason.Denied);
-        Assert.DoesNotContain(items, static i => i.Id.StartsWith("system.pagefile.", StringComparison.Ordinal) && i.Id != "system.pagefile.count");
+        Assert.DoesNotContain(items, static i => i.Id.StartsWith("system.pagefile.", StringComparison.Ordinal) && i.Id != "system.pagefile.count" && i.Id != "system.pagefile.automatic");
+        Assert.Null(Row(items, "system.pagefile.automatic").Subject); // the flag comes from another class, so it is there whether the list came or not
         SI.AssertValid(items);
     }
 
     [Fact]
-    public void The_automatic_flag_that_did_not_come_is_information_with_its_reason_on_every_file()
+    public void The_automatic_flag_that_did_not_come_is_one_information_row_with_its_reason()
     {
         var items = Judge(SI.Healthy() with
         {
@@ -628,8 +636,10 @@ public sealed class SystemJudgeTests
             PageFileAutomatic = CheckReading<bool>.Missing(CheckReason.Denied),
         });
 
-        Missing(Row(items, "system.pagefile.automatic", "pagefile-1"), CheckReason.Denied, ItemVerdict.Info);
-        Missing(Row(items, "system.pagefile.automatic", "pagefile-2"), CheckReason.Denied, ItemVerdict.Info);
+        var automatic = Row(items, "system.pagefile.automatic");
+        Missing(automatic, CheckReason.Denied, ItemVerdict.Info);
+        Assert.Null(automatic.Subject);
+        Assert.Single(items, static i => i.Id == "system.pagefile.automatic");
         SI.AssertValid(items);
     }
 

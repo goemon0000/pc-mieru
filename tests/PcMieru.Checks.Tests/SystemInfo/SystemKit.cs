@@ -281,7 +281,36 @@ internal static class Hw
     public static StorageDevice Disk(int number, string model, string serial, params StorageVolume[] volumes) =>
         new(number, V(model), V(serial), V("FW01"), V(StorageBus.Nvme), V(2 * Tb), V(true), V("GPT"), volumes);
 
-    /// <summary>A slot Core could not look at: nothing about it was read.</summary>
+    /// <summary>The adapter of <see cref="Gpu"/> with the PCI place Core read for it: a physical PCI function, or (null) one Core says it does not have.</summary>
+    public static GpuHardware GpuAt(string? location, string pci = NvidiaPci) =>
+        Gpu(pci: pci) with
+        {
+            Details = new GpuDetails(
+                V("discrete"),
+                V("1043:889C"),
+                V(161),
+                V("NVIDIA"),
+                V(0L),
+                location is null ? Value.Unsupported<string>("test", "not a physical PCI function") : V(location),
+                V(5),
+                V(16)),
+        };
+
+    private static StorageDetails SlotDetails(bool removable) =>
+        new(V("Unspecified"), V(512), V(512), V(removable), [], V("10.0.1"), Value.Unsupported<int>("test"), Value.Unsupported<int>("test"), Value.Unsupported<int>("test"), Value.Unsupported<int>("test"));
+
+    /// <summary>
+    /// A slot Core opened and read whose descriptor says "removable", with the capacity Windows gave (zero, or a reading that did not come:
+    /// no medium in a card reader). A volume that the slot lists is the caller's.
+    /// </summary>
+    public static StorageDevice RemovableSlot(int number, Value<long> capacity, params StorageVolume[] volumes) =>
+        new(number, V("Generic STORAGE DEVICE"), V("SLOT" + number), V("1.00"), V(StorageBus.Usb), capacity, V(false), V("RAW"), volumes, SlotDetails(removable: true));
+
+    /// <summary>A drive whose descriptor says it is not removable, with the capacity given (a fixed disk that answered zero is not an empty slot).</summary>
+    public static StorageDevice FixedDisk(int number, Value<long> capacity) =>
+        new(number, V("Fixed Model"), V("FIXED" + number), V("1.00"), V(StorageBus.Sata), capacity, V(true), V("GPT"), [], SlotDetails(removable: false));
+
+    /// <summary>A slot Core could not look at: nothing about it was read.
     public static StorageDevice UnreadableDisk(int number) =>
         new(
             number,

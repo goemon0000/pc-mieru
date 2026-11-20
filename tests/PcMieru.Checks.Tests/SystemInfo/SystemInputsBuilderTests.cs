@@ -221,17 +221,68 @@ public sealed class SystemInputsBuilderTests
     }
 
     [Fact]
-    public void An_adapter_with_no_controller_of_its_ids_has_no_status_and_never_a_guess()
+    public void An_adapter_with_no_controller_of_its_ids_has_no_status_that_is_unsupported_and_never_a_guess()
     {
-        IsMissing(Build(wmi: Wmi(video: [])).Gpus.Value.Single().DeviceStatus, CheckReason.Error);
-        IsMissing(Build(wmi: Wmi(video: [new VideoControllerRow(@"PCI\VEN_1002&DEV_164E", 0)])).Gpus.Value.Single().DeviceStatus, CheckReason.Error);
-        IsMissing(Build(wmi: Wmi(video: [new VideoControllerRow(@"ROOT\BASICDISPLAY\0000", 0)])).Gpus.Value.Single().DeviceStatus, CheckReason.Error);
+        // Windows does not list it as a PCI device (the Basic Render Driver, a synthetic or indirect display): it has no status to give.
+        IsMissing(Build(wmi: Wmi(video: [])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
+        IsMissing(Build(wmi: Wmi(video: [new VideoControllerRow(@"PCI\VEN_1002&DEV_164E", 0)])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
+        IsMissing(Build(wmi: Wmi(video: [new VideoControllerRow(@"ROOT\BASICDISPLAY\0000", 0)])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
+        IsMissing(Build(wmi: Wmi(video: [new VideoControllerRow(null, 0)])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
     }
 
     [Fact]
     public void A_controller_whose_code_did_not_come_leaves_the_status_an_error()
     {
         IsMissing(Build(wmi: Wmi(video: [Nvidia(null)])).Gpus.Value.Single().DeviceStatus, CheckReason.Error);
+    }
+
+    [Fact]
+    public void An_adapter_with_a_pci_place_is_paired_as_before()
+    {
+        var gpu = Build(Hw.Machine(gpus: [Hw.GpuAt("bus 1, device 0, function 0")]), Wmi(video: [Nvidia(43)])).Gpus.Value.Single();
+
+        Assert.Equal(43, gpu.DeviceStatus.Value);
+    }
+
+    [Fact]
+    public void An_adapter_with_no_pci_place_has_no_status_whatever_wmi_says()
+    {
+        // A virtual or remote copy of an adapter shares the ids of the real one: it must not take the real one's code, and it is not an error.
+        var wmi = Wmi(video: [Nvidia(43)]);
+
+        var gpu = Build(Hw.Machine(gpus: [Hw.GpuAt(null)]), wmi).Gpus.Value.Single();
+
+        IsMissing(gpu.DeviceStatus, CheckReason.Unsupported);
+        Assert.True(gpu.Name.HasValue);
+    }
+
+    [Fact]
+    public void A_software_adapter_has_no_status_even_when_the_controllers_did_not_come()
+    {
+        var software = Hw.Gpu(name: "Microsoft Basic Render Driver") with { PciId = Value.Unsupported<string>("test", "software adapter has no PCI id") };
+        var wmi = Wmi() with { VideoControllers = CheckReading<IReadOnlyList<VideoControllerRow>>.Missing(CheckReason.Timeout) };
+
+        IsMissing(Build(Hw.Machine(gpus: [software])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
+        IsMissing(Build(Hw.Machine(gpus: [software]), wmi).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
+    }
+
+    [Fact]
+    public void A_software_adapter_next_to_a_real_one_leaves_the_real_ones_status_alone()
+    {
+        var software = Hw.Gpu(name: "Microsoft Basic Render Driver") with { PciId = Value.Unsupported<string>("test", "software adapter has no PCI id") };
+
+        var gpus = Build(Hw.Machine(gpus: [Hw.Gpu(), software]), Wmi(video: [Nvidia(0)])).Gpus.Value;
+
+        Assert.Equal(0, gpus[0].DeviceStatus.Value);
+        IsMissing(gpus[1].DeviceStatus, CheckReason.Unsupported);
+    }
+
+    [Fact]
+    public void An_adapter_whose_pci_id_could_not_be_read_keeps_the_reason_of_core_and_is_not_unsupported()
+    {
+        var gpu = Hw.Gpu() with { PciId = Value.Denied<string>("test") };
+
+        IsMissing(Build(Hw.Machine(gpus: [gpu])).Gpus.Value.Single().DeviceStatus, CheckReason.Denied);
     }
 
     [Fact]
@@ -242,18 +293,18 @@ public sealed class SystemInputsBuilderTests
         var both = Build(twins, Wmi(video: [Nvidia(0), Nvidia(0)])).Gpus.Value;
         Assert.All(both, static g => Assert.Equal(0, g.DeviceStatus.Value));
 
-        // One fewer controller than adapters, or two that disagree: which adapter has the error is not known.
+        // One fewer controller than adapters (but at least one), or two that disagree: which adapter has the error is not known.
         Assert.All(Build(twins, Wmi(video: [Nvidia(43)])).Gpus.Value, static g => IsMissing(g.DeviceStatus, CheckReason.Error));
         Assert.All(Build(twins, Wmi(video: [Nvidia(0), Nvidia(43)])).Gpus.Value, static g => IsMissing(g.DeviceStatus, CheckReason.Error));
         Assert.All(Build(twins, Wmi(video: [Nvidia(0), Nvidia(0), Nvidia(0)])).Gpus.Value, static g => IsMissing(g.DeviceStatus, CheckReason.Error));
     }
 
     [Fact]
-    public void An_adapter_whose_pci_id_is_not_known_has_no_status()
+    public void An_adapter_whose_pci_id_core_does_not_have_has_no_status_that_is_unsupported()
     {
         var gpu = Hw.Gpu() with { PciId = Value.Unsupported<string>("test") };
 
-        IsMissing(Build(Hw.Machine(gpus: [gpu])).Gpus.Value.Single().DeviceStatus, CheckReason.Error);
+        IsMissing(Build(Hw.Machine(gpus: [gpu])).Gpus.Value.Single().DeviceStatus, CheckReason.Unsupported);
     }
 
     [Fact]
@@ -326,6 +377,104 @@ public sealed class SystemInputsBuilderTests
         Assert.Null(disks[0].Health.Text);
         Assert.Equal(CheckReason.Error, disks[0].Health.Reason);
         Assert.Equal("healthy", disks[1].Health.Text);
+    }
+
+    [Fact]
+    public void A_disk_with_no_row_of_its_number_in_a_query_that_worked_is_unsupported_and_not_an_error()
+    {
+        // Windows's storage module does not list it (a card reader, a virtual disk, a RAID member): there is no health to read.
+        var wmi = Wmi(health: Health(new PhysicalDiskRow("1", Hw.SerialOfDisk1, 0, [2])));
+
+        var disks = Build(wmi: wmi).Disks.Value;
+
+        Assert.Null(disks[0].Health.Text);
+        Assert.Equal(CheckReason.Unsupported, disks[0].Health.Reason);
+        Assert.Equal("healthy", disks[1].Health.Text);
+    }
+
+    [Fact]
+    public void A_serial_is_compared_as_core_cleans_it_without_the_trailing_dots_and_underscores_and_whatever_the_case()
+    {
+        var machine = Hw.Machine(storage: [Hw.Disk(0, "Model", "s6b0ng0r000000x_.")]);
+        var wmi = Wmi(health: Health(new PhysicalDiskRow("0", " S6B0NG0R000000X ", 2, [2])));
+
+        Assert.Equal("critical", Build(machine, wmi).Disks.Value.Single().Health.Text);
+    }
+
+    // ---- a slot with no media ----
+
+    [Fact]
+    public void A_removable_slot_that_answered_a_size_of_zero_is_not_counted_has_no_health_and_no_volume()
+    {
+        var machine = Hw.Machine(storage:
+        [
+            Hw.Disk(0, "Model", Hw.SerialOfDisk0, Hw.Volume("C:", 1000, 500)),
+            Hw.RemovableSlot(1, Hw.V(0L), Hw.Volume("E:", 3000, 1000)),
+            Hw.Disk(2, "Other", "S2", Hw.Volume("D:", 2000, 1000)),
+        ]);
+        var wmi = Wmi(health: Health(new PhysicalDiskRow("0", Hw.SerialOfDisk0, 0, [2]), new PhysicalDiskRow("2", "S2", 0, [2])));
+
+        var inputs = Build(machine, wmi);
+
+        Assert.Equal(["Model", "Other"], inputs.Disks.Value.Select(static d => d.Model!));
+        Assert.Equal([1000L, 2000L], inputs.Volumes.Value.Select(static v => v.TotalBytes.Value));
+        Assert.Equal([1, 2], inputs.Volumes.Value.Select(static v => v.DiskOrdinal!.Value)); // disk-2 is the next drive that is counted
+    }
+
+    [Theory]
+    [InlineData(ValueStatus.Error)]
+    [InlineData(ValueStatus.Unsupported)]
+    public void A_removable_slot_whose_size_did_not_come_because_windows_has_no_medium_is_not_counted(ValueStatus status)
+    {
+        var slot = Hw.RemovableSlot(1, Value.Missing<long>(status, "test"));
+
+        var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), slot])).Disks.Value;
+
+        Assert.Equal("Model", Assert.Single(disks).Model);
+    }
+
+    [Theory]
+    [InlineData(ValueStatus.Denied)]
+    [InlineData(ValueStatus.Timeout)]
+    public void A_removable_slot_whose_size_could_not_be_asked_is_still_counted(ValueStatus status)
+    {
+        var slot = Hw.RemovableSlot(1, Value.Missing<long>(status, "test"));
+
+        var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), slot])).Disks.Value;
+
+        Assert.Equal(2, disks.Count);
+    }
+
+    [Fact]
+    public void A_removable_drive_with_media_and_a_fixed_disk_that_answered_zero_are_counted()
+    {
+        var stick = Hw.RemovableSlot(1, Hw.V(32L * 1000 * 1000 * 1000));
+        var strange = Hw.FixedDisk(2, Hw.V(0L));
+
+        var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), stick, strange])).Disks.Value;
+
+        Assert.Equal(3, disks.Count);
+    }
+
+    [Fact]
+    public void A_slot_core_could_not_open_stays_listed_and_unavailable_it_is_not_an_empty_slot()
+    {
+        var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), Hw.UnreadableDisk(1)])).Disks.Value;
+
+        Assert.Equal(2, disks.Count);
+        Assert.True(disks[1].Unreadable);
+    }
+
+    [Fact]
+    public void When_every_slot_has_no_media_the_list_is_empty_and_not_missing()
+    {
+        var machine = Hw.Machine(storage: [Hw.RemovableSlot(0, Hw.V(0L)), Hw.RemovableSlot(1, Hw.V(0L), Hw.Volume("F:", 0, 0))]);
+
+        var inputs = Build(machine, Wmi(health: Health()));
+
+        Assert.True(inputs.Disks.HasValue);
+        Assert.Empty(inputs.Disks.Value);
+        Assert.Empty(inputs.Volumes.Value);
     }
 
     [Fact]

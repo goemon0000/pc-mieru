@@ -225,6 +225,9 @@ internal static class SystemJudge
             return Missing(Id, gpu.DriverDate.Reason, CheckSource.Setupapi, infoOrJudged, subject);
         }
 
+        // Port note: the driver age counts from the driver's date at UTC midnight to the run's UTC moment, while the old code (pl-cloud
+        // SystemCheck) counted to the local "now". The difference is at most a few hours (the zone's offset), so it can change the verdict only
+        // for a driver within those hours of the 730-day edge.
         var date = DateTime.SpecifyKind(gpu.DriverDate.Value.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
         var days = (nowUtc - date).TotalDays;
         var value = CheckValue.Int(days <= 0 ? 0 : (long)Math.Truncate(days));
@@ -323,6 +326,8 @@ internal static class SystemJudge
 
     // ---- page files ----
 
+    // DESIGN-A 3.1: the count, then ONE machine-wide "automatic" row (no subject: whether Windows manages the page file is a property of the
+    // machine, not of a file, and it is there even with no page file at all), then the three rows of each file.
     private static void PageFiles(List<CheckItem> items, SystemInputs inputs)
     {
         const string CountId = "system.pagefile.count";
@@ -331,21 +336,26 @@ internal static class SystemJudge
         {
             // The list did not come: how many there are is not known, and no file row can be made.
             items.Add(Missing(CountId, files.Reason, CheckSource.Wmi, ItemVerdict.Unavailable));
+            items.Add(Automatic(inputs.PageFileAutomatic));
             return;
         }
 
         var list = files.Value;
         items.Add(CheckItem.Create(CountId, CheckValue.Int(list.Count), list.Count == 0 ? ItemVerdict.Caution : ItemVerdict.Ok, CheckSource.Wmi));
+        items.Add(Automatic(inputs.PageFileAutomatic));
         for (var i = 0; i < list.Count; i++)
         {
             var file = list[i];
             var subject = new CheckSubject("pagefile-" + (i + 1).ToString(CultureInfo.InvariantCulture));
-            items.Add(Info("system.pagefile.automatic", inputs.PageFileAutomatic, static v => CheckValue.Bool(v), CheckSource.Wmi, subject));
             items.Add(SizeRow("system.pagefile.allocated", file.AllocatedMb, subject));
             items.Add(SizeRow("system.pagefile.current", file.CurrentMb, subject));
             items.Add(Peak(file, subject));
         }
     }
+
+    // An info row (the registry's class for it): Win32_ComputerSystem.AutomaticManagedPagefile, or the reason it was not read.
+    private static CheckItem Automatic(CheckReading<bool> automatic) =>
+        Info("system.pagefile.automatic", automatic, static v => CheckValue.Bool(v), CheckSource.Wmi);
 
     private static CheckItem SizeRow(string id, long? megabytes, CheckSubject subject) =>
         ToBytes(megabytes) is { } bytes

@@ -148,7 +148,7 @@ public static class CheckItemRegistry
         Add(sys, "system.storage.health", CheckValueType.Text, null, ItemClass.Judged, SubjectKind.Disk, allowedText: HealthValues);
         Add(sys, "system.storage.free", CheckValueType.Dec, "B", ItemClass.Judged, SubjectKind.Volume);
         Add(sys, "system.pagefile.count", CheckValueType.Int, "count", ItemClass.Judged);
-        Add(sys, "system.pagefile.automatic", CheckValueType.Bool, null, ItemClass.Info, SubjectKind.Pagefile);
+        Add(sys, "system.pagefile.automatic", CheckValueType.Bool, null, ItemClass.Info); // one machine-wide row, no subject (DESIGN-A 3.1)
         Add(sys, "system.pagefile.allocated", CheckValueType.Dec, "B", ItemClass.Info, SubjectKind.Pagefile);
         Add(sys, "system.pagefile.current", CheckValueType.Dec, "B", ItemClass.Info, SubjectKind.Pagefile);
         Add(sys, "system.pagefile.peak", CheckValueType.Dec, "B", ItemClass.Judged, SubjectKind.Pagefile);

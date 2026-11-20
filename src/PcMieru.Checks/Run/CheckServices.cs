@@ -12,7 +12,7 @@ namespace PcMieru.Checks;
 /// Every path is given by the caller: nothing here looks at the user's profile. The Windows pieces are plugged in by whoever assembles the
 /// services (<see cref="CreateLive"/> for the real machine).
 /// <para>
-/// The hardware provider arrived with the system check (<see cref="Hardware"/>), as did the two readers it asks Windows through
+/// The hardware provider arrived with the system check (<see cref="HardwareFactory"/>), as did the two readers it asks Windows through
 /// (<see cref="Wmi"/> and <see cref="Events"/>, which the storage check's disk health uses too). The CPU test-session factory of §2 arrives
 /// with the CPU and memory checks (DESIGN-A §11 steps 6 and 7).
 /// </para>
@@ -33,8 +33,10 @@ public sealed class CheckServices
     /// <param name="history">Where a finished run is saved.</param>
     /// <param name="app">The <c>app</c> field of the results ("PCMieru 0.4.0"). Defaults to <see cref="DefaultApp"/>.</param>
     /// <param name="hardware">
-    /// The source of the system check's hardware facts (OS, CPU, memory, GPUs, disks). Defaults to a new <see cref="RealHardwareProvider"/>,
-    /// which reads nothing until a system check asks.
+    /// The source of the system check's hardware facts (OS, CPU, memory, GPUs, disks). Null: every system check gets a new
+    /// <see cref="RealHardwareProvider"/> of its own (made on a worker when the check asks, nothing cached from an earlier run). A provider
+    /// that is given is shared by every system check of these services and is used as it is: it is never asked to invalidate its cache, because
+    /// its gates may be held by a call that an earlier run abandoned and the check must not wait on them. It is the owner's to keep fresh.
     /// </param>
     public CheckServices(
         TimeProvider time,
@@ -44,11 +46,14 @@ public sealed class CheckServices
         ICheckHistoryMaintainer history,
         string? app = null,
         IHardwareProvider? hardware = null)
-        : this(time, storage, history, NewBaseline(time, root, legacyDirectory), app, runIds: null, hardware)
+        : this(time, storage, history, NewBaseline(time, root, legacyDirectory), app, runIds: null, hardware is null ? null : () => hardware)
     {
     }
 
-    /// <param name="hardware">The hardware provider (null: a real one).</param>
+    /// <param name="hardwareFactory">
+    /// Makes the hardware provider of one system check (null: <c>() =&gt; new RealHardwareProvider()</c>). It is called on a worker, never on
+    /// the caller's thread, and only when a call is to be made.
+    /// </param>
     /// <param name="wmi">The WMI reader of the system check and of the storage check's disk health (null: the real one, <see cref="ManagementWmiReader"/>).</param>
     /// <param name="events">The System-log counter of the system check (null: the real one, <see cref="WevtEventCounter"/>).</param>
     internal CheckServices(
@@ -58,7 +63,7 @@ public sealed class CheckServices
         BaselineEngine baseline,
         string? app,
         Func<Guid>? runIds,
-        IHardwareProvider? hardware = null,
+        Func<IHardwareProvider>? hardwareFactory = null,
         IWmiReader? wmi = null,
         IEventCounter? events = null)
     {
@@ -72,10 +77,13 @@ public sealed class CheckServices
         Baseline = baseline;
         App = string.IsNullOrWhiteSpace(app) ? DefaultApp : app;
         RunIds = runIds ?? Guid.NewGuid;
-        Hardware = hardware ?? new RealHardwareProvider();
+        HardwareFactory = hardwareFactory ?? NewRealHardware;
         Wmi = wmi ?? new ManagementWmiReader();
         Events = events ?? new WevtEventCounter();
     }
+
+    // A provider of the real machine for one system check: it reads nothing until the check asks.
+    private static IHardwareProvider NewRealHardware() => new RealHardwareProvider();
 
     /// <summary>The folder of the saved results and of the baseline (<c>&lt;root&gt;\checks</c>, DESIGN-A §4).</summary>
     internal static string ChecksFolder(string root) => Path.Combine(root, "checks");
@@ -101,8 +109,15 @@ public sealed class CheckServices
     /// <summary>Makes the ID of a new run. A test fixes it.</summary>
     internal Func<Guid> RunIds { get; }
 
-    /// <summary>The system check's hardware facts. Each run of the system check asks it to forget what it cached first.</summary>
-    public IHardwareProvider Hardware { get; }
+    /// <summary>
+    /// Makes the provider of the system check's hardware facts, one per run (or the one shared provider of the public constructor, which it
+    /// gives back every time). A run never calls <see cref="IHardwareProvider.Invalidate"/> on what it gets: a fresh provider has nothing
+    /// cached, and Invalidate takes the gates an abandoned call may hold, so it must not run where a caller waits (DESIGN-A 6.1).
+    /// </summary>
+    internal Func<IHardwareProvider> HardwareFactory { get; }
+
+    /// <summary>The hardware calls of the system check that are still running, kept across the runs of these services (§6.1: they do not pile up).</summary>
+    internal HardwareCalls HardwareCalls { get; } = new();
 
     /// <summary>WMI, for the system check's page files and GPU status and for the disk health of the system and storage checks. Each question has its own 5 s deadline (§6.1).</summary>
     internal IWmiReader Wmi { get; }
@@ -112,7 +127,7 @@ public sealed class CheckServices
 
     /// <summary>
     /// The services of the real machine: the real storage inspection (<see cref="RealStorageInspectionSource"/>), the real hardware provider,
-    /// WMI and System-log readers (system check), the history under
+    /// WMI and System-log readers (system check; a new hardware provider for every system check), the history under
     /// <c>&lt;root&gt;\checks</c> and the baseline under <c>&lt;root&gt;\checks\baseline</c> (DESIGN-A §4). <paramref name="root"/> is the
     /// product's data folder (the app passes <c>%LOCALAPPDATA%\PCMieru</c>) and <paramref name="legacyDirectory"/> the v0.7.4 folder or null: both are the caller's
     /// decision, nothing here looks at the user's profile, and nothing is read or created until a run starts. No elevated reader is wired
@@ -124,11 +139,12 @@ public sealed class CheckServices
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         return new CheckServices(
             TimeProvider.System,
-            root,
             new RealStorageInspectionSource(elevated),
-            legacyDirectory,
             new CheckHistoryStore(ChecksFolder(root)),
-            app);
+            NewBaseline(TimeProvider.System, root, legacyDirectory),
+            app,
+            runIds: null,
+            hardwareFactory: NewRealHardware); // a provider of its own for every system check: nothing cached, no gate held by an abandoned call
     }
 
     /// <summary>"PCMieru " and the informational version of the assembly without the build metadata ("+sha").</summary>

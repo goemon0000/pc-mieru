@@ -87,7 +87,7 @@ internal static class Samples
             I("system.storage.free", D("812345678901"), ItemVerdict.Ok, CheckSource.Win32, subject: vol1, evidence: new CheckEvidence { TotalBytes = "2000398934016", DiskId = "disk-1" }),
             I("system.storage.free", D("40012345678"), ItemVerdict.Caution, CheckSource.Win32, subject: vol2, evidence: new CheckEvidence { TotalBytes = "500107862016" }),
             I("system.pagefile.count", Int(1), ItemVerdict.Ok, CheckSource.Wmi),
-            I("system.pagefile.automatic", B(true), ItemVerdict.Info, CheckSource.Wmi, subject: pagefile),
+            I("system.pagefile.automatic", B(true), ItemVerdict.Info, CheckSource.Wmi),
             I("system.pagefile.allocated", D("4294967296"), ItemVerdict.Info, CheckSource.Wmi, subject: pagefile),
             I("system.pagefile.current", D("1073741824"), ItemVerdict.Info, CheckSource.Wmi, subject: pagefile),
             I("system.pagefile.peak", D("2147483648"), ItemVerdict.Ok, CheckSource.Wmi, subject: pagefile),

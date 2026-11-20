@@ -127,7 +127,7 @@ public sealed class DiskHealthTests
 
         Assert.Equal("healthy", Of(1, null, rows).Text);
         Assert.Equal("critical", Of(10, null, rows).Text);
-        Assert.Equal(CheckReason.Error, Of(11, null, rows).Reason);
+        Assert.Equal(CheckReason.Unsupported, Of(11, null, rows).Reason);
     }
 
     [Fact]
@@ -146,6 +146,10 @@ public sealed class DiskHealthTests
     [InlineData("S6B0NG0R000000X", "s6b0ng0r000000x")] // the case is not a difference
     [InlineData("S6B0NG0R000000X", "S6B0NG0R000000X....")] // the dots Windows pads NVMe serials with
     [InlineData("S6B0NG0R000000X..", "S6B0NG0R000000X")]
+    [InlineData("S6B0NG0R000000X", "S6B0NG0R000000X_.")] // the underscore and dot padding of Core's CleanSerial on one side only
+    [InlineData("S6B0NG0R000000X_.", "S6B0NG0R000000X")]
+    [InlineData("S6B0NG0R000000X_.", "S6B0NG0R000000X.__")]
+    [InlineData(" S6B0NG0R000000X ._", "S6B0NG0R000000X")] // the space left before the padding is cut too, as Core does
     public void The_same_serial_in_the_forms_the_two_sides_write_it_is_the_same(string ours, string theirs)
     {
         var health = Of(0, ours, FakeWmiReader.Disk("0", theirs, health: 0));
@@ -168,14 +172,16 @@ public sealed class DiskHealthTests
     }
 
     [Fact]
-    public void No_row_for_the_drive_number_is_an_error()
+    public void A_query_that_was_answered_with_no_row_for_the_drive_number_is_unsupported_not_an_error()
     {
+        // A USB bridge, a RAID or a virtual disk that Windows does not list: not a failure of the check (DESIGN-A 14.1).
         var none = Of(3, Hw.SerialOfDisk0, FakeWmiReader.Disk("0", Hw.SerialOfDisk0));
         var empty = Of(0, Hw.SerialOfDisk0);
 
-        Assert.Equal(CheckReason.Error, none.Reason);
+        Assert.Equal(CheckReason.Unsupported, none.Reason);
         Assert.Null(none.Text);
-        Assert.Equal(CheckReason.Error, empty.Reason);
+        Assert.Equal(ItemVerdict.Unavailable, none.Verdict);
+        Assert.Equal(CheckReason.Unsupported, empty.Reason);
         Assert.Null(empty.Text);
     }
 
@@ -189,11 +195,28 @@ public sealed class DiskHealthTests
     }
 
     [Fact]
-    public void A_row_with_no_device_id_is_nobodys()
+    public void A_row_with_no_device_id_is_nobodys_so_the_disk_has_no_row()
     {
         var health = Of(0, null, FakeWmiReader.Row(("SerialNumber", "X"), ("HealthStatus", (ushort)0)));
 
-        Assert.Equal(CheckReason.Error, health.Reason);
+        Assert.Equal(CheckReason.Unsupported, health.Reason);
+    }
+
+    [Theory]
+    [InlineData("S6B0NG0R000000X")]
+    [InlineData("S6B0NG0R000000X_.")]
+    [InlineData("  S6B0NG0R000000X._ ")]
+    [InlineData("S6B0NG0R000000X . _")]
+    [InlineData("_._")]
+    [InlineData("   ")]
+    [InlineData("")]
+    [InlineData("A_B.C")]
+    public void The_serial_rule_is_the_one_of_cores_clean_serial(string serial)
+    {
+        // The Checks assembly cannot call Core's internal rule, so it keeps a copy of the one line; this holds the two together.
+        var core = PcMieru.Core.Hardware.Storage.StorageProtocol.CleanSerial(serial);
+
+        Assert.Equal(core.Length == 0 ? null : core, DiskHealthReader.NormalizeSerial(serial));
     }
 
     // ---- the mapper: the operational status as WMI gives it ----

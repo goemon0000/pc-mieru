@@ -29,12 +29,14 @@ internal sealed class SystemCheckProcedure : ICheckProcedure
         var now = context.Time.GetUtcNow().UtcDateTime;
         var windowStart = EventCountQuery.WindowStartFor(now);
 
-        // A system check reads the machine as it is now, not what an earlier look left in the provider's cache.
-        services.Hardware.Invalidate();
-
-        var hardware = HardwareFacts.ReadAsync(services.Hardware, context.Time, ct);
-        var wmi = SystemWmiFacts.ReadAsync(services.Wmi, context.Time, ct);
-        var events = ReadEventsAsync(services.Events, windowStart, context.Time, ct);
+        // Nothing that can block runs on the caller's thread before the first await (DESIGN-A 6.1: every question has its deadline, and the
+        // caller of a run, the app's UI or the CLI, has none to give). So the three groups are started on workers, whatever their readers do
+        // before they return a task. The hardware group gets a provider of its own from the services' factory (made on a worker): it reads
+        // the machine as it is now, with nothing left in a cache by an earlier look, and it is never asked to Invalidate, which takes gates an
+        // abandoned call of an earlier run may hold.
+        var hardware = Task.Run(() => HardwareFacts.ReadAsync(services.HardwareFactory, services.HardwareCalls, context.Time, ct), CancellationToken.None);
+        var wmi = Task.Run(() => SystemWmiFacts.ReadAsync(services.Wmi, context.Time, ct), CancellationToken.None);
+        var events = Task.Run(() => ReadEventsAsync(services.Events, windowStart, context.Time, ct), CancellationToken.None);
         await Task.WhenAll(hardware, wmi, events).ConfigureAwait(false);
 
         ct.ThrowIfCancellationRequested();

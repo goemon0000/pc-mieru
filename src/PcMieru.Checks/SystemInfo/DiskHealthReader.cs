@@ -75,9 +75,11 @@ internal sealed class DiskHealthReading
 
     /// <summary>
     /// The health of the disk with this drive number. The row is found by <c>DeviceId == drive number</c>. When the disk's serial (as this
-    /// side read it) and the row's serial are both there, they must be the same, or the row is another disk's and nothing is said of this
-    /// one (reason error): a drive number is only a label of one moment, so it is not trusted alone when there is more to check. A disk
-    /// with no row, or with two, is an error too.
+    /// side read it) and the row's serial are both there, they must be the same (both are cleaned by the rule of Core's
+    /// <c>StorageProtocol.CleanSerial</c> first, see <see cref="DiskHealthReader.NormalizeSerial"/>), or the row is another disk's and nothing
+    /// is said of this one (reason error): a drive number is only a label of one moment, so it is not trusted alone when there is more to
+    /// check. A query that was answered with no row of this number is unsupported (a USB bridge, a RAID or a virtual disk that Windows does
+    /// not list there is not a failure); two rows of one number, or a query that failed, are errors.
     /// </summary>
     public DiskHealthVerdict Of(int driveNumber, string? serial)
     {
@@ -105,7 +107,8 @@ internal sealed class DiskHealthReading
 
         if (found is null)
         {
-            return DiskHealthVerdict.Unavailable(CheckReason.Error);
+            // The question was answered, and Windows has no row for this number: it does not report this disk's health (DESIGN-A 14.1).
+            return DiskHealthVerdict.Unavailable(CheckReason.Unsupported);
         }
 
         var ours = DiskHealthReader.NormalizeSerial(serial);
@@ -179,11 +182,16 @@ internal static class DiskHealthReader
         };
     }
 
-    /// <summary>A serial as it is compared: trimmed, without the dots Windows pads NVMe serials with, and null when nothing is left.</summary>
+    /// <summary>
+    /// A serial as it is compared: the rule of Core's <c>StorageProtocol.CleanSerial</c> (trimmed, without the dots and underscores NVMe and
+    /// some SATA bridges pad serials with, trimmed again), and null when nothing is left. Core's one is internal to Core and the drive side
+    /// of the join has already been through it, so the row's side must be cleaned the same way: this is a copy of that one line, and a test
+    /// holds the two together (SerialNormalizationTests).
+    /// </summary>
     internal static string? NormalizeSerial(string? serial)
     {
-        var trimmed = serial?.Trim().TrimEnd('.').Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        var cleaned = serial?.Trim().TrimEnd('.', '_').Trim();
+        return string.IsNullOrEmpty(cleaned) ? null : cleaned;
     }
 
     /// <summary>A tolerant mapper: a property that is missing or not what it should be is null (or empty), never an exception, so one odd row cannot cost the answer of the others.</summary>

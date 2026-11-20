@@ -129,7 +129,8 @@ internal sealed class RunRig : IDisposable
 
     /// <param name="withLegacy">The baseline has an old install's records to read.</param>
     /// <param name="clock">The clock the checks' deadlines run on (a test that moves time by hand); the baseline and the history keep their own.</param>
-    public RunRig(bool withLegacy = false, TimeProvider? clock = null)
+    /// <param name="hardwareFactory">The factory of the system check's hardware provider. Null: a factory that gives <see cref="Hardware"/> every time.</param>
+    public RunRig(bool withLegacy = false, TimeProvider? clock = null, Func<IHardwareProvider>? hardwareFactory = null)
     {
         Baseline = new BaselineRig(withLegacy);
         Source = new FakeStorageSource();
@@ -139,7 +140,7 @@ internal sealed class RunRig : IDisposable
         Hardware = new FakeHardware();
         Wmi = FakeWmiReader.Typical(FakeWmiReader.AnyDisks());
         Events = new FakeEventCounter();
-        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, Hardware, Wmi, Events);
+        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, hardwareFactory ?? (() => Hardware), Wmi, Events);
         Runner = new CheckRunner(Services);
     }
 
