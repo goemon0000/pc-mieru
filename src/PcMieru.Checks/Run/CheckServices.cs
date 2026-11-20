@@ -23,7 +23,7 @@ public sealed class CheckServices
     /// <param name="time">The clock. Start and end times of a run come from it.</param>
     /// <param name="root">The folder that holds the baseline (<c>baseline\</c>). The history store has its own root; the caller passes the same one.</param>
     /// <param name="storage">The source of the storage check's input.</param>
-    /// <param name="legacyDirectory">The v0.7.4 folder (<c>%APPDATA%\PartsLife\checks</c>), only read, or null for no import.</param>
+    /// <param name="legacyDirectory">The checks folder the v0.7.4 app kept, only read, or null for no import.</param>
     /// <param name="history">Where a finished run is saved.</param>
     /// <param name="app">The <c>app</c> field of the results ("PCMieru 0.4.0"). Defaults to <see cref="DefaultApp"/>.</param>
     public CheckServices(
