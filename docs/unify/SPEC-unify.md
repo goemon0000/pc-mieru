@@ -64,10 +64,10 @@ PCMieru.Helper.exe        既存。長い読み取り処理のための「セッ
 
 ### 4.0 共通
 - 判定は 4 段: OK／注意／要確認／**測れず**（測れずを OK に数えない）。各項目は `Value<T>` と同じく値・状態・取得元・理由を持つ。
-- 結果の形 `pcm-check/1`（JSON・キーは英語）: `{format, app, kind: system|cpu|memory|storage|gpu, startedAtUtc, endedAtUtc, outcome: completed|stopped|failed, verdict, items[], notes[]}`。
+- 結果の形 `pcm-check/1`（JSON・キーは英語）: `{format, app, runId, kind: system|cpu|memory|storage, startedAtUtc, endedAtUtc, outcome: completed|stopped|failed, verdict, counts, items[], notes[]}`（`runId` と `counts` は必須。`gpu` は門を開く版で足す。詳細は DESIGN-A §3・§14）。
   - `items[]` の各項目は**版をまたいで変えない項目 ID**（例 `system.eventlog.whea7d`）・値の型と単位・判定・根拠を持つ。測れない値は `null` と理由コード（`unsupported|denied|timeout|error|partial`）。
   - `outcome: stopped` のときも、それまでの部分結果を項目ごとに残す（終わっていない項目は `partial`）。
-  - 項目は「判定する項目」と「観測だけの項目」（`info`。経過時間・総量・速度・型番・通電時間・電力など、閾値を持たない物）に分ける。どちらになるかは項目 ID ごとに固定（設計図）。
+  - 項目は「判定する項目」と「観測だけの項目」（`info`。経過時間・総量・速度・型番・通電時間・電力など、閾値を持たない物）に分ける。どちらになるかは項目 ID ごとに固定（設計図）。例外は 2 つだけ: 比べられなかった増分（`.delta`）と、GPU の状態が異常のときのドライバの行は `info`（DESIGN-A §14.0）。
   - **総合判定 `verdict`** は**判定する項目**の判定の最も悪い物: 要確認 ＞ 注意 ＞ 測れず ＞ OK。`partial` の項目は（すでに異常を見つけていなければ）「測れず」として数える。つまり OK は**判定する項目が全部測れて OK のときだけ**。判定する項目が全部測れず（または 1 つも無い）なら「測れず」。`info` の項目は値が欠けても総合に入れない（入れると、常に測れない観測のせいで毎回「測れず」になる）。項目ごとの数（OK n・注意 n・観測 n…）も並べて持つ。
   - 項目 ID・型・単位・理由コード・停止時の部分結果・総合判定は fixture で固定する（§13）。
 - `pcm-check/1` は**伏せ字済み**: シリアル・PC 名・ユーザー名・パスは入れない。記憶媒体のドライブは型番と、ローカルの基準値の中の通し番号（`disk-1` 等）でだけ指す。差分の計算は `pcm-check/1` ではなく、ローカルの基準値（§4.4）で行う。

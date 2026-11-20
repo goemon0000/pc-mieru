@@ -51,7 +51,7 @@ public interface IBuildCodeProvider
 - 履歴の型（§14 の確定に合わせて固定）:
 
 ```csharp
-public sealed record CheckHistoryQuery(CheckKind? Kind, int Limit);          // Limit 1〜200、既定 20（MCP）／全保持分（CLI・GUI）
+public sealed record CheckHistoryQuery(CheckKind? Kind, int? Limit);         // null＝保持している全部（CLI・GUI。種類ごとに最大 200 件×4）。MCP は 1〜200・既定 20
 public sealed record CheckHistoryEntry(Guid RunId, CheckKind Kind,
     DateTimeOffset StartedAtUtc, DateTimeOffset EndedAtUtc,
     CheckOutcome Outcome, CheckVerdict Verdict, CheckCounts Counts);       // Verdict は総合の 4 値
@@ -107,7 +107,7 @@ UTF-8 の JSON オブジェクト。キーと列挙値は英語。表示用の�
 | `system.memory.modules`, `system.memory.capacity`, `system.memory.rated_speed`, `system.memory.configured_speed` | int・`count`、dec・`B`、int・`MT/s`、int・`MT/s` | 最初は搭載枚数。残りは各枚。混在容量は一覧の根拠に出す。定格未満は設定上の注意、定格超えは情報。速度が 0 または欠けていれば測れず。 |
 | `system.gpu.adapters`, `system.gpu.model`, `system.gpu.driver_version`, `system.gpu.driver_age`, `system.gpu.device_status`, `system.gpu.generic_driver` | int・`count`、string・–、string・–、int・`d`、int・`code`、bool・– | 最初は枚数。残りは各 GPU。ドライバの古さは 730 日超で注意。汎用ドライバ（Basic Display）は注意。構成コード 22 は無効化の表示で故障に数えない。0 以外の状態ではドライバの 2 行は `info`（§14.0）。 |
 | `system.storage.devices`, `system.storage.health`, `system.storage.free` | int・`count`、string・–、dec・`B` | ディスク一覧、台ごとの健康、ローカルのボリュームごとの空き。健康値は `healthy\|warning\|critical`。判定に必要な健康情報が欠ければ測れず。空きの `evidence.totalBytes` も十進文字列。空き率 3% 未満は要確認、10% 未満は注意。ボリュームの所属を一意に確認できるときだけ `evidence.diskId` を付ける。 |
-| `system.pagefile.count`, `system.pagefile.automatic`, `system.pagefile.allocated`, `system.pagefile.current`, `system.pagefile.peak` | int・`count`、bool・–、dec・`B`、dec・`B`、dec・`B` | 件数 0 は注意。後三つは各ファイル。ピークが割当の 80% 超なら注意。 |
+| `system.pagefile.count`, `system.pagefile.automatic`, `system.pagefile.allocated`, `system.pagefile.current`, `system.pagefile.peak` | int・`count`、bool・–、dec・`B`、dec・`B`、dec・`B` | 件数 0 は注意。後三つは各ファイル。割当が正のファイルだけ、ピークが割当の 80% 超なら注意。 |
 | `system.eventlog.whea7d`, `system.eventlog.disk7d`, `system.eventlog.ntfs7d`, `system.eventlog.stornvme7d`, `system.eventlog.volmgr7d` | int・`count` | Level 1–2 の件数。対応する Level 3 の ID は順に `system.eventlog.whea_warning7d`、`system.eventlog.disk_warning7d`、`system.eventlog.ntfs_warning7d`、`system.eventlog.stornvme_warning7d`、`system.eventlog.volmgr_warning7d`。同じ型と単位。WHEA エラーありは要確認。警告行と他のエラー行は旧判定を項目別に当てる。 |
 | `system.eventlog.kp41_7d` | int・`count` | Kernel-Power 41。1 件以上は注意。原因は断定しない。 |
 
@@ -140,7 +140,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 
 前回との差を扱うのは NVMe の `critical_warning`、`available_spare`、`percentage_used`、`media_errors`、`error_log_entries`、`unsafe_shutdowns`、`power_on_hours`、`data_units_written` と、表の ATA 数値属性。比較結果の ID は当該 ID に `.delta` を足した固定集合。値は `dec` と同じ精度を持つ符号付き十進文字列、単位は元の行と同じ。`evidence` に `before`、`after`、`sinceUtc` を持つ。警告ビットの行では新規に立ったビットも根拠にする。温度の旧基準値は移行時に保存するが、増分の判定項目にしない。
 
-比較不能なら `.delta` は `null`。`evidence.code` は `baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_missing_counter`、`baseline_read_failed` のいずれか。ディスクに適用する方式の項目だけを出す。`.delta` の判定は旧 `Counters.GrowthVerdict`（`PL/Storage/Baseline.cs:59`）の表どおり。増えたとき: `storage.nvme.media_errors`・`storage.nvme.critical_warning`・`storage.ata.5`・`.187`・`.196`・`.197`・`.198` は `check`、`storage.nvme.error_log_entries` と `storage.ata.199` は `caution`（199 は `evidence.code: likely_cable`。旧 `StorageJudge.cs:189` の「ケーブルや差し込みのことが多い」）。表にある項目で増えていなければ `ok`。表に無い項目（不意の電源断・通電・書き込み量・寿命の消費・予備領域）の `.delta` と、比べられなかった `.delta` は `info`（初回は毎回比べられないので「測れず」にしない）。絶対値の行は旧の項目別判定（`GrowthFinding` の初回・増加・横ばい、`StorageJudge.cs:77`、`:186`）をそのまま移し、基準値から得た増減をその根拠にも使う。旧カウンター、個別判定、ATA の値の出所は `PL/Storage/Baseline.cs:45`、`:85`、`PL/Storage/StorageJudge.cs:70`、`:113`、`:159`、`:226`、`PL/Storage/AtaSmart.cs:27`、`:127`。
+比較不能なら `.delta` は `null`。`evidence.code` は `baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_concurrent`、`baseline_missing_counter`、`baseline_read_failed`、`baseline_legacy_refused` のいずれか（決まりは §14.5）。ディスクに適用する方式の項目だけを出す。`.delta` の判定は旧 `Counters.GrowthVerdict`（`PL/Storage/Baseline.cs:59`）の表どおり。増えたとき: `storage.nvme.media_errors`・`storage.nvme.critical_warning`・`storage.ata.5`・`.187`・`.196`・`.197`・`.198` は `check`、`storage.nvme.error_log_entries` と `storage.ata.199` は `caution`（199 は `evidence.code: likely_cable`。旧 `StorageJudge.cs:189` の「ケーブルや差し込みのことが多い」）。表にある項目で増えていなければ `ok`。表に無い項目（不意の電源断・通電・書き込み量・寿命の消費・予備領域）の `.delta` と、比べられなかった `.delta` は `info`（初回は毎回比べられないので「測れず」にしない）。絶対値の行は旧の項目別判定（`GrowthFinding` の初回・増加・横ばい、`StorageJudge.cs:77`、`:186`）をそのまま移し、基準値から得た増減をその根拠にも使う。旧カウンター、個別判定、ATA の値の出所は `PL/Storage/Baseline.cs:45`、`:85`、`PL/Storage/StorageJudge.cs:70`、`:113`、`:159`、`:226`、`PL/Storage/AtaSmart.cs:27`、`:127`。
 
 ### 3.4 JSON 例
 
@@ -186,6 +186,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
     imported-twins.json
     imported-v074.json
     disk-ordinals.json
+    acq-seq.json
 ```
 
 - 履歴の `<UTC>` は `endedAtUtc` の `yyyyMMdd'T'HHmmssfffffff'Z'`。UTC、UUID、種類を本体と照合する。列挙は直下だけ。終了時刻の降順、同時刻なら UUID の順。種類ごとに正常な最新 200 件を残す。基準値は台ごとに最大 200 観測を持ち、時計逆行で保留中なら次の比較元を残す。旧基準値の上限と保留は `PL/Storage/Baseline.cs:223`、`:341`、`:365`。
@@ -219,7 +220,7 @@ v2|sn=SN%257%7CA_|uid=eui.0123456789abcdef|model=ATA Example SSD|size=1000204886
 - 記述子の文字列は 旧版と同じ ASCII 抽出と `Trim()`。シリアルは採取時に末尾の `.` を落とす。`_` は残す。型番は製品名がベンダー名で始まらないときベンダー名を前置する。旧方式では `ATA` も前置対象。Core の表示用 `CleanSerial` と `JoinVendorModel` はこの変換と異なるため、鍵には記述子から得た互換用の値を使う。`PL/Storage/DiskReport.cs:26`、`:35`、`PL/Storage/StorageReader.cs:66`、`:73`、`PL/Storage/Baseline.cs:171`、`src/PcMieru.Core/Hardware/Storage/StorageProtocol.cs:118`。
 - `UniqueId` は `IOCTL_STORAGE_QUERY_PROPERTY` の `StorageDeviceIdProperty = 2`。デバイス関連の binary ID のみ。旧版のサイズ・型のフィルターを移し、`eui.` を優先し、次に `naa.`。小文字 hex。全 0／全 FF、ポートの識別子、壊れた記述子は採用しない。`Location` は `IOCTL_SCSI_GET_ADDRESS`（`0x00041018`）。`Port:Path:Target:Lun` の十進表記。読めなければ空。`PL/Storage/StorageProtocol.cs:42`、`:67`、`:97`、`PL/Storage/StorageReader.cs:33`、`:81`。
 - 強い鍵は、有効なシリアルか空でない `UniqueId` があるもの。シリアルの判定は旧版どおり「`0` 以外の ASCII 英数字が 1 文字でもある」。比較は位置なしの強い鍵の完全一致。同時に同じ鍵が出たら `twins.json` に永続化する。過去の双子も比較不可。全台に異なる位置が取れた双子は位置つき鍵で記録だけ続ける。双子情報の書き込みに失敗した回は比較と基準値の更新を見送る。`PL/Storage/Baseline.cs:175`、`:190`、`:279`、`:308`。
-- 連続性は旧版どおり、NVMe の通電時間・書き込み単位、ATA 9 の逆行を見る。NVMe の通電時間だけは経過実時間に 3 時間の余裕を足した上限も見る。時計逆行で `Withheld` になった記録は次の比較元から外す。遅れて届いた回との区別は §14.5 の `seq`。今回のインベントリが不完全で重複を除外できないときは差分を出さない。`PL/Storage/Baseline.cs:341`、`:382`、`:407`。
+- 連続性は旧版どおり、NVMe の通電時間・書き込み単位、ATA 9 の逆行を見る。NVMe の通電時間だけは経過実時間に 3 時間の余裕を足した上限も見る。時計逆行で `Withheld` になった記録は次の比較元から外す。遅れて届いた回との区別は §14.5 の採取番号 `acq`。今回のインベントリが不完全で重複を除外できないときは差分を出さない。`PL/Storage/Baseline.cs:341`、`:382`、`:407`。
 - 強い鍵の表示番号は `disk-ordinals.json` に保持する。弱い鍵や恒久番号をまだ持たない台は、その結果内で未使用の `disk-N` を割り当てる。弱い鍵と番号の対応は保存しない。番号を履歴間で名寄せする用途には使わない。
 
 ### 5.3 v0.7.4 からの読み取り専用移行
@@ -326,7 +327,7 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 1. **型と形式**。`PcMieru.Checks.csproj`、`Contracts/`、`Serialization/`、`PcMieru.slnx`、`tests/PcMieru.Checks.Tests/`。4 種の schema fixture と総合判定を先に固定。
 2. **結果ストア**。`Checks/History/` と試験。原子的な保存、退避、保持、読み取り専用の閲覧。
 3. **ディスク識別子と応答**。Core の `StorageCollector.cs`、`StorageHealthReader.cs`、`HelperStorageReader.cs`、`Hardware/Model/`、Wire の `StorageProtocol.cs`、`DiskOperations.cs`、`ActionResult.cs`。旧鍵の入力と差し替わりの fixture。NVMe の Error Information（ログ 0x01、16 件 × 64 B）の読み取りを Core と Helper に足し、件数（媒体の誤り＝Status Code Type 2 の数・読めた件数）だけを返す（§14.4）。Helper の publish も確認。
-4. **基準値と移行**。`Checks/Storage/` の識別、連続性、移行、双子、増分（§14.5 の `seq`・新しいビット・逆行）の実装と fixtures。3 の採取ポートを接続。
+4. **基準値と移行**。`Checks/Storage/` の識別、連続性、移行、双子、増分（§14.5 の採取番号 `acq`・新しいビット・逆行）の実装と fixtures。3 の採取ポートを接続。
 5. **システム点検**。`Checks/SystemInfo/`、期限付き問い合わせ、Core 採取の組み立て、判定の移植。イベント列挙と WMI の故障注入。
 6. **CPU 負荷**。`Checks/Load/CpuLoadTest.cs`、`Steadiness.cs`、Core のトポロジーと PDH 点検セッション。サンプル、割り当て、停止の試験。
 7. **メモリ負荷**。`Checks/Load/MemoryTest.cs`、`Patterns.cs`、部分結果と解放の試験。CPU と共通の実行・保存境界を接続。
@@ -360,7 +361,7 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 4. **PDH の記述**（§6.2）。Core は既に `Processor Frequency` と `% Processor Performance` の両方を登録している（`src/PcMieru.Core/Collection/PdhSystemSampler.cs:44`）。仕様 u0.2〜u0.3 の「片方だけ」が誤りで、仕様の側を直した。
 5. **終了コード**（§8）。既存の凍結済み `ExitCode` の値（4 = Denied）を使い、新しい値を作らないことを明記。
 6. JSON 例の `memory.verified` と `memory.mismatches` に `reason: partial` を付けた（止まった回の照合は途中まで）。
-7. **codex の再点検（2 回目）を受けて §14 を足した**。`.delta` の例外（比べられない物は `info`）、GPU の汎用ドライバの行と状態 22、イベントの警告の扱い、`cpu.variation` を `info` にして持続性を 1 判定に、クロックの持続性が出ないときの扱い、NVMe の危険温度の累計とエラーログ 0x01、`predict_failure` の偽と欠け、総合 4 値と項目 5 値、`source`／`evidence` の固定一覧、遅れて届いた回と時計の逆行の区別（`seq`）。
+7. **codex の再点検（2 回目）を受けて §14 を足した**。`.delta` の例外（比べられない物は `info`）、GPU の汎用ドライバの行と状態 22、イベントの警告の扱い、`cpu.variation` を `info` にして持続性を 1 判定に、クロックの持続性が出ないときの扱い、NVMe の危険温度の累計とエラーログ 0x01、`predict_failure` の偽と欠け、総合 4 値と項目 5 値、`source`／`evidence` の固定一覧、遅れて届いた回と時計の逆行の区別（採取番号 `acq`）。
 
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
@@ -373,7 +374,7 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
   2. GPU のデバイス状態が 0 以外のとき、その GPU の `system.gpu.driver_age` と `system.gpu.generic_driver` は `info`（旧は状態のエラーを最優先にして他を言わない。`PL/SystemInfo/SystemCheck.cs:220`）。
 - 判定する項目で値が取れない（`null`）ときは `unavailable`。旧は一部で「OK（報告なし）」にしていた物（メモリの速度が 0）も、ここでは `unavailable` にそろえる（OK は測れたときだけ、仕様 §4.0）。
 - 旧の総合判定（`PL/Storage/StorageJudge.cs:11`）は「測れず」を順位から除いていた。新しい総合は仕様 §4.0 の順位（要確認＞注意＞測れず＞OK）で、ここは**意図して変える**。
-- `source` の固定値: `os`、`smbios`、`setupapi`、`dxgi`、`wmi`、`eventlog`、`pdh`、`energy_meter`、`load`、`nvme`、`ata`、`storage_query`、`baseline`。足すときはこの表を直してから。
+- `source` の固定値: `os`、`win32`（GlobalMemoryStatusEx などの Win32 API）、`smbios`、`setupapi`、`dxgi`、`wmi`、`eventlog`、`pdh`、`energy_meter`、`load`、`nvme`、`ata`、`storage_query`、`baseline`。足すときはこの表を直してから。
 - `evidence` の固定キーと型: `code`（下の一覧の文字列）・`before`／`after`（十進の文字列）・`sinceUtc`（UTC ISO 8601）・`newBits`（int）・`totalBytes`（十進の文字列）・`diskId`（`disk-N`）・`efficiencyClass`（int）・`cv`（number。変動係数 ×100）・`clockSteadiness`（number・%）・`warningTempMinutes`／`criticalTempMinutes`（十進の文字列）・`recentMediaErrors`（int）・`recentEntries`（int）・`capacities`（十進の文字列の配列）。
 - `evidence.code` の固定値: `baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_concurrent`、`baseline_missing_counter`、`baseline_read_failed`、`baseline_legacy_refused`、`counter_increased`、`counter_decreased`、`new_bits`、`likely_cable`、`mixed_capacity`、`below_rated`、`above_rated`、`disabled_code22`、`device_error`、`too_short`、`pin_unknown`、`pattern_mismatch`、`compute_mismatch`、`past_threshold_breach`、`current_threshold_breach`、`temp_over_critical_before`、`media_errors_in_log`。
 
@@ -387,7 +388,7 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 | `system.memory.configured_speed`（各枚） | 定格か設定のどちらかが 0・欠け → `unavailable`。設定 < 定格 → `caution`（`below_rated`。故障ではないと画面で言う）。設定 > 定格 → `ok`（`above_rated`）。等しい → `ok`（`:207`） |
 | `system.gpu.device_status`（各 GPU） | 22 → `ok`（`disabled_code22`）。他の 0 以外 → `check`（`device_error`）。0 → `ok`（`:220`） |
 | `system.gpu.generic_driver`（各 GPU・bool） | 名前が Basic Display／基本ディスプレイ → `caution`、他は `ok`。状態が 0 以外なら `info`（§14.0） |
-| `system.gpu.driver_age`（各 GPU・`d`） | 730 日超 → `caution`。日付が無い → `unavailable`。状態が 0 以外なら `info` |
+| `system.gpu.driver_age`（各 GPU・`d`） | 判定は小数の日数で `(今 − ドライバの日付).TotalDays > 730` → `caution`（旧どおり。値は切り捨ての整数で出すが、判定に整数を使わない）。日付が無い → `unavailable`。状態が 0 以外なら `info` |
 | `system.storage.health`（各台） | Windows の HealthStatus 2、または OperationalStatus に 3・5・6・7 → `check`。HealthStatus 1 → `caution`。0 → `ok`。他・読めない → `unavailable`（`:244`）。値は `healthy\|warning\|critical` |
 | `system.storage.free`（各ボリューム） | 空き率 < 3% → `check`、< 10% → `caution`、他 `ok`。容量 0 は空き率 1 として扱う（旧どおり） |
 | `system.pagefile.count` | 0 → `caution`、他 `ok` |
@@ -430,12 +431,12 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 | ID | 判定 |
 |---|---|
 | `storage.health` | §14.1 の `system.storage.health` と同じ決まり |
-| `storage.temperature` | NVMe: ≥ 80 → `check`、≥ 70 → `caution`、他 `ok`。ただし危険温度超過の累計分 > 0 なら少なくとも `caution`（`temp_over_critical_before`、根拠 `warningTempMinutes`・`criticalTempMinutes`。Core の `HardwareDetails.cs:159` が既に読んでいる）。ATA: 194、無ければ 190 の値が 1〜127 のとき ≥ 70 → `check`、≥ 60 → `caution`、他 `ok`。範囲外・無し → `unavailable` |
+| `storage.temperature` | NVMe: 現在温度が読めない → 累計にかかわらず `unavailable`（旧どおり）。≥ 80 → `check`、≥ 70 → `caution`、他 `ok`。ただし危険温度超過の累計分 > 0 なら少なくとも `caution`（`temp_over_critical_before`、根拠 `warningTempMinutes`・`criticalTempMinutes`。Core の `HardwareDetails.cs:159` が既に読んでいる）。ATA: 194、無ければ 190 の値が 1〜127 のとき ≥ 70 → `check`、≥ 60 → `caution`、他 `ok`。範囲外・無し → `unavailable` |
 | `storage.nvme.critical_warning` | 0 以外 → `check`、0 → `ok` |
 | `storage.nvme.available_spare` | しきい値 > 0 かつ 予備 < しきい値 → `check`。予備 < しきい値 + 10 → `caution`。他 `ok` |
 | `storage.nvme.percentage_used` | ≥ 100 → `check`、≥ 90 → `caution`、他 `ok` |
 | `storage.nvme.error_log_entries` | 最近のエラーログ（Error Information、ログ 0x01、最大 16 件）に媒体の誤り（Status Code Type = 2）が 1 件以上 → `caution`（`media_errors_in_log`、根拠 `recentMediaErrors`・`recentEntries`）。そうでなく、比べられて累計が増えた → `caution`。他 `ok`。ログ 0x01 が読めないときは累計の増え方だけで判定する（`PL/Storage/StorageJudge.cs:126`） |
-| `storage.ata.threshold_status` | しきい値が読めない → `unavailable`。今しきい値以下の属性がある → `check`（`current_threshold_breach`）。過去に割った（worst ≤ しきい値）→ `caution`（`past_threshold_breach`）。他 `ok` |
+| `storage.ata.threshold_status` | しきい値が読めない → `unavailable`。しきい値 0 の属性は比べない（旧 `PL/Storage/AtaSmart.cs:17`）。今の値 ≤ しきい値の属性がある → `check`（`current_threshold_breach`）。過去に割った（worst ≤ しきい値）→ `caution`（`past_threshold_breach`）。他 `ok` |
 | `storage.ata.predict_failure` | 真 → `check`。偽 → `ok`。この窓口が読めない台では**項目を出さない**（旧は真のときだけ出していた。出さないことで、SMART だけ読める台が毎回「測れず」にならない） |
 
 ログ 0x01 の読み取りは Core と Helper に**足す**（今の PCミエルはヘルスのログ 0x02 だけ。`src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs:114`）。結果へは件数だけを出し、LBA・ページの中身は出さない。§11 の作業順 3 に含める。
@@ -450,6 +451,7 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 - 比べられない（値 `null`）ときは `info`。理由を `evidence.code` に入れる:
   - 通電時間・書き込み量・ATA 9 が減った → `baseline_counter_reset`（別の台と見なし、その台の `.delta` は全部 `null`。旧 `WentBackwards`）。これら以外の数が減っただけなら比べられたまま（上の `counter_decreased`）。
   - NVMe の通電時間が、前回からの実時間 ＋ 3 時間（旧 `HoursSlack` 2 時間 ＋ `ClockSkew` 1 時間、`Baseline.cs:386`）より多く進んだ → `baseline_clock`。
-- **時計が戻ったのと、古い採取が遅れて届いたのを分ける**:
-  - 基準値の各記録に、プロセス間ロックの下で振る通し番号 `seq` を持たせる（旧ファイルは 0 とみなす）。点検は採取を始める前に最新の `seq` を控える。記録するときに最新の `seq` が控えと違えば、間に別の回が記録した＝この回は遅れて届いた。**比べず、記録もしない**（`baseline_concurrent`）。
-  - 遅れでないのに今の時計が前回の記録時刻より前 → 時計が戻った。旧どおり記録はするが `withheld` にし、次の回の比較元には前回を残す（`Baseline.cs:358`）。この回は `baseline_clock`。
+- **時計が戻ったのと、古い採取が遅れて届いたのを分ける**（codex 3 回目の指摘で直した。通し番号を記録の側だけに振ると「間に別の保存があった」ことしか分からず、どちらの採取が新しいか分からない）:
+  - 採取の**始め**に、プロセス間ロックを短く取って利用者ごとの採取番号 `acq` を 1 つ進めて受け取る（`baseline\acq-seq.json`。全台で共通の 1 本）。基準値の各記録はその回の `acq` を持つ（旧ファイルの記録は 0 とみなす）。
+  - 記録のときロックの下で読み直し、自分より大きい `acq` の記録がもうある → この回の採取の方が古い。**比べず、記録もしない**（`baseline_concurrent`）。無ければ、読み直した中の最後の Withheld でない記録と比べて記録する（間に保存があっても、その方が古い採取なら正しい比較元）。
+  - 時計の扱いは旧の条件そのまま（`PL/Storage/Baseline.cs:351`〜`:359`）: 連続性の判定が `AheadOfClock`（NVMe の通電時間が許す上限より進んだ）なら比べない（`baseline_clock`）。そのうち**今の時刻が比較元の記録時刻より前**のときだけ `withheld` で記録し、次の回の比較元には前の記録を残す。今の時刻が前より後の `AheadOfClock` は普通に記録する。
