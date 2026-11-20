@@ -184,7 +184,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 
 ### 3.4 JSON 例
 
-照合中に停止したメモリ点検。確認済みの不一致 1 件は `check` のまま残す（停止しても見つけた異常は消さない）。不一致が 0 件のまま止まっていれば、その行は `unavailable`・`reason: partial`・値 0 で、総合は `unavailable`。
+照合中に停止したメモリ点検。確認済みの不一致 1 件は `check` のまま残す（停止しても見つけた異常は消さない）。不一致が 0 件のまま止まっていれば、その行は `unavailable`・`reason: partial`・値 0 で、総合は `unavailable`。（この例は形の例で、§2 の確定点の規則が後から決まった。実装は止めた回の全行を `partial` にする。）
 
 ```json
 {
@@ -319,6 +319,9 @@ WMI は固定の問い合わせごとに接続、実行、全件列挙・変換�
 - 点検専用 PDH クエリに `\Processor Information(_Total)\Processor Frequency` と `\Processor Information(_Total)\% Processor Performance` を登録し、同じ収集時点の 2 値で `frequency × performance / 100` を計算する。欠測や不正なサンプルを 0 MHz にしない。現行 `PdhSystemSampler` はすでに両方を登録している（u0.3 までの「片方だけ」は誤りで、u0.4 で直した）。既存の読み取り規則を共用し、クエリは別インスタンスにする。PDH の採取が固まっても停止と所定時間の終わりは遅らせない（停止トークンと絶対の締め切りで負荷を止め、採取は負荷の制御から切り離す）。毎秒の刻みは開始からの絶対時刻で数え、ずれを溜めない（通知の門は 0.9 秒より詰まった 1 回だけを落とす）。負荷スレッドから漏れた例外（メモリ不足を含む）は黙って捨てず、その回を `failed` にする。試験では CPU のセッションを明示して渡し、本物のセッションを使えるのは RealMachine の試験だけにする。`PL/Load/ClockSampler.cs:22`、`:38`、`src/PcMieru.Core/Collection/PdhSystemSampler.cs:44`、`:224`、`:246`。
 - CPU パッケージ電力は `\Energy Meter(*)\Power` のパッケージインスタンスだけを読み、確認済みの mW を合計して W にする。列挙、単位、サンプルが確かめられなければ測れず。参考実装は後段ブランチの `pl-sensors/src/PartsLife.Checks/Recording/Sources.System.cs:12`、`:45`、`:189`。移すのはパッケージの選別と換算規則。CPU 温度は読まない（項目を置かず note だけ。§3.2）。
 - メモリは空きの既定 25%、最大 50%。`max(1 GiB, 物理容量の10%)` を空け、64 MiB ごとに確保してページを触る。実行中も空きを監視し、下限に達したら `stopped` と `memory.pressure`。停止・期限は小区画で確認する。確保済み範囲は `finally` で解放する。旧計画、空き監視と解放は `PL/Load/MemoryTest.cs:52`、`:61`、`:91`、`:121`、`:169`。
+  - 手順 7 の前に司会が決めた細則（2026-11-21）。下限 `floor = max(1 GiB, 物理容量の10%)`。確保中は「確保後の空きが floor を割る」ところで確保をやめ、実行中は空きが `floor / 2` を割ったら引く（旧と同じ。自分が触ったページはすでに空きから引かれているので、実行中に割るのは他のアプリが欲しがったとき）。実行中の空きは 0.25 秒ごとに 1 か所で読み、作業スレッドごとには呼ばない。
+  - 確保の失敗（`NativeMemory.AlignedAlloc` は null を返さず `OutOfMemoryException` を投げる）は「そこで確保をやめる」で、失敗の回にしない。1 区画も借りられなかった回（計画が 64 MiB 未満を含む）は `completed`。`memory.borrowed` は 0、照合の行は `unavailable`・`partial`、note `memory.pressure` を付ける（空きが足りずに借りられなかったことを伝える。総合は `unavailable`）。
+  - 書き込みと照合は専用スレッド（スレッドプールと `Parallel.For` は使わない）。本数は `clamp(論理 CPU 数 / 2, 1, 論理 CPU 数)`、`BelowNormal`。停止トークン・開始からの絶対の締め切り・空きの低下のどれでも 4 MiB の小区画の境で止まる。全スレッドを join してから解放し（解放後の書き込みを作らない）、作業スレッドから漏れた例外はメモリ不足を含めて `failed`。1 パス＝借りた全範囲の書き込みと照合を終えたもの。`memory.verified` は途中の照合も含めた照合済みバイトの合計。速度は転送量 0 なら欠測（0 にしない）。乱数の種は試験で固定できるようにする。試験では負荷のセッションを明示して渡し、本物のセッションを使えるのは RealMachine の試験だけ（CPU と同じ）。止めた回は §2 のとおり全行 `partial`。
 
 ## 7. GUI
 
@@ -486,7 +489,7 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 |---|---|
 | `memory.mismatches` | 1 以上 → `check`（`pattern_mismatch`。停止しても消さない）。照合 0 バイト → `unavailable`。止まった回で 0 件 → `unavailable`・`reason: partial`・値 0 |
 
-他のメモリの項目は `info`（§3.0）。空きの低下で止めた回は note `memory.pressure`。
+他のメモリの項目は `info`（§3.0）。空きの低下で止めた回と、空きが足りず 1 区画も借りられなかった回は note `memory.pressure`（§6.2 の細則）。
 
 ### 14.4 記憶媒体（台ごと）
 
