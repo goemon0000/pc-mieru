@@ -635,6 +635,33 @@ public sealed class StorageCheckRunTests
         Assert.Empty(rig.History.Saved);
     }
 
+    // The assertion that 385ebe0 removed ("a CPU request is not supported") cannot come back as it was: the CPU check exists now. What it
+    // guarded is that this test project never puts a real load on the machine by accident; that is what these two say. A rig that was given no
+    // session has none, so a CPU request on it is a failed run (the factory refused), saved, with no row and no thread started.
+    [Fact]
+    public async Task A_cpu_request_on_a_rig_with_no_cpu_session_fails_with_an_internal_error_and_loads_nothing()
+    {
+        using var rig = new RunRig();
+
+        var run = await rig.Runner.RunAsync(new CheckRequest(CheckKind.Cpu, TimeSpan.FromSeconds(30)), null, CancellationToken.None);
+
+        Assert.Equal(CheckOutcome.Failed, run.Result.Outcome);
+        Assert.Equal(CheckRunFailureCodes.InternalError, run.FailureCode);
+        Assert.Contains("explicit session", run.FailureDetail, StringComparison.Ordinal);
+        Assert.True(run.IsSaved);
+        Assert.Empty(run.Result.Items);
+    }
+
+    [Fact]
+    public void The_default_cpu_session_of_a_rig_is_never_the_real_one()
+    {
+        using var rig = new RunRig();
+
+        // Called as the procedure calls it: it refuses, it does not hand out a session that could load every core.
+        var refusal = Assert.Throws<InvalidOperationException>(rig.Services.CpuSessionFactory);
+        Assert.Contains("explicit session", refusal.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_storage_request_with_a_duration_is_refused()
     {

@@ -178,9 +178,9 @@ public sealed class CpuRealMachineTests(ITestOutputHelper output)
 
         private sealed class Recording(ILoadThreadStarter inner, List<ILoadThread> handles) : ILoadThreadStarter
         {
-            public ILoadThread Start(string name, Action onStart, Func<bool> step)
+            public ILoadThread Start(string name, Action onStart, Func<bool> step, Action<Exception> onFault)
             {
-                var thread = inner.Start(name, onStart, step);
+                var thread = inner.Start(name, onStart, step, onFault);
                 lock (handles)
                 {
                     handles.Add(thread);

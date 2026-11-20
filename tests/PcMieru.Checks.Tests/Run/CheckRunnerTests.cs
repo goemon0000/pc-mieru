@@ -226,14 +226,14 @@ public sealed class CheckRunnerTests
     }
 
     [Fact]
-    public async Task A_cancel_that_comes_after_the_procedure_but_before_the_end_is_a_stop()
+    public async Task A_cancel_that_comes_while_the_procedure_is_finishing_and_before_it_returns_is_a_stop()
     {
         using var rig = new RunRig();
         using var cts = new CancellationTokenSource();
         var runner = With(rig, async (c, _) =>
         {
             c.Collector.Add(Duration());
-            await cts.CancelAsync(); // the user's stop arrives just as the procedure finishes: one finalisation point decides
+            await cts.CancelAsync(); // the stop arrives inside the procedure, before it returns its rows: the seal point has not been reached (SealPointTests has the cancel that comes after it)
         });
 
         var run = await Run(runner, ct: cts.Token);

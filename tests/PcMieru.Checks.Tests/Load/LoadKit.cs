@@ -72,6 +72,21 @@ internal sealed class FakeCpuSession : ICpuTestSession
     /// <summary>The chunk throws on call number <c>n</c>.</summary>
     public Func<int, bool> ChunkThrows { get; set; } = static _ => false;
 
+    /// <summary>The chunk throws this exception on call number <c>n</c> (null: it does not). A test makes an OutOfMemoryException from here.</summary>
+    public Func<int, Exception?> ChunkFault { get; set; } = static _ => null;
+
+    /// <summary>Added to every wait of the load clock: a clock that oversleeps (the real one sleeps a little longer than asked, and more on a busy machine).</summary>
+    public TimeSpan Oversleep { get; set; }
+
+    /// <summary>
+    /// When set, <see cref="SamplePdh"/> blocks on it (a counter call that hangs). The test sets it at the end so that no thread is left behind;
+    /// the load must not depend on it.
+    /// </summary>
+    public ManualResetEventSlim? SampleBlock { get; set; }
+
+    /// <summary>Set when a call of <see cref="SamplePdh"/> has entered the fake (before it blocks, if it does).</summary>
+    public ManualResetEventSlim SampleEntered { get; } = new(false);
+
     /// <summary>The thread with this index never gets to run its start action (so it never pins).</summary>
     public Func<int, bool> ThreadNeverStarts { get; set; } = static _ => false;
 
@@ -122,6 +137,8 @@ internal sealed class FakeCpuSession : ICpuTestSession
     public CpuPdhSample SamplePdh()
     {
         var n = Interlocked.Increment(ref _samples);
+        SampleEntered.Set();
+        SampleBlock?.Wait();
         return SampleThrows(n) ? throw new InvalidOperationException("the fake PDH failed") : Sample(n);
     }
 
@@ -145,7 +162,7 @@ internal sealed class FakeCpuSession : ICpuTestSession
             _threads[i].Run(ChunksPerWait(n, i));
         }
 
-        Time.Advance(wait);
+        Time.Advance(wait + Oversleep);
         AfterAdvance?.Invoke(wait);
         return ct.IsCancellationRequested;
     }
@@ -169,6 +186,11 @@ internal sealed class FakeCpuSession : ICpuTestSession
                 throw new InvalidOperationException("the fake chunk failed");
             }
 
+            if (owner.ChunkFault(n) is { } fault)
+            {
+                throw fault;
+            }
+
             var answer = Answer(seed);
             return owner.WrongAnswer(n) ? answer ^ 1UL : answer;
         }
@@ -189,7 +211,7 @@ internal sealed class FakeCpuSession : ICpuTestSession
 
     private sealed class FakeThreadStarter(FakeCpuSession owner) : ILoadThreadStarter
     {
-        public ILoadThread Start(string name, Action onStart, Func<bool> step)
+        public ILoadThread Start(string name, Action onStart, Func<bool> step, Action<Exception> onFault)
         {
             var index = owner._threads.Count;
             if (owner.ThreadStartFails(index))
@@ -198,7 +220,7 @@ internal sealed class FakeCpuSession : ICpuTestSession
             }
 
             owner.ChunkCallsAtThreadStart.Add(owner._chunkCalls);
-            var thread = new FakeLoadThread(name, step);
+            var thread = new FakeLoadThread(name, step, onFault);
             owner._threads.Add(thread);
             if (!owner.ThreadNeverStarts(index))
             {
@@ -221,9 +243,10 @@ internal sealed class FakeCpuSession : ICpuTestSession
 
 /// <summary>
 /// A load thread that works only when the world says so. <see cref="Join"/> runs the steps that are left and demands that the first of them
-/// says "stop": a thread that is joined without the stop flag set would run forever, and the test says so instead of hanging.
+/// says "stop": a thread that is joined without the stop flag set would run forever, and the test says so instead of hanging. A step that
+/// throws ends the thread and goes to the fault handler, as it does on a real thread (nothing is swallowed).
 /// </summary>
-internal sealed class FakeLoadThread(string name, Func<bool> step) : ILoadThread
+internal sealed class FakeLoadThread(string name, Func<bool> step, Action<Exception> onFault) : ILoadThread
 {
     private const int JoinGuard = 100_000;
 
@@ -243,7 +266,7 @@ internal sealed class FakeLoadThread(string name, Func<bool> step) : ILoadThread
     {
         for (var i = 0; i < chunks && !Ended; i++)
         {
-            if (!step())
+            if (!Step())
             {
                 Ended = true;
             }
@@ -260,7 +283,7 @@ internal sealed class FakeLoadThread(string name, Func<bool> step) : ILoadThread
                 throw new InvalidOperationException("Join would never return: the stop flag was not set before the join");
             }
 
-            if (step())
+            if (Step())
             {
                 StepsDuringJoin++;
             }
@@ -268,6 +291,20 @@ internal sealed class FakeLoadThread(string name, Func<bool> step) : ILoadThread
             {
                 Ended = true;
             }
+        }
+    }
+
+    // False when the thread is over: the step said stop, or it threw (the fault handler has then been told).
+    private bool Step()
+    {
+        try
+        {
+            return step();
+        }
+        catch (Exception ex)
+        {
+            onFault(ex);
+            return false;
         }
     }
 }

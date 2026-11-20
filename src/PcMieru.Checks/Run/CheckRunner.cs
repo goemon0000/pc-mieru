@@ -70,7 +70,7 @@ public sealed class CheckRunner : ICheckRunner
             context.Stage(CheckStage.Starting);
 
             var end = await ExecuteAsync(procedure, context, ct).ConfigureAwait(false);
-            var final = Finalize(runId, request.Kind, startedUtc, collector, end, ct);
+            var final = Finalize(runId, request.Kind, startedUtc, collector, end);
 
             context.Stage(CheckStage.Saving);
             var save = await SaveAsync(final.Result).ConfigureAwait(false);
@@ -89,7 +89,13 @@ public sealed class CheckRunner : ICheckRunner
         try
         {
             await procedure.ExecuteAsync(context, ct).ConfigureAwait(false);
-            return new ProcedureEnd(context.Collector.StoppedByProcedure ? CheckOutcome.Stopped : CheckOutcome.Completed, null, null);
+
+            // The seal point (DESIGN-A 2): the procedure has returned its rows. Whether the run was stopped is read here, once, right after the
+            // return, and decided for good: a stop that comes later (while the result is made final, or saved) does not change a completed run,
+            // whose load is over and whose rows are whole. A stop that came before this point is a stopped run (its rows are partial: the
+            // procedures see the token themselves and say so).
+            var stopped = context.Collector.StoppedByProcedure || ct.IsCancellationRequested;
+            return new ProcedureEnd(stopped ? CheckOutcome.Stopped : CheckOutcome.Completed, null, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -106,13 +112,14 @@ public sealed class CheckRunner : ICheckRunner
     }
 
     /// <summary>
-    /// The one place a result is made final (DESIGN-A §2). A stop that arrives before this point makes a run that would have been
-    /// completed <c>stopped</c>; a failure stays a failure. The result is validated strictly; one that does not pass is replaced for the save
-    /// by an empty failed one, and is kept (unsaved) with the failure code the run had and the first problem.
+    /// The one place a result is made final (DESIGN-A §2). The outcome was decided at the seal point (see <see cref="ExecuteAsync"/>) and is not
+    /// read again here: a stop that arrives after the procedure has returned its rows does not touch it. The result is validated strictly; one
+    /// that does not pass is replaced for the save by an empty failed one, and is kept (unsaved) with the failure code the run had and the first
+    /// problem.
     /// </summary>
-    private FinalResult Finalize(Guid runId, CheckKind kind, DateTimeOffset startedUtc, CheckCollector collector, ProcedureEnd end, CancellationToken ct)
+    private FinalResult Finalize(Guid runId, CheckKind kind, DateTimeOffset startedUtc, CheckCollector collector, ProcedureEnd end)
     {
-        var outcome = end.Outcome == CheckOutcome.Completed && ct.IsCancellationRequested ? CheckOutcome.Stopped : end.Outcome;
+        var outcome = end.Outcome;
         var endedUtc = CheckTime.TruncateToMilliseconds(_services.Time.GetUtcNow());
         if (endedUtc < startedUtc)
         {

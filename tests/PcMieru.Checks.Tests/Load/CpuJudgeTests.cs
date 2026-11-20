@@ -130,15 +130,16 @@ public sealed class CpuJudgeTests
     }
 
     [Fact]
-    public void A_run_that_compared_nothing_cannot_say_there_was_no_error()
+    public void A_run_that_compared_nothing_cannot_say_there_was_no_error_and_the_reason_is_partial()
     {
+        // Not stopped, and nothing compared (DESIGN-A 14.2): the load did not get to compare, which is not an error of the check.
         var load = Loads.Make(Cpus.Uniform(2), [1000, 1000], seconds: 0);
 
         var row = Rows.One(Judge(load), "cpu.compute_errors");
 
         Assert.Null(row.Value);
         Assert.Equal(ItemVerdict.Unavailable, row.Verdict);
-        Assert.Equal(CheckReason.Error, row.Reason);
+        Assert.Equal(CheckReason.Partial, row.Reason);
     }
 
     [Fact]
@@ -385,7 +386,7 @@ public sealed class CpuJudgeTests
         Assert.Equal(ItemVerdict.Caution, rows[1].Verdict);
         Assert.Null(rows[2].Value);
         Assert.Equal(ItemVerdict.Unavailable, rows[2].Verdict);
-        Assert.Equal(CheckReason.Error, rows[2].Reason);
+        Assert.Equal(CheckReason.Partial, rows[2].Reason);
         Assert.Equal(CheckEvidenceCode.PinUnknown, rows[2].Evidence!.Code);
         Assert.Equal(0, rows[2].Evidence!.EfficiencyClass);
     }
@@ -400,6 +401,7 @@ public sealed class CpuJudgeTests
         Assert.Equal(CheckEvidenceCode.PinUnknown, rows[1].Evidence!.Code);
         Assert.Null(rows[1].Value);
         Assert.Equal(ItemVerdict.Unavailable, rows[1].Verdict);
+        Assert.Equal(CheckReason.Partial, rows[1].Reason); // both when Windows refused the pin and when it is not known (DESIGN-A 14.2)
         Assert.Equal(ItemVerdict.Ok, rows[0].Verdict);
     }
 
@@ -419,6 +421,7 @@ public sealed class CpuJudgeTests
         var rows = Peers([100, 100], pins: [PinOutcome.Failed, PinOutcome.Failed]);
 
         Assert.All(rows, static r => Assert.Equal(CheckEvidenceCode.PinUnknown, r.Evidence!.Code));
+        Assert.All(rows, static r => Assert.Equal(CheckReason.Partial, r.Reason));
     }
 
     [Fact]
@@ -445,6 +448,28 @@ public sealed class CpuJudgeTests
         Assert.Equal(99, medians[1]);
         Assert.Equal(30, medians[0]); // two values: the upper one
         Assert.Equal(100, CpuJudge.MediansByClass(withUnpinned)[0]);
+    }
+
+    [Fact]
+    public void The_median_of_an_even_number_of_pinned_cpus_is_the_upper_one_and_the_cpus_that_were_not_pinned_are_not_in_it()
+    {
+        // Class 0: pinned 100, 60, 20, 10 (even count: the upper median is the element at 2 of the sorted 10 20 60 100, which is 60), and two
+        // CPUs that were not pinned with 1000 and 5000 (counted, the median of the six would be 100). Class 1: one pinned CPU of its own.
+        var cpus = Cpus.OfClasses(0, 0, 0, 0, 0, 0, 1);
+        var pins = new[] { PinOutcome.Pinned, PinOutcome.Pinned, PinOutcome.Pinned, PinOutcome.Pinned, PinOutcome.Failed, PinOutcome.Unknown, PinOutcome.Pinned };
+        var load = Loads.Make(cpus, [100, 60, 20, 10, 1000, 5000, 7], pins: pins);
+
+        var medians = CpuJudge.MediansByClass(load);
+        var rows = Rows.All(Judge(load), "cpu.peer_ratio");
+
+        Assert.Equal(60, medians[0]);
+        Assert.Equal(7, medians[1]);
+        Assert.Equal(100.0 / 60 * 100, Rows.Number(rows[0]), 9);
+        Assert.Equal(10.0 / 60 * 100, Rows.Number(rows[3]), 9);
+        Assert.Equal(ItemVerdict.Caution, rows[3].Verdict); // 10 is under 75 % of 60
+        Assert.Equal(ItemVerdict.Caution, rows[2].Verdict); // 20 is under 75 % of 60
+        Assert.Equal(ItemVerdict.Ok, rows[1].Verdict);
+        Assert.All(new[] { rows[4], rows[5] }, static r => Assert.Equal(ItemVerdict.Unavailable, r.Verdict));
     }
 
     // ---- the effective clock ----

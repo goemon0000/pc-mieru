@@ -54,8 +54,9 @@ internal static class CpuJudge
 
         if (r.Chunks <= 0)
         {
-            // Nothing was compared, so "no errors" says nothing.
-            return CheckItem.Create(id, null, ItemVerdict.Unavailable, CheckSource.Load, stopped ? CheckReason.Partial : CheckReason.Error);
+            // Nothing was compared, so "no errors" says nothing. Partial whether the run was stopped or not (DESIGN-A 14.2): the load did not get
+            // to compare, which is not an error of the check.
+            return CheckItem.Create(id, null, ItemVerdict.Unavailable, CheckSource.Load, CheckReason.Partial);
         }
 
         return stopped
@@ -109,7 +110,8 @@ internal static class CpuJudge
             var pinned = i < r.Pins.Count && r.Pins[i] == PinOutcome.Pinned;
             if (!pinned)
             {
-                items.Add(CheckItem.Create("cpu.peer_ratio", null, ItemVerdict.Unavailable, CheckSource.Load, CheckReason.Error, subject,
+                // Partial (DESIGN-A 14.2), both when Windows refused the pin and when it is not known (an exception, a thread that never got to pin).
+                items.Add(CheckItem.Create("cpu.peer_ratio", null, ItemVerdict.Unavailable, CheckSource.Load, CheckReason.Partial, subject,
                     new CheckEvidence { Code = CheckEvidenceCode.PinUnknown, EfficiencyClass = cpu.EfficiencyClass }));
                 continue;
             }

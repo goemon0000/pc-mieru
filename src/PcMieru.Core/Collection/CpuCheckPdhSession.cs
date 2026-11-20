@@ -21,8 +21,8 @@ internal readonly record struct CpuPdhSample(double? EffectiveMhz, double? Utili
 /// </summary>
 internal sealed class CpuCheckPdhSession : IDisposable
 {
-    private readonly PdhQuery _query = new();
-    private readonly PdhArrayReader _reader = new();
+    private readonly IPdhQuery _query;
+    private readonly PdhArrayReader _reader;
     private readonly nint _frequency;
     private readonly nint _performance;
     private readonly nint _utilization;
@@ -30,19 +30,39 @@ internal sealed class CpuCheckPdhSession : IDisposable
     private bool _baseline;
 
     public CpuCheckPdhSession()
+        : this(new PdhQuery())
     {
-        if (!_query.IsOpen)
+    }
+
+    /// <summary>
+    /// The session over a query that is already open. It owns the query from here: when setting it up throws (a counter that cannot be added,
+    /// the first collection failing), the query is closed before the exception goes on, so that a failed set-up leaks no PDH handle.
+    /// </summary>
+    internal CpuCheckPdhSession(IPdhQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        _query = query;
+        try
         {
-            return;
+            _reader = new PdhArrayReader();
+            if (!_query.IsOpen)
+            {
+                return;
+            }
+
+            _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
+            _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
+            _utilization = _query.Add(@"\Processor Information(_Total)\% Processor Time", out _);
+            _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
+
+            // The first collection only starts PDH's clock: the first Sample, a second later, then has a window to take its rates over.
+            _baseline = _query.Collect() == Pdh.Success;
         }
-
-        _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
-        _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
-        _utilization = _query.Add(@"\Processor Information(_Total)\% Processor Time", out _);
-        _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
-
-        // The first collection only starts PDH's clock: the first Sample, a second later, then has a window to take its rates over.
-        _baseline = _query.Collect() == Pdh.Success;
+        catch
+        {
+            _query.Dispose();
+            throw;
+        }
     }
 
     public bool IsOpen => _query.IsOpen;

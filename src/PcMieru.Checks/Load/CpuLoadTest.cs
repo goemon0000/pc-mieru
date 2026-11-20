@@ -61,8 +61,24 @@ internal static class CpuLoadTest
     // The counters sit 128 bytes apart (16 longs): a core does not fight its neighbour for a cache line.
     private const int Stride = 16;
 
-    /// <summary>One second between two readings, plus a little: the next reading is scheduled from when the last one really happened, so that two never fall closer than the progress rate limit of one a second.</summary>
+    /// <summary>
+    /// One second between two readings, plus a little, so that two readings never fall closer than the progress rate limit of one a second. Reading
+    /// k is due k intervals after the start (an absolute schedule): a wait that oversleeps does not push the readings after it later, it only
+    /// shortens the next wait, and the run ends when it was asked to (a reading that comes too early may be dropped by the progress gate).
+    /// </summary>
     internal static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1) + TimeSpan.FromMilliseconds(2);
+
+    /// <summary>
+    /// How long a reading waits for its PDH sample before it goes on without it (the sample is then missing, never 0). Real time. The PDH call is
+    /// normally a few milliseconds; this only bounds a call that hangs.
+    /// </summary>
+    internal static readonly TimeSpan SampleWait = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// How long after the last reading is due the stop flag is set whatever the control loop is doing (real time). In a healthy run the loop is
+    /// done long before; this is the backstop for a loop that is stuck, so that no load outlives the time that was asked for.
+    /// </summary>
+    internal static readonly TimeSpan DeadlineGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// One chunk of computation. The same seed always gives the same answer. Integer multiplication and shifts are mixed with floating-point
@@ -94,10 +110,16 @@ internal static class CpuLoadTest
     /// <summary>
     /// Runs the load for <paramref name="duration"/> (a whole number of seconds: that many readings) or until <paramref name="ct"/> is
     /// cancelled, then stops every thread at its chunk boundary and joins them all. Blocking: call it on a worker.
+    /// <para>
+    /// The stop flag does not wait for the control loop: it is set by the cancel itself (<see cref="CancellationToken.Register(Action)"/>) and by an
+    /// absolute deadline (<see cref="DeadlineGrace"/> after the last reading is due), as well as when the loop ends. And the loop never waits
+    /// for the counters: the PDH sample is taken by <see cref="PdhSampler"/> and waited for at most <paramref name="sampleWait"/>.
+    /// </para>
     /// </summary>
     /// <param name="onTick">Called at the start of every second's reading with the elapsed seconds and the total chunks per second. It must not block.</param>
-    /// <exception cref="CheckRunFailedException">A load thread faulted: the chunk itself threw. That is the check's own failure, not a finding about the CPU.</exception>
-    public static CpuLoadResult Run(ICpuTestSession session, TimeSpan duration, Action<double, double>? onTick, CancellationToken ct)
+    /// <param name="sampleWait">How long a reading waits for its PDH sample (null: <see cref="SampleWait"/>). A test gives a short one for a sampler that hangs, or an infinite one to make a control loop that is stuck.</param>
+    /// <exception cref="CheckRunFailedException">A load thread faulted: the chunk (or its set-up) threw. That is the check's own failure, not a finding about the CPU.</exception>
+    public static CpuLoadResult Run(ICpuTestSession session, TimeSpan duration, Action<double, double>? onTick, CancellationToken ct, TimeSpan? sampleWait = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         var cpus = session.Cpus;
@@ -122,6 +144,7 @@ internal static class CpuLoadTest
         var pins = new int[n];
         long errors = 0;
         long faults = 0;
+        Exception? firstFault = null;
         var stop = 0;
 
         var started = new List<ILoadThread>(n);
@@ -129,6 +152,14 @@ internal static class CpuLoadTest
         var stopped = false;
         var startStamp = clock.Timestamp;
         TimeSpan elapsedAtEnd;
+
+        // Two things set the stop flag besides the end of the loop, and neither waits for the loop: the cancel, and the deadline.
+        using var stopOnCancel = ct.Register(() => Volatile.Write(ref stop, 1));
+        using var stopAtDeadline = new Timer(_ => Volatile.Write(ref stop, 1), null, (TickInterval * seconds) + DeadlineGrace, Timeout.InfiniteTimeSpan);
+
+        // The PDH sample is taken on a thread of its own: a counter call that hangs delays nothing here.
+        using var sampler = new PdhSampler(session.SamplePdh, ct);
+        var sampleBound = sampleWait ?? SampleWait;
         try
         {
             for (var t = 0; t < n; t++)
@@ -149,17 +180,8 @@ internal static class CpuLoadTest
                             return false;
                         }
 
-                        ulong got;
-                        try
-                        {
-                            got = work.Chunk(SeedOf(k));
-                        }
-                        catch (Exception ex) when (ex is not OutOfMemoryException)
-                        {
-                            Interlocked.Increment(ref faults);
-                            return false;
-                        }
-
+                        // Nothing is caught here: whatever the chunk throws ends the thread and reaches the fault handler below.
+                        var got = work.Chunk(SeedOf(k));
                         if (got != expected[k])
                         {
                             Interlocked.Increment(ref errors);
@@ -168,15 +190,20 @@ internal static class CpuLoadTest
                         k = (k + 1) % SeedCount;
                         Volatile.Write(ref counters[me * Stride], ++done);
                         return true;
+                    },
+                    ex =>
+                    {
+                        Interlocked.CompareExchange(ref firstFault, ex, null);
+                        Interlocked.Increment(ref faults);
                     }));
             }
 
             var previous = new long[n];
             var lastSample = TimeSpan.Zero;
-            var next = TickInterval;
             for (var tick = 1; tick <= seconds;)
             {
-                var wait = next - clock.Elapsed(startStamp);
+                // Reading k is due k intervals after the start, however late the one before it was.
+                var wait = (TickInterval * tick) - clock.Elapsed(startStamp);
                 if (wait > TimeSpan.Zero && clock.WaitCancelled(wait, ct))
                 {
                     stopped = true;
@@ -197,7 +224,6 @@ internal static class CpuLoadTest
                 var now = clock.Elapsed(startStamp);
                 var span = Math.Max(0.001, (now - lastSample).TotalSeconds);
                 lastSample = now;
-                next = now + TickInterval;
 
                 var perCpu = new double[n];
                 for (var i = 0; i < n; i++)
@@ -210,7 +236,7 @@ internal static class CpuLoadTest
                 var total = perCpu.Sum();
                 onTick?.Invoke(now.TotalSeconds, total);
 
-                ticks.Add(new CpuLoadTick(tick, perCpu, total, SafeSample(session), Interlocked.Read(ref errors)));
+                ticks.Add(new CpuLoadTick(tick, perCpu, total, sampler.Take(sampleBound), Interlocked.Read(ref errors)));
                 tick++;
             }
         }
@@ -228,7 +254,8 @@ internal static class CpuLoadTest
 
         if (Interlocked.Read(ref faults) > 0)
         {
-            throw new CheckRunFailedException(CheckRunFailureCodes.InternalError, "a load thread faulted");
+            // The type only: a message of the code under test may carry a path or an ID, and the detail must not.
+            throw new CheckRunFailedException(CheckRunFailureCodes.InternalError, $"a load thread faulted: {Volatile.Read(ref firstFault)?.GetType().Name}");
         }
 
         var outcomes = new PinOutcome[n];
@@ -240,6 +267,10 @@ internal static class CpuLoadTest
         var final = new CpuLoadResult { Cpus = cpus, Pins = outcomes, Seconds = elapsedAtEnd.TotalSeconds, Stopped = stopped };
         final.Ticks.AddRange(ticks);
         final.ComputeErrors = Interlocked.Read(ref errors);
+
+        // The counters are read here, after the join, not at the last reading: Chunks includes the chunks that finished after the last tick (and,
+        // on a stop, in the stretch the stop cut short), so Chunks is not the sum of the ticks' rates. That is by design (DESIGN-A 3.2: cpu.chunks
+        // is what was computed and compared, cpu.throughput is what the steady seconds show).
         for (var i = 0; i < n; i++)
         {
             final.Chunks += Volatile.Read(ref counters[i * Stride]);
@@ -281,19 +312,6 @@ internal static class CpuLoadTest
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return PinOutcome.Unknown;
-        }
-    }
-
-    // What the PDH query could not give is a missing sample, never a failed second of the load.
-    private static CpuPdhSample SafeSample(ICpuTestSession session)
-    {
-        try
-        {
-            return session.SamplePdh();
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            return CpuPdhSample.Missing();
         }
     }
 }

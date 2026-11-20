@@ -24,7 +24,12 @@ internal interface ICpuTestSession : IDisposable
     /// <summary>The run's clock and its wait.</summary>
     ILoadClock Clock { get; }
 
-    /// <summary>One collection of the check's own PDH query: the effective clock, the utilisation and the package power. Never 0 for a value that is missing.</summary>
+    /// <summary>
+    /// One collection of the check's own PDH query: the effective clock, the utilisation and the package power. Never 0 for a value that is missing.
+    /// A counter call can hang and cannot be interrupted, so the load never makes this call on its control path (see <see cref="PdhSampler"/>): it
+    /// runs on a thread of its own and a call that does not come back in time is a missing sample. For the same reason <see cref="IDisposable.Dispose"/>
+    /// of a session never waits for a call that is still in flight: it closes the query when that call returns (or at once, if none is in flight).
+    /// </summary>
     CpuPdhSample SamplePdh();
 }
 
@@ -48,7 +53,7 @@ internal enum PinOutcome
     Failed,
 }
 
-/// <summary>One load thread. It lives from <see cref="ILoadThreadStarter.Start"/> until its step says to stop; <see cref="Join"/> waits for that.</summary>
+/// <summary>One load thread. It lives from <see cref="ILoadThreadStarter.Start"/> until its step says to stop or it faults; <see cref="Join"/> waits for that.</summary>
 internal interface ILoadThread
 {
     bool IsAlive { get; }
@@ -60,10 +65,15 @@ internal interface ILoadThread
 /// <summary>
 /// Starts a load thread that runs <c>onStart()</c> once and then <c>step()</c> again and again while it returns true. A step is one chunk:
 /// the thread can only stop between two chunks.
+/// <para>
+/// Nothing a step or <c>onStart</c> throws is swallowed: any exception that escapes them (an OutOfMemoryException too) ends the thread and is
+/// handed to <paramref name="onFault"/> on that thread, once. The run then fails; a load thread that dies without a word would leave a CPU
+/// unloaded and the result looking like a finding about it.
+/// </para>
 /// </summary>
 internal interface ILoadThreadStarter
 {
-    ILoadThread Start(string name, Action onStart, Func<bool> step);
+    ILoadThread Start(string name, Action onStart, Func<bool> step, Action<Exception> onFault);
 }
 
 /// <summary>The clock of the load run and its wait between two seconds.</summary>

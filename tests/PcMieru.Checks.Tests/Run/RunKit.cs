@@ -131,7 +131,11 @@ internal sealed class RunRig : IDisposable
     /// <param name="withLegacy">The baseline has an old install's records to read.</param>
     /// <param name="clock">The clock the checks' deadlines run on (a test that moves time by hand); the baseline and the history keep their own.</param>
     /// <param name="hardwareFactory">The factory of the system check's hardware provider. Null: a factory that gives <see cref="Hardware"/> every time.</param>
-    /// <param name="cpuSessionFactory">The factory of the CPU check's test session. Null: the real one (a test that runs a CPU check gives its own, with no real load).</param>
+    /// <param name="cpuSessionFactory">
+    /// The factory of the CPU check's test session. Null: a factory that throws (DESIGN-A 6.2: a test never gets the real session by default, which
+    /// would load every core of the machine it runs on). A test that runs a CPU check gives its own, with no real load; only the RealMachine
+    /// tests pass <c>() => new RealCpuTestSession()</c> themselves.
+    /// </param>
     public RunRig(bool withLegacy = false, TimeProvider? clock = null, Func<IHardwareProvider>? hardwareFactory = null, Func<ICpuTestSession>? cpuSessionFactory = null)
     {
         Baseline = new BaselineRig(withLegacy);
@@ -142,9 +146,12 @@ internal sealed class RunRig : IDisposable
         Hardware = new FakeHardware();
         Wmi = FakeWmiReader.Typical(FakeWmiReader.AnyDisks());
         Events = new FakeEventCounter();
-        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, hardwareFactory ?? (() => Hardware), Wmi, Events, cpuSessionFactory);
+        Services = new CheckServices(clock ?? Baseline.Time, Source, History, Baseline.Engine, Samples.App, NextRunId, hardwareFactory ?? (() => Hardware), Wmi, Events, cpuSessionFactory ?? NoCpuSession);
         Runner = new CheckRunner(Services);
     }
+
+    /// <summary>The default CPU session factory of a rig: there is none. A CPU check that gets here fails with an internal error and puts no load on the machine.</summary>
+    internal static ICpuTestSession NoCpuSession() => throw new InvalidOperationException("the CPU test needs an explicit session");
 
     public BaselineRig Baseline { get; }
 

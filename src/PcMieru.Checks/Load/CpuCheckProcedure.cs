@@ -38,6 +38,13 @@ internal sealed class CpuCheckProcedure : ICheckProcedure
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default).ConfigureAwait(false);
 
+        // A cancel that came while the load was ending (after the last reading, during the join) is a stop too: the rows are then partial and
+        // the run is stopped, never stopped with whole rows. A cancel after this line is after the rows are built: the runner's seal point.
+        if (ct.IsCancellationRequested)
+        {
+            load.Stopped = true;
+        }
+
         context.Stage(CheckStage.Judging);
         context.Collector.AddRange(CpuJudge.Judge(load));
         if (load.Stopped)

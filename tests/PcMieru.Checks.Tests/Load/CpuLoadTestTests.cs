@@ -404,7 +404,8 @@ public sealed class CpuLoadTestTests
                 background = Thread.CurrentThread.IsBackground;
                 startThread = Environment.CurrentManagedThreadId;
             },
-            () => ++steps < 3);
+            () => ++steps < 3,
+            static _ => { });
         thread.Join();
 
         Assert.Equal("PcMieru.CpuLoad.test", name);
@@ -488,9 +489,9 @@ public sealed class CpuLoadTestTests
 
         private sealed class RecordingStarter(RealThreadSession owner) : ILoadThreadStarter
         {
-            public ILoadThread Start(string name, Action onStart, Func<bool> step)
+            public ILoadThread Start(string name, Action onStart, Func<bool> step, Action<Exception> onFault)
             {
-                var handle = new RealLoadThreadStarter().Start(name, onStart, step);
+                var handle = new RealLoadThreadStarter().Start(name, onStart, step, onFault);
                 lock (owner._handles)
                 {
                     owner._handles.Add(handle);
