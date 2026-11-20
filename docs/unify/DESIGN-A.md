@@ -97,6 +97,7 @@ UTF-8 の JSON オブジェクト。キーと列挙値は英語。表示用の�
 - システム: `system.eventlog.disk_warning7d`、`system.eventlog.ntfs_warning7d`、`system.eventlog.stornvme_warning7d`、`system.eventlog.volmgr_warning7d`、`system.os.version`、`system.cpu.model`、`system.cpu.cores`、`system.cpu.logical`、`system.cpu.rated_clock`、`system.memory.capacity`、`system.memory.rated_speed`、`system.gpu.adapters`、`system.gpu.model`、`system.gpu.driver_version`、`system.storage.devices`、`system.pagefile.automatic`、`system.pagefile.allocated`、`system.pagefile.current`
 - CPU: `cpu.duration`、`cpu.chunks`、`cpu.throughput`、`cpu.variation`、`cpu.logical_throughput`、`cpu.utilization`、`cpu.package_power`
 - メモリ: `memory.duration`、`memory.total`、`memory.available_at_start`、`memory.borrowed`、`memory.passes`、`memory.verified`、`memory.write_rate`、`memory.verify_rate`
+- GPU のドライバの 2 行（`system.gpu.driver_age`・`system.gpu.generic_driver`）は判定する項目だが、同じ GPU の `system.gpu.device_status` が 0 以外なら `info`（§14.0 の例外 2）。
 - 記憶媒体: `storage.devices`、`storage.capacity`、`storage.nvme.spare_threshold`、`storage.nvme.unsafe_shutdowns`、`storage.nvme.power_cycles`、`storage.nvme.power_on_hours`、`storage.nvme.data_units_written`、`storage.ata.9`、および §3.3 の判定表に無い `.delta` と比べられなかった `.delta`
 
 旧 `StorageJudge` が「参考（判定しない）」にしていた不意の電源断・通電時間・読み書き量（`PL/Storage/StorageJudge.cs:142`）と同じ線。判定する項目の閾値は旧判定をそのまま移す。
@@ -145,6 +146,26 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 前回との差を扱うのは NVMe の `critical_warning`、`available_spare`、`percentage_used`、`media_errors`、`error_log_entries`、`unsafe_shutdowns`、`power_on_hours`、`data_units_written` と、表の ATA 数値属性。比較結果の ID は当該 ID に `.delta` を足した固定集合。値は `dec` と同じ精度を持つ符号付き十進文字列、単位は元の行と同じ。`evidence` に `before`、`after`、`sinceUtc` を持つ。警告ビットの行では新規に立ったビットも根拠にする。温度の旧基準値は移行時に保存するが、増分の判定項目にしない。
 
 比較不能なら `.delta` は `null`。`evidence.code` は `baseline_first`、`baseline_no_identity`、`baseline_duplicate`、`baseline_device_changed`、`baseline_counter_reset`、`baseline_clock`、`baseline_concurrent`、`baseline_missing_counter`、`baseline_read_failed`、`baseline_legacy_refused` のいずれか（決まりは §14.5）。ディスクに適用する方式の項目だけを出す。`.delta` の判定は旧 `Counters.GrowthVerdict`（`PL/Storage/Baseline.cs:59`）の表どおり。増えたとき: `storage.nvme.media_errors`・`storage.nvme.critical_warning`・`storage.ata.5`・`.187`・`.196`・`.197`・`.198` は `check`、`storage.nvme.error_log_entries` と `storage.ata.199` は `caution`（199 は `evidence.code: likely_cable`。旧 `StorageJudge.cs:189` の「ケーブルや差し込みのことが多い」）。表にある項目で増えていなければ `ok`。表に無い項目（不意の電源断・通電・書き込み量・寿命の消費・予備領域）の `.delta` と、比べられなかった `.delta` は `info`（初回は毎回比べられないので「測れず」にしない）。絶対値の行は旧の項目別判定（`GrowthFinding` の初回・増加・横ばい、`StorageJudge.cs:77`、`:186`）をそのまま移し、基準値から得た増減をその根拠にも使う。旧カウンター、個別判定、ATA の値の出所は `PL/Storage/Baseline.cs:45`、`:85`、`PL/Storage/StorageJudge.cs:70`、`:113`、`:159`、`:226`、`PL/Storage/AtaSmart.cs:27`、`:127`。
+
+### 3.5 検証の細則（点検 1b55576 で決めた）
+
+書き手と厳しい検証（保存の前・試験）が守る決まり。読み手の寛容さは §3 のとおり。
+
+1. **欄を足す。** `pcm-check/1` のまま、後の版で任意の欄（項目や `evidence` の中）を足してよい。厳しい検証は自分の知らない欄を拒み、読み手は無視する。必須欄を足す・型を変えるのは `pcm-check/2`。
+2. **値・判定・理由の組。** 判定する項目で許す組は次だけ。
+   - 値あり・`reason: null` → `ok`・`caution`・`check`
+   - 値あり・`reason: partial` → `caution`・`check`・`unavailable`
+   - 値 `null`・理由あり → `unavailable`
+   `info` の項目は値あり・`null`、値あり・`partial`、値 `null`・理由あり の 3 つ。`unavailable` で値ありの `reason: null` は不正。
+3. **数の書き方。** 読んだ数を書き直さない。`6400.0`、`6.4e3`、`-0` のような正規形でない数は拒む（読んで書いたバイトが同じになるように）。単位 `bits`・`code`・`d`・`count` の整数は負を拒む。
+4. **通し番号は 1 から。** `subject.id` の `cpu-N`・`ram-N`・`gpu-N`・`disk-N`・`volume-N`・`pagefile-N` は全部 1 から。
+5. **増分の型。** `.delta` の元になる行は全部整数（NVMe の予備領域と寿命の消費も整数の %）。`before`・`after` は符号なしの十進の文字列、`.delta` の値は符号つきの十進の文字列。
+6. **比べられなかった `.delta`。** 値 `null`・`verdict: info`・`reason: partial`・`evidence` は `code` だけ（`before`・`after`・`sinceUtc` を持たない）。
+7. **台ごとに効く理由。** `baseline_first`・`baseline_no_identity`・`baseline_duplicate`・`baseline_device_changed`・`baseline_counter_reset`・`baseline_clock`・`baseline_concurrent`・`baseline_read_failed`・`baseline_legacy_refused` は台ごと。どれか 1 つが付いたら、その台の `.delta` は全部 `null` で同じコード。`baseline_missing_counter` だけは行ごと（前の記録にその数が無かった）。
+8. **根拠のコードを置ける行。** 項目一覧にコードごとの置ける ID を持たせ、§3 と §14 から起こす。`baseline_*` は `.delta` の行だけ、`counter_increased`・`counter_decreased`・`new_bits` は `.delta` とその元の行だけ。
+9. **知っているコードだけ書く。** `notes` のコードも一覧を持ち、書き手は一覧に無いコードを拒む（読み手は形だけ見る）。
+10. **時刻。** 書き手はミリ秒より細かい時刻を拒む（黙って切り捨てない）。履歴の DTO の書き手も同じ。
+11. **読み手が行を飛ばしたとき**の `counts` と総合の検算は、飛ばした行も含めて全行の `verdict` で行う（知らない ID でも `verdict` と `reason` は読める）。必須欄の欠けは、知らない欄の無視と違って既定値で埋めない。その行・そのファイルは読めない物として扱い、`ok` に見せない。
 
 ### 3.4 JSON 例
 
@@ -368,6 +389,8 @@ MCP `get_check_history` は `IReadOnlyCheckHistory` のみを追加注入する�
 7. **codex の再点検（2 回目）を受けて §14 を足した**。`.delta` の例外（比べられない物は `info`）、GPU の汎用ドライバの行と状態 22、イベントの警告の扱い、`cpu.variation` を `info` にして持続性を 1 判定に、クロックの持続性が出ないときの扱い、NVMe の危険温度の累計とエラーログ 0x01、`predict_failure` の偽と欠け、総合 4 値と項目 5 値、`source`／`evidence` の固定一覧、遅れて届いた回と時計の逆行の区別（採取番号 `acq`）。
 
 8. **点検 1b55576（段 A 手順 1）の後で決めた 3 点**（§3・§4）。読み手は知らない ID・コードを飛ばす（戻した版が新しい版の履歴を `.bad` にしないため）。`baseline_*` は `.delta` の行だけ。ファイル名の時刻は JSON と同じミリ秒。あわせて `ok` と `reason: partial` の組を不正にした。
+
+9. **点検 1b55576 の 2 回目で §3.5 を足した**（Opus 点検役の指摘 15 件と、設計の曖昧な所 9 つへの答え）。
 
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
