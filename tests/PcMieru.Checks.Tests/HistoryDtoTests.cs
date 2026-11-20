@@ -113,10 +113,19 @@ public class HistoryDtoTests
     }
 
     [Fact]
-    public void The_four_warning_codes_are_the_only_codes()
+    public void The_seven_warning_codes_are_the_only_codes()
     {
+        // The first four are DESIGN-A §2; the last three were fixed in step 2 (locked, permission, other read failure).
         Assert.Equal(
-            ["history_unreadable", "history_future_format", "history_quarantined", "history_quarantine_failed"],
+            [
+                "history_unreadable",
+                "history_future_format",
+                "history_quarantined",
+                "history_quarantine_failed",
+                "history_locked",
+                "history_access_denied",
+                "history_read_failed",
+            ],
             CheckHistoryWarningCodes.All.ToArray());
 
         foreach (var code in CheckHistoryWarningCodes.All)
@@ -139,6 +148,29 @@ public class HistoryDtoTests
         var some = new CheckHistoryQuery(CheckKind.Storage, 20);
         Assert.Equal(CheckKind.Storage, some.Kind);
         Assert.Equal(20, some.Limit);
+    }
+
+    [Fact]
+    public void The_mcp_query_defaults_to_20_and_accepts_1_to_200()
+    {
+        Assert.Equal(20, CheckHistoryQuery.McpDefaultLimit);
+        Assert.Equal(200, CheckHistoryQuery.McpMaxLimit);
+
+        Assert.Equal(new CheckHistoryQuery(null, 20), CheckHistoryQuery.ForMcp(null, null));
+        Assert.Equal(new CheckHistoryQuery(CheckKind.Cpu, 1), CheckHistoryQuery.ForMcp(CheckKind.Cpu, 1));
+        Assert.Equal(new CheckHistoryQuery(CheckKind.Storage, 200), CheckHistoryQuery.ForMcp(CheckKind.Storage, 200));
+        Assert.Equal(new CheckHistoryQuery(null, 57), CheckHistoryQuery.ForMcp(null, 57));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(201)]
+    [InlineData(int.MaxValue)]
+    [InlineData(int.MinValue)]
+    public void The_mcp_query_refuses_a_limit_outside_1_to_200(int limit)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => CheckHistoryQuery.ForMcp(null, limit));
     }
 
 

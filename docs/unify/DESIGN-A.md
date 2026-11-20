@@ -60,7 +60,7 @@ public sealed record CheckHistoryPage(IReadOnlyList<CheckHistoryEntry> Entries,
     IReadOnlyList<CheckHistoryWarning> Warnings);
 ```
 
-  `Warnings.Code` は `history_unreadable`（壊れている・必須欄の不整合）、`history_future_format`（未知の `format`）、`history_quarantined`（今回 `.bad-` へ退避した）、`history_quarantine_failed`（退避できず残した）の 4 つだけ。同じコードは 1 行にまとめて件数を持つ。MCP は退避しないので最初の 2 つだけを出す。JSON は camelCase、`kind`・`outcome`・`verdict` は小文字の文字列、`counts` は 5 値のキー。
+  `Warnings.Code` は `history_unreadable`（壊れている・必須欄の不整合）、`history_future_format`（未知の `format`）、`history_quarantined`（今回 `.bad-` へ退避した）、`history_quarantine_failed`（退避できず残した）に、段 A 手順 2 で §4 の「共有違反、権限エラー」用に足した `history_locked`（他のプロセスが握っている）、`history_access_denied`（権限がない）、`history_read_failed`（そのほかの I/O 失敗）を加えた 7 つだけ（この順で並べる）。同じコードは 1 行にまとめて件数を持つ。MCP は退避しないので `history_quarantined` と `history_quarantine_failed` は出さず、残りの 5 つを出す。JSON は camelCase、`kind`・`outcome`・`verdict` は小文字の文字列、`counts` は 5 値のキー。
 - `CheckRequest` は `CheckKind`、負荷の `Duration`、記憶媒体の `AllowElevation`。長さは 30／120／300 秒。`AllowElevation` は `storage` に限る。`CheckRun` は `CheckResult` と保存状態を返す。保存の成否と測定の `outcome` は別に扱う。
 - `CheckProgress` は実行 ID、段階、経過秒、目標秒、直近の速度と単位。CPU は `chunks/s`、メモリは書き込み／照合の `MiB/s`。負荷の通知は最大毎秒 1 回。段階変更と最終結果は別に届ける。通知は結果の確定や停止処理を待たせない。
 - `CheckServices` は `IHardwareProvider` と新設する Core の `IStorageInspectionSource`、CPU 点検用測定セッションのファクトリー、時計と保存先を受ける。Windows の依存は組み立て側で差し込む。`IHardwareProvider.GetAsync` と既存 `IStorageHealthProvider` の入口は `src/PcMieru.Core/Contracts/Interfaces.cs:76`、`:84`。現行の採取の振り分けは `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:32`、`:49`。Core の `Value<T>` を採取境界で使い、Checks の結果に変換する。`src/PcMieru.Core/Contracts/Value.cs:14`、`:30`。
@@ -218,6 +218,17 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 - 同じディレクトリの一意な `.tmp` に `CreateNew` で書く。`Flush(true)` 後に閉じて、同一ボリューム上で rename／replace。履歴の初回と移行コピーは上書きなし。基準値の更新は読み取りから比較、書き込みまで、ユーザーと保存先を識別するプロセス間ロックの下で行う。長い採取中はロックを持たない。先に採取した回が遅れて到着した場合は古い値で比較元を更新しない。未確定の `.tmp` は一覧から除き、所有を確認できる残骸だけを後で片付ける。
 - 壊れた JSON、必須欄の不整合は GUI／CLI が検出したとき `name.json.bad-<UTC>` に退避する。別ファイルを上書きせず、理由コードと件数を表示する。共有違反、権限エラー、将来の `format` は現物を保持する。退避に失敗しても壊れたファイルへ書き戻さない。MCP は読めない履歴を飛ばして件数を返す。退避も削除も行わない。
 - 保存 I/O の失敗は `CheckRun` の保存状態に出す。確定した結果ファイルを削除して取り消す処理は作らない。基準値を更新できなかった回は次回までの比較元を進めない。履歴保存に先立って確定した基準値は有効な観測として残す。
+
+### 4.1 結果ストアの細則（段 A 手順 2 で決めた。実装は `src/PcMieru.Checks/History/`）
+
+- **型**。`IReadOnlyCheckHistory`（`ListAsync`、`GetAsync`。MCP に渡すのはこれだけ）と `CheckHistoryStore`（GUI／CLI 用。保存・退避・保持・`.tmp` の片付けを持つ）。MCP 側の `ReadOnlyCheckHistory` は読み取り口 `ICheckHistoryFileReader`（列挙・読み・存在確認だけ）からしか作れず、型の上で保存・退避・削除ができない。保存先・時計・ファイルシステムは注入できる。履歴ファイルにプロセス全体のロックは使わない。読み手は寛容（`Tolerant`）、保存は厳格（`Strict`）。
+- **保存の失敗**は例外にせず `CheckSaveState`（`Saved`／`Failed` と固定コード）で返す。コードは `invalid_result`（検証に通らない）、`already_exists`（同名が既にある。上書きしない）、`access_denied`、`disk_full`、`io_error`。失敗した回は自分の `.tmp` だけを消し、確定済みのファイルは消さない。`CancellationToken` は保存を始める前にだけ見る（書き始めたら最後まで進めて確定させる）。
+- **`.tmp` の名前と所有の規則**。名前は `<種類>-<UTC>-<runId:N>.json.pcmtmp-<pid>-<8 桁の小文字 16 進>.tmp`。次の 2 つを両方満たすものだけを「自分の残骸」として削除する。(1) 名前が全体でこの形に一致し、種類がこの版の知る 4 種のいずれか（新しい版の保存側の残骸は判定しない）。(2) 最終更新が 1 時間以上前（未来の日付は古いと見なさない）。握られていて削除に失敗したものは残す。片付けは保存が確定した後にだけ行い、一覧では行わない。一覧からは `.tmp` は常に除く。それ以外の `.tmp`、`.bad-`、確定名のファイル、他の名前は触らない。
+- **保持が消してよいもの**。保存の確定後、その種類の候補（確定名の形のファイル）が 200 件を超えるときだけ、新しい順に正常（寛容に読めて名前と本体が一致）なものを数え、201 番目以降の正常なファイルだけを削除する。壊れたもの、将来の `format`／`kind`、握られているもの、権限や I/O で読めないもの、他の種類、`.tmp`、`.bad-`、他の名前は削除も退避もしない（退避は一覧の仕事で、保持は警告を消さない）。読めなかったものは正常に数えないので、窓が一時的に 200 件を超えることはあっても、下回ることはない。候補が 200 件以下なら 1 件も読まない。削除に失敗しても保存は成功のまま、失敗は数えるだけ。
+- **一覧の窓**。新しい順に走査し、種類ごとに正常 200 件を超えた分は読まず一覧にも出さない。`Limit` に達したら走査をやめる。そのため窓の外や `Limit` より古い側にある壊れたファイルは、そこまで走査する一覧（`Limit` なしなど）が来るまで見つからず、退避もされない。`Limit` が null は保持分すべて、0 以下は拒否。MCP の `limit`（既定 20、1～200）は `CheckHistoryQuery.ForMcp` で入口に強制する（範囲外は `ArgumentOutOfRangeException`、MCP は tool error にする）。同時刻は UUID の昇順（種類をまたいでも同じ）、それも同じなら種類名の順。
+- **退避**。GUI／CLI の一覧と `GetAsync` が壊れた JSON、必須欄の不整合、名前と本体の食い違い（種類・終了時刻・UUID のどれか）を見つけたとき `name.json.bad-<UTC>`（現在時刻のミリ秒まで）へ移す。同名があれば `-1`、`-2` と番号を足し、決して上書きしない。rename に失敗したら元のファイルをそのままにして `history_quarantine_failed` と数え、書き戻さない。移す前に消えていたファイルは問題として数えない。`.bad-` のファイルは以後どの列挙にも現れない。
+- **将来の種類**。未知の `format` は `future_format`、未知の `kind` は `future_kind` という理由で、どちらも警告コードは `history_future_format`。どちらも現物を保持する。
+- **理由コード**（件ごとの一覧用。警告コードとは別）は `invalid_content`、`too_large`（8 MiB 超）、`name_kind_mismatch`、`name_time_mismatch`、`name_id_mismatch`、`future_format`、`future_kind`、`sharing_violation`、`permission_denied`、`io_error`、`reader_error`、`vanished`（読む前に消えた。数えない）。
 
 ## 5. ディスクの採取、鍵、移行
 
