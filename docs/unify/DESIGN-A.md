@@ -126,8 +126,8 @@ UTF-8 の JSON オブジェクト。キーと列挙値は英語。表示用の�
 | `system.cpu.model`, `system.cpu.cores`, `system.cpu.logical`, `system.cpu.rated_clock` | string・–、int・`count`、int・`count`、number・`MHz` | Core の名称、物理／論理数、定格。取得元の値をそのまま区別して出す。 |
 | `system.memory.modules`, `system.memory.capacity`, `system.memory.rated_speed`, `system.memory.configured_speed` | int・`count`、dec・`B`、int・`MT/s`、int・`MT/s` | 最初は搭載枚数。残りは各枚。混在容量は一覧の根拠に出す。定格未満は設定上の注意、定格超えは情報。速度が 0 または欠けていれば測れず。 |
 | `system.gpu.adapters`, `system.gpu.model`, `system.gpu.driver_version`, `system.gpu.driver_age`, `system.gpu.device_status`, `system.gpu.generic_driver` | int・`count`、string・–、string・–、int・`d`、int・`code`、bool・– | 最初は枚数。残りは各 GPU。ドライバの古さは 730 日超で注意。汎用ドライバ（Basic Display）は注意。構成コード 22 は無効化の表示で故障に数えない。0 以外の状態ではドライバの 2 行は `info`（§14.0）。 |
-| `system.storage.devices`, `system.storage.health`, `system.storage.free` | int・`count`、string・–、dec・`B` | ディスク一覧、台ごとの健康、ローカルのボリュームごとの空き。健康値は `healthy\|warning\|critical`。判定に必要な健康情報が欠ければ測れず。空きの `evidence.totalBytes` も十進文字列。空き率 3% 未満は要確認、10% 未満は注意。ボリュームの所属を一意に確認できるときだけ `evidence.diskId` を付ける。 |
-| `system.pagefile.count`, `system.pagefile.automatic`, `system.pagefile.allocated`, `system.pagefile.current`, `system.pagefile.peak` | int・`count`、bool・–、dec・`B`、dec・`B`、dec・`B` | 件数 0 は注意。後三つは各ファイル。割当が正のファイルだけ、ピークが割当の 80% 超なら注意。 |
+| `system.storage.devices`, `system.storage.health`, `system.storage.free` | int・`count`、string・–、dec・`B` | ディスク一覧、台ごとの健康、ローカルのボリュームごとの空き。健康値は `healthy\|warning\|critical`。判定に必要な健康情報が欠ければ測れず。空きの `evidence.totalBytes` も十進文字列。空き率 3% 未満は要確認、10% 未満は注意。ボリュームの所属を一意に確認できるときだけ `evidence.diskId` を付ける。**媒体の入っていない枠**（カードリーダーの空きスロットなど。開けて、容量 0 と答えた取り外し可能な台）と、その枠のボリュームは台にもボリュームにも数えず行を出さない（媒体が無いのは故障でも測れずでもない。数えると空きスロットのある機械は毎回総合が「測れず」になる）。開けなかった枠はこれに当たらない（§14.4 どおり `unavailable`）。`disk-N` の番号は点検の種類ごとに付ける（システムはドライブ番号の順、記憶媒体は基準値の順）。種類をまたいで同じ `disk-N` が同じ台だとは約束しない。 |
+| `system.pagefile.count`, `system.pagefile.automatic`, `system.pagefile.allocated`, `system.pagefile.current`, `system.pagefile.peak` | int・`count`、bool・–、dec・`B`、dec・`B`、dec・`B` | 件数 0 は注意。`automatic` は機械全体の 1 行（主体なし。ページファイルが 0 件でも出す）。後三つは各ファイル。割当が正のファイルだけ、ピークが割当の 80% 超なら注意。 |
 | `system.eventlog.whea7d`, `system.eventlog.disk7d`, `system.eventlog.ntfs7d`, `system.eventlog.stornvme7d`, `system.eventlog.volmgr7d` | int・`count` | Level 1–2 の件数。対応する Level 3 の ID は順に `system.eventlog.whea_warning7d`、`system.eventlog.disk_warning7d`、`system.eventlog.ntfs_warning7d`、`system.eventlog.stornvme_warning7d`、`system.eventlog.volmgr_warning7d`。同じ型と単位。WHEA エラーありは要確認。警告行と他のエラー行は旧判定を項目別に当てる。 |
 | `system.eventlog.kp41_7d` | int・`count` | Kernel-Power 41。1 件以上は注意。原因は断定しない。 |
 
@@ -430,6 +430,8 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 12. **点検 1fa342a・97858af（段 A 手順 4b）の後で決めた**（§2・§3・§14.4）。基準値は `checks\baseline\`（§4 のまま。実装が `PCMieru\baseline` に置いていた）。`storage.health` は Windows の状態から作り、SMART からまとめない（実装は手順 5 の期限つき WMI と一緒）。NVMe の温度は旧どおり Kelvin − 273 の整数。検証を通らない結果は元の結果を画面に残す。注記 `storage.legacy_import_abandoned` を足した。
 
+13. **点検 88a1549・7da6884（段 A 手順 5b）の後で決めた**（§3.1・§14.1）。媒体の入っていない枠は台にもボリュームにも数えない。`system.pagefile.automatic` は機械全体の 1 行。MSFT_PhysicalDisk にその台の行が無いのは `unsupported`（2 行・失敗は `error`）。シリアルは Core と同じ規則で揃える。`disk-N` は種類ごとの番号。あわせて実装側で、Core の機器採取の待ち（`Invalidate` のロックを含む）を呼び出し側のスレッドで行わない・前の回の採取が戻っていない分類は待たずに `timeout`・PCI の位置を持たない GPU（Basic Render・仮想の画面）の状態は `unsupported`。
+
 ## 14. 判定表（確定。codex の再点検 2 回目を受けて Opus が旧コードから起こした）
 
 旧コードの行は `PL/` が `pl-cloud/src/PartsLife.Checks/`（v0.7.4 `25e4571`）。閾値の境界（`<` か `<=` か）は旧コードどおりで、fixture に境界の値を直書きする。
@@ -456,7 +458,7 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 | `system.gpu.device_status`（各 GPU） | 22 → `ok`（`disabled_code22`）。他の 0 以外 → `check`（`device_error`）。0 → `ok`（`:220`） |
 | `system.gpu.generic_driver`（各 GPU・bool） | 名前が Basic Display／基本ディスプレイ → `caution`、他は `ok`。状態が 0 以外なら `info`（§14.0） |
 | `system.gpu.driver_age`（各 GPU・`d`） | 判定は小数の日数で `(今 − ドライバの日付).TotalDays > 730` → `caution`（旧どおり。値は切り捨ての整数で出すが、判定に整数を使わない）。日付が無い → `unavailable`。状態が 0 以外なら `info` |
-| `system.storage.health`（各台） | Windows の HealthStatus 2、または OperationalStatus に 3・5・6・7 → `check`。HealthStatus 1 → `caution`。0 → `ok`。他・読めない → `unavailable`（`:244`）。値は `healthy\|warning\|critical` |
+| `system.storage.health`（各台） | Windows の HealthStatus 2、または OperationalStatus に 3・5・6・7 → `check`。HealthStatus 1 → `caution`。0 → `ok`。他・読めない → `unavailable`（`:244`）。値は `healthy\|warning\|critical`。問い合わせは通ったがその番号の行が無い → `unavailable`・`unsupported`（USB の橋渡し・RAID・仮想の台。故障ではない）。同じ番号の行が 2 つ・問い合わせの失敗 → `unavailable`・`error`。シリアルの突き合わせは両側とも Core の `StorageProtocol.CleanSerial` と同じ規則（前後の空白、末尾の `.` と `_`）で揃えてから比べる |
 | `system.storage.free`（各ボリューム） | 空き率 < 3% → `check`、< 10% → `caution`、他 `ok`。容量 0 は空き率 1 として扱う（旧どおり） |
 | `system.pagefile.count` | 0 → `caution`、他 `ok` |
 | `system.pagefile.peak`（各ファイル） | 割当が正で、ピーク > 割当 × 0.8 → `caution`、他 `ok`（`:280`） |
