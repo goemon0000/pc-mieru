@@ -1,0 +1,97 @@
+{
+  "format": "pcm-check/1",
+  "app": "PCMieru 0.4.0",
+  "runId": "89914ef9-5781-4cf7-a4f8-6d58003ddf86",
+  "kind": "memory",
+  "startedAtUtc": "2026-11-20T03:00:00.000Z",
+  "endedAtUtc": "2026-11-20T03:00:04.200Z",
+  "outcome": "stopped",
+  "verdict": "check",
+  "counts": {
+    "ok": 0,
+    "caution": 0,
+    "check": 1,
+    "unavailable": 0,
+    "info": 8
+  },
+  "items": [
+    {
+      "id": "memory.duration",
+      "value": 4.2,
+      "unit": "s",
+      "verdict": "info",
+      "source": "load",
+      "reason": null
+    },
+    {
+      "id": "memory.total",
+      "value": "34359738368",
+      "unit": "B",
+      "verdict": "info",
+      "source": "win32",
+      "reason": null
+    },
+    {
+      "id": "memory.available_at_start",
+      "value": "12884901888",
+      "unit": "B",
+      "verdict": "info",
+      "source": "win32",
+      "reason": null
+    },
+    {
+      "id": "memory.borrowed",
+      "value": "3221225472",
+      "unit": "B",
+      "verdict": "info",
+      "source": "load",
+      "reason": null
+    },
+    {
+      "id": "memory.passes",
+      "value": null,
+      "unit": "count",
+      "verdict": "info",
+      "source": "load",
+      "reason": "partial"
+    },
+    {
+      "id": "memory.verified",
+      "value": "134217728",
+      "unit": "B",
+      "verdict": "info",
+      "source": "load",
+      "reason": "partial"
+    },
+    {
+      "id": "memory.mismatches",
+      "value": 1,
+      "unit": "count",
+      "verdict": "check",
+      "source": "load",
+      "reason": "partial",
+      "evidence": {
+        "code": "pattern_mismatch"
+      }
+    },
+    {
+      "id": "memory.write_rate",
+      "value": 6400,
+      "unit": "MiB/s",
+      "verdict": "info",
+      "source": "load",
+      "reason": null
+    },
+    {
+      "id": "memory.verify_rate",
+      "value": 5300,
+      "unit": "MiB/s",
+      "verdict": "info",
+      "source": "load",
+      "reason": null
+    }
+  ],
+  "notes": [
+    "memory.borrowed_region_only"
+  ]
+}

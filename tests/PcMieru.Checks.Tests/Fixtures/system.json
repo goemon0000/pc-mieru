@@ -1,0 +1,485 @@
+{
+  "format": "pcm-check/1",
+  "app": "PCMieru 0.4.0",
+  "runId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "kind": "system",
+  "startedAtUtc": "2026-11-20T03:00:00.000Z",
+  "endedAtUtc": "2026-11-20T03:00:01.250Z",
+  "outcome": "completed",
+  "verdict": "caution",
+  "counts": {
+    "ok": 16,
+    "caution": 4,
+    "check": 0,
+    "unavailable": 1,
+    "info": 24
+  },
+  "items": [
+    {
+      "id": "system.os.version",
+      "value": {
+        "name": "Windows 11 Pro",
+        "displayVersion": "25H2",
+        "build": 26300,
+        "ubr": 7171
+      },
+      "unit": null,
+      "verdict": "info",
+      "source": "os",
+      "reason": null
+    },
+    {
+      "id": "system.os.uptime",
+      "value": 273600.5,
+      "unit": "s",
+      "verdict": "ok",
+      "source": "os",
+      "reason": null
+    },
+    {
+      "id": "system.cpu.model",
+      "value": "AMD Ryzen 7 7800X3D 8-Core Processor",
+      "unit": null,
+      "verdict": "info",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.cpu.cores",
+      "value": 8,
+      "unit": "count",
+      "verdict": "info",
+      "source": "win32",
+      "reason": null
+    },
+    {
+      "id": "system.cpu.logical",
+      "value": 16,
+      "unit": "count",
+      "verdict": "info",
+      "source": "win32",
+      "reason": null
+    },
+    {
+      "id": "system.cpu.rated_clock",
+      "value": 4200,
+      "unit": "MHz",
+      "verdict": "info",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.memory.modules",
+      "value": 2,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "smbios",
+      "reason": null
+    },
+    {
+      "id": "system.memory.capacity",
+      "subject": {
+        "id": "ram-1"
+      },
+      "value": "17179869184",
+      "unit": "B",
+      "verdict": "info",
+      "source": "smbios",
+      "reason": null
+    },
+    {
+      "id": "system.memory.capacity",
+      "subject": {
+        "id": "ram-2"
+      },
+      "value": "17179869184",
+      "unit": "B",
+      "verdict": "info",
+      "source": "smbios",
+      "reason": null
+    },
+    {
+      "id": "system.memory.rated_speed",
+      "subject": {
+        "id": "ram-1"
+      },
+      "value": 6000,
+      "unit": "MT/s",
+      "verdict": "info",
+      "source": "smbios",
+      "reason": null
+    },
+    {
+      "id": "system.memory.rated_speed",
+      "subject": {
+        "id": "ram-2"
+      },
+      "value": 6000,
+      "unit": "MT/s",
+      "verdict": "info",
+      "source": "smbios",
+      "reason": null
+    },
+    {
+      "id": "system.memory.configured_speed",
+      "subject": {
+        "id": "ram-1"
+      },
+      "value": 4800,
+      "unit": "MT/s",
+      "verdict": "caution",
+      "source": "smbios",
+      "reason": null,
+      "evidence": {
+        "code": "below_rated"
+      }
+    },
+    {
+      "id": "system.memory.configured_speed",
+      "subject": {
+        "id": "ram-2"
+      },
+      "value": 4800,
+      "unit": "MT/s",
+      "verdict": "caution",
+      "source": "smbios",
+      "reason": null,
+      "evidence": {
+        "code": "below_rated"
+      }
+    },
+    {
+      "id": "system.gpu.adapters",
+      "value": 2,
+      "unit": "count",
+      "verdict": "info",
+      "source": "dxgi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.model",
+      "subject": {
+        "id": "gpu-1",
+        "model": "NVIDIA GeForce RTX 5070"
+      },
+      "value": "NVIDIA GeForce RTX 5070",
+      "unit": null,
+      "verdict": "info",
+      "source": "dxgi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.driver_version",
+      "subject": {
+        "id": "gpu-1",
+        "model": "NVIDIA GeForce RTX 5070"
+      },
+      "value": "32.0.15.8180",
+      "unit": null,
+      "verdict": "info",
+      "source": "setupapi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.driver_age",
+      "subject": {
+        "id": "gpu-1",
+        "model": "NVIDIA GeForce RTX 5070"
+      },
+      "value": 41,
+      "unit": "d",
+      "verdict": "ok",
+      "source": "setupapi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.device_status",
+      "subject": {
+        "id": "gpu-1",
+        "model": "NVIDIA GeForce RTX 5070"
+      },
+      "value": 0,
+      "unit": "code",
+      "verdict": "ok",
+      "source": "setupapi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.generic_driver",
+      "subject": {
+        "id": "gpu-1",
+        "model": "NVIDIA GeForce RTX 5070"
+      },
+      "value": false,
+      "unit": null,
+      "verdict": "ok",
+      "source": "dxgi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.model",
+      "subject": {
+        "id": "gpu-2",
+        "model": "AMD Radeon(TM) Graphics"
+      },
+      "value": "AMD Radeon(TM) Graphics",
+      "unit": null,
+      "verdict": "info",
+      "source": "dxgi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.driver_version",
+      "subject": {
+        "id": "gpu-2",
+        "model": "AMD Radeon(TM) Graphics"
+      },
+      "value": "32.0.21025.1042",
+      "unit": null,
+      "verdict": "info",
+      "source": "setupapi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.driver_age",
+      "subject": {
+        "id": "gpu-2",
+        "model": "AMD Radeon(TM) Graphics"
+      },
+      "value": 900,
+      "unit": "d",
+      "verdict": "info",
+      "source": "setupapi",
+      "reason": null
+    },
+    {
+      "id": "system.gpu.device_status",
+      "subject": {
+        "id": "gpu-2",
+        "model": "AMD Radeon(TM) Graphics"
+      },
+      "value": 22,
+      "unit": "code",
+      "verdict": "ok",
+      "source": "setupapi",
+      "reason": null,
+      "evidence": {
+        "code": "disabled_code22"
+      }
+    },
+    {
+      "id": "system.gpu.generic_driver",
+      "subject": {
+        "id": "gpu-2",
+        "model": "AMD Radeon(TM) Graphics"
+      },
+      "value": false,
+      "unit": null,
+      "verdict": "info",
+      "source": "dxgi",
+      "reason": null
+    },
+    {
+      "id": "system.storage.devices",
+      "value": 2,
+      "unit": "count",
+      "verdict": "info",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "system.storage.health",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "healthy",
+      "unit": null,
+      "verdict": "ok",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "system.storage.health",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "healthy",
+      "unit": null,
+      "verdict": "ok",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "system.storage.free",
+      "subject": {
+        "id": "volume-1"
+      },
+      "value": "812345678901",
+      "unit": "B",
+      "verdict": "ok",
+      "source": "win32",
+      "reason": null,
+      "evidence": {
+        "totalBytes": "2000398934016",
+        "diskId": "disk-1"
+      }
+    },
+    {
+      "id": "system.storage.free",
+      "subject": {
+        "id": "volume-2"
+      },
+      "value": "40012345678",
+      "unit": "B",
+      "verdict": "caution",
+      "source": "win32",
+      "reason": null,
+      "evidence": {
+        "totalBytes": "500107862016"
+      }
+    },
+    {
+      "id": "system.pagefile.count",
+      "value": 1,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.pagefile.automatic",
+      "subject": {
+        "id": "pagefile-1"
+      },
+      "value": true,
+      "unit": null,
+      "verdict": "info",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.pagefile.allocated",
+      "subject": {
+        "id": "pagefile-1"
+      },
+      "value": "4294967296",
+      "unit": "B",
+      "verdict": "info",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.pagefile.current",
+      "subject": {
+        "id": "pagefile-1"
+      },
+      "value": "1073741824",
+      "unit": "B",
+      "verdict": "info",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.pagefile.peak",
+      "subject": {
+        "id": "pagefile-1"
+      },
+      "value": "2147483648",
+      "unit": "B",
+      "verdict": "ok",
+      "source": "wmi",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.whea7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.whea_warning7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.disk7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.disk_warning7d",
+      "value": 2,
+      "unit": "count",
+      "verdict": "info",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.ntfs7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.ntfs_warning7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "info",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.stornvme7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "ok",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.stornvme_warning7d",
+      "value": 0,
+      "unit": "count",
+      "verdict": "info",
+      "source": "eventlog",
+      "reason": null
+    },
+    {
+      "id": "system.eventlog.volmgr7d",
+      "value": null,
+      "unit": "count",
+      "verdict": "unavailable",
+      "source": "eventlog",
+      "reason": "denied"
+    },
+    {
+      "id": "system.eventlog.volmgr_warning7d",
+      "value": null,
+      "unit": "count",
+      "verdict": "info",
+      "source": "eventlog",
+      "reason": "denied"
+    },
+    {
+      "id": "system.eventlog.kp41_7d",
+      "value": 1,
+      "unit": "count",
+      "verdict": "caution",
+      "source": "eventlog",
+      "reason": null
+    }
+  ],
+  "notes": []
+}
