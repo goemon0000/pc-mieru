@@ -264,8 +264,10 @@ internal static class SystemInputsBuilder
     /// A removable drive that was opened and read, and answered "no size": an empty card-reader slot. It is told by three of Core's own
     /// readings together: the device descriptor was read (<see cref="StorageDevice.Details"/> is there; a slot Core could not open or read has none
     /// and is "unreadable", which is not this), the descriptor says the media is removable (<see cref="StorageDetails.Removable"/> is true), and the
-    /// capacity is zero or did not come (<see cref="StorageDevice.CapacityBytes"/>: 0, or not read because Windows says there is no medium).
-    /// A capacity that was denied or timed out is not "no medium": it is a drive that could not be asked, so it stays in the list.
+    /// capacity is zero or Windows said there is no medium (<see cref="StorageDevice.CapacityBytes"/>: 0, or the geometry call failed with
+    /// ERROR_NOT_READY 21 or ERROR_NO_MEDIA_IN_DRIVE 1112; an empty card-reader slot answers 21).
+    /// Any other failure is not "no medium": a card that is in the slot and fails to read (a CRC or device I/O error), or a drive that could not
+    /// be asked (denied, timed out), stays in the list, so a dying card is not dropped from the check.
     /// </summary>
     internal static bool HasNoMedia(StorageDevice drive)
     {
@@ -274,8 +276,17 @@ internal static class SystemInputsBuilder
             return false;
         }
 
-        return drive.CapacityBytes is { Status: ValueStatus.Ok, Data: 0 } || drive.CapacityBytes.Status is ValueStatus.Error or ValueStatus.Unsupported;
+        return drive.CapacityBytes is { Status: ValueStatus.Ok, Data: 0 }
+            || (drive.CapacityBytes.Status is ValueStatus.Error && NoMediumDetails.Contains(drive.CapacityBytes.Detail ?? string.Empty));
     }
+
+    // Core writes a failed geometry call as Probe.FromWin32's "<what>: Win32 error <code>" (StorageCollector, "capacity"). The detail is the
+    // only place the code is kept; SystemInputsBuilderTests pins this text against Probe.FromWin32, so a change of the wording fails a test.
+    private static readonly HashSet<string> NoMediumDetails = new(StringComparer.Ordinal)
+    {
+        "capacity: Win32 error 21",   // ERROR_NOT_READY
+        "capacity: Win32 error 1112", // ERROR_NO_MEDIA_IN_DRIVE
+    };
 
     // The volumes in the order of their letters (a letter is only used to sort and to join; it is never written). A volume that sits on
     // several drives is listed once, and says no drive (the drive of a volume is only given when there is one).

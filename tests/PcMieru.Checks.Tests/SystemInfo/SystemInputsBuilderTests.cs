@@ -422,15 +422,29 @@ public sealed class SystemInputsBuilderTests
     }
 
     [Theory]
-    [InlineData(ValueStatus.Error)]
-    [InlineData(ValueStatus.Unsupported)]
-    public void A_removable_slot_whose_size_did_not_come_because_windows_has_no_medium_is_not_counted(ValueStatus status)
+    [InlineData(21)]   // ERROR_NOT_READY: what an empty card-reader slot answers on the real machine
+    [InlineData(1112)] // ERROR_NO_MEDIA_IN_DRIVE
+    public void A_removable_slot_whose_size_did_not_come_because_windows_has_no_medium_is_not_counted(int win32Error)
     {
-        var slot = Hw.RemovableSlot(1, Value.Missing<long>(status, "test"));
+        // Made by Core's own Probe, so a change of its wording breaks this test instead of silently counting empty slots again.
+        var slot = Hw.RemovableSlot(1, PcMieru.Core.Hardware.Native.Probe.FromWin32<long>(win32Error, "ioctl:IOCTL_DISK_GET_DRIVE_GEOMETRY_EX", "capacity"));
 
         var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), slot])).Disks.Value;
 
         Assert.Equal("Model", Assert.Single(disks).Model);
+    }
+
+    [Theory]
+    [InlineData(23)]   // ERROR_CRC: a card in the slot that fails to read
+    [InlineData(1117)] // ERROR_IO_DEVICE
+    [InlineData(1)]    // ERROR_INVALID_FUNCTION (unsupported)
+    public void A_removable_drive_whose_size_failed_for_another_reason_is_still_counted(int win32Error)
+    {
+        var card = Hw.RemovableSlot(1, PcMieru.Core.Hardware.Native.Probe.FromWin32<long>(win32Error, "ioctl:IOCTL_DISK_GET_DRIVE_GEOMETRY_EX", "capacity"));
+
+        var disks = Build(Hw.Machine(storage: [Hw.Disk(0, "Model", Hw.SerialOfDisk0), card])).Disks.Value;
+
+        Assert.Equal(2, disks.Count);
     }
 
     [Theory]
