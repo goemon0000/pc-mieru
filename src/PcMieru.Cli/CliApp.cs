@@ -1,4 +1,6 @@
 using System.Reflection;
+using PcMieru.Checks;
+using PcMieru.Checks.Build;
 using PcMieru.Core;
 
 namespace PcMieru.Cli;
@@ -22,7 +24,25 @@ public interface ICliCommand
     Task<ExitCode> RunAsync(CliContext context, ParsedArgs args);
 }
 
+/// <summary>
+/// Where the checks live and who runs them. Every part has a live default, made only when a command asks for it (building this record, or
+/// the context, reads and creates nothing); a test gives a temporary folder and a fake runner, so nothing of the real machine is touched.
+/// </summary>
+/// <param name="DataRoot">
+/// The data folder the checks folder is under (<c>&lt;DataRoot&gt;\checks</c>), as the app's window takes it. Null: the default folder
+/// (<see cref="CheckHistoryStore.DefaultRoot"/>), and then the default legacy folder too.
+/// </param>
+/// <param name="LegacyDirectory">
+/// The checks folder of v0.7.4, which the baseline only reads, once. With a given <paramref name="DataRoot"/> null means none (a test never
+/// reads the real one); with the default data folder null means the library's own default.
+/// </param>
+/// <param name="RunnerFactory">Makes the runner of the check commands. Null: the live runner, built on the first check.</param>
+public sealed record CliChecks(string? DataRoot = null, string? LegacyDirectory = null, Func<CliContext, ICheckRunner>? RunnerFactory = null);
+
 /// <summary>Everything outside the process that the CLI touches, so tests can run it on in-memory streams.</summary>
+/// <param name="Checks">Where the checks are kept and who runs them. Null: the live ones.</param>
+/// <param name="BuildCodeProvider">The maker of the configuration code (PCB1) of <c>pcmi parts --code</c>. Null: the one that reads this PC.</param>
+/// <param name="ErrorIsTerminal">True when stderr is a terminal: only then does a running check say what it is doing there.</param>
 public sealed record CliEnvironment(
     TextReader In,
     TextWriter Out,
@@ -30,7 +50,10 @@ public sealed record CliEnvironment(
     Func<PcMieruOptions, PcMieruServices> ServicesFactory,
     int ConsoleWidth = 120,
     Language? Language = null,
-    string? HelperDirectory = null)
+    string? HelperDirectory = null,
+    CliChecks? Checks = null,
+    IBuildCodeProvider? BuildCodeProvider = null,
+    bool ErrorIsTerminal = false)
 {
     public static Func<PcMieruOptions, PcMieruServices> DefaultFactory { get; } = static o => PcMieruServices.Create(o);
 }
@@ -62,6 +85,40 @@ public sealed class CliContext : IDisposable
     public Language Language { get; }
 
     public CancellationToken Ct { get; }
+
+    /// <summary>True when stderr is a terminal (the only place a running check shows its progress).</summary>
+    public bool ErrorIsTerminal => _env.ErrorIsTerminal;
+
+    /// <summary>The checks folder (where the results are kept). Only computes the path; nothing is read or created.</summary>
+    public string ChecksFolder => _env.Checks?.DataRoot is { } dataRoot ? Path.Combine(dataRoot, "checks") : CheckHistoryStore.DefaultRoot();
+
+    /// <summary>
+    /// The history, opened for reading only: opening reads and creates nothing, and a folder that is not there is an empty history. This is
+    /// the only way the CLI hands a history to anything that does not save (the MCP server gets nothing else).
+    /// </summary>
+    public IReadOnlyCheckHistory OpenHistory() => CheckHistory.OpenReadOnly(ChecksFolder);
+
+    /// <summary>The maker of the configuration code: the one a test gave, else the one that reads this PC (made now; making it reads nothing).</summary>
+    public IBuildCodeProvider BuildCodeProvider => _env.BuildCodeProvider ?? BuildCodeProviders.Windows();
+
+    /// <summary>
+    /// The runner of the check commands, made on the first call (the real one reads the machine only when a check runs, and a check is what
+    /// writes its baseline and its result). The real services are made as the app's window makes them (DESIGN-A 2).
+    /// </summary>
+    public ICheckRunner CreateCheckRunner()
+    {
+        if (_env.Checks?.RunnerFactory is { } factory)
+        {
+            return factory(this);
+        }
+
+        var given = _env.Checks;
+        var checksFolder = ChecksFolder;
+        var root = given?.DataRoot ?? Path.GetDirectoryName(checksFolder)!;
+        var legacy = given?.DataRoot is null ? given?.LegacyDirectory ?? CheckHistoryStore.DefaultLegacyDirectory() : given.LegacyDirectory;
+        var checkServices = new CheckServices(TimeProvider.System, root, Services().StorageInspection, legacy, new CheckHistoryStore(checksFolder), app: null);
+        return new CheckRunner(checkServices);
+    }
 
     /// <summary>Created on first use. Says on stderr when any area still serves sample data.</summary>
     public PcMieruServices Services(bool redact = true)

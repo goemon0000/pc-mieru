@@ -1,14 +1,18 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PcMieru.Checks;
 using PcMieru.Core;
+using PcMieru.Core.Reporting;
 
 namespace PcMieru.Cli.Mcp;
 
 /// <summary>
 /// MCP over stdio (newline-delimited JSON-RPC 2.0), read-only. Structural guarantees: the constructor takes only
-/// <see cref="IReadOnlyInsights"/> (what may be asked) and <see cref="IRedactor"/> (applied to every result right
-/// before it is written); there is no argument that turns redaction off, and no tool changes anything.
+/// <see cref="IReadOnlyInsights"/> (what may be asked), <see cref="IReadOnlyCheckHistory"/> (the saved checks, which can be
+/// listed and read and nothing else: the type that saves is not one) and <see cref="IRedactor"/> (applied to every result right
+/// before it is written); there is no argument that turns redaction off, and no tool changes anything. The check history is always
+/// redacted, even when the server itself was started with redaction off.
 /// Limits: one observation at a time, requests up to <see cref="MaxLineChars"/>, results up to
 /// <see cref="MaxResultChars"/>, every tool call ends within 45 seconds.
 /// </summary>
@@ -37,18 +41,21 @@ public sealed class McpServer
     private volatile string _protocol = SupportedVersions[0];
     private volatile bool _initialized;
 
-    public McpServer(IReadOnlyInsights insights, IRedactor redactor, string version)
-        : this(insights, redactor, version, DefaultCallTimeout)
+    public McpServer(IReadOnlyInsights insights, IRedactor redactor, string version, IReadOnlyCheckHistory history)
+        : this(insights, redactor, version, history, DefaultCallTimeout)
     {
     }
 
-    /// <summary>The timeout is a knob for tests only; the public constructor fixes it at 45 seconds.</summary>
-    internal McpServer(IReadOnlyInsights insights, IRedactor redactor, string version, TimeSpan callTimeout)
+    /// <summary>
+    /// The timeout is a knob for tests only; the public constructor fixes it at 45 seconds. <paramref name="historyRedactor"/> is a test's
+    /// stand-in for the always-on redactor of the check history (null: the real one, for this user and this PC).
+    /// </summary>
+    internal McpServer(IReadOnlyInsights insights, IRedactor redactor, string version, IReadOnlyCheckHistory history, TimeSpan callTimeout, IRedactor? historyRedactor = null)
     {
         _callTimeout = callTimeout;
         _redactor = redactor;
         _version = version;
-        _tools = new McpTools(insights);
+        _tools = new McpTools(insights, history, historyRedactor ?? new SimpleRedactor(RedactionContext.FromEnvironment(), true));
     }
 
     /// <summary>Serves until the input ends (the client closed stdin) or <paramref name="ct"/> is cancelled.</summary>

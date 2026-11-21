@@ -34,16 +34,24 @@ else
 
 var stdin = new StreamReader(Console.OpenStandardInput(), utf8, detectEncodingFromByteOrderMarks: false);
 using var cancel = new CancellationTokenSource();
+var pressed = 0;
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true;
     cancel.Cancel();
 
-    // A read blocked on stdin (pcmi mcp in a terminal) cannot be interrupted; leave after a grace period.
-    _ = Task.Delay(TimeSpan.FromSeconds(2)).ContinueWith(_ => Environment.Exit(1), TaskScheduler.Default);
+    // A second Ctrl+C leaves at once, whatever is still running.
+    if (Interlocked.Increment(ref pressed) > 1)
+    {
+        Environment.Exit(1);
+    }
+
+    // A read blocked on stdin (pcmi mcp in a terminal) cannot be interrupted; leave after a grace period. A check that is stopping is
+    // given longer (CliShutdown): it joins its workers and saves the stopped run, which 2 seconds could cut off.
+    _ = CliShutdown.WaitForLeaveAsync().ContinueWith(_ => Environment.Exit(1), TaskScheduler.Default);
 };
 
-var env = new CliEnvironment(stdin, stdout, stderr, CliEnvironment.DefaultFactory, width);
+var env = new CliEnvironment(stdin, stdout, stderr, CliEnvironment.DefaultFactory, width, ErrorIsTerminal: !Console.IsErrorRedirected);
 try
 {
     return await CliApp.RunAsync(args, env, cancel.Token).ConfigureAwait(false);

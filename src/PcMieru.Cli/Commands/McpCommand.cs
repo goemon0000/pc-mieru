@@ -20,7 +20,7 @@ public sealed class McpCommand : ICliCommand
     {
         args.RequirePositionals(0, 0);
         var services = context.Services(redact: !args.Has("no-redact"));
-        var server = new McpServer(services.Insights, services.Redactor, VersionCommand.CurrentVersion);
+        var server = new McpServer(services.Insights, services.Redactor, VersionCommand.CurrentVersion, context.OpenHistory());
         await server.RunAsync(context.In, context.Out, context.Ct).ConfigureAwait(false);
         return ExitCode.Success;
     }

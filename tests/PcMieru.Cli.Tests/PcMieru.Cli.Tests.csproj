@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PcMieru.Cli\PcMieru.Cli.csproj" />
     <ProjectReference Include="..\..\src\PcMieru.Core\PcMieru.Core.csproj" />
+    <ProjectReference Include="..\..\src\PcMieru.Checks\PcMieru.Checks.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,5 @@
 using System.Reflection;
+using PcMieru.Checks;
 using PcMieru.Cli.Mcp;
 
 namespace PcMieru.Cli.Tests;
@@ -39,11 +40,108 @@ public class McpBoundaryTests
         "Socket",
     ];
 
+    /// <summary>What may save, run or move a check: none of these is ever handed to the server, held by it, or named in its sources.</summary>
+    private static readonly Type[] CheckWriters =
+    [
+        typeof(ICheckHistoryMaintainer),
+        typeof(CheckHistoryStore),
+        typeof(ICheckRunner),
+        typeof(CheckRunner),
+        typeof(CheckServices),
+    ];
+
+    private static readonly string[] ForbiddenForChecks =
+    [
+        "CheckHistoryStore",
+        "ICheckHistoryMaintainer",
+        "ICheckRunner",
+        "CheckRunner",
+        "CheckServices",
+        "SaveAsync",
+        "CreateCheckRunner",
+    ];
+
     [Fact]
-    public void The_constructor_takes_only_the_read_interface_the_redactor_and_a_version_text()
+    public void The_constructor_takes_only_the_read_interfaces_the_redactor_and_a_version_text()
     {
         var constructor = Assert.Single(typeof(McpServer).GetConstructors());
-        Assert.Equal([typeof(IReadOnlyInsights), typeof(IRedactor), typeof(string)], constructor.GetParameters().Select(p => p.ParameterType).ToArray());
+        Assert.Equal(
+            [typeof(IReadOnlyInsights), typeof(IRedactor), typeof(string), typeof(IReadOnlyCheckHistory)],
+            constructor.GetParameters().Select(p => p.ParameterType).ToArray());
+
+        // The one more constructor (tests give it a short timeout and a fixed redactor) has the same four first, and nothing that writes.
+        var all = typeof(McpServer).GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.Equal(2, all.Length);
+        var wider = all.Single(c => c.GetParameters().Length > 4);
+        Assert.Equal(
+            [typeof(IReadOnlyInsights), typeof(IRedactor), typeof(string), typeof(IReadOnlyCheckHistory), typeof(TimeSpan), typeof(IRedactor)],
+            wider.GetParameters().Select(p => p.ParameterType).ToArray());
+        Assert.Equal(
+            [typeof(IReadOnlyInsights), typeof(IReadOnlyCheckHistory), typeof(IRedactor)],
+            Assert.Single(typeof(McpTools).GetConstructors()).GetParameters().Select(p => p.ParameterType).ToArray());
+    }
+
+    [Fact]
+    public void Nothing_the_server_holds_or_takes_can_save_or_run_a_check()
+    {
+        var mcp = typeof(McpServer).Assembly.GetTypes().Where(t => t.Namespace == "PcMieru.Cli.Mcp").ToArray();
+        Assert.Contains(typeof(McpServer), mcp);
+        Assert.Contains(typeof(McpTools), mcp);
+        foreach (var type in mcp)
+        {
+            var held = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                .Select(f => f.FieldType)
+                .Concat(type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).Select(p => p.PropertyType))
+                .Concat(type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).SelectMany(c => c.GetParameters()).Select(p => p.ParameterType))
+                .Concat(type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).SelectMany(m => m.GetParameters()).Select(p => p.ParameterType));
+            foreach (var heldType in held)
+            {
+                foreach (var writer in CheckWriters)
+                {
+                    Assert.False(writer.IsAssignableFrom(heldType),
+                        $"{type.Name} holds or takes {heldType.Name}, which reaches {writer.Name}");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void The_read_only_history_and_the_store_are_two_unrelated_types()
+    {
+        Assert.False(typeof(IReadOnlyCheckHistory).IsAssignableFrom(typeof(CheckHistoryStore)));
+        Assert.False(typeof(IReadOnlyCheckHistory).IsAssignableFrom(typeof(ICheckHistoryMaintainer)));
+        Assert.False(typeof(ICheckHistoryMaintainer).IsAssignableFrom(typeof(IReadOnlyCheckHistory)));
+        using var folder = new TempFolder();
+        var opened = CheckHistory.OpenReadOnly(folder.Checks);
+        object boxed = opened;
+        Assert.False(boxed is ICheckHistoryMaintainer);
+        Assert.False(boxed is CheckHistoryStore);
+        Assert.Equal(["GetAsync", "ListAsync"], typeof(IReadOnlyCheckHistory).GetMethods().Select(m => m.Name).Order().ToArray());
+    }
+
+    [Fact]
+    public void The_McpCommand_gives_the_server_the_read_only_history_and_never_names_a_store()
+    {
+        var text = File.ReadAllText(Path.Combine(RepoRoot(), "src", "PcMieru.Cli", "Commands", "McpCommand.cs"));
+        Assert.Contains("context.OpenHistory()", text, StringComparison.Ordinal);
+        foreach (var word in ForbiddenForChecks)
+        {
+            Assert.False(text.Contains(word, StringComparison.Ordinal), $"McpCommand.cs mentions {word}");
+        }
+    }
+
+    [Fact]
+    public void The_sources_under_Mcp_never_name_a_check_writer()
+    {
+        var dir = Path.Combine(RepoRoot(), "src", "PcMieru.Cli", "Mcp");
+        foreach (var file in Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories))
+        {
+            var text = File.ReadAllText(file);
+            foreach (var word in ForbiddenForChecks)
+            {
+                Assert.False(text.Contains(word, StringComparison.Ordinal), $"{Path.GetFileName(file)} mentions {word}");
+            }
+        }
     }
 
     [Fact]
