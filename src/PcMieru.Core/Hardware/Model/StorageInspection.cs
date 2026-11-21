@@ -141,6 +141,16 @@ public sealed record StorageInspection(
     IReadOnlyList<StorageInspectionDrive> Drives)
 {
     /// <summary>
+    /// How many drives could not have their health read for lack of administrator rights in this pass, before any elevation was tried (a drive
+    /// that waited for the Helper, or one Windows refused and elevation was not requested or not available). 0 when none, and for a source
+    /// that does not say (default).
+    /// </summary>
+    public int ElevationNeeded { get; init; }
+
+    /// <summary>Of <see cref="ElevationNeeded"/>, how many the elevated re-read actually returned health bytes for. 0 when elevation was not requested, was refused, or failed.</summary>
+    public int ElevationReRead { get; init; }
+
+    /// <summary>
     /// True when every slot that exists was read (<see cref="UnreadableSlots"/> is 0). False is NOT "do not compare anything" (DESIGN-A 5.2):
     /// an unreadable slot may be a drive that looks like another one (the same model, no serial, no unique id), so a drive whose key leaves
     /// that doubt open is held back (<c>baseline_inventory_incomplete</c>): one with a weak key (no usable serial and no unique id), and one

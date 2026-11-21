@@ -75,7 +75,7 @@ public sealed class CheckRunner : ICheckRunner
             context.Stage(CheckStage.Saving);
             var save = await SaveAsync(final.Result).ConfigureAwait(false);
             context.Stage(CheckStage.Done);
-            return new CheckRun(final.Result, save, final.FailureCode, final.FailureDetail, final.UnsavedResult, final.OriginalFailureCode, final.FirstProblem);
+            return new CheckRun(final.Result, save, final.FailureCode, final.FailureDetail, final.UnsavedResult, final.OriginalFailureCode, final.FirstProblem, collector.Elevation);
         }
         finally
         {

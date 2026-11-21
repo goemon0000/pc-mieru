@@ -6,7 +6,8 @@ namespace PcMieru.Cli.Tests;
 /// <summary>
 /// <c>pcmi check history</c> (DESIGN-A 8): every kept run, newest first, as one <c>{ entries, warnings }</c> document or as tables. A history
 /// that is not there is an empty one (exit 0, nothing made); a file that cannot be used is a warning with a count (exit 0); a folder that
-/// cannot be opened is exit 1. The command only reads: nothing is moved aside or written.
+/// cannot be opened is exit 1. A damaged file is moved aside here (this command is the one place that does it: the history of the app and
+/// of the MCP server never moves anything); nothing else is written.
 /// </summary>
 public class CheckHistoryCommandTests
 {
@@ -183,11 +184,10 @@ public class CheckHistoryCommandTests
     }
 
     [Fact]
-    public async Task Listing_does_not_save_move_or_make_anything()
+    public async Task Listing_healthy_files_does_not_save_move_or_make_anything()
     {
         using var data = new TempFolder();
         await CheckSamples.SeedAsync(data.Checks, CheckSamples.SystemOk(1), CheckSamples.StorageRead(2));
-        WriteBroken(data, 9);
         string[] Snapshot() => Directory.GetFileSystemEntries(data.Path, "*", SearchOption.AllDirectories)
             .Select(p => Path.GetRelativePath(data.Path, p) + "|" + (File.Exists(p) ? new FileInfo(p).Length : -1) + "|" + File.GetLastWriteTimeUtc(p).Ticks)
             .Order(StringComparer.Ordinal)
@@ -211,15 +211,25 @@ public class CheckHistoryCommandTests
         WriteBroken(data, 91);
 
         var json = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
-        var human = await CliRun.CheckAsync(["check", "history"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
 
         Assert.Equal(0, json.ExitCode);
         Assert.Equal("", json.Err);
         var root = JsonDocument.Parse(json.Out).RootElement;
         Assert.Single(root.GetProperty("entries").EnumerateArray());
-        var warning = Assert.Single(root.GetProperty("warnings").EnumerateArray());
-        Assert.Equal("history_unreadable", warning.GetProperty("code").GetString());
-        Assert.Equal(2, warning.GetProperty("count").GetInt32());
+
+        // Each broken file is counted as unreadable and, as it is moved aside, as quarantined (the store's own counting).
+        var counts = WarningCounts(root);
+        Assert.Equal(2, counts["history_unreadable"]);
+        Assert.Equal(2, counts["history_quarantined"]);
+        Assert.Equal(2, counts.Count);
+
+        // The human table of the same situation (a folder of its own: the first listing moved those files aside).
+        using var other = new TempFolder();
+        await CheckSamples.SeedAsync(other.Checks, CheckSamples.SystemOk(1));
+        WriteBroken(other, 90);
+        WriteBroken(other, 91);
+
+        var human = await CliRun.CheckAsync(["check", "history"], other, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
 
         Assert.Equal(0, human.ExitCode);
         Assert.Equal("", human.Err);
@@ -291,6 +301,153 @@ public class CheckHistoryCommandTests
         var warning = Assert.Single(root.GetProperty("warnings").EnumerateArray());
         Assert.Equal("history_locked", warning.GetProperty("code").GetString());
         Assert.Equal(1, warning.GetProperty("count").GetInt32());
+        Assert.Empty(Directory.GetFiles(data.Checks, "*.bad-*"));
+        Assert.True(File.Exists(held));
+    }
+
+    // ---- the one place a damaged file is moved aside (DESIGN-A 4, 8) -------------------------------------------------------------------
+
+    private static string[] BadCopies(TempFolder data, CheckKind kind, int n) =>
+        Directory.GetFiles(data.Checks, HistoryFileName(kind, n) + ".bad-*");
+
+    private static Dictionary<string, int> WarningCounts(JsonElement root) =>
+        root.GetProperty("warnings").EnumerateArray().ToDictionary(w => w.GetProperty("code").GetString()!, w => w.GetProperty("count").GetInt32());
+
+    [Fact]
+    public async Task A_broken_file_is_moved_aside_and_reported_as_quarantined_exit_0_and_the_next_listing_is_clean()
+    {
+        using var data = new TempFolder();
+        await CheckSamples.SeedAsync(data.Checks, CheckSamples.SystemOk(1));
+        WriteBroken(data, 90);
+        var broken = Path.Combine(data.Checks, HistoryFileName(CheckKind.System, 90));
+
+        var first = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal("", first.Err);
+        var root = JsonDocument.Parse(first.Out).RootElement;
+        Assert.Single(root.GetProperty("entries").EnumerateArray());
+        var counts = WarningCounts(root);
+        Assert.Equal(1, counts["history_quarantined"]);
+        Assert.Equal(1, counts["history_unreadable"]);
+        Assert.DoesNotContain("history_quarantine_failed", counts.Keys);
+        Assert.False(File.Exists(broken), "the original is gone");
+        var moved = Assert.Single(BadCopies(data, CheckKind.System, 90));
+        Assert.Equal("{ this is not json", File.ReadAllText(moved));
+        Assert.True(File.Exists(Path.Combine(data.Checks, CheckSamples.FileName(CheckSamples.SystemOk(1)))), "a valid file is not touched");
+
+        var second = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+
+        Assert.Equal(0, second.ExitCode);
+        Assert.Empty(JsonDocument.Parse(second.Out).RootElement.GetProperty("warnings").EnumerateArray());
+        Assert.Single(BadCopies(data, CheckKind.System, 90));
+    }
+
+    [Fact]
+    public async Task The_human_listing_says_the_broken_file_was_set_aside()
+    {
+        using var data = new TempFolder();
+        WriteBroken(data, 90);
+
+        var en = await CliRun.CheckAsync(["check", "history"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+
+        Assert.Equal(0, en.ExitCode);
+        AssertInOrder(en.Out, CliWords.En("cli.check.hist.warnings"), "history_quarantined", "1", CliWords.En("cli.check.warn.history_quarantined"));
+        Assert.Single(BadCopies(data, CheckKind.System, 90));
+
+        using var other = new TempFolder();
+        WriteBroken(other, 90);
+
+        var ja = await CliRun.CheckAsync(["check", "history"], other, FakeCheckRunner.Returning(CheckSamples.SystemOk()), language: Language.Ja);
+
+        Assert.Equal(0, ja.ExitCode);
+        AssertInOrder(ja.Out, "history_quarantined", "1", CliWords.Ja("cli.check.warn.history_quarantined"));
+    }
+
+    [Fact]
+    public async Task A_file_that_cannot_be_read_because_another_process_holds_it_is_never_moved_aside()
+    {
+        using var data = new TempFolder();
+        await CheckSamples.SeedAsync(data.Checks, CheckSamples.SystemOk(1));
+        WriteBroken(data, 90);
+        var broken = Path.Combine(data.Checks, HistoryFileName(CheckKind.System, 90));
+        var valid = Path.Combine(data.Checks, CheckSamples.FileName(CheckSamples.SystemOk(1)));
+        var validBytes = File.ReadAllBytes(valid);
+
+        CliResult r;
+        using (new FileStream(broken, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            r = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+        }
+
+        Assert.Equal(0, r.ExitCode);
+        var root = JsonDocument.Parse(r.Out).RootElement;
+        Assert.Single(root.GetProperty("entries").EnumerateArray());
+        var counts = WarningCounts(root);
+        Assert.Equal(1, counts["history_locked"]);
+        Assert.DoesNotContain("history_quarantined", counts.Keys);
+        Assert.DoesNotContain("history_unreadable", counts.Keys);
+        Assert.True(File.Exists(broken), "a file that could not be read is left exactly where it is");
+        Assert.Empty(BadCopies(data, CheckKind.System, 90));
+        Assert.Equal("{ this is not json", File.ReadAllText(broken));
+        Assert.Equal(validBytes, File.ReadAllBytes(valid));
+    }
+
+    [Fact]
+    public async Task A_file_a_newer_version_wrote_is_left_where_it_is()
+    {
+        using var data = new TempFolder();
+        var newer = CheckSamples.SystemOk(5);
+        Directory.CreateDirectory(data.Checks);
+        var path = Path.Combine(data.Checks, CheckSamples.FileName(newer));
+        var text = CheckJson.Serialize(newer).Replace("\"format\":\"pcm-check/1\"", "\"format\":\"pcm-check/2\"", StringComparison.Ordinal);
+        File.WriteAllText(path, text);
+
+        var r = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+
+        Assert.Equal(0, r.ExitCode);
+        Assert.Equal(1, WarningCounts(JsonDocument.Parse(r.Out).RootElement)["history_future_format"]);
+        Assert.Equal(text, File.ReadAllText(path));
+        Assert.Single(Directory.GetFiles(data.Checks));
+    }
+
+    [Fact]
+    public async Task The_listing_holds_the_shutdown_from_the_scan_to_the_last_byte_so_that_ctrl_c_cannot_cut_a_rename_short()
+    {
+        using var data = new TempFolder();
+        await CheckSamples.SeedAsync(data.Checks, CheckSamples.SystemOk(1));
+        var output = new HoldProbeWriter { NewLine = "\n" };
+        var env = new CliEnvironment(
+            new StringReader(string.Empty),
+            output,
+            new StringWriter { NewLine = "\n" },
+            o => CliRun.Services(o),
+            Checks: new CliChecks(data.Path, LegacyDirectory: null));
+        Assert.False(CliShutdown.IsHeld);
+
+        var code = await CliApp.RunAsync(["check", "history", "--json"], env, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.NotEmpty(output.HeldAtWrite);
+        Assert.All(output.HeldAtWrite, held => Assert.True(held, "the output is written, and flushed, while the shutdown is held"));
+        Assert.False(CliShutdown.IsHeld, "and let go when the command is over");
+    }
+
+    private sealed class HoldProbeWriter : StringWriter
+    {
+        public List<bool> HeldAtWrite { get; } = [];
+
+        public override void Write(string? value)
+        {
+            HeldAtWrite.Add(CliShutdown.IsHeld);
+            base.Write(value);
+        }
+
+        public override Task FlushAsync()
+        {
+            HeldAtWrite.Add(CliShutdown.IsHeld);
+            return base.FlushAsync();
+        }
     }
 
     // ---- the folder cannot be opened: exit 1 --------------------------------------------------------------------------------------------

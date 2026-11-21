@@ -42,6 +42,10 @@ internal sealed class StorageCheckProcedure : ICheckProcedure
             throw new CheckRunFailedException(CheckRunFailureCodes.InspectionFailed, CheckRunner.Describe(ex), ex);
         }
 
+        // The fact about administrator rights goes on the run, not into the result (CheckRun.Elevation). It is set before anything that can
+        // stop the run, so a stop after the inspection still carries it.
+        collector.SetElevation(inspection.ElevationNeeded, inspection.ElevationReRead);
+
         ct.ThrowIfCancellationRequested();
         context.Stage(CheckStage.Judging);
 

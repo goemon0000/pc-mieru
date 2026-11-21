@@ -334,11 +334,11 @@ public class CheckCommandTests
     }
 
     [Fact]
-    public async Task A_failed_run_with_elevate_is_exit_1_not_4()
+    public async Task A_failed_run_with_elevate_is_exit_1_not_4_even_when_the_fact_says_nothing_was_read()
     {
         using var data = new TempFolder();
         var failed = CheckSamples.Failed(CheckKind.Storage);
-        var run = new CheckRun(failed, CheckSaveState.Saved(CheckSamples.FileName(failed)), FailureCode: "inspection_failed");
+        var run = new CheckRun(failed, CheckSaveState.Saved(CheckSamples.FileName(failed)), FailureCode: "inspection_failed", Elevation: new CheckElevation(2, 0));
 
         var runner = FakeCheckRunner.Returning(run);
 
@@ -349,40 +349,68 @@ public class CheckCommandTests
         Assert.True(Assert.Single(runner.Requests).AllowElevation);
     }
 
-    // ---- exit 4: --elevate refused -----------------------------------------------------------------------------------------------------
+    // ---- exit 4: --elevate refused (a fact of the inspection: CheckRun.Elevation) ----------------------------------------------------------
 
-    [Fact]
-    public async Task Elevate_refused_and_no_drive_read_is_exit_4_with_the_results_and_the_reason_still_shown()
+    // The rows are the same in every case (a denied temperature): the exit code follows the fact, not the rows.
+    [Theory]
+    [InlineData(0, 0, true, 0)]
+    [InlineData(2, 0, true, 4)]
+    [InlineData(1, 0, true, 4)]
+    [InlineData(2, 1, true, 0)]
+    [InlineData(2, 2, true, 0)]
+    [InlineData(2, 0, false, 0)]
+    public async Task The_exit_code_with_elevate_follows_the_fact_the_run_reports_not_the_rows(int needed, int reRead, bool elevate, int exit)
     {
         using var data = new TempFolder();
         var result = CheckSamples.StorageDenied();
-        var runner = FakeCheckRunner.Returning(result);
+        var runner = FakeCheckRunner.Returning(result, new CheckElevation(needed, reRead));
+        var args = elevate ? new[] { "check", "storage", "--elevate", "--json" } : ["check", "storage", "--json"];
 
-        var human = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, runner);
-        var json = await CliRun.CheckAsync(["check", "storage", "--elevate", "--json"], data, runner);
+        var r = await CliRun.CheckAsync(args, data, runner);
 
-        string[] expectedErr = ["pcmi: " + CliWords.En("cli.check.elevateMaybe"), "pcmi check: " + CliWords.En("cli.check.noElevatedRead")];
-        Assert.Equal(4, human.ExitCode);
-        Assert.Equal(expectedErr, ErrLines(human));
-        Assert.StartsWith("Storage check: ", human.Out, StringComparison.Ordinal);
-        Assert.Contains("storage.temperature", human.Out, StringComparison.Ordinal);
-        Assert.Contains("Denied", human.Out, StringComparison.Ordinal);
-        Assert.Equal(4, json.ExitCode);
-        Assert.Equal(expectedErr, ErrLines(json));
-        Assert.Equal(CheckJson.Serialize(result) + "\n", json.Out);
-        Assert.All(runner.Requests, q =>
+        Assert.Equal(exit, r.ExitCode);
+
+        // Whatever the code, the result is on stdout whole and parses.
+        Assert.Equal(CheckJson.Serialize(result) + "\n", r.Out);
+        Assert.Equal(CheckSamples.Id(1), CheckJson.Deserialize(r.Out.TrimEnd('\n')).RunId);
+        var expectedErr = new List<string>();
+        if (elevate)
         {
-            Assert.Equal(CheckKind.Storage, q.Kind);
-            Assert.True(q.AllowElevation);
-        });
-        Assert.Equal(2, runner.Requests.Count);
+            expectedErr.Add("pcmi: " + CliWords.En("cli.check.elevateMaybe"));
+            if (exit == 4)
+            {
+                expectedErr.Add("pcmi check: " + CliWords.En("cli.check.noElevatedRead"));
+            }
+        }
+        else
+        {
+            expectedErr.Add("pcmi check: " + CliWords.En("cli.hint.elevate"));
+        }
+
+        Assert.Equal(expectedErr, ErrLines(r));
+        Assert.Equal(elevate, Assert.Single(runner.Requests).AllowElevation);
+    }
+
+    [Fact]
+    public async Task Elevate_refused_is_exit_4_with_the_human_table_and_the_reason_still_shown()
+    {
+        using var data = new TempFolder();
+        var runner = FakeCheckRunner.Returning(CheckSamples.StorageDenied(), new CheckElevation(1, 0));
+
+        var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, runner);
+
+        Assert.Equal(4, r.ExitCode);
+        Assert.Equal(["pcmi: " + CliWords.En("cli.check.elevateMaybe"), "pcmi check: " + CliWords.En("cli.check.noElevatedRead")], ErrLines(r));
+        Assert.StartsWith("Storage check: ", r.Out, StringComparison.Ordinal);
+        Assert.Contains("storage.temperature", r.Out, StringComparison.Ordinal);
+        Assert.Contains("Denied", r.Out, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Elevate_that_read_the_drive_is_exit_0_and_only_the_note_is_on_stderr()
     {
         using var data = new TempFolder();
-        var runner = FakeCheckRunner.Returning(CheckSamples.StorageRead());
+        var runner = FakeCheckRunner.Returning(CheckSamples.StorageRead(), new CheckElevation(1, 1));
 
         var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, runner);
 
@@ -396,21 +424,48 @@ public class CheckCommandTests
     {
         using var data = new TempFolder();
 
-        var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, FakeCheckRunner.Returning(CheckSamples.StorageOneReadOneDenied()));
+        var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, FakeCheckRunner.Returning(CheckSamples.StorageOneReadOneDenied(), new CheckElevation(2, 1)));
 
-        // The library has no flag for a refused approval: the CLI tells a refusal by its effect (a denied temperature and none read).
         Assert.Equal(0, r.ExitCode);
         Assert.DoesNotContain(CliWords.En("cli.check.noElevatedRead"), r.Err, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void The_refusal_rule_needs_a_denied_temperature_row_and_no_temperature_with_a_value()
+    public async Task A_run_without_the_fact_has_nothing_to_refuse_whatever_the_rows_say()
     {
-        Assert.True(CheckCommand.ElevationRefused(CheckSamples.StorageDenied()));
-        Assert.False(CheckCommand.ElevationRefused(CheckSamples.StorageRead()));
-        Assert.False(CheckCommand.ElevationRefused(CheckSamples.StorageOneReadOneDenied()));
-        Assert.False(CheckCommand.ElevationRefused(CheckSamples.SystemOk()));
-        Assert.False(CheckCommand.ElevationRefused(CheckSamples.SystemUnavailable()));
+        using var data = new TempFolder();
+
+        var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, FakeCheckRunner.Returning(CheckSamples.StorageDenied()));
+
+        Assert.Equal(0, r.ExitCode);
+        Assert.DoesNotContain(CliWords.En("cli.check.noElevatedRead"), r.Err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_stopped_run_is_exit_1_even_when_the_fact_says_nothing_was_read()
+    {
+        using var data = new TempFolder();
+        var stopped = CheckSamples.StorageStopped();
+        Assert.Empty(CheckResultValidator.Validate(stopped));
+
+        var r = await CliRun.CheckAsync(["check", "storage", "--elevate", "--json"], data, FakeCheckRunner.Returning(stopped, new CheckElevation(2, 0)));
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Equal(CheckJson.Serialize(stopped) + "\n", r.Out);
+        Assert.DoesNotContain(CliWords.En("cli.check.noElevatedRead"), r.Err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_result_that_was_not_saved_is_exit_1_not_4_with_elevate_refused()
+    {
+        using var data = new TempFolder();
+        var result = CheckSamples.StorageDenied();
+        var run = new CheckRun(result, CheckSaveState.Failed("io_error", "disk full"), Elevation: new CheckElevation(2, 0));
+
+        var r = await CliRun.CheckAsync(["check", "storage", "--elevate"], data, FakeCheckRunner.Returning(run));
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.DoesNotContain(CliWords.En("cli.check.noElevatedRead"), r.Err, StringComparison.Ordinal);
     }
 
     // ---- stdout is data, stderr is diagnostics -----------------------------------------------------------------------------------------

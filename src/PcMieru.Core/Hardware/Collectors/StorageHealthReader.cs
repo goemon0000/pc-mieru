@@ -66,7 +66,42 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     /// What reading one drive without the Helper came to: <see cref="Health"/> is the answer, or null when only the elevated Helper can
     /// give it (the drive is then waiting in the batch of <see cref="ResolveAsync"/>, which asks for all of them at once).
     /// </summary>
-    internal sealed record Step(int Number, string Model, StorageHealthKind Kind, Value<StorageHealth>? Health);
+    internal sealed record Step(int Number, string Model, StorageHealthKind Kind, Value<StorageHealth>? Health)
+    {
+        /// <summary>
+        /// Windows refused this drive's health data for lack of administrator rights in this process. True for a drive waiting for the Helper
+        /// (<see cref="Health"/> is null) and for one that was refused and not handed on (elevation not requested, or no Helper). Counted by
+        /// <see cref="CountElevation"/>.
+        /// </summary>
+        internal bool NeedsRights { get; init; }
+    }
+
+    /// <summary>
+    /// How many drives needed administrator rights in this pass and how many of those the elevated re-read returned bytes for
+    /// (<paramref name="resolved"/> is the answer of <see cref="ResolveWithEvidenceAsync"/> for the same <paramref name="steps"/>). A drive
+    /// that waited for the Helper counts as needed whatever its flag; one that is not waiting counts only when it says it was refused.
+    /// </summary>
+    internal static (int Needed, int ReRead) CountElevation(IReadOnlyList<Step> steps, IReadOnlyList<Resolved> resolved)
+    {
+        var needed = 0;
+        var reRead = 0;
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var waiting = steps[i].Health is null;
+            if (!waiting && !steps[i].NeedsRights)
+            {
+                continue;
+            }
+
+            needed++;
+            if (waiting && i < resolved.Count && resolved[i].Evidence?.Bytes is not null)
+            {
+                reRead++;
+            }
+        }
+
+        return (needed, reRead);
+    }
 
     /// <summary>One drive's health and, when the bytes behind it were taken, what came with them (identity on the same handle, error log counts).</summary>
     internal sealed record Resolved(DriveHealth Health, ElevatedDriveRead? Evidence);
@@ -181,26 +216,31 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
     {
         Value<StorageHealth>? health;
         var kind = StorageHealthKind.Sata;
+        var needsRights = false;
         switch (busType)
         {
             case 17:
                 kind = StorageHealthKind.Nvme;
-                health = ReadNvme(path, allowElevation, evidence);
+                health = ReadNvme(path, allowElevation, evidence, out needsRights);
                 break;
             case 3 or 11:
-                health = ReadSata(path, number, allowElevation, evidence);
+                health = ReadSata(path, number, allowElevation, evidence, out needsRights);
                 break;
             default:
                 health = Value.Unsupported<StorageHealth>("ioctl:StorageDeviceProperty", "health data is only read for NVMe and SATA drives; USB bridges, RAID and virtual disks are not guessed");
                 break;
         }
 
-        return new Step(number, model, kind, health);
+        return new Step(number, model, kind, health) { NeedsRights = needsRights };
     }
 
-    /// <summary>Null means "only the elevated Helper can read this one": the drive is then handed to the batch in <see cref="ResolveAsync"/>.</summary>
-    private Value<StorageHealth>? ReadNvme(string path, bool allowElevation, Action<ElevatedDriveRead>? evidence)
+    /// <summary>
+    /// Null means "only the elevated Helper can read this one": the drive is then handed to the batch in <see cref="ResolveAsync"/>.
+    /// <paramref name="needsRights"/> is true when Windows refused the drive for lack of administrator rights (whether or not the Helper may be asked).
+    /// </summary>
+    private Value<StorageHealth>? ReadNvme(string path, bool allowElevation, Action<ElevatedDriveRead>? evidence, out bool needsRights)
     {
+        needsRights = false;
         const string source = "ioctl:StorageDeviceProtocolSpecificProperty";
         var sawDenied = false;
         foreach (var (access, label) in new[] { (0u, "none"), (GenericRead, "read"), (GenericRead | GenericWrite, "read+write") })
@@ -251,11 +291,13 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source}, handle access: {label}", parsed.Detail);
         }
 
+        needsRights = sawDenied;
         return NeedsHelper(allowElevation, sawDenied, source);
     }
 
-    private Value<StorageHealth>? ReadSata(string path, int number, bool allowElevation, Action<ElevatedDriveRead>? evidence)
+    private Value<StorageHealth>? ReadSata(string path, int number, bool allowElevation, Action<ElevatedDriveRead>? evidence, out bool needsRights)
     {
+        needsRights = false;
         const string source = "ioctl:SMART_RCV_DRIVE_DATA";
         if (IsElevated())
         {
@@ -284,6 +326,7 @@ public sealed class RealStorageHealthProvider(IElevatedStorageReader? elevated =
             return new Value<StorageHealth>(parsed.Data, parsed.Status, $"{parsed.Source} via {source} (elevated process)", parsed.Detail);
         }
 
+        needsRights = true;
         return NeedsHelper(allowElevation, true, source);
     }
 

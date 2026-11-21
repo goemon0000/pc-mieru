@@ -342,6 +342,62 @@ public sealed class StorageCheckRunTests
         Assert.Equal(CheckVerdict.Ok, elevated.Result.Verdict);
     }
 
+    // ---- the elevation fact (DESIGN-A 2): carried by the run, never written to the saved file ----
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(2, 0)]
+    [InlineData(2, 1)]
+    [InlineData(1, 1)]
+    public async Task The_run_carries_the_elevation_fact_of_the_inspection_as_it_is(int needed, int reRead)
+    {
+        using var rig = new RunRig();
+        rig.Source.Returns(Drives.Inspect(Nvme()) with { ElevationNeeded = needed, ElevationReRead = reRead });
+
+        var run = await rig.RunAsync(new CheckRequest(CheckKind.Storage, AllowElevation: true));
+
+        Assert.Equal(CheckOutcome.Completed, run.Result.Outcome);
+        Assert.Equal(new CheckElevation(needed, reRead), run.Elevation);
+    }
+
+    [Fact]
+    public async Task The_saved_file_is_byte_for_byte_the_same_whatever_the_fact_says_and_has_no_word_of_it()
+    {
+        using var plain = new RunRig();
+        using var refused = new RunRig();
+        plain.Source.Returns(Drives.Inspect(Nvme()));
+        refused.Source.Returns(Drives.Inspect(Nvme()) with { ElevationNeeded = 2, ElevationReRead = 0 });
+
+        var a = await plain.RunAsync(new CheckRequest(CheckKind.Storage, AllowElevation: true));
+        var b = await refused.RunAsync(new CheckRequest(CheckKind.Storage, AllowElevation: true));
+
+        Assert.Equal(new CheckElevation(0, 0), a.Elevation);
+        Assert.Equal(new CheckElevation(2, 0), b.Elevation);
+        Assert.True(a.IsSaved);
+        Assert.True(b.IsSaved);
+        Assert.Equal(a.Result.RunId, b.Result.RunId);
+        var fileA = await File.ReadAllBytesAsync(Path.Combine(plain.HistoryRoot, a.Save.FileName!));
+        var fileB = await File.ReadAllBytesAsync(Path.Combine(refused.HistoryRoot, b.Save.FileName!));
+        Assert.Equal(fileA, fileB);
+        Assert.DoesNotContain("elevat", System.Text.Encoding.UTF8.GetString(fileB), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_run_that_never_got_an_inspection_has_no_fact_to_report()
+    {
+        using var failing = new RunRig();
+        failing.Source.Throws(new InvalidOperationException("the drive list could not be read"));
+        using var other = new RunRig();
+
+        var failed = await failing.RunAsync(new CheckRequest(CheckKind.Storage, AllowElevation: true));
+        var system = await other.RunAsync(new CheckRequest(CheckKind.System));
+
+        Assert.Equal(CheckOutcome.Failed, failed.Result.Outcome);
+        Assert.Null(failed.Elevation);
+        Assert.Equal(CheckKind.System, system.Result.Kind);
+        Assert.Null(system.Elevation);
+    }
+
     // ---- baseline failure ----
 
     [Fact]

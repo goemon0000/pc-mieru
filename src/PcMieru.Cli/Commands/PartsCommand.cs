@@ -38,6 +38,9 @@ public sealed class PartsCommand : ICliCommand
         new("cli.parts.needShare", "型番の一覧は --share、構成コードは --code を付けてください（pcmi parts --share / pcmi parts --code）", "Add --share for the model numbers or --code for the configuration code (pcmi parts --share / pcmi parts --code)"),
         new("cli.parts.shareAndCode", "--share と --code は同時に使えません。どちらか一方を付けてください", "--share and --code cannot be used together; give one of them"),
         new("cli.parts.emptyConfig", "コードに入る部品を読み取れなかったため、コードは出していません", "No parts could be read for the code, so no code was made"),
+        new("cli.parts.outputFailed", "{file} に書き込めなかったため、コードは出していません（{reason}）", "Could not write {file}, so no code was printed ({reason})"),
+        new("cli.parts.output.denied", "権限がありません", "access denied"),
+        new("cli.parts.output.error", "書き込みに失敗しました", "the write failed"),
         new("cli.parts.unread", "{category}: 読み取れませんでした（{reason}）", "{category}: not read ({reason})"),
 
         // What was left out of the code. The meaning is the one of the app's window; the words are this command's own.
@@ -130,14 +133,32 @@ public sealed class PartsCommand : ICliCommand
             return ExitCode.Failure;
         }
 
-        context.Out.Write(result.Code + "\n");
         if (path is not null)
         {
-            // The provider's JSON as it is: UTF-8 without a BOM, and no newline added.
-            await File.WriteAllBytesAsync(path, new UTF8Encoding(false).GetBytes(result.Json), context.Ct).ConfigureAwait(false);
+            // The file first (DESIGN-A 8): a code printed for a file that could not be written would look like a success to a script that reads
+            // stdout. The provider's JSON as it is: UTF-8 without a BOM, and no newline added. A path that cannot be written (a folder, a read-only
+            // file, a missing folder, a full disk) is exit 1, not 4: 4 is only for a refused --elevate.
+            try
+            {
+                await File.WriteAllBytesAsync(path, new UTF8Encoding(false).GetBytes(result.Json), context.Ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                var reason = ex is UnauthorizedAccessException ? "cli.parts.output.denied" : "cli.parts.output.error";
+                context.Err.WriteLine("pcmi parts: " + context.Format("cli.parts.outputFailed", ("file", OutputName(path)), ("reason", context.Text(reason))));
+                return ExitCode.Failure;
+            }
         }
 
+        context.Out.Write(result.Code + "\n");
         return ExitCode.Success;
+    }
+
+    /// <summary>The name of the output file as the user gave it, without its folders (the message names the file, never a path the system built).</summary>
+    private static string OutputName(string path)
+    {
+        var name = Path.GetFileName(path);
+        return CliText.Printable(string.IsNullOrEmpty(name) ? path : name);
     }
 
     /// <summary>

@@ -190,6 +190,55 @@ public class CliStringsTests
         Assert.Equal(["OK", "Caution", "Needs review", "Not measured", "Info"], keys.Select(k => table["cli.check.verdict." + k].En).ToArray());
     }
 
+    // ---- the counts line is built from the verdict enum (m6): a verdict added later is a part of it, never a silent omission ----
+
+    private static CliContext ContextOf(Language language) =>
+        new(new CliEnvironment(TextReader.Null, new StringWriter(), new StringWriter(), CliEnvironment.DefaultFactory), language, CancellationToken.None);
+
+    [Theory]
+    [InlineData(Language.En)]
+    [InlineData(Language.Ja)]
+    public void The_counts_line_has_one_part_for_every_verdict_of_the_enum_in_the_enum_order_with_its_own_word_and_count(Language language)
+    {
+        using var context = ContextOf(language);
+        var table = Table();
+        var verdicts = Enum.GetValues<PcMieru.Checks.ItemVerdict>();
+        Assert.Equal(5, verdicts.Length);
+
+        // Every verdict has a distinct count, so a part in the wrong place or with another verdict's number cannot pass.
+        var counts = new PcMieru.Checks.CheckCounts(Ok: 1, Caution: 2, Check: 3, Unavailable: 4, Info: 5);
+        var expectedNumbers = new Dictionary<PcMieru.Checks.ItemVerdict, int>
+        {
+            [PcMieru.Checks.ItemVerdict.Ok] = 1,
+            [PcMieru.Checks.ItemVerdict.Caution] = 2,
+            [PcMieru.Checks.ItemVerdict.Check] = 3,
+            [PcMieru.Checks.ItemVerdict.Unavailable] = 4,
+            [PcMieru.Checks.ItemVerdict.Info] = 5,
+        };
+        Assert.Equal(verdicts.Length, expectedNumbers.Count);
+
+        var expected = string.Join(
+            " / ",
+            verdicts.Select(v =>
+            {
+                var entry = table["cli.check.verdict." + Lower(v)];
+                return (language == Language.Ja ? entry.Ja : entry.En) + " " + expectedNumbers[v];
+            }));
+
+        Assert.Equal(expected, Commands.CheckCommand.CountsFull(context, counts));
+        Assert.Equal(expected.Replace(" / ", " ", StringComparison.Ordinal), Commands.CheckCommand.CountsShort(context, counts));
+        Assert.Equal("-", Commands.CheckCommand.CountsShort(context, PcMieru.Checks.CheckCounts.Zero));
+        Assert.Equal(
+            string.Join(" / ", verdicts.Select(v => (language == Language.Ja ? table["cli.check.verdict." + Lower(v)].Ja : table["cli.check.verdict." + Lower(v)].En) + " 0")),
+            Commands.CheckCommand.CountsFull(context, PcMieru.Checks.CheckCounts.Zero));
+    }
+
+    [Fact]
+    public void The_counts_line_has_no_text_of_its_own_to_fall_out_of_step_with_the_verdict_words()
+    {
+        Assert.DoesNotContain(AllCliEntries(), e => e.Key == "cli.check.counts");
+    }
+
     [Theory]
     [InlineData(Language.En, "System and storage checks", "pcmi check", "--elevate", "--code")]
     [InlineData(Language.Ja, "システム・ストレージの確認", "pcmi check", "--elevate", "--code")]

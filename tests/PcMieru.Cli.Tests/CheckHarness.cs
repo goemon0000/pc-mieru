@@ -144,6 +144,16 @@ internal static class CheckSamples
                 I("system.os.uptime", CheckValue.Number(100), ItemVerdict.Ok, CheckSource.Os),
             ]);
 
+    /// <summary>A storage run that was stopped half way: the device count was found, nothing else.</summary>
+    public static CheckResult StorageStopped(int n = 1) =>
+        Make(
+            n,
+            CheckKind.Storage,
+            CheckOutcome.Stopped,
+            [
+                I("storage.devices", CheckValue.Int(2), ItemVerdict.Info, CheckSource.StorageQuery),
+            ]);
+
     /// <summary>A run that could not be done at all: the empty failed result.</summary>
     public static CheckResult Failed(CheckKind kind = CheckKind.System, int n = 1) => Make(n, kind, CheckOutcome.Failed, []);
 
@@ -172,8 +182,8 @@ internal static class CheckSamples
             ]);
 
     /// <summary>
-    /// Two drives: the first needed the approval and was not read, the second was read without it. With <c>--elevate</c> that is not a refusal
-    /// the CLI can tell from a result alone (one temperature has a value), so the exit code stays 0.
+    /// Two drives: the first needed the approval and was not read, the second was read without it. The exit code with <c>--elevate</c> does not
+    /// come from this result's rows but from the fact the run carries (<see cref="CheckElevation"/>).
     /// </summary>
     public static CheckResult StorageOneReadOneDenied(int n = 1) =>
         Make(
@@ -239,10 +249,10 @@ internal sealed class FakeCheckRunner(Func<CheckRequest, IProgress<CheckProgress
 
     public static FakeCheckRunner Returning(CheckRun run) => new((_, _, _) => Task.FromResult(run));
 
-    public static FakeCheckRunner Returning(CheckResult result) => Returning(Saved(result));
+    public static FakeCheckRunner Returning(CheckResult result, CheckElevation? elevation = null) => Returning(Saved(result, elevation));
 
-    /// <summary>A run that was saved under its proper file name.</summary>
-    public static CheckRun Saved(CheckResult result) => new(result, CheckSaveState.Saved(CheckSamples.FileName(result)));
+    /// <summary>A run that was saved under its proper file name. <paramref name="elevation"/> is the fact the inspection reports (null: a run that never inspected).</summary>
+    public static CheckRun Saved(CheckResult result, CheckElevation? elevation = null) => new(result, CheckSaveState.Saved(CheckSamples.FileName(result)), Elevation: elevation);
 
     public Task<CheckRun> RunAsync(CheckRequest request, IProgress<CheckProgress>? progress, CancellationToken ct)
     {

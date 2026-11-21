@@ -397,7 +397,7 @@ public sealed class McpServer
         var text = redacted.ToJsonString(PcMieruJson.Compact);
         if (text.Length > MaxResultChars)
         {
-            return ToolError("the result is too large; narrow the query (use top or filter)");
+            return ToolError("the result is too large to return; ask for less (a lower `limit` or `top`, or a narrower `kind` or `filter`, where the tool has one)");
         }
 
         var result = new JsonObject

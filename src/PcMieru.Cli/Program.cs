@@ -34,30 +34,21 @@ else
 
 var stdin = new StreamReader(Console.OpenStandardInput(), utf8, detectEncodingFromByteOrderMarks: false);
 using var cancel = new CancellationTokenSource();
-var pressed = 0;
+
+// Ctrl+C only cancels the token (the coordinator): Main owns the exit code. The process is forced out only when Main has not returned within
+// the grace (a read blocked on stdin cannot be cancelled), and a second Ctrl+C waits while a check is joining its workers and saving the stopped run.
+var shutdown = new ShutdownCoordinator(cancel);
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true;
-    cancel.Cancel();
-
-    // A second Ctrl+C leaves at once, whatever is still running.
-    if (Interlocked.Increment(ref pressed) > 1)
-    {
-        Environment.Exit(1);
-    }
-
-    // A read blocked on stdin (pcmi mcp in a terminal) cannot be interrupted; leave after a grace period. A check that is stopping is
-    // given longer (CliShutdown): it joins its workers and saves the stopped run, which 2 seconds could cut off.
-    _ = CliShutdown.WaitForLeaveAsync().ContinueWith(_ => Environment.Exit(1), TaskScheduler.Default);
+    shutdown.CtrlC();
 };
 
 var env = new CliEnvironment(stdin, stdout, stderr, CliEnvironment.DefaultFactory, width, ErrorIsTerminal: !Console.IsErrorRedirected);
-try
-{
-    return await CliApp.RunAsync(args, env, cancel.Token).ConfigureAwait(false);
-}
-finally
-{
-    await stdout.FlushAsync().ConfigureAwait(false);
-    await stderr.FlushAsync().ConfigureAwait(false);
-}
+return await shutdown.RunAsync(
+    ct => CliApp.RunAsync(args, env, ct),
+    async () =>
+    {
+        await stdout.FlushAsync().ConfigureAwait(false);
+        await stderr.FlushAsync().ConfigureAwait(false);
+    }).ConfigureAwait(false);

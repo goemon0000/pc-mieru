@@ -165,9 +165,11 @@ internal sealed class McpTools
                     throw new ToolException("argument 'runId' is used alone: do not combine it with 'kind' or 'limit'");
                 }
 
-                if (!Guid.TryParse(runIdText, out var runId))
+                // Only the two spellings the result files use ("D" with dashes, "N" without), in either case. Guid.TryParse would also take
+                // braces, parentheses and the hexadecimal "X" form, which no file name or listing ever shows.
+                if (!Guid.TryParseExact(runIdText, "D", out var runId) && !Guid.TryParseExact(runIdText, "N", out runId))
                 {
-                    throw new ToolException("argument 'runId' must be the UUID of a saved run");
+                    throw new ToolException("argument 'runId' must be the UUID of a saved run (with or without dashes)");
                 }
 
                 var found = await history.GetAsync(runId, ct).ConfigureAwait(false);
@@ -176,7 +178,7 @@ internal sealed class McpTools
                     case CheckHistoryGetStatus.Found:
                         return redactor.RedactJson(new JsonObject { ["result"] = JsonNode.Parse(CheckJson.Serialize(found.Result!)) });
                     case CheckHistoryGetStatus.Unreadable:
-                        throw new ToolException($"the saved result of this run exists but cannot be read now ({found.WarningCode}); it is not missing, try again later");
+                        throw new ToolException($"the saved result of this run exists but cannot be read now ({found.WarningCode}): {UnreadableHint(found.WarningCode)}; it is not missing");
                     default:
                         throw new ToolException("not found: no saved check has this runId");
                 }
@@ -189,7 +191,25 @@ internal sealed class McpTools
         {
             throw new ToolException(redactor.RedactText("the check history folder cannot be read: " + ex.Message));
         }
+        catch (Exception ex) when (ex is not (ToolException or OperationCanceledException or OutOfMemoryException))
+        {
+            // Anything else from the history (a fault of the reader, an I/O error with a path in its message) would reach the server's catch-all
+            // and be redacted only by the server's own setting. This tool's text is always redacted.
+            throw new ToolException(redactor.RedactText(ex.GetType().Name + ": " + ex.Message));
+        }
     }
+
+    // What to tell the model about a run whose file exists but cannot be read now, by the reason the history gave. The code stays in the text.
+    private static string UnreadableHint(string? warningCode) => warningCode switch
+    {
+        CheckHistoryWarningCodes.Locked => "in use, try again later",
+        CheckHistoryWarningCodes.Unreadable or CheckHistoryWarningCodes.QuarantineFailed => "the file is damaged; `pcmi check history` moves it aside",
+        CheckHistoryWarningCodes.Quarantined => "the file was damaged and has been moved aside",
+        CheckHistoryWarningCodes.FutureFormat => "written by a newer version",
+        CheckHistoryWarningCodes.AccessDenied => "access to the file is denied",
+        CheckHistoryWarningCodes.ReadFailed => "reading the file failed, try again later",
+        _ => "try again later",
+    };
 
     public McpTool? Find(string name) => All.FirstOrDefault(t => t.Name == name);
 

@@ -68,7 +68,6 @@ public sealed class CheckCommand : ICliCommand
         new("cli.check.col.value", "値", "Value"),
         new("cli.check.col.verdict", "判定", "Verdict"),
         new("cli.check.col.reason", "理由", "Reason"),
-        new("cli.check.counts", "OK {ok} / 注意 {caution} / 要確認 {check} / 測れず {unavailable} / 参考 {info}", "OK {ok} / Caution {caution} / Needs review {check} / Not measured {unavailable} / Info {info}"),
         new("cli.check.noteLine", "注記: {text}", "Note: {text}"),
         new("cli.check.note.cpu.temperature_not_measured", "CPU の温度は測れていません", "The CPU temperature was not measured"),
         new("cli.check.note.memory.borrowed_region_only", "メモリは、借りられた範囲だけを調べています", "Only the memory that could be borrowed was tested"),
@@ -226,13 +225,12 @@ public sealed class CheckCommand : ICliCommand
             return code;
         }
 
-        // A drive that was not read for lack of rights says "denied". Without --elevate that is a hint. With --elevate it is only exit 4 when
-        // nothing was read through the approval: the library has no flag for a refused approval, so a refusal is told by its effect, a
-        // temperature row that is denied while no temperature row has a value (a drive that needed the approval and was read has one).
-        var denied = result.Items.Any(i => i.Reason == CheckReason.Denied);
+        // A drive that was not read for lack of rights says "denied". Without --elevate that is a hint. With --elevate the exit code is a fact of
+        // the inspection (CheckRun.Elevation, DESIGN-A 2): 4 only when drives needed the approval and none was read through it. A run that never
+        // inspected (Elevation null) has nothing to refuse.
         if (!elevate)
         {
-            if (denied)
+            if (run.Result.Items.Any(i => i.Reason == CheckReason.Denied))
             {
                 context.Err.WriteLine("pcmi check: " + context.Text("cli.hint.elevate"));
             }
@@ -240,20 +238,13 @@ public sealed class CheckCommand : ICliCommand
             return ExitCode.Success;
         }
 
-        if (ElevationRefused(result))
+        if (run.Elevation is { Needed: > 0, ReRead: 0 })
         {
             context.Err.WriteLine("pcmi check: " + context.Text("cli.check.noElevatedRead"));
             return ExitCode.Denied;
         }
 
         return ExitCode.Success;
-    }
-
-    /// <summary>True when the storage result looks like an elevation that was refused: a denied temperature row and no temperature read at all.</summary>
-    internal static bool ElevationRefused(CheckResult result)
-    {
-        var temperatures = result.Items.Where(i => i.Id == "storage.temperature").ToList();
-        return temperatures.Any(i => i.Reason == CheckReason.Denied) && !temperatures.Any(i => i.Value is not null);
     }
 
     private static string FailureText(CliContext context, CheckRun run)
@@ -312,10 +303,14 @@ public sealed class CheckCommand : ICliCommand
 
     private static async Task<ExitCode> RunHistoryAsync(CliContext context, bool json)
     {
+        // The one place a damaged history file is moved aside (DESIGN-A 4, 8): the store's listing renames it to name.json.bad-<UTC> and says
+        // history_quarantined. The read-only history of the GUI and the MCP server never does. A folder that is not there is an empty
+        // page (the store does not create it; only a save does). Held like a run: Ctrl+C must not cut a rename short.
+        using var hold = CliShutdown.Hold();
         CheckHistoryPage page;
         try
         {
-            page = await context.OpenHistory().ListAsync(new CheckHistoryQuery(Kind: null, Limit: null), context.Ct).ConfigureAwait(false);
+            page = await new CheckHistoryStore(context.ChecksFolder).ListAsync(new CheckHistoryQuery(Kind: null, Limit: null), context.Ct).ConfigureAwait(false);
         }
         catch (CheckHistoryFolderException ex)
         {
@@ -324,6 +319,7 @@ public sealed class CheckCommand : ICliCommand
         }
 
         context.Out.Write(json ? CheckJson.SerializeHistory(page) + "\n" : RenderHistory(context, page));
+        await context.Out.FlushAsync().ConfigureAwait(false);
         return ExitCode.Success;
     }
 
@@ -487,34 +483,34 @@ public sealed class CheckCommand : ICliCommand
         return text + " (" + build + ")";
     }
 
-    private static string CountsFull(CliContext context, CheckCounts counts) =>
-        context.Format(
-            "cli.check.counts",
-            ("ok", counts.Ok.ToString(CultureInfo.InvariantCulture)),
-            ("caution", counts.Caution.ToString(CultureInfo.InvariantCulture)),
-            ("check", counts.Check.ToString(CultureInfo.InvariantCulture)),
-            ("unavailable", counts.Unavailable.ToString(CultureInfo.InvariantCulture)),
-            ("info", counts.Info.ToString(CultureInfo.InvariantCulture)));
+    /// <summary>
+    /// "OK 2 / Caution 0 / ...": one part for every verdict of <see cref="ItemVerdict"/>, in the enum's order, with that verdict's own word
+    /// (cli.check.verdict.*). Built from the enum, so a verdict added later is a part of the line (or a loud failure in <see cref="CountOf"/>),
+    /// never a silent omission.
+    /// </summary>
+    internal static string CountsFull(CliContext context, CheckCounts counts) =>
+        string.Join(" / ", Enum.GetValues<ItemVerdict>().Select(v => VerdictWord(context, v.ToString()) + " " + CountOf(counts, v).ToString(CultureInfo.InvariantCulture)));
 
-    /// <summary>Only the verdicts that have rows ("OK 12 Caution 1"), so a table of many runs stays narrow.</summary>
-    private static string CountsShort(CliContext context, CheckCounts counts)
+    /// <summary>Only the verdicts that have rows ("OK 12 Caution 1"), so a table of many runs stays narrow. Built from the enum like <see cref="CountsFull"/>.</summary>
+    internal static string CountsShort(CliContext context, CheckCounts counts)
     {
-        var parts = new List<string>(5);
-        void Add(string verdict, int n)
-        {
-            if (n > 0)
-            {
-                parts.Add(VerdictWord(context, verdict) + " " + n.ToString(CultureInfo.InvariantCulture));
-            }
-        }
-
-        Add("Ok", counts.Ok);
-        Add("Caution", counts.Caution);
-        Add("Check", counts.Check);
-        Add("Unavailable", counts.Unavailable);
-        Add("Info", counts.Info);
+        var parts = Enum.GetValues<ItemVerdict>()
+            .Where(v => CountOf(counts, v) > 0)
+            .Select(v => VerdictWord(context, v.ToString()) + " " + CountOf(counts, v).ToString(CultureInfo.InvariantCulture))
+            .ToList();
         return parts.Count == 0 ? "-" : string.Join(' ', parts);
     }
+
+    // The one place that maps a verdict to its member of CheckCounts. A verdict with no member throws, and CliStringsTests walks the enum.
+    private static int CountOf(CheckCounts counts, ItemVerdict verdict) => verdict switch
+    {
+        ItemVerdict.Ok => counts.Ok,
+        ItemVerdict.Caution => counts.Caution,
+        ItemVerdict.Check => counts.Check,
+        ItemVerdict.Unavailable => counts.Unavailable,
+        ItemVerdict.Info => counts.Info,
+        _ => throw new ArgumentOutOfRangeException(nameof(verdict), verdict, "CheckCounts has no member for this verdict"),
+    };
 
     internal static string VerdictWord(CliContext context, string verdictName) => context.Text("cli.check.verdict." + verdictName.ToLowerInvariant());
 

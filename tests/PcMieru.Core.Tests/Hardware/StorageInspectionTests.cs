@@ -826,6 +826,134 @@ public class UnreadableSlotTests
     }
 }
 
+/// <summary>
+/// The fact behind "--elevate was asked for and refused" (DESIGN-A 2): how many drives needed administrator rights in a pass and how many of
+/// those the elevated re-read returned bytes for. Counted from the steps and what resolved them, never guessed from the rows' wording.
+/// </summary>
+public class ElevationCountTests
+{
+    private static Value<StorageHealth> ReadHere() =>
+        Value.Ok(
+            new StorageHealth(StorageHealthKind.Nvme, Value.NotCollected<double>("t"), Value.NotCollected<double>("t"), Value.NotCollected<double>("t"), Value.NotCollected<double>("t"), Value.NotCollected<int>("t"), Value.NotCollected<U128>("t"), Value.NotCollected<U128>("t"), Value.NotCollected<U128>("t"), Value.NotCollected<U128>("t"), Value.NotCollected<U128>("t"), Value.NotCollected<U128>("t"), []),
+            "t");
+
+    private static RealStorageHealthProvider.Step Waiting(int number, StorageHealthKind kind = StorageHealthKind.Nvme) =>
+        new(number, "drive " + number, kind, null);
+
+    private static RealStorageHealthProvider.Step Refused(int number) =>
+        new(number, "drive " + number, StorageHealthKind.Nvme, Value.Denied<StorageHealth>("t", "needs administrator")) { NeedsRights = true };
+
+    private static RealStorageHealthProvider.Step Fine(int number) =>
+        new(number, "drive " + number, StorageHealthKind.Nvme, ReadHere());
+
+    private sealed class RefusingHelper : IHelperClient
+    {
+        public Task<HelperOutcome> RunAsync(HelperRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new HelperOutcome(OperationCode.Cancelled, true, null));
+    }
+
+    private static async Task<(int Needed, int ReRead)> CountAsync(RealStorageHealthProvider.Step[] steps, IElevatedStorageReader? elevated)
+    {
+        var resolved = await RealStorageHealthProvider.ResolveWithEvidenceAsync(steps, null, elevated, CancellationToken.None);
+        return RealStorageHealthProvider.CountElevation(steps, resolved);
+    }
+
+    [Fact]
+    public async Task When_every_drive_was_read_here_nothing_needed_rights_and_the_count_is_0_of_0()
+    {
+        Assert.Equal((0, 0), await CountAsync([Fine(0), Fine(1)], null));
+        Assert.Equal((0, 0), await CountAsync([], null));
+    }
+
+    [Fact]
+    public async Task A_drive_that_failed_for_another_reason_is_not_counted_as_needing_rights()
+    {
+        var failed = new RealStorageHealthProvider.Step(1, "drive 1", StorageHealthKind.Nvme, Value.Denied<StorageHealth>("t", "x"));
+
+        Assert.False(failed.NeedsRights);
+        Assert.Equal((0, 0), await CountAsync([Fine(0), failed], null));
+    }
+
+    [Fact]
+    public async Task Two_drives_waiting_for_the_helper_that_was_refused_are_2_needed_and_0_re_read()
+    {
+        var client = new RefusingHelper();
+
+        var count = await CountAsync([Waiting(0), Waiting(3, StorageHealthKind.Sata)], new HelperStorageReader(() => client));
+
+        Assert.Equal((2, 0), count);
+    }
+
+    [Fact]
+    public async Task Two_drives_waiting_for_the_helper_that_returned_the_bytes_of_one_are_2_needed_and_1_re_read()
+    {
+        var page = InspectionFixtures.NvmePage();
+        var client = new InspectionFixtures.BatchHelper(DiskOperations.CombineHealth([(0, InspectionFixtures.NvmeSection(page, InspectionFixtures.ErrorLog(), InspectionFixtures.NvmeDisk))]));
+        var steps = new[] { Waiting(0), Waiting(3, StorageHealthKind.Sata) };
+
+        var resolved = await RealStorageHealthProvider.ResolveWithEvidenceAsync(steps, null, new HelperStorageReader(() => client), CancellationToken.None);
+
+        Assert.NotNull(resolved[0].Evidence?.Bytes);
+        Assert.Null(resolved[1].Evidence?.Bytes);
+        Assert.Equal((2, 1), RealStorageHealthProvider.CountElevation(steps, resolved));
+    }
+
+    [Fact]
+    public async Task Two_drives_waiting_for_the_helper_that_returned_both_are_2_needed_and_2_re_read()
+    {
+        var client = new InspectionFixtures.BatchHelper(DiskOperations.CombineHealth(
+        [
+            (0, InspectionFixtures.NvmeSection(InspectionFixtures.NvmePage(), InspectionFixtures.ErrorLog(), InspectionFixtures.NvmeDisk)),
+            (3, InspectionFixtures.SataSection(InspectionFixtures.SmartTable(), InspectionFixtures.SmartLimits(), InspectionFixtures.SataDisk)),
+        ]));
+
+        var count = await CountAsync([Waiting(0), Waiting(3, StorageHealthKind.Sata)], new HelperStorageReader(() => client));
+
+        Assert.Equal((2, 2), count);
+    }
+
+    [Fact]
+    public async Task Elevation_not_requested_leaves_the_refused_drives_needed_and_none_re_read()
+    {
+        // No Helper was given (or --elevate was not passed): the drives Windows refused are needed, and nothing could re-read them.
+        Assert.Equal((2, 0), await CountAsync([Refused(0), Fine(1), Refused(2)], null));
+    }
+
+    [Fact]
+    public async Task One_drive_re_read_by_the_helper_and_one_refused_here_is_2_needed_and_1_re_read()
+    {
+        var client = new InspectionFixtures.BatchHelper(DiskOperations.CombineHealth([(0, InspectionFixtures.NvmeSection(InspectionFixtures.NvmePage(), InspectionFixtures.ErrorLog(), InspectionFixtures.NvmeDisk))]));
+
+        var count = await CountAsync([Waiting(0), Refused(1), Fine(2)], new HelperStorageReader(() => client));
+
+        Assert.Equal((2, 1), count);
+    }
+
+    [Fact]
+    public void An_inspection_that_says_nothing_about_elevation_reports_0_of_0_and_the_two_numbers_are_set_only_by_the_reader()
+    {
+        var inspection = new StorageInspection(DateTimeOffset.UnixEpoch, 0, []);
+
+        Assert.Equal(0, inspection.ElevationNeeded);
+        Assert.Equal(0, inspection.ElevationReRead);
+        var counted = inspection with { ElevationNeeded = 2, ElevationReRead = 1 };
+        Assert.Equal((2, 1), (counted.ElevationNeeded, counted.ElevationReRead));
+        Assert.Equal(inspection.Drives, counted.Drives);
+    }
+
+    [Fact]
+    public async Task The_fake_source_does_not_claim_any_elevation_was_needed()
+    {
+        foreach (var allow in new[] { false, true })
+        {
+            var inspection = await new FakeStorageInspectionSource().InspectAsync(allow);
+
+            Assert.Equal(0, inspection.ElevationNeeded);
+            Assert.Equal(0, inspection.ElevationReRead);
+        }
+    }
+}
+
 public class FakeStorageInspectionTests
 {
     private static readonly DateTime Clock = new(2026, 11, 20, 3, 0, 0, DateTimeKind.Utc);

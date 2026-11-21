@@ -43,6 +43,11 @@ public static class CheckRunFailureCodes
 /// did not validate either). Null when the run had not failed. Set only together with a replacement; otherwise see <paramref name="FailureCode"/>.
 /// </param>
 /// <param name="FirstProblem">The first problem the validator found in <paramref name="UnsavedResult"/>, cut short. Null when there is no unsaved result.</param>
+/// <param name="Elevation">
+/// For a storage run that inspected the drives: how many needed administrator rights and how many of those the elevated re-read returned (a
+/// fact of the inspection, DESIGN-A §2). Null for every other run, and for a run that never inspected. It is a property of the run, NOT of the
+/// result: it is never written into pcm-check/1 and a saved file does not carry it.
+/// </param>
 public sealed record CheckRun(
     CheckResult Result,
     CheckSaveState Save,
@@ -50,8 +55,16 @@ public sealed record CheckRun(
     string? FailureDetail = null,
     CheckResult? UnsavedResult = null,
     string? OriginalFailureCode = null,
-    string? FirstProblem = null)
+    string? FirstProblem = null,
+    CheckElevation? Elevation = null)
 {
     /// <summary>The file is committed to the history.</summary>
     public bool IsSaved => Save.Status == CheckSaveStatus.Saved;
 }
+
+/// <summary>
+/// What a storage inspection says about administrator rights (see <see cref="CheckRun.Elevation"/>): <paramref name="Needed"/> drives could
+/// not have their health read without them in this pass, and <paramref name="ReRead"/> of those the elevated re-read did return health for.
+/// "Elevation was asked for and refused" is <c>Needed &gt; 0 &amp;&amp; ReRead == 0</c>.
+/// </summary>
+public sealed record CheckElevation(int Needed, int ReRead);

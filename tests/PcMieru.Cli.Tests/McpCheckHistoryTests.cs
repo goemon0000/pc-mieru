@@ -138,7 +138,7 @@ public class McpCheckHistoryTests
     }
 
     [Fact]
-    public async Task The_list_with_a_file_that_cannot_be_used_is_the_cli_document_with_its_warning_and_is_not_an_error()
+    public async Task The_list_with_a_file_that_cannot_be_used_has_the_entries_of_the_cli_and_the_warning_and_is_not_an_error_and_moves_nothing()
     {
         using var data = new TempFolder();
         await CheckSamples.SeedAsync(data.Checks, CheckSamples.SystemOk(1), CheckSamples.StorageRead(2), CheckSamples.SystemCaution(3));
@@ -152,10 +152,16 @@ public class McpCheckHistoryTests
         var warning = Assert.Single(document["warnings"]!.AsArray());
         Assert.Equal("history_unreadable", (string?)warning!["code"]);
         Assert.Equal(1, (int)warning["count"]!);
-        var cli = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
-        Assert.Equal(JsonNode.Parse(cli.Out)!.ToJsonString(), document.ToJsonString());
         // Reading moved nothing aside.
         Assert.True(File.Exists(broken));
+        Assert.Empty(Directory.GetFiles(data.Checks, "*.bad-*"));
+
+        // The CLI lists the same runs. Its listing is the one that moves a damaged file aside (DESIGN-A 8), so its warnings say that as well.
+        var cli = await CliRun.CheckAsync(["check", "history", "--json"], data, FakeCheckRunner.Returning(CheckSamples.SystemOk()));
+        var cliDocument = JsonNode.Parse(cli.Out)!;
+        Assert.Equal(document["entries"]!.ToJsonString(), cliDocument["entries"]!.ToJsonString());
+        Assert.Equal("history_unreadable,history_quarantined", string.Join(",", cliDocument["warnings"]!.AsArray().Select(w => (string?)w!["code"])));
+        Assert.False(File.Exists(broken));
     }
 
     [Fact]
@@ -332,7 +338,7 @@ public class McpCheckHistoryTests
         await CheckSamples.SeedAsync(data.Checks, saved);
         var history = CheckHistory.OpenReadOnly(data.Checks);
 
-        foreach (var text in new[] { saved.RunId.ToString("N"), saved.RunId.ToString("D").ToUpperInvariant(), saved.RunId.ToString("B") })
+        foreach (var text in new[] { saved.RunId.ToString("N"), saved.RunId.ToString("D").ToUpperInvariant(), saved.RunId.ToString("N").ToUpperInvariant() })
         {
             var result = await McpRun.HistoryToolAsync(history, "{\"runId\":\"" + text + "\"}");
 
@@ -571,6 +577,122 @@ public class McpCheckHistoryTests
         var result = McpRun.Reply(sink.Messages, "c")["result"]!;
         Assert.True(IsError(result));
         Assert.Contains("too long", Text(result), StringComparison.Ordinal);
+    }
+
+    // ---- what is told for each reason the file cannot be read (a model must not retry a damaged file, nor give up on a locked one) ------------
+
+    [Theory]
+    [InlineData("history_locked", "in use, try again later")]
+    [InlineData("history_unreadable", "the file is damaged; `pcmi check history` moves it aside")]
+    [InlineData("history_quarantine_failed", "the file is damaged; `pcmi check history` moves it aside")]
+    [InlineData("history_quarantined", "the file was damaged and has been moved aside")]
+    [InlineData("history_future_format", "written by a newer version")]
+    [InlineData("history_access_denied", "access to the file is denied")]
+    [InlineData("history_read_failed", "reading the file failed, try again later")]
+    public async Task Each_reason_a_file_cannot_be_read_has_its_own_words_after_its_code(string code, string hint)
+    {
+        var stub = new StubHistory(get: (_, _) => Task.FromResult(CheckHistoryGetResult.Unreadable(code)));
+
+        var result = await McpRun.HistoryToolAsync(stub, Args(CheckSamples.Id(1)));
+
+        Assert.True(IsError(result), result.ToJsonString());
+        Assert.Equal($"the saved result of this run exists but cannot be read now ({code}): {hint}; it is not missing", Text(result));
+    }
+
+    [Fact]
+    public async Task No_reason_of_the_history_falls_back_to_the_generic_words_and_every_reason_is_one_of_the_cases_above()
+    {
+        // A reason added to the history without words here would be told as "try again later" (what a damaged file must not be told).
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var code in CheckHistoryWarningCodes.All)
+        {
+            var stub = new StubHistory(get: (_, _) => Task.FromResult(CheckHistoryGetResult.Unreadable(code)));
+
+            var text = Text(await McpRun.HistoryToolAsync(stub, Args(CheckSamples.Id(1))));
+
+            Assert.DoesNotContain($"({code}): try again later;", text, StringComparison.Ordinal);
+            Assert.True(seen.Add(text), "two reasons told in the same words: " + code);
+        }
+
+        // The reasons for which retrying later is not the advice say so (damaged files are not "try again").
+        foreach (var code in new[] { CheckHistoryWarningCodes.Unreadable, CheckHistoryWarningCodes.QuarantineFailed })
+        {
+            var stub = new StubHistory(get: (_, _) => Task.FromResult(CheckHistoryGetResult.Unreadable(code)));
+            var text = Text(await McpRun.HistoryToolAsync(stub, Args(CheckSamples.Id(1))));
+            Assert.DoesNotContain("try again", text, StringComparison.Ordinal);
+            Assert.Contains("pcmi check history", text, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(CheckHistoryWarningCodes.All.Count, seen.Count);
+    }
+
+    // ---- the runId: only the two spellings the files use --------------------------------------------------------------------------------------
+
+    // The "X" form is longer than 64 characters, so it is refused before the format is looked at; the others are refused as not a UUID.
+    [Theory]
+    [InlineData("B", "UUID")]
+    [InlineData("P", "UUID")]
+    [InlineData("X", "'runId'")]
+    public async Task A_runId_in_braces_parentheses_or_the_hexadecimal_form_is_refused_and_the_library_is_never_asked(string format, string says)
+    {
+        var id = CheckSamples.Id(1);
+        var stub = new StubHistory();
+
+        var result = await McpRun.HistoryToolAsync(stub, "{\"runId\":\"" + id.ToString(format) + "\"}");
+
+        Assert.True(IsError(result), result.ToJsonString());
+        Assert.Contains(says, Text(result), StringComparison.Ordinal);
+        Assert.Empty(stub.Fetched);
+    }
+
+    // ---- an error of the library other than the folder is redacted by this tool whatever the server does ------------------------------------
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_failure_of_the_library_with_a_user_and_an_address_in_its_message_is_a_redacted_tool_error(bool serverRedacts)
+    {
+        var message = @"cannot reach C:\Users\alice\AppData\Local\PCMieru\checks at 192.168.1.20";
+        var stub = new StubHistory(list: (_, _) => throw new IOException(message));
+
+        var result = await McpRun.HistoryToolAsync(stub, redact: serverRedacts, historyRedactor: Alice);
+
+        Assert.True(IsError(result), result.ToJsonString());
+        var text = Text(result);
+        Assert.StartsWith("IOException: ", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("alice", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("192.168.1.20", text, StringComparison.Ordinal);
+        Assert.Contains("<ip>", text, StringComparison.Ordinal);
+        Assert.Null(result["structuredContent"]);
+    }
+
+    [Fact]
+    public async Task A_failure_of_the_library_when_fetching_one_run_is_redacted_the_same_way()
+    {
+        var stub = new StubHistory(get: (_, _) => throw new UnauthorizedAccessException(@"denied: C:\Users\alice\x"));
+
+        var result = await McpRun.HistoryToolAsync(stub, Args(CheckSamples.Id(1)), redact: false, historyRedactor: Alice);
+
+        Assert.True(IsError(result), result.ToJsonString());
+        Assert.StartsWith("UnauthorizedAccessException: ", Text(result), StringComparison.Ordinal);
+        Assert.DoesNotContain("alice", Text(result), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- a value that looks like an address is masked (documented in docs/MCP.md) -----------------------------------------------------------
+
+    [Fact]
+    public async Task A_dotted_number_in_a_value_that_looks_like_an_address_is_masked_by_the_redactor_and_the_rest_of_the_result_is_not()
+    {
+        using var data = new TempFolder();
+        var saved = CheckSamples.SystemCaution(3, "Driver 1.2.3.4 on slot 4");
+        await CheckSamples.SeedAsync(data.Checks, saved);
+
+        var result = await McpRun.HistoryToolAsync(CheckHistory.OpenReadOnly(data.Checks), Args(saved.RunId));
+
+        var text = Text(result);
+        Assert.DoesNotContain("1.2.3.4", text, StringComparison.Ordinal);
+        Assert.Contains("Driver <ip> on slot 4", text, StringComparison.Ordinal);
+        Assert.Equal("caution", (string?)Data(result)["result"]!["verdict"]);
     }
 
     // ---- an error of the library other than the folder ---------------------------------------------------------------------------------

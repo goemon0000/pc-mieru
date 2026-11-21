@@ -50,6 +50,11 @@ internal sealed class CheckCollector
     }
 
     public void MarkStopped() => StoppedByProcedure = true;
+
+    /// <summary>What the inspection said about administrator rights, set by a procedure that inspected the drives (null otherwise). Goes to <see cref="CheckRun.Elevation"/>, never into the result.</summary>
+    public CheckElevation? Elevation { get; private set; }
+
+    public void SetElevation(int needed, int reRead) => Elevation = new CheckElevation(needed, reRead);
 }
 
 /// <summary>What a procedure sees of its run: the request, the services, the run's ID and clock, the collector, and the way to tell the caller where it is.</summary>

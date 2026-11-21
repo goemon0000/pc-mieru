@@ -155,15 +155,127 @@ public class PartsCodeTests
     }
 
     [Fact]
-    public async Task A_folder_that_is_not_there_for_o_is_exit_1_with_the_command_name_and_no_file()
+    public async Task A_folder_that_is_not_there_for_o_is_exit_1_with_the_command_name_no_file_and_nothing_on_stdout()
     {
-        var missing = Path.Combine(Path.GetTempPath(), "pcmi-no-such-" + Guid.NewGuid().ToString("N"), "code.json");
+        var folder = "pcmi-no-such-" + Guid.NewGuid().ToString("N");
+        var missing = Path.Combine(Path.GetTempPath(), folder, "code.json");
 
         var r = await CliRun.RunAsync(["parts", "--code", "-o", missing], buildCodeProvider: BuildCodeProviders.Sample());
 
         Assert.Equal(1, r.ExitCode);
-        Assert.StartsWith("pcmi parts: ", r.Err, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, r.Out);
+        var line = Assert.Single(r.Err.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains(line, OutputFailedLines("code.json", Language.En));
+        Assert.DoesNotContain(folder, line, StringComparison.Ordinal);
         Assert.False(File.Exists(missing));
+    }
+
+    // ---- -o: the file first, then the code (DESIGN-A 8) ------------------------------------------------------------------------------
+
+    /// <summary>The one line the command says when the file cannot be written (the reason is "denied" or "the write failed", by the kind of failure).</summary>
+    private static string[] OutputFailedLines(string file, Language language) =>
+        new[] { "cli.parts.output.denied", "cli.parts.output.error" }
+            .Select(reason => "pcmi parts: " + CliWords.Of("cli.parts.outputFailed", language).Replace("{file}", file, StringComparison.Ordinal).Replace("{reason}", CliWords.Of(reason, language), StringComparison.Ordinal))
+            .ToArray();
+
+    /// <summary>A stdout that says what it finds the moment the code is written to it.</summary>
+    private sealed class ProbeWriter(Action<string?> onWrite) : StringWriter
+    {
+        public override void Write(string? value)
+        {
+            onWrite(value);
+            base.Write(value);
+        }
+    }
+
+    [Fact]
+    public async Task The_file_is_complete_on_disk_before_the_first_byte_of_the_code_reaches_stdout()
+    {
+        var path = TempFile();
+        try
+        {
+            var sample = await Sample();
+            var expected = new UTF8Encoding(false).GetBytes(sample.Json);
+            var seen = new List<byte[]?>();
+            var output = new ProbeWriter(_ => seen.Add(File.Exists(path) ? File.ReadAllBytes(path) : null)) { NewLine = "\n" };
+            var env = new CliEnvironment(
+                new StringReader(string.Empty),
+                output,
+                new StringWriter { NewLine = "\n" },
+                o => CliRun.Services(o),
+                BuildCodeProvider: BuildCodeProviders.Sample());
+
+            var code = await CliApp.RunAsync(["parts", "--code", "-o", path], env, CancellationToken.None);
+
+            Assert.Equal(0, code);
+            Assert.Equal(sample.Code + "\n", output.ToString());
+            var atWrite = Assert.Single(seen);
+            Assert.NotNull(atWrite);
+            Assert.Equal(expected, atWrite);
+            Assert.Equal(expected, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(Language.En)]
+    [InlineData(Language.Ja)]
+    public async Task A_folder_for_o_gives_exit_1_nothing_on_stdout_and_one_line_that_names_the_file_only(Language language)
+    {
+        using var folder = new TempFolder(create: true);
+        var name = Path.GetFileName(folder.Path);
+
+        var r = await CliRun.RunAsync(["parts", "--code", "-o", folder.Path], language: language, buildCodeProvider: BuildCodeProviders.Sample());
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Equal(string.Empty, r.Out);
+        var line = Assert.Single(r.Err.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains(line, OutputFailedLines(name, language));
+        Assert.DoesNotContain(Path.GetDirectoryName(folder.Path)!, line, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(folder.Path), "the folder is left alone");
+    }
+
+    [Fact]
+    public async Task A_read_only_file_for_o_gives_exit_1_nothing_on_stdout_one_line_and_the_file_is_not_changed()
+    {
+        var path = TempFile();
+        try
+        {
+            await File.WriteAllTextAsync(path, "old content");
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+
+            var r = await CliRun.RunAsync(["parts", "--code", "-o", path], buildCodeProvider: BuildCodeProviders.Sample());
+
+            Assert.Equal(1, r.ExitCode);
+            Assert.Equal(string.Empty, r.Out);
+            var line = Assert.Single(r.Err.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+            Assert.Contains(line, OutputFailedLines(Path.GetFileName(path), Language.En));
+            Assert.DoesNotContain(Path.GetDirectoryName(path)!, line, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("old content", await File.ReadAllTextAsync(path));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task The_notes_of_a_trimmed_machine_stay_on_stderr_when_the_file_cannot_be_written_and_no_code_is_printed()
+    {
+        using var folder = new TempFolder(create: true);
+
+        var r = await CliRun.RunAsync(["parts", "--code", "-o", folder.Path], buildCodeProvider: BuildCodeProviders.Sample(SampleVariant.Trimmed));
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Equal(string.Empty, r.Out);
+        var lines = r.Err.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.True(lines.Length >= 2, "the cuts are still said");
+        Assert.All(lines, l => Assert.StartsWith("pcmi parts: ", l, StringComparison.Ordinal));
+        Assert.Contains(lines[^1], OutputFailedLines(Path.GetFileName(folder.Path), Language.En));
     }
 
     // ---- argument errors ----------------------------------------------------------------------------------------------------------------

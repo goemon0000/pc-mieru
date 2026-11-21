@@ -114,7 +114,9 @@ public sealed class RealStorageInspectionSource(IElevatedStorageReader? elevated
                 counters));
         }
 
-        return new StorageInspection(startedAt, unreadableSlots, drives);
+        // The fact behind "elevation was asked for and refused" (DESIGN-A 2): counted from the steps, never guessed from the rows.
+        var (needed, reRead) = RealStorageHealthProvider.CountElevation(steps, resolved);
+        return new StorageInspection(startedAt, unreadableSlots, drives) { ElevationNeeded = needed, ElevationReRead = reRead };
     }
 
     /// <summary>How one slot of the walk (PhysicalDrive0 to 63) came out.</summary>
