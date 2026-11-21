@@ -645,7 +645,11 @@ internal static partial class SmokeRun
         /// lazily), so the picture is taken again until two takes in a row agree.
         /// </summary>
         /// <param name="target">The window to take. Null: the app's window. A dialog the run shows without activating it (the configuration code) passes itself.</param>
-        private async Task<string> Capture(string directory, string fileName, Form? target = null)
+        /// <param name="regions">
+        /// Parts of the window that must show text (the code box, the parts list). A take in which one of them is flat is not kept as the settled picture
+        /// (it is taken again), and the picture that is kept is checked: each region shows at least <see cref="SmokePixels.MinDistinctColours"/> distinct colours.
+        /// </param>
+        private async Task<string> Capture(string directory, string fileName, Form? target = null, IReadOnlyList<(string Name, Control Region)>? regions = null)
         {
             var subject = target ?? form;
             Directory.CreateDirectory(directory);
@@ -657,10 +661,13 @@ internal static partial class SmokeRun
             Rectangle previousCrop = default;
             Bitmap? current = null;
             Rectangle currentCrop = default;
+            Point previousOrigin = default;
+            Point currentOrigin = default;
             for (var attempt = 0; attempt < 12; attempt++)
             {
                 RedrawWindow(subject.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
                 await Task.Delay(attempt == 0 ? 120 : 200).ConfigureAwait(true);
+                await PaintFully(subject).ConfigureAwait(true);
                 if (onScreen && !await EnsureUncovered(subject).ConfigureAwait(true))
                 {
                     // Something else is drawn over the window (the owner is working on this PC): a picture now would show it.
@@ -681,13 +688,16 @@ internal static partial class SmokeRun
                 }
 
                 current = Take(subject, window, width, height, fileName);
+                currentOrigin = new Point(window.Left, window.Top);
 
                 // Live numbers move in the sample data, so the whole picture may differ a little between two takes; the
                 // navigation never changes, so its strip must be identical. A list that is caught between "background drawn"
                 // and "items drawn" is a few hundred pixels: far under the whole-picture limit, and the take it is in
                 // would have been kept.
                 var strip = target is null ? new Rectangle(0, 0, Math.Min(current.Width, form.DeviceDpi * 210 / 96), current.Height) : Rectangle.Empty;
-                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0)
+                // A take in which a region that must show text is flat is never "settled", however well the two takes agree: two blank code boxes agree
+                // perfectly, and the whole-picture limit above is far larger than the code box.
+                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0 && FlatRegions(current, currentOrigin, regions).Count == 0)
                 {
                     break;
                 }
@@ -695,6 +705,7 @@ internal static partial class SmokeRun
                 previous?.Dispose();
                 previous = current;
                 previousCrop = currentCrop;
+                previousOrigin = currentOrigin;
                 current = null;
             }
 
@@ -702,6 +713,7 @@ internal static partial class SmokeRun
             // Never uncovered: no picture is taken, and the run says so (the PNG is not written, so a stale one cannot pass).
             var kept = current ?? previous;
             var crop = current is not null ? currentCrop : previousCrop;
+            var keptOrigin = current is not null ? currentOrigin : previousOrigin;
             if (kept is null)
             {
                 Check("window capture not covered: " + fileName, false, "another window stayed on top of the app");
@@ -715,9 +727,77 @@ internal static partial class SmokeRun
             }
 
             using var full = kept;
+            if (regions is not null)
+            {
+                foreach (var (name, region) in regions)
+                {
+                    var found = SmokePixels.DistinctColours(full, SmokePixels.TextAreaInPicture(region, keptOrigin));
+                    Check($"window capture: {name} of {fileName} is painted, not flat (at least {SmokePixels.MinDistinctColours} distinct colours in its text area, scroll bar left out)", found >= SmokePixels.MinDistinctColours, found + " distinct colours");
+                }
+            }
+
             using var cropped = full.Clone(crop, PixelFormat.Format32bppArgb);
             cropped.Save(path, ImageFormat.Png);
             return path;
+        }
+
+        /// <summary>The regions of <paramref name="regions"/> that show fewer than <see cref="SmokePixels.MinDistinctColours"/> colours in this take.</summary>
+        private static List<string> FlatRegions(Bitmap take, Point origin, IReadOnlyList<(string Name, Control Region)>? regions)
+        {
+            var flat = new List<string>();
+            if (regions is null)
+            {
+                return flat;
+            }
+
+            foreach (var (name, region) in regions)
+            {
+                if (SmokePixels.DistinctColours(take, SmokePixels.TextAreaInPicture(region, origin)) < SmokePixels.MinDistinctColours)
+                {
+                    flat.Add(name);
+                }
+            }
+
+            return flat;
+        }
+
+        /// <summary>
+        /// Paints the window and every control in it now and waits until nothing in it still has something to paint: a control that was
+        /// shown a moment ago (the code box of a dialog that was just opened) is painted from the message queue, and a picture taken before
+        /// that holds its background only. The window's own redraw above asks for it; this loop is what makes sure it has happened.
+        /// </summary>
+        private static async Task PaintFully(Control subject)
+        {
+            for (var round = 0; round < 8; round++)
+            {
+                RedrawWindow(subject.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
+                foreach (var control in Descendants(subject))
+                {
+                    if (control.IsHandleCreated && control.Visible)
+                    {
+                        control.Update();
+                    }
+                }
+
+                Application.DoEvents();
+                await Task.Delay(40).ConfigureAwait(true);
+                if (!Descendants(subject).Any(static c => c.IsHandleCreated && c.Visible && GetUpdateRect(c.Handle, out _, false)))
+                {
+                    return;
+                }
+            }
+        }
+
+        private static IEnumerable<Control> Descendants(Control root)
+        {
+            yield return root;
+            foreach (Control child in root.Controls)
+            {
+                foreach (var inner in Descendants(child))
+                {
+                    yield return inner;
+                }
+            }
         }
 
         /// <summary>
@@ -897,6 +977,10 @@ internal static partial class SmokeRun
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetUpdateRect(IntPtr hwnd, out NativeRect rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);

@@ -161,7 +161,7 @@ public class BuildCodeUiTests
     }
 
     /// <summary>The contrast of two colours as WCAG 2 defines it (1 to 21).</summary>
-    private static double ContrastRatio(Color a, Color b)
+    internal static double ContrastRatio(Color a, Color b)
     {
         static double Channel(byte value)
         {
@@ -854,6 +854,74 @@ public class BuildCodeUiTests
         Assert.Equal(BuildCodeDialog.CodeLines, dialog.CodeLinesShown);
     }
 
+    [Theory]
+    [InlineData(1.0f)]
+    [InlineData(1.5f)]
+    public async Task The_parts_list_ends_on_a_whole_row_below_its_own_header_also_with_a_bigger_font(float factor)
+    {
+        using var rig = new Rig(Language.En);
+        var basis = SystemFonts.MessageBoxFont ?? Control.DefaultFont;
+        using var font = new Font(basis.FontFamily, basis.SizeInPoints * factor);
+        using var dialog = new BuildCodeDialog(rig.Theme, await TrimmedResult(), _ => true);
+        dialog.Font = font;
+        _ = dialog.Handle;
+        var grid = dialog.PartsList;
+        _ = grid.Handle;
+
+        // The native list lays its rows out against its header only in a window that is on show (as the smoke run shows it, without taking the focus).
+        dialog.PreventActivation();
+        dialog.Show();
+        Application.DoEvents();
+        dialog.PerformLayout();
+        Application.DoEvents();
+
+        foreach (var room in new[] { int.MaxValue, 0 })
+        {
+            dialog.FitToHeight(room);
+            var rows = dialog.PartRowsShown;
+            Assert.InRange(rows, 1, dialog.PartLines.Count);
+
+            // The header, N whole rows and the border: what is under the header is N rows high, as the list measures a row, and no more.
+            var body = grid.ClientSize.Height - grid.HeaderHeight;
+            Assert.Equal(rows * grid.MeasuredRowHeight, body);
+            Assert.Equal(grid.HeightForRows(rows), grid.Height);
+            Assert.Equal(rows, grid.RowsThatFit(grid.Height));
+
+            // One pixel less would take a row away; one row's height more would show another whole row.
+            Assert.Equal(Math.Max(rows - 1, 0), grid.RowsThatFit(grid.Height - 1));
+            Assert.Equal(rows + 1, grid.RowsThatFit(grid.Height + grid.MeasuredRowHeight));
+
+            // Where the native list puts the rows (the first under the header, the last ending at the bottom, no part of another below) is the
+            // smoke run's check (WholeRowsProblem on the window that is really on show): a list in a window no message loop has run for is
+            // not laid out like that one, and the test would be pinning the test's own window.
+        }
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public void The_opening_text_says_where_Copy_and_Save_put_the_code_and_that_nothing_is_sent(Language language)
+    {
+        using var _ = Harness.Locale(language);
+        var lead = Strings.Get("gui.hw.pcb1.lead");
+
+        // The two buttons are named as they are on the buttons, and each is said to put the content in one place.
+        Assert.Contains(Strings.Get("gui.common.copy"), lead, StringComparison.Ordinal);
+        Assert.Contains(Strings.Get("gui.hw.pcb1.save"), lead, StringComparison.Ordinal);
+        var words = language == Language.Ja
+            ? new[] { "クリップボード", "読める形のファイル", "選んだ場所", "何も送信しません", "シリアル番号", "MAC アドレス", "PC の名前" }
+            : new[] { "on the clipboard", "readable JSON file", "a place you choose", "sends nothing to the site or anywhere else", "serial numbers", "MAC addresses", "the PC's name" };
+        foreach (var word in words)
+        {
+            Assert.Contains(word, lead, StringComparison.Ordinal);
+        }
+
+        // The sentences that read as contradicting each other are gone.
+        Assert.DoesNotContain("Nothing is sent", lead, StringComparison.Ordinal);
+        Assert.DoesNotContain("leaves this window", lead, StringComparison.Ordinal);
+        Assert.DoesNotContain("画面の外に出", lead, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task The_columns_of_the_list_follow_what_the_rows_need_when_the_font_and_the_window_grow()
     {
@@ -1088,6 +1156,40 @@ public class BuildCodeUiTests
         status = Assert.Single(statuses);
         Assert.StartsWith("Failed: ThreadStateException 0x", status, StringComparison.Ordinal);
         Assert.DoesNotContain("secret", status, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------- the fonts of the dialog
+
+    [Fact]
+    public async Task The_fonts_of_the_heads_and_the_code_box_stay_alive_when_they_are_made_again_and_follow_the_dialogs_font()
+    {
+        // The smoke run at 150% found it: the Font property keeps the font it has when the new one is equal in value, so a dialog that made its
+        // fonts again at the same scale disposed the font its code box was still holding, and the first line height asked of it threw.
+        using var rig = new Rig(Language.En);
+        var result = await PreviewResult();
+        using var grown = new Font("Segoe UI", 13.5f);
+        using var dialog = new BuildCodeDialog(rig.Theme, result, _ => true);
+        _ = dialog.Handle;
+
+        dialog.RefreshFonts();
+        dialog.RefreshFonts();
+        Assert.True(dialog.CodeBox.Font.Height > 0);
+        Assert.True(dialog.CodeLineHeight > 0);
+        var heads = AllControls(dialog).OfType<Label>().Where(static l => l.Name.EndsWith("Head", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(heads);
+        foreach (var head in heads)
+        {
+            Assert.True(head.Font.Height > 0, head.Name);
+        }
+
+        // The window goes to a higher scale: the box has a font of its own at the new size, still a tenth over the dialog's (the same visual size).
+        var before = dialog.CodeBox.Font.SizeInPoints;
+        dialog.Font = grown;
+        Assert.True(dialog.CodeBox.Font.SizeInPoints > before, "the code box font follows the dialog font");
+        Assert.Equal(grown.SizeInPoints * 1.1f, dialog.CodeBox.Font.SizeInPoints, 0.05f);
+        Assert.True(dialog.CodeLineHeight > 0);
+        Assert.All(heads, static head => Assert.True(head.Font.Height > 0, head.Name));
+        Assert.True(dialog.FitToHeight(int.MaxValue) > 0);
     }
 
     // ---------------------------------------------------------------- the dim text of a selected row

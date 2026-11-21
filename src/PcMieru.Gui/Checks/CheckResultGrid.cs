@@ -26,8 +26,14 @@ internal sealed class CheckResultGrid : GridView
         RowStyles = row => row >= 0 && row < _rows.Count && _rows[row].Header ? RowStyle.Header : RowStyle.Normal;
         CellTip = Tip;
         FillColumn = EvidenceColumn;
-        SizeChanged += (_, _) => FitLastColumn();
+        SizeChanged += (_, _) => FitContentColumns();
     }
+
+    // What the columns need for the rows on show, measured once per result, language and scale (a resize only applies the ceilings again).
+    private int _labelNeed;
+    private int _nameNeed;
+    private int _verdictNeed;
+    private int _valueNeed;
 
     /// <summary>The result on show (null: none).</summary>
     public CheckResult? Result => _result;
@@ -79,45 +85,69 @@ internal sealed class CheckResultGrid : GridView
         PageLayout.Prepare(
             this,
             accessibleName,
-            (Strings.Get("gui.chk.col.item"), ItemColumnWidth(), HorizontalAlignment.Left),
+            (Strings.Get("gui.chk.col.item"), px(200), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.verdict"), px(110), HorizontalAlignment.Left),
-            (Strings.Get("gui.chk.col.value"), px(190), HorizontalAlignment.Left),
+            (Strings.Get("gui.chk.col.value"), px(150), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.evidence"), px(310), HorizontalAlignment.Left));
+        FitContentColumns();
     }
 
     /// <summary>
-    /// The item column, in pixels of the scale the grid is at now: the longest item label of the registry (in the language on show) with the
-    /// room the grid keeps around a text (its padding on both sides, and the indent of a change row under a part). A fixed width was too wide
-    /// for the short labels of one language and cut the long ones of the other. It is measured in device pixels, not written in logical ones:
-    /// a window at 150% grows its font as well, and the text grows with the font and the DPI while the room around it grows with the DPI only.
+    /// What the item, verdict and value columns need for the rows on show (their widest text, the room the grid keeps round a text and, in the
+    /// first column, the indent of a row under a part). A part's own header row is counted apart: its name may be long, and it has a tooltip.
     /// </summary>
-    internal int ItemColumnWidth()
+    private void MeasureNeeds()
     {
-        var widest = 0;
-        foreach (var spec in CheckItemRegistry.All)
+        _labelNeed = 0;
+        _nameNeed = 0;
+        _verdictNeed = 0;
+        _valueNeed = 0;
+        for (var row = 0; row < _rows.Count; row++)
         {
-            var width = TextRenderer.MeasureText(
-                CheckFormat.ItemLabel(spec.Id),
-                Font,
-                new Size(int.MaxValue, int.MaxValue),
-                TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
-            widest = Math.Max(widest, width);
-        }
+            var item = NeededWidth(row, ItemColumn);
+            if (_rows[row].Header)
+            {
+                _nameNeed = Math.Max(_nameNeed, item);
+            }
+            else
+            {
+                _labelNeed = Math.Max(_labelNeed, item);
+            }
 
-        // The padding on both sides, the steps the grid keeps in the first column for the widest case (a change row under a part has the
-        // indent 2, and the grid keeps the indent plus one step), and a few pixels of air.
-        const int indentSteps = 3;
-        return widest + (Scaled(8) * 2) + (indentSteps * Scaled(16)) + Scaled(4);
+            _verdictNeed = Math.Max(_verdictNeed, NeededWidth(row, VerdictColumn));
+            _valueNeed = Math.Max(_valueNeed, NeededWidth(row, ValueColumn));
+        }
     }
 
-    /// <summary>The columns were scaled for a new DPI or font: the item column is measured again at that scale.</summary>
+    /// <summary>
+    /// The item, verdict and value columns are as wide as their own content (their header counts too, and each has a least), in pixels of the
+    /// scale the grid is at now; the evidence column takes the rest, so a long evidence line is not cut while a short label has air round it. A
+    /// part's header row can make the item column wider, up to two fifths of the table; a long value up to a third of it.
+    /// </summary>
+    private void FitContentColumns()
+    {
+        if (Columns.Count != EvidenceColumn + 1)
+        {
+            return;
+        }
+
+        var width = ClientSize.Width;
+        var itemCeiling = Math.Max(width * 40 / 100, Scaled(160));
+        var valueCeiling = Math.Max(width * 33 / 100, Scaled(120));
+        var air = Scaled(4);
+        var item = Math.Max(Math.Max(HeaderNeed(ItemColumn), _labelNeed), Math.Min(_nameNeed, itemCeiling));
+        Columns[ItemColumn].Width = Math.Max(item, Scaled(120)) + air;
+        Columns[VerdictColumn].Width = Math.Max(Math.Max(HeaderNeed(VerdictColumn), _verdictNeed), Scaled(70)) + air;
+        Columns[ValueColumn].Width = Math.Min(Math.Max(Math.Max(HeaderNeed(ValueColumn), _valueNeed), Scaled(90)), valueCeiling) + air;
+        FitLastColumn();
+    }
+
+    /// <summary>The columns were scaled for a new DPI or font: what the rows need is measured again at that scale.</summary>
     protected override void OnColumnsRescaled()
     {
         base.OnColumnsRescaled();
-        if (Columns.Count == EvidenceColumn + 1)
-        {
-            Columns[ItemColumn].Width = ItemColumnWidth();
-        }
+        MeasureNeeds();
+        FitContentColumns();
     }
 
     /// <summary>Shows a result (or nothing). Rebuilds the rows and keeps the list's position at the top.</summary>
@@ -136,11 +166,9 @@ internal sealed class CheckResultGrid : GridView
             Columns[VerdictColumn].Text = Strings.Get("gui.chk.col.verdict");
             Columns[ValueColumn].Text = Strings.Get("gui.chk.col.value");
             Columns[EvidenceColumn].Text = Strings.Get("gui.chk.col.evidence");
-            // The labels are written again in the other language: the item column follows its longest.
-            Columns[ItemColumn].Width = ItemColumnWidth();
-            FitLastColumn();
         }
 
+        // The rows are written again in the other language, and the columns follow what they now hold.
         Rebuild();
     }
 
@@ -154,6 +182,8 @@ internal sealed class CheckResultGrid : GridView
 
         SelectedIndices.Clear();
         VirtualListSize = _rows.Count;
+        MeasureNeeds();
+        FitContentColumns();
         Invalidate();
     }
 

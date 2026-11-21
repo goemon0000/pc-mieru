@@ -459,18 +459,16 @@ public class ChecksPageTests
                 seen.Add(item.Verdict);
                 Assert.Equal(words[item.Verdict], grid.TextAt(row, 1));
                 var tone = grid.ToneAt(row, 1);
-                switch (item.Verdict)
+                // Each verdict has a colour of its own (the contrast of the five is pinned in GridReadabilityTests).
+                var expected = item.Verdict switch
                 {
-                    case ItemVerdict.Check or ItemVerdict.Caution:
-                        Assert.Equal(CellTone.Accent, tone);
-                        break;
-                    case ItemVerdict.Unavailable:
-                        Assert.Equal(CellTone.Dim, tone);
-                        break;
-                    default:
-                        Assert.Equal(CellTone.Normal, tone);
-                        break;
-                }
+                    ItemVerdict.Ok => CellTone.Good,
+                    ItemVerdict.Caution => CellTone.Warning,
+                    ItemVerdict.Check => CellTone.Danger,
+                    ItemVerdict.Unavailable => CellTone.Dim,
+                    _ => CellTone.Normal,
+                };
+                Assert.Equal(expected, tone);
 
                 // The label is the words of the table, never the raw ID or the "[key]" of a missing label.
                 Assert.NotEqual(item.Id, grid.TextAt(row, 0));
@@ -504,7 +502,8 @@ public class ChecksPageTests
 
             var errors = RowOf(grid, "storage.nvme.error_log_entries.delta", "disk-1");
             Assert.Contains("12 → 15 (+3)", grid.TextAt(errors, 3), StringComparison.Ordinal);
-            Assert.Equal(CellTone.Accent, grid.ToneAt(errors, 1));
+            Assert.Equal(CheckFormat.VerdictWord(ItemVerdict.Caution), grid.TextAt(errors, 1));
+            Assert.Equal(CellTone.Warning, grid.ToneAt(errors, 1));
 
             Strings.Current = Language.Ja;
             rig.Page.ApplyLanguage();
@@ -823,6 +822,67 @@ public class ChecksPageTests
             Assert.Equal(new[] { "記憶媒体", "システム", "メモリ", "CPU" }, Enumerable.Range(0, 4).Select(row => tab.ListText(row, 1)));
             Assert.Equal("要確認", tab.ListText(2, 2));
             Assert.Equal("停止", tab.ListText(2, 3));
+        });
+    }
+
+    [Theory]
+    [InlineData(1.0f)]
+    [InlineData(1.5f)]
+    public void The_history_list_ends_on_a_whole_row_below_its_own_header_also_with_a_bigger_font(float factor)
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new PageRig(new RunnerQueue().Controller(new InMemoryCheckHistory()), handle: true);
+            rig.Host.Size = new Size(1100, 800);
+            var tab = rig.ShowHistory(ui, HistoryView.List);
+            using var grown = factor == 1.0f ? null : new Font(rig.Host.Font.FontFamily, rig.Host.Font.SizeInPoints * factor);
+            if (grown is not null)
+            {
+                rig.Host.Font = grown;
+            }
+
+            rig.Host.PerformLayout();
+            Application.DoEvents();
+            rig.Host.PerformLayout();
+
+            var list = tab.List;
+            var rowHeight = list.MeasuredRowHeight;
+            var body = list.ClientSize.Height - list.HeaderHeight;
+
+            // The header, N whole rows and the border: nothing of another row is under the last one, and the list shows at least three.
+            Assert.Equal(0, body % rowHeight);
+            Assert.True(body / rowHeight >= 3, $"{body / rowHeight} rows");
+            Assert.InRange(list.GetItemRect(0, ItemBoundsPortion.Entire).Top, list.HeaderHeight - 1, list.HeaderHeight + 1);
+
+            // It keeps about the share of the area it had (more than that only when three rows need more), and the detail below takes the rest.
+            var area = list.Parent!.ClientSize.Height;
+            Assert.True(list.Height <= Math.Max(area * 38 / 100, list.HeightForRows(3)), $"the list is {list.Height} px in an area of {area} px");
+            Assert.True(list.Height + rowHeight > area * 38 / 100 || body / rowHeight == 3, $"the list is {list.Height} px: another whole row would have fitted");
+        });
+    }
+
+    [Fact]
+    public void The_history_list_is_made_for_whole_rows_again_when_its_runs_arrive_after_the_page_was_laid_out()
+    {
+        Ui.Run(ui =>
+        {
+            var history = new StubHistory
+            {
+                OnList = (_, _) => Task.FromResult(new CheckHistoryPage(EntriesOf([.. Enumerable.Range(0, 12).Select(i => FakeCheckData.Seed[i % FakeCheckData.Seed.Count])]), [])),
+            };
+            using var rig = new PageRig(new RunnerQueue().Controller(history), handle: true);
+            rig.Host.Size = new Size(1100, 800);
+            rig.Host.PerformLayout();
+            Application.DoEvents();
+
+            // The page is laid out while the list is empty (it has no row to measure then); the runs come after, and nothing lays the page out again.
+            var tab = rig.ShowHistory(ui, HistoryView.List);
+            var list = tab.List;
+            Assert.Equal(12, list.VirtualListSize);
+
+            // Its share of the page is a header and whole rows as the list measures them now that it holds rows, not as it guessed with none.
+            Assert.Equal(tab.WholeRowsHeight(), list.Height);
+            Assert.Equal(0, (list.ClientSize.Height - list.HeaderHeight) % list.MeasuredRowHeight);
         });
     }
 

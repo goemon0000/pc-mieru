@@ -52,12 +52,14 @@ internal static class CheckFormat
     public static string VerdictWord(CheckVerdict verdict) => Strings.Get("gui.chk.verdict." + Snake(verdict.ToString()));
 
     /// <summary>
-    /// How a verdict is drawn. Caution and check use the accent colour (always with their word next to it); ok is plain; unavailable is
-    /// grey. Info is an observation, not a verdict: plain text, never accent, whatever the value says.
+    /// How a verdict is drawn, each in a colour of its own (always with its word next to it): ok is green, caution is amber, needs review
+    /// is red (and bold), not measured is grey. Info is an observation, not a verdict: plain text, whatever the value says.
     /// </summary>
     public static CellTone Tone(ItemVerdict verdict) => verdict switch
     {
-        ItemVerdict.Check or ItemVerdict.Caution => CellTone.Accent,
+        ItemVerdict.Ok => CellTone.Good,
+        ItemVerdict.Caution => CellTone.Warning,
+        ItemVerdict.Check => CellTone.Danger,
         ItemVerdict.Unavailable => CellTone.Dim,
         _ => CellTone.Normal,
     };

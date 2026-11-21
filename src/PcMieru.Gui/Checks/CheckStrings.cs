@@ -53,7 +53,7 @@ internal static class CheckStrings
         new("gui.chk.load.stage.done", "終わりました", "Finished"),
         new("gui.chk.load.stage.unknown", "処理しています", "Working"),
 
-        new("gui.chk.sto.intro", "ディスクの状態と、前回の点検からの増え方を調べます。増えた数は前回の記録との差で出します。", "Reads the state of each disk and how its counters grew since the last check. Growth is the difference from the previous record."),
+        new("gui.chk.sto.intro", "ディスクの状態と、前回の点検からの増え方を調べます。増減は前回の記録との差です。", "Reads the state of each disk and how its counters changed since the last check. A change is the difference from the previous record."),
         new("gui.chk.sto.denied", "通常の権限では読めなかったディスクがあります", "Some disks could not be read with normal rights"),
         new("gui.chk.sto.elevate", "管理者で読み直す", "Read again as administrator"),
         new("gui.chk.sto.elevate.tip", "管理者の許可を求めて、読めなかったディスクをもう一度調べます。新しい点検として保存します", "Asks for administrator permission and reads the disks that were denied. It is saved as a new check"),
@@ -181,8 +181,8 @@ internal static class CheckStrings
         new("gui.chk.note.cpu.temperature_not_measured", "CPU の温度は測っていません（温度を読むドライバを入れていないため）", "CPU temperature is not measured (no sensor driver is installed)"),
         new("gui.chk.note.memory.borrowed_region_only", "借りた範囲だけを調べています。メモリ全体の検査ではありません", "Only the borrowed range was checked, not all of the memory"),
         new("gui.chk.note.memory.pressure", "空きメモリが減ったため、途中で止めました", "Stopped early because free memory fell"),
-        new("gui.chk.note.storage.baseline_read_failed", "前回の記録を読めなかったため、増え方は比べていません", "The previous record could not be read, so growth was not compared"),
-        new("gui.chk.note.storage.legacy_import_abandoned", "旧版（パーツぐらし）の記録は信頼できず、取り込みませんでした。この版の記録から比べます", "The records of the older version could not be trusted and were not imported. Growth is compared from this version's own records"),
+        new("gui.chk.note.storage.baseline_read_failed", "前回の記録を読めなかったため、前回からの増減は比べていません", "The previous record could not be read, so the change since the previous check was not compared"),
+        new("gui.chk.note.storage.legacy_import_abandoned", "旧版（パーツぐらし）の記録は信頼できず、取り込みませんでした。この版の記録から比べます", "The records of the older version could not be trusted and were not imported. Changes are compared from this version's own records"),
         new("gui.chk.note.unknown", "この版が知らない注記です: {code}", "A note this version does not know: {code}"),
     ];
 
@@ -191,7 +191,7 @@ internal static class CheckStrings
         new("gui.chk.ev.baseline_inventory_incomplete", "ディスクの一覧が揃わず、前回とは比べていません", "The disk list was incomplete, so nothing was compared"),
         new("gui.chk.ev.baseline_first", "初めての記録で、比べる前回がありません", "First reading: there is no earlier one to compare with"),
         new("gui.chk.ev.baseline_no_identity", "ディスクを見分ける情報がなく、前回とは比べられません", "The disk could not be identified, so it cannot be compared"),
-        new("gui.chk.ev.baseline_duplicate", "見分けのつかない同じディスクが複数あり、比べられません", "Same-looking disks, cannot compare"),
+        new("gui.chk.ev.baseline_duplicate", "見分けのつかない同じディスクが複数あり、比べられません", "Several identical-looking disks; cannot compare"),
         new("gui.chk.ev.baseline_device_changed", "前回とは別のディスクのため、比べていません", "A different disk than last time, so nothing was compared"),
         new("gui.chk.ev.baseline_counter_reset", "カウンターが戻っていたため、比べていません", "The counters went back, so nothing was compared"),
         new("gui.chk.ev.baseline_clock", "時計が戻っていたため、比べていません", "The clock went back, so nothing was compared"),
@@ -326,21 +326,21 @@ internal static class CheckStrings
 
     private static readonly StringEntry[] DeltaItems =
     [
-        Item("storage.nvme.critical_warning.delta", "警告ビットの変化", "Change of the warning bits"),
-        Item("storage.nvme.available_spare.delta", "予備領域の変化", "Change of the available spare"),
-        Item("storage.nvme.percentage_used.delta", "寿命消費の変化", "Change of the life used"),
-        Item("storage.nvme.media_errors.delta", "メディアエラーの増減", "Change of the media errors"),
-        Item("storage.nvme.error_log_entries.delta", "エラーログ件数の増減", "Change of the error log entries"),
-        Item("storage.nvme.unsafe_shutdowns.delta", "不意の電源断の増減", "Change of the unsafe shutdowns"),
-        Item("storage.nvme.power_on_hours.delta", "通電時間の増減", "Change of the power-on hours"),
-        Item("storage.nvme.data_units_written.delta", "書き込み量の増減", "Change of the data written"),
-        Item("storage.ata.5.delta", "再配置されたセクター数の増減", "Change of the reallocated sectors"),
-        Item("storage.ata.187.delta", "訂正できなかったエラー数の増減", "Change of the uncorrectable errors"),
-        Item("storage.ata.196.delta", "再配置イベント数の増減", "Change of the reallocation events"),
-        Item("storage.ata.197.delta", "保留中のセクター数の増減", "Change of the pending sectors"),
-        Item("storage.ata.198.delta", "オフラインで訂正できないセクター数の増減", "Change of the offline uncorrectable sectors"),
-        Item("storage.ata.199.delta", "UDMA CRC エラー数の増減", "Change of the UDMA CRC errors"),
-        Item("storage.ata.9.delta", "通電カウンターの増減", "Change of the power-on counter"),
+        Item("storage.nvme.critical_warning.delta", "警告ビットの変化", "Change in warning bits"),
+        Item("storage.nvme.available_spare.delta", "予備領域の変化", "Change in available spare"),
+        Item("storage.nvme.percentage_used.delta", "寿命消費の変化", "Change in life used"),
+        Item("storage.nvme.media_errors.delta", "メディアエラーの増減", "Change in media errors"),
+        Item("storage.nvme.error_log_entries.delta", "エラーログ件数の増減", "Change in error log entries"),
+        Item("storage.nvme.unsafe_shutdowns.delta", "不意の電源断の増減", "Change in unsafe shutdowns"),
+        Item("storage.nvme.power_on_hours.delta", "通電時間の増減", "Change in power-on hours"),
+        Item("storage.nvme.data_units_written.delta", "書き込み量の増減", "Change in data written"),
+        Item("storage.ata.5.delta", "再配置されたセクター数の増減", "Change in reallocated sectors"),
+        Item("storage.ata.187.delta", "訂正できなかったエラー数の増減", "Change in uncorrectable errors"),
+        Item("storage.ata.196.delta", "再配置イベント数の増減", "Change in reallocation events"),
+        Item("storage.ata.197.delta", "保留中のセクター数の増減", "Change in pending sectors"),
+        Item("storage.ata.198.delta", "オフラインで訂正できないセクター数の増減", "Change in offline uncorrectable sectors"),
+        Item("storage.ata.199.delta", "UDMA CRC エラー数の増減", "Change in UDMA CRC errors"),
+        Item("storage.ata.9.delta", "通電カウンターの増減", "Change in power-on counter"),
     ];
 
     public static readonly StringEntry[] All =

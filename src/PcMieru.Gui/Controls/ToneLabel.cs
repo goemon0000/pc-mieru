@@ -30,12 +30,7 @@ internal class ToneLabel : Label, IThemed
     }
 
     /// <summary>The colour this label must have in a palette; the smoke run compares against it.</summary>
-    public Color ExpectedColor(Palette palette) => _tone switch
-    {
-        CellTone.Dim => palette.TextDim,
-        CellTone.Accent => palette.Accent,
-        _ => palette.Text,
-    };
+    public Color ExpectedColor(Palette palette) => GridView.ToneColor(palette, _tone, selected: false);
 
     private void Recolor()
     {

@@ -5,8 +5,9 @@ namespace PcMieru.Gui.Tests;
 
 /// <summary>
 /// What the person can read in the tables of the checks: no item label and no verdict word is cut by its column (a cell that is cut for a
-/// long evidence line or a part's name has a tooltip with the whole text), the item column follows the longest label of the language on
-/// show, and the overall line under a table does not write counts of zero. The grid answers for itself (<see cref="GridView.IsCut"/>): the
+/// long evidence line or a part's name has a tooltip with the whole text), the item, verdict and value columns are as wide as their content
+/// and the evidence takes the rest, each of the five verdicts has a colour of its own that reads in both themes (also on the selected row), and
+/// the overall line under a table does not write counts of zero. The grid answers for itself (<see cref="GridView.IsCut"/>): the
 /// tests never keep a copy of its arithmetic.
 /// </summary>
 public class GridReadabilityTests
@@ -15,12 +16,16 @@ public class GridReadabilityTests
 
     /// <summary>The item column of the result grid (the grid keeps the number to itself).</summary>
     private const int ItemColumn = 0;
+    private const int VerdictColumn = 1;
+    private const int ValueColumn = 2;
+    private const int EvidenceColumn = 3;
 
     /// <summary>A grid in a form of the size the checks page gives it (not shown: the grid measures with the font and the columns it has).</summary>
     private sealed class GridRig : IDisposable
     {
         private readonly IDisposable _locale;
         private readonly Form _form;
+        private Font? _grown;
 
         public GridRig(Language language)
         {
@@ -28,6 +33,10 @@ public class GridReadabilityTests
             _form = new Form { Size = new Size(1100, 700) };
             Grid = new CheckResultGrid { Dock = DockStyle.Fill };
             _form.Controls.Add(Grid);
+
+            // The column that takes the rest is set only for a grid that has a handle (the page's grid has one as soon as it is shown).
+            _ = _form.Handle;
+            _ = Grid.Handle;
             Grid.PrepareColumns(value => Grid.LogicalToDeviceUnits(value), "t");
             _form.PerformLayout();
             Grid.FitLastColumn();
@@ -35,9 +44,21 @@ public class GridReadabilityTests
 
         public CheckResultGrid Grid { get; }
 
+        /// <summary>The form's font at another size, as a denser screen has it (the grid scales its columns and measures again).</summary>
+        public void Grow(float factor)
+        {
+            var basis = _form.Font;
+            _grown?.Dispose();
+            _grown = new Font(basis.FontFamily, basis.SizeInPoints * factor);
+            _form.Font = _grown;
+            _form.PerformLayout();
+            Grid.FitLastColumn();
+        }
+
         public void Dispose()
         {
             _form.Dispose();
+            _grown?.Dispose();
             _locale.Dispose();
         }
     }
@@ -71,28 +92,69 @@ public class GridReadabilityTests
     }
 
     [Theory]
-    [InlineData(Language.Ja)]
-    [InlineData(Language.En)]
-    public void The_item_column_is_as_wide_as_the_longest_label_of_the_language_and_follows_a_change_of_language(Language language)
+    [InlineData(Language.Ja, 1.0f)]
+    [InlineData(Language.En, 1.0f)]
+    [InlineData(Language.Ja, 1.5f)]
+    [InlineData(Language.En, 1.5f)]
+    public void The_item_verdict_and_value_columns_are_as_wide_as_their_content_and_the_evidence_takes_the_rest(Language language, float factor)
     {
         using var rig = new GridRig(language);
         var grid = rig.Grid;
-        var other = language == Language.Ja ? Language.En : Language.Ja;
-        var widest = CheckItemRegistry.All.Max(spec => TextRenderer.MeasureText(CheckFormat.ItemLabel(spec.Id), grid.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width);
+        if (factor != 1.0f)
+        {
+            rig.Grow(factor);
+        }
 
-        // The longest label of the language on show fits in the column with the grid's room around it (the padding on both sides).
-        Assert.True(grid.Columns[ItemColumn].Width >= widest + (grid.LogicalToDeviceUnits(8) * 2), $"the item column is {grid.Columns[ItemColumn].Width} px, the longest label {widest} px");
-
-        // The language changes: the labels are written again, and the column is made for the new longest one.
-        Strings.Current = other;
-        grid.ApplyLanguage();
-        var widestOther = CheckItemRegistry.All.Max(spec => TextRenderer.MeasureText(CheckFormat.ItemLabel(spec.Id), grid.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width);
-        Assert.True(grid.Columns[ItemColumn].Width >= widestOther + (grid.LogicalToDeviceUnits(8) * 2), $"after the change the item column is {grid.Columns[ItemColumn].Width} px, the longest label {widestOther} px");
+        // The air a column keeps beyond what its text needs (the grid's own, a few pixels), and a pixel for the rounding of a scaled width.
+        var slack = grid.Scaled(4) + 1;
+        var widthBefore = grid.ClientSize.Width;
         foreach (var result in Results())
         {
             grid.Show(result);
             Assert.Empty(grid.UnreadableCuts());
+
+            // The table is a vertical bar narrower once it holds more rows than it shows: the third is of the width it had when the columns were made.
+            var widthNow = grid.ClientSize.Width;
+            var ceiling = Math.Max(Math.Max(widthBefore, widthNow) * 33 / 100, grid.Scaled(120));
+            var ceilingLeast = Math.Max(Math.Min(widthBefore, widthNow) * 33 / 100, grid.Scaled(120));
+
+            // Item and verdict: never narrower than the header and every label or word, never wider than that and the grid's least.
+            foreach (var (column, least) in new[] { (ItemColumn, 120), (VerdictColumn, 70) })
+            {
+                var need = grid.ContentNeed(column);
+                var width = grid.Columns[column].Width;
+                Assert.True(width <= Math.Max(need, grid.Scaled(least)) + slack, $"column {column} is {width} px for a content of {need} px ({language}, x{factor})");
+                Assert.True(width >= grid.HeaderNeed(column), $"column {column} is {width} px, its header needs {grid.HeaderNeed(column)} px");
+            }
+
+            // Value: the same, and a very long value is held to a third of the table (it has a tooltip).
+            var valueNeed = grid.ContentNeed(ValueColumn);
+            var valueWidth = grid.Columns[ValueColumn].Width;
+            Assert.True(valueWidth <= Math.Max(Math.Min(valueNeed, ceiling), grid.Scaled(90)) + slack, $"the value column is {valueWidth} px for a content of {valueNeed} px ({language}, x{factor})");
+            Assert.True(valueWidth >= Math.Min(valueNeed, ceilingLeast), $"the value column is {valueWidth} px, its content needs {valueNeed} px");
+
+            // Evidence: everything that is left, and the columns together never run past the table.
+            var others = grid.Columns[ItemColumn].Width + grid.Columns[VerdictColumn].Width + grid.Columns[ValueColumn].Width;
+            var evidence = grid.Columns[EvidenceColumn].Width;
+            Assert.True(evidence >= grid.ClientSize.Width - others - grid.Scaled(40), $"evidence is {evidence} px, {grid.ClientSize.Width - others} px were left");
+            Assert.True(others + evidence <= grid.ClientSize.Width + 1 || evidence <= grid.Scaled(140) + 1, $"the columns are {others + evidence} px in a table of {grid.ClientSize.Width} px");
         }
+    }
+
+    [Fact]
+    public void The_columns_follow_a_change_of_language()
+    {
+        using var rig = new GridRig(Language.En);
+        var grid = rig.Grid;
+        grid.Show(FakeCheckData.SystemCheck(Run, FakeCheckData.Start));
+        var before = grid.Columns[ItemColumn].Width;
+
+        Strings.Current = Language.Ja;
+        grid.ApplyLanguage();
+
+        // The labels are written again, and the column is made for what it holds now: the grid's own measure of it, not the width it had.
+        Assert.True(grid.Columns[ItemColumn].Width >= grid.ContentNeed(ItemColumn), $"{grid.Columns[ItemColumn].Width} px for {grid.ContentNeed(ItemColumn)} px (it was {before} px)");
+        Assert.Empty(grid.UnreadableCuts());
     }
 
     [Fact]
@@ -108,6 +170,70 @@ public class GridReadabilityTests
         var cuts = grid.UnreadableCuts();
         Assert.NotEmpty(cuts);
         Assert.Contains(cuts, static cut => cut.Contains(":" + ItemColumn.ToString(CultureInfo.InvariantCulture) + " ", StringComparison.Ordinal));
+    }
+
+    // ---------------------------------------------------------------- the colours of the verdicts
+
+    private const double Readable = 4.5;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_five_verdicts_are_five_colours_and_each_reads_on_a_plain_row_and_on_the_selected_one(bool dark)
+    {
+        var mode = dark ? ThemeMode.Dark : ThemeMode.Light;
+        using var theme = new ThemeService(mode);
+        var palette = theme.Palette;
+        var verdicts = Enum.GetValues<ItemVerdict>();
+        Assert.Equal(5, verdicts.Length);
+
+        var plain = verdicts.ToDictionary(static v => v, v => GridView.ToneColor(palette, CheckFormat.Tone(v), selected: false));
+        var chosen = verdicts.ToDictionary(static v => v, v => GridView.ToneColor(palette, CheckFormat.Tone(v), selected: true));
+
+        // Five words, five colours: caution and needs review in particular are not the same colour (they were both bluish).
+        Assert.Equal(5, plain.Values.Select(static c => c.ToArgb()).Distinct().Count());
+        Assert.Equal(5, chosen.Values.Select(static c => c.ToArgb()).Distinct().Count());
+        Assert.NotEqual(plain[ItemVerdict.Caution], plain[ItemVerdict.Check]);
+
+        foreach (var verdict in verdicts)
+        {
+            // On the table's own background and on the page's.
+            Assert.True(BuildCodeUiTests.ContrastRatio(plain[verdict], palette.Surface) >= Readable, $"{verdict} on the table: {BuildCodeUiTests.ContrastRatio(plain[verdict], palette.Surface):F2}:1 ({mode})");
+            Assert.True(BuildCodeUiTests.ContrastRatio(plain[verdict], palette.Window) >= Readable, $"{verdict} on the window: {BuildCodeUiTests.ContrastRatio(plain[verdict], palette.Window):F2}:1 ({mode})");
+
+            // On the selected row (the tone blended 0.7 toward its own share, the rest the selection's text colour).
+            Assert.True(BuildCodeUiTests.ContrastRatio(chosen[verdict], palette.Selection) >= Readable, $"{verdict} on the selected row: {BuildCodeUiTests.ContrastRatio(chosen[verdict], palette.Selection):F2}:1 ({mode})");
+        }
+    }
+
+    [Fact]
+    public void The_check_is_able_to_fail_two_verdicts_on_one_colour_are_found()
+    {
+        // A test that nothing can fail proves nothing: with caution and needs review on one tone, the five colours are four.
+        using var theme = new ThemeService(ThemeMode.Light);
+        var palette = theme.Palette;
+        Color Mapped(ItemVerdict verdict) => GridView.ToneColor(palette, verdict == ItemVerdict.Check ? CheckFormat.Tone(ItemVerdict.Caution) : CheckFormat.Tone(verdict), selected: false);
+
+        Assert.Equal(4, Enum.GetValues<ItemVerdict>().Select(Mapped).Select(static c => c.ToArgb()).Distinct().Count());
+    }
+
+    [Fact]
+    public void The_verdict_word_of_a_row_that_needs_review_is_bold_and_the_other_four_are_not()
+    {
+        using var rig = new GridRig(Language.En);
+        var grid = rig.Grid;
+        grid.Show(FakeCheckData.SystemCheck(Run, FakeCheckData.Start));
+
+        for (var row = 0; row < grid.RowCount; row++)
+        {
+            if (grid.ItemAt(row) is not { } item)
+            {
+                continue;
+            }
+
+            Assert.Equal(item.Verdict == ItemVerdict.Check, grid.Cells!(row, VerdictColumn).Bold);
+            Assert.Equal(CheckFormat.Tone(item.Verdict), grid.ToneAt(row, VerdictColumn));
+        }
     }
 
     // ---------------------------------------------------------------- the overall line

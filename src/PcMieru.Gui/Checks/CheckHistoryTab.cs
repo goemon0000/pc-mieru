@@ -112,6 +112,20 @@ internal sealed class CheckHistoryTab : CheckTab
         _rows.Controls.Add(_list, 0, 0);
         _rows.Controls.Add(_detailPanel, 0, 1);
 
+        // The list ends on a whole row: its share of the height is a header and N rows as the list measures them (not 38% of whatever the
+        // window has, which left half a row under the last one, most of all at 150%). The detail below takes the rest.
+        _rows.SizeChanged += (_, _) => FitListRows();
+        // Not in the call that makes the handle: the native list has no columns or rows yet then, so it is asked once that is over.
+        _list.HandleCreated += (_, _) => _list.BeginInvoke(FitListRows);
+        _list.ColumnsRescaled += (_, _) =>
+        {
+            FitListRows();
+            if (_list.IsHandleCreated)
+            {
+                _list.BeginInvoke(FitListRows);
+            }
+        };
+
         _count.Margin = new Padding(0, 0, Px(16), 0);
         var bar = PageLayout.Bar("checksHistoryBar", pad, [_reload], []);
         Controls.Add(_rows);
@@ -119,6 +133,39 @@ internal sealed class CheckHistoryTab : CheckTab
         Controls.Add(_notice);
         Controls.Add(bar);
         ApplyLanguage();
+    }
+
+    /// <summary>The fewest runs the list shows when the window is low.</summary>
+    private const int MinListRows = 3;
+
+    /// <summary>How tall the list may be, as a share of the area it and the detail divide: about as much as before.</summary>
+    private const int ListSharePercent = 38;
+
+    /// <summary>The height of the list row of the page: the header and a whole number of rows, as the list measures them now.</summary>
+    internal int WholeRowsHeight()
+    {
+        var available = _rows.ClientSize.Height;
+        var rows = Math.Max(_list.RowsThatFit(available * ListSharePercent / 100), MinListRows);
+        return _list.HeightForRows(rows);
+    }
+
+    private void FitListRows()
+    {
+        if (_rows.ClientSize.Height <= 0 || _rows.RowStyles.Count != 2 || _list.IsDisposed)
+        {
+            return;
+        }
+
+        var height = WholeRowsHeight();
+        var first = _rows.RowStyles[0];
+        if (first.SizeType != SizeType.Absolute || Math.Abs(first.Height - height) > 0.5f)
+        {
+            first.SizeType = SizeType.Absolute;
+            first.Height = height;
+            var second = _rows.RowStyles[1];
+            second.SizeType = SizeType.Percent;
+            second.Height = 100;
+        }
     }
 
     private enum DetailState
@@ -328,6 +375,14 @@ internal sealed class CheckHistoryTab : CheckTab
         finally
         {
             _suppressSelection = false;
+        }
+
+        // The list measures its rows from the rows it holds: its share of the page is made again now that it has them (and once more when the
+        // native list has laid them out).
+        FitListRows();
+        if (_list.IsHandleCreated)
+        {
+            _list.BeginInvoke(FitListRows);
         }
 
         _list.Invalidate();

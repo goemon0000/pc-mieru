@@ -28,7 +28,7 @@ internal static class BuildCodeStrings
         new("gui.hw.pcb1", "構成コードをコピー（/my-config 用）", "Copy configuration code (for /my-config)"),
         new("gui.hw.pcb1.tip", "この PC の部品の型番と数から、構成コードを作ります。内容を確認してから、コピーまたは保存できます。シリアル番号・MAC・PC の名前などは含みません", "Builds a configuration code from the model names and counts of this PC's parts. You can read it before copying or saving. Serial numbers, MAC addresses, the PC's name and similar are not included"),
         new("gui.hw.pcb1.title", "構成コード（/my-config 用）", "Configuration code (for /my-config)"),
-        new("gui.hw.pcb1.lead", "このコードには、下の部品の名前と数が入っています。シリアル番号・MAC・PC の名前などは入りません。何も送信しません。コピーか保存を押した時だけ、内容がこの画面の外に出ます。", "The code holds the names and counts of the parts below. Serial numbers, MAC addresses, the PC's name and similar are not included. Nothing is sent. The content leaves this window only when you press Copy or Save."),
+        new("gui.hw.pcb1.lead", "このコードには、下の部品の名前と数だけが入ります（シリアル番号・MAC アドレス・PC の名前などは入りません）。この画面からは何も送信しません。「コピー」でコードがクリップボードに入り、「JSON を保存」で同じ内容を読める形のファイルにして、選んだ場所へ保存します。", "The code holds only the names and counts of the parts below (serial numbers, MAC addresses, the PC's name and similar are not included). This app sends nothing to the site or anywhere else. Copy puts the code on the clipboard. Save JSON writes the same content as a readable JSON file to a place you choose."),
         new("gui.hw.pcb1.failed", "構成コードを作れませんでした（{detail}）", "Could not make the configuration code ({detail})"),
 
         new("gui.hw.pcb1.parts", "コードに入る部品", "Parts in the code"),
@@ -49,9 +49,9 @@ internal static class BuildCodeStrings
         new("gui.hw.pcb1.copy.failed", "コピーできませんでした（クリップボードが使用中です）", "Could not copy (the clipboard is busy)"),
 
         // A note names its category first, so the word for the category can start a sentence in both languages.
-        new(NotePrefix + "kinds_left_out", "{category}: {max} 種類までなので、残りの {count} 種類を省きました", "{category}: only {max} kinds fit, so {count} were left out"),
+        new(NotePrefix + "kinds_left_out", "{category}: {max} 種類までのため、残り {count} 種類を省きました", "{category}: only {max} models fit; {count} more were left out"),
         new(NotePrefix + "category_left_out_for_length", "{category}: 長さの上限（{max} 字）に収めるため、省きました", "{category}: left out to stay within {max} characters"),
-        new(NotePrefix + "memory_first_kind_only", "{category}: 長さの上限（{max} 字）に収めるため、1 種類目だけにしました", "{category}: only the first kind was kept, to stay within {max} characters"),
+        new(NotePrefix + "memory_first_kind_only", "{category}: 長さの上限（{max} 字）に収めるため、1 種類目だけを残しました", "{category}: only the first model was kept, to stay within {max} characters"),
         new(NotePrefix + "one_part_left_out_for_length", "{category}: 長さの上限に収めるため、1 つ省きました", "{category}: one part was left out to fit"),
         // The same note repeated for one category is one line with a count on the screen (the notes themselves stay one each).
         new(NotePrefix + "one_part_left_out_for_length_many", "{category}: 長さの上限に収めるため、{count} 個省きました", "{category}: {count} parts were left out to fit"),

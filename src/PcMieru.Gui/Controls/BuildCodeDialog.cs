@@ -40,8 +40,9 @@ internal sealed class BuildCodeDialog : Form
     private readonly Button _copy = new() { Name = "pcb1Copy", AutoSize = true };
     private readonly Button _save = new() { Name = "pcb1Save", AutoSize = true };
     private readonly Button _close = new() { Name = "pcb1Close", DialogResult = DialogResult.Cancel, AutoSize = true };
-    private readonly Font _mono;
-    private readonly Font _bold;
+    private Font _mono;
+    private Font _bold;
+    private bool _fontsReady;
     private readonly bool _empty;
     private TableLayoutPanel _root = null!;
     private int _codeLines = CodeLines;
@@ -72,7 +73,7 @@ internal sealed class BuildCodeDialog : Form
         var width = LogicalToDeviceUnits(780);
         var headMargin = new Padding(0, pad / 2, 0, pad / 4);
         _bold = new Font(Font, FontStyle.Bold);
-        _mono = new Font("Consolas", Font.SizeInPoints);
+        _mono = MonoFont();
 
         var root = new TableLayoutPanel
         {
@@ -111,7 +112,19 @@ internal sealed class BuildCodeDialog : Form
             _parts.Size = new Size(width, PartsListHeight(Math.Min(_rows.Count, MaxShownRows)));
             _parts.Margin = new Padding(0, 0, 0, pad / 4);
             _parts.SizeChanged += (_, _) => FitPartColumns();
-            _parts.HandleCreated += (_, _) => FitPartColumns();
+            _parts.HandleCreated += (_, _) =>
+            {
+                // The header exists now: its real height (not the guess) decides how high the list is for whole rows. Not in this call: the native
+                // list has no columns or rows yet while its handle is being made, so it is asked once that is over.
+                _parts.BeginInvoke(() =>
+                {
+                    if (!_parts.IsDisposed)
+                    {
+                        FitPartColumns();
+                        FitToScreen();
+                    }
+                });
+            };
             _parts.ColumnsRescaled += (_, _) => FitPartColumns();
             _parts.CellTip = PartTip;
             FitPartColumns();
@@ -173,6 +186,7 @@ internal sealed class BuildCodeDialog : Form
         _save.Click += async (_, _) => await SaveAsync().ConfigureAwait(true);
         theme.Apply(this);
         _code.Font = _mono;
+        _fontsReady = true;
         // The box is whole lines high (no half line at the bottom): its client area is CodeLines lines of the code's own font plus a little air.
         // The list and the box give up rows and lines when the screen is too low for the whole dialog.
         FitToScreen();
@@ -225,14 +239,75 @@ internal sealed class BuildCodeDialog : Form
     internal int CodeLinesShown => _codeLines;
 
     /// <summary>How many parts the list shows now before it scrolls: ten, or fewer on a screen too low for the whole dialog.</summary>
-    internal int PartRowsShown => _rows.Count == 0 ? 0 : Math.Max((_parts.Height - LogicalToDeviceUnits(6)) / Math.Max(RowHeightNow(), 1) - 1, 0);
+    internal int PartRowsShown => _rows.Count == 0 ? 0 : _parts.RowsThatFit(_parts.Height);
 
     /// <summary>The height the whole window needs now: its content and the frame round it.</summary>
     internal int PreferredHeight => _root.GetPreferredSize(Size.Empty).Height + (Height - ClientSize.Height);
 
-    private int RowHeightNow() => Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(28));
+    /// <summary>
+    /// The height of the list for this many rows: the header as the list measures it now, the rows as the list measures them, and the border.
+    /// Measured, not assumed (a header that is not one row high, as at 150%, left half a row under the last one).
+    /// </summary>
+    private int PartsListHeight(int rows) => _parts.HeightForRows(rows);
 
-    private int PartsListHeight(int rows) => (RowHeightNow() * (rows + 1)) + LogicalToDeviceUnits(6);
+    /// <summary>
+    /// The code's font: monospace, and the same visual size as the dialog's own text. Consolas is drawn smaller than the dialog's font at the
+    /// same point size, so it is a tenth bigger. It is made from the dialog's current font, so it follows the scale the window is at.
+    /// </summary>
+    private Font MonoFont() => new("Consolas", Font.SizeInPoints * 1.1f);
+
+    /// <summary>
+    /// The heads and the code box have fonts of their own, made from the dialog's font; when that font changes (the window goes to another
+    /// scale) they are made again from the new one, or they stay at the old size while everything round them grows.
+    /// </summary>
+    /// <remarks>
+    /// A control keeps the font it has when the new one is equal to it in value (the Font property compares by value), so an old font is
+    /// never disposed after a new one was set: a font that is the same as the one in use is dropped and the one in use stays. (Disposing the
+    /// old one first left the code box with a disposed font at 150%, and the first line height asked of it threw.)
+    /// </remarks>
+    internal void RefreshFonts()
+    {
+        if (!_fontsReady)
+        {
+            return;
+        }
+
+        var bold = new Font(Font, FontStyle.Bold);
+        if (bold.Equals(_bold))
+        {
+            bold.Dispose();
+        }
+        else
+        {
+            var old = _bold;
+            _bold = bold;
+            foreach (var head in new[] { _partsHead, _codeHead, _notesHead, _unreadHead })
+            {
+                head.Font = _bold;
+            }
+
+            old.Dispose();
+        }
+
+        var mono = MonoFont();
+        if (mono.Equals(_mono))
+        {
+            mono.Dispose();
+        }
+        else
+        {
+            var old = _mono;
+            _mono = mono;
+            _code.Font = _mono;
+            old.Dispose();
+        }
+    }
+
+    protected override void OnFontChanged(EventArgs e)
+    {
+        base.OnFontChanged(e);
+        RefreshFonts();
+    }
 
     /// <summary>
     /// Makes the window as low as the screen allows: the list gives up rows first (down to <see cref="MinShownRows"/>; it scrolls), then the box
@@ -293,9 +368,9 @@ internal sealed class BuildCodeDialog : Form
         }
 
         var detailCeiling = Math.Max(_parts.ClientSize.Width * 45 / 100, _parts.Scaled(120));
-        _parts.Columns[0].Width = Math.Max(_parts.WidestNeed(0), _parts.Scaled(120));
-        _parts.Columns[2].Width = Math.Min(Math.Max(_parts.WidestNeed(2), _parts.Scaled(120)), detailCeiling);
-        _parts.Columns[3].Width = Math.Max(_parts.WidestNeed(3), _parts.Scaled(56));
+        _parts.Columns[0].Width = Math.Max(_parts.ContentNeed(0), _parts.Scaled(80));
+        _parts.Columns[2].Width = Math.Min(Math.Max(_parts.ContentNeed(2), _parts.Scaled(60)), detailCeiling);
+        _parts.Columns[3].Width = Math.Max(_parts.ContentNeed(3), _parts.Scaled(56));
         _parts.FitLastColumn();
     }
 
@@ -304,6 +379,15 @@ internal sealed class BuildCodeDialog : Form
         // The window is on its screen now: a screen lower than the first guess takes rows and lines away before the window is placed.
         FitToScreen();
         base.OnLoad(e);
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        // The window is laid out and on its screen: the list is asked for its header and rows once more (only a height that differs is a change).
+        FitPartColumns();
+        FitToScreen();
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -317,6 +401,7 @@ internal sealed class BuildCodeDialog : Form
             {
                 if (!IsDisposed)
                 {
+                    RefreshFonts();
                     FitPartColumns();
                     FitToScreen();
                 }

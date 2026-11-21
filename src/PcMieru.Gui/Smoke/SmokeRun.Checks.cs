@@ -265,6 +265,9 @@ internal static partial class SmokeRun
             {
                 history.SelectEntry(index);
                 await Until(() => history.SelectedRunId == runId && history.DetailTask.IsCompleted && history.Detail.RowCount > 0, 4000).ConfigureAwait(true);
+                await Until(() => history.List.WholeRowsProblem(out _) is null, 2000).ConfigureAwait(true);
+                var listProblem = history.List.WholeRowsProblem(out var listFacts);
+                Check("checks: the list of runs starts under its header and ends on a whole row", listProblem is null, (listProblem is null ? string.Empty : listProblem + " | ") + listFacts);
                 Check("checks: the stopped run is selected and its saved values are shown", history.SelectedRunId == runId && history.Detail.RowCount > 0 && history.ListText(index, 3) == CheckFormat.OutcomeName(CheckOutcome.Stopped), history.SelectedRunId + " / " + history.Detail.RowCount + " rows / " + history.ListText(index, 3));
                 await ShootChecksTab(page, "history", async () =>
                 {
@@ -381,10 +384,16 @@ internal static partial class SmokeRun
                 }
 
                 Check($"hardware: no part name or detail of the {kind} dialog is cut short without a tooltip that holds it ({look})", grid.Columns.Count >= 4 && cells.Count == 0, string.Join(" | ", cells.Take(4)) + " (columns " + string.Join("/", grid.Columns.Cast<ColumnHeader>().Select(static c => c.Width)) + ")");
+                // The list ends on a whole row under its header in the window that is really on show (the test of it runs on a list the window has not laid out).
+                await Until(() => grid.WholeRowsProblem(out _) is null, 2000).ConfigureAwait(true);
+                var rowsProblem = grid.WholeRowsProblem(out var rowFacts);
+                Check($"hardware: the parts list of the {kind} dialog starts under its header and ends on a whole row ({look})", rowsProblem is null, (rowsProblem is null ? string.Empty : rowsProblem + " | ") + rowFacts);
                 Check($"hardware: the {kind} dialog fits on the screen ({look})", dialog.Height <= work.Height && dialog.Width <= work.Width && dialog.BackColor == context.Theme.Palette.Window, dialog.Width + "x" + dialog.Height + " in " + work.Width + "x" + work.Height);
                 if (shotsDirectory is not null)
                 {
-                    _shots.Add(await Capture(shotsDirectory, $"{look}-hardware-pcb1{nameSuffix}{ScaleSuffix}.png", dialog).ConfigureAwait(true));
+                    // The code box and the parts list are the two things this picture is for: it is taken again while either is flat, and the picture kept is checked.
+                    var regions = new List<(string, Control)> { ("the code box", dialog.CodeBox), ("the parts list", dialog.PartsList) };
+                    _shots.Add(await Capture(shotsDirectory, $"{look}-hardware-pcb1{nameSuffix}{ScaleSuffix}.png", dialog, regions).ConfigureAwait(true));
                 }
 
                 dialog.Close();
