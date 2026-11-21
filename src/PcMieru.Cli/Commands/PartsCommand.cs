@@ -39,6 +39,7 @@ public sealed class PartsCommand : ICliCommand
         new("cli.parts.shareAndCode", "--share と --code は同時に使えません。どちらか一方を付けてください", "--share and --code cannot be used together; give one of them"),
         new("cli.parts.emptyConfig", "コードに入る部品を読み取れなかったため、コードは出していません", "No parts could be read for the code, so no code was made"),
         new("cli.parts.outputFailed", "{file} に書き込めなかったため、コードは出していません（{reason}）", "Could not write {file}, so no code was printed ({reason})"),
+        new("cli.parts.shareOutputFailed", "{file} に書き込めませんでした（{reason}）", "Could not write {file} ({reason})"),
         new("cli.parts.output.denied", "権限がありません", "access denied"),
         new("cli.parts.output.error", "書き込みに失敗しました", "the write failed"),
         new("cli.parts.unread", "{category}: 読み取れませんでした（{reason}）", "{category}: not read ({reason})"),
@@ -106,7 +107,17 @@ public sealed class PartsCommand : ICliCommand
         }
         else
         {
-            await File.WriteAllTextAsync(path, json + "\n", new UTF8Encoding(false), context.Ct).ConfigureAwait(false);
+            // A path that cannot be written is exit 1, as for --code -o; 4 is only for a refused --elevate (DESIGN-A 8).
+            try
+            {
+                await File.WriteAllTextAsync(path, json + "\n", new UTF8Encoding(false), context.Ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                var reason = ex is UnauthorizedAccessException ? "cli.parts.output.denied" : "cli.parts.output.error";
+                context.Err.WriteLine("pcmi parts: " + context.Format("cli.parts.shareOutputFailed", ("file", OutputName(path)), ("reason", context.Text(reason))));
+                return ExitCode.Failure;
+            }
         }
 
         return ExitCode.Success;

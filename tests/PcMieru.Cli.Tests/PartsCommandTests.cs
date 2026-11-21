@@ -115,6 +115,32 @@ public class PartsCommandTests
     }
 
     [Fact]
+    public async Task A_folder_for_o_is_exit_1_not_4_nothing_on_stdout_and_one_line_that_names_the_file_only()
+    {
+        var folder = TempFile();
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var r = await CliRun.RunAsync(["parts", "--share", "-o", folder]);
+
+            Assert.Equal(1, r.ExitCode);
+            Assert.Equal(string.Empty, r.Out);
+            var name = Path.GetFileName(folder);
+            var expected = new[] { "cli.parts.output.denied", "cli.parts.output.error" }
+                .Select(reason => "pcmi parts: " + CliWords.Of("cli.parts.shareOutputFailed", Language.En)
+                    .Replace("{file}", name, StringComparison.Ordinal)
+                    .Replace("{reason}", CliWords.Of(reason, Language.En), StringComparison.Ordinal))
+                .ToArray();
+            Assert.Contains(r.Err.Split('\n', StringSplitOptions.RemoveEmptyEntries), line => expected.Contains(line.TrimEnd('\r')));
+            Assert.DoesNotContain(Path.GetDirectoryName(folder)!, r.Err, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(folder);
+        }
+    }
+
+    [Fact]
     public async Task The_long_option_name_writes_a_file_too()
     {
         var path = TempFile();
