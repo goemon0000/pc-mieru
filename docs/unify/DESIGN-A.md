@@ -53,6 +53,9 @@ public interface IBuildCodeProvider
 }
 ```
 
+- PCB1 の公開面（手順 8 の点検で確定）: 公開するのは `IBuildCodeProvider`、結果の DTO（`BuildCodeResult`・`BuildPart`・`BuildNote`）、工場 `BuildCodeProviders` の 2 つ（`Windows()`＝この機械を読む既定、`Sample()`＝合成の部品を規則に通した固定の結果。`--fakes` とプレビューの写し用）だけ。`BuildCollector`・`BuildCode.Make`・`BuildRules` は内部。偽 PCB1 は `IBuildCodeProvider` の差し替えで作る。
+- `BuildCodeResult` は読めなかったカテゴリと理由（カテゴリ名＋`CheckReason`。期限切れ・空き枠なし・拒否・失敗）を持つ。コードの文字列には入れない（旧版とバイト一致を保つ）。画面はこれで「空の構成や欠測の根拠」（§7）を出す。
+
 - 履歴の型（§14 の確定に合わせて固定）:
 
 ```csharp
@@ -311,7 +314,7 @@ internal interface IWmiReader
 
 `EvtNext` に残り時間以下の待ちを渡し、バッチの前後で期限と停止を確かめる。最後の `ERROR_NO_MORE_ITEMS` まで到達した場合だけ件数を返す。0 件もこの経路で確定する。期限切れ、途中のエラー、停止、打ち切りは途中の件数を破棄する。イベントとクエリのハンドルは所有スレッドで閉じる。
 
-WMI は固定の問い合わせごとに接続、実行、全件列挙・変換を 5 秒で包む。ページファイルの 2 問、PCB1 の互換フォールバックは、それぞれの項目の期限を使い回す。`EnumerationOptions.Timeout` に残り時間を渡し、外側の単調時計でも待ちを切る。Windows 呼び出しが残る場合に備え、イベントログと WMI に独立した有限のバックグラウンド実行枠を置く。枠はネイティブ呼び出しが戻るまで解放しない。連打でブロック中のワーカーを積み増さない。Core から経由する OS の DeviceGuard 問い合わせも、この期限管理で点検結果を待たせない。既存の経路は `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:60`、`:139`、`src/PcMieru.Core/Hardware/Collectors/OsCollector.cs:44`。
+WMI は固定の問い合わせごとに接続、実行、全件列挙・変換を 5 秒で包む。ページファイルの 2 問、PCB1 の互換フォールバックは、それぞれの項目の期限を使い回す（カテゴリごとに 5 秒をフォールバックと分け合う。フォールバックは Error・Denied・Unsupported のとき。期限切れと停止ではフォールバックせず空のカテゴリにする。ただし期限が残っているのに実行枠が空かず即座に断られたときは、フォールバックを試す。DXGI は専用の枠で同じ期限を使う）。`EnumerationOptions.Timeout` に残り時間を渡し、外側の単調時計でも待ちを切る。Windows 呼び出しが残る場合に備え、イベントログと WMI に独立した有限のバックグラウンド実行枠を置く。枠はネイティブ呼び出しが戻るまで解放しない。連打でブロック中のワーカーを積み増さない。Core から経由する OS の DeviceGuard 問い合わせも、この期限管理で点検結果を待たせない。既存の経路は `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:60`、`:139`、`src/PcMieru.Core/Hardware/Collectors/OsCollector.cs:44`。
 
 ### 6.2 CPU とメモリ
 
@@ -360,10 +363,14 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 ## 9. PCB1 の互換試験
 
-- `BuildConfig`、`BuildRules`、`BuildCode`、`BuildCollector` を §1 のとおり移す。`PCB1.`＋UTF-8 の compact JSON の base64url。`v: 1`、`src: "parts-life"`、カテゴリ・プロパティ順、省略、重複集約、長さ上限をそのまま固定。保存版は同じ内容の整形済み JSON。`PL/Build/BuildCode.cs:29`、`:44`、`:138`、`:155`。
+- `BuildConfig`、`BuildRules`、`BuildCode`、`BuildCollector` を §1 のとおり移す。`PCB1.`＋UTF-8 の compact JSON の base64url。`v: 1`、`src: "parts-life"`、カテゴリ・プロパティ順、省略、重複集約、長さ上限をそのまま固定。保存版は同じ内容の整形済み JSON。`PL/Build/BuildCode.cs:29`、`:44`、`:138`、`:155`。注記は旧版の日英の文ではなく `BuildNote`（種類・カテゴリ・件数）で返し、文言は画面側が持つ（golden とは件数と、上限の 3 段では種類・カテゴリで突き合わせる）。
 - Windows 入力は旧 `BuildSources` の順序と意味を守る。CPU、基板、メモリ、DXGI と WMI の GPU フォールバック、物理ディスク、モニター、光学ドライブを同じ条件で取る。WMI の薄いアダプターに期限を追加する。Core の収集値への差し替えは、同じ入力と同じ実機で文字列一致を証明できたものから。旧ソースとフォールバックは `PL/Build/BuildCollector.cs:11`、`:72`、`:94`、`:126`、`:141`、`:165`、`:174`。
+  - 手順 8 で決めた: GPU は Core の `GpuAdapters` ではなく旧 DXGI＋D3DKMT の列挙を移す（Core の一覧は PCI アドレスが無く別名を落とせない・ソフトウェアアダプターを残す・D3DKMT が無い。上限 64 枚）。CPU 名は旧と同じ Win32_Processor.Name。
+  - 旧版との差（通常の出力は変わらない）: 期限で切れたカテゴリは空（旧は期限切れの ManagementException でもフォールバックし、遅い DXGI の一覧も保った）。呼び出し元のものでない OperationCanceledException は空のカテゴリ（旧は収集ごと止めた）。Trace には例外の型名だけ（旧は本文も出した）。DXGI の想定外の例外は Win32_VideoController へフォールバックする（旧は GPU が空）。
 - Golden は `25e4571` を一時ディレクトリに展開し、そのリビジョンの Checks を参照する小さなコンソールハーネスで作る。旧 GUI や Helper を起動せず、`BuildCode.Make(BuildCollector.Collect(sources))` を直接呼ぶ。まず合成の `BuildSources` で、日英名、同型複数、XMP、4 GiB 超 VRAM、USB／仮想機器、光学ドライブ、欠測、長さ超過を固定する。コードの UTF-8 バイト一致と、保存 JSON の内容一致を確認する。移植する旧試験は `PL-tests/BuildCodeTests.cs:23`、`:65`、`:149`、`:223`、`:278`、`:319`、`:353`、`:402`、`:438`。
+  - ハーネスは `tools/pcb1-golden`。`25e4571` の `src/PartsLife.Checks` と `src/Shared` だけを git archive で `%TEMP%` に展開して組む（祖先フォルダの Directory.Build.* を拾わないよう空の物を置く）。旧試験 `Summary_counts_modules_by_q` は WPF 側の要約なので移さない。golden は新しいコードから作り直さない（作り直しは常にハーネスで、旧版から）。
 - 実機比較では同じハーネスで `BuildSources` の材料を一度だけ採り、必要な公開型番と数値だけの試料を作って旧・新に再生する。続けて同じ機器状態で旧・新の Windows 収集経路の一致も確認する。試験用の一時ルートにだけ出力し、オーナーの `%APPDATA%\PartsLife`、基準値、設定には触れない。Golden にシリアル、PC 名、パスを含めない。旧実機テストの入口は `PL-tests/BuildCodeTests.cs:503`。
+  - 実機比較は `Pcb1RealMachineTests`（RealMachine）。ハーネスは `PCMIERU_PCB1_HARNESS` か `%TEMP%\pcmieru-pcb1-harness\out\Pcb1Golden.exe`。無ければ失敗する（黙って飛ばさない）。一時の試料は規則が読む分だけに減らす（光学ドライブの PNPDeviceID は「USB で始まるか」「MSFT を含むか」だけ。末尾は USB 機器のシリアルになり得る）。名前と型番は規則に通す前の生の値のまま一時フォルダに置き、終了時に消す。消せなければ失敗とする（パスは出さない）。出力は一致したか・件数・コードの長さだけ。
 - `pcm-parts/1` との相互変換は作らない。出荷前に PCB1 と v0.3.0 の `pcm-parts/1` golden をサイトの受け渡し側へ渡し、実パーサーで受理・解釈を確認する。`docs/unify/SPEC-unify.md:131`、`:139`、`:236`。
 
 ## 10. `tools/measure.ps1`
