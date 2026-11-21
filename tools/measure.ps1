@@ -639,6 +639,18 @@ public static class PcmMeasureWin
     private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+
+    [DllImport("user32.dll")]
     private static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
 
     [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
@@ -666,6 +678,37 @@ public static class PcmMeasureWin
     private const uint LB_GETTEXT = 0x0189;
     private const uint LB_GETTEXTLEN = 0x018A;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    // The main window of a process: its largest visible top-level window that has no owner, leaving out the drop shadow of a tooltip
+    // (class SysShadow, unowned and visible while a tooltip shows) and tooltips. Process.MainWindowHandle takes the first such window in
+    // z-order, so a tooltip shown under a resting mouse pointer made it the 285 x 40 shadow and WM_CLOSE went nowhere. Zero: none.
+    public static IntPtr MainWindowOf(int processId)
+    {
+        IntPtr best = IntPtr.Zero;
+        long bestArea = -1;
+        EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
+        {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId || !IsWindowVisible(hwnd) || GetWindow(hwnd, 4) != IntPtr.Zero) { return true; }
+            StringBuilder name = new StringBuilder(256);
+            GetClassName(hwnd, name, 256);
+            string cls = name.ToString();
+            if (cls == "SysShadow" || cls.IndexOf("tooltips_class", StringComparison.OrdinalIgnoreCase) >= 0) { return true; }
+            RECT rect;
+            if (!GetWindowRect(hwnd, out rect)) { return true; }
+            long area = (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top);
+            if (area > bestArea) { bestArea = area; best = hwnd; }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
+
+    // WM_CLOSE to a top-level window, as Process.CloseMainWindow does, but to the window MainWindowOf chose.
+    public static bool PostClose(IntPtr hwnd)
+    {
+        return hwnd != IntPtr.Zero && PostMessage(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
+    }
 
     // The navigation list box: a direct child of the main window whose window class is a list box.
     public static IntPtr FindNavList(IntPtr main)
@@ -844,8 +887,7 @@ function Step-NavPage([System.Diagnostics.Process]$Proc, [hashtable]$State) {
         Initialize-Win32
         $held = [PcmMeasureWin]::ModifierHeld()
         if ($null -ne $held) { $r.skipped = $true; $r.note = $held + ' was held: the step was skipped'; return $r }
-        $Proc.Refresh()
-        $main = $Proc.MainWindowHandle
+        $main = Get-MainWindow $Proc
         if ($main -eq [IntPtr]::Zero) { $r.note = 'no main window handle'; return $r }
         if ($null -eq $State.Nav -or $State.Nav -eq [IntPtr]::Zero) { $State.Nav = [PcmMeasureWin]::FindNavList($main) }
         $nav = $State.Nav
@@ -878,13 +920,18 @@ function Step-NavPage([System.Diagnostics.Process]$Proc, [hashtable]$State) {
     return $r
 }
 
+# The main window of a process (see PcmMeasureWin.MainWindowOf); [IntPtr]::Zero when it has none (yet).
+function Get-MainWindow([System.Diagnostics.Process]$Proc) {
+    Initialize-Win32
+    return [PcmMeasureWin]::MainWindowOf([int]$Proc.Id)
+}
+
 # The size of the window of a process (GetWindowRect: width, height). width/height $null with a note when it cannot be measured.
 function Get-WindowSize($Proc) {
     $r = [ordered]@{ width = $null; height = $null; note = $null }
     try {
         Initialize-Win32
-        $Proc.Refresh()
-        $handle = $Proc.MainWindowHandle
+        $handle = Get-MainWindow $Proc
         if ($handle -eq [IntPtr]::Zero) { $r.note = 'no main window handle'; return $r }
         $size = [PcmMeasureWin]::WindowSize($handle)
         if ($null -eq $size) { $r.note = 'GetWindowRect failed'; return $r }
@@ -1405,7 +1452,7 @@ function Close-Politely([System.Diagnostics.Process]$Proc, [int]$TimeoutSeconds,
     }
     else {
         $sent = $false
-        try { $Proc.Refresh(); if ($Proc.MainWindowHandle -ne [IntPtr]::Zero) { $sent = $Proc.CloseMainWindow() } } catch { }
+        try { $sent = [PcmMeasureWin]::PostClose((Get-MainWindow $Proc)) } catch { }
         $ended = $false
         try { $ended = $Proc.WaitForExit($TimeoutSeconds * 1000) } catch { $ended = -not (Test-Alive $Proc) }
         if ($ended) { $info.method = 'CloseMainWindow' }

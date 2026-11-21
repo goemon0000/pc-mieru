@@ -484,7 +484,7 @@ else {
         finally { Stop-Quietly $proc }
     }
 
-    Check 'gui: the navigation list is read, the checks page is found, one page step is made and the window size is read' {
+    Check 'gui: the navigation list is read, the checks page is found, one page step is made, the window size is read and the window closes politely' {
         $dir = New-WorkSubDir 'navread'
         $proc = Start-App (Join-Path $dir 'marks.jsonl')
         try {
@@ -495,8 +495,9 @@ else {
             while ($limit.Elapsed.TotalSeconds -lt 40) {
                 $proc.Refresh()
                 if ($proc.HasExited) { throw 'the GUI ended by itself' }
-                if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
-                    $nav = [PcmMeasureWin]::FindNavList($proc.MainWindowHandle)
+                $mainWindow = Get-MainWindow $proc
+                if ($mainWindow -ne [IntPtr]::Zero) {
+                    $nav = [PcmMeasureWin]::FindNavList($mainWindow)
                     if ($nav -ne [IntPtr]::Zero) { $count = [PcmMeasureWin]::Count($nav); if ($count -ge 8) { break } }
                 }
                 [Threading.Thread]::Sleep(250)
@@ -517,6 +518,10 @@ else {
             $size = Get-WindowSize $proc
             Assert-That ($null -ne $size.width -and $size.width -gt 200 -and $size.height -gt 200) ('window size: ' + $size.note)
             Info ('step: ' + $from + ' -> ' + $step.to + ' by ' + (@($step.keys) -join ',') + '; window ' + $size.width + ' x ' + $size.height)
+            # The close the measurement uses: WM_CLOSE to the window Get-MainWindow chose ends the GUI without a kill (a tooltip under a
+            # resting mouse pointer once made Process.MainWindowHandle the tooltip's shadow and every run ended in a kill).
+            $close = Close-Politely $proc 20
+            Assert-That ($close.method -eq 'CloseMainWindow') ('the GUI was not closed politely: ' + $close.method + ' ' + $close.note)
         }
         finally {
             try { [void]$proc.CloseMainWindow(); if (-not $proc.WaitForExit(15000)) { $proc.Kill() } } catch { }
