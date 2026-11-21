@@ -234,7 +234,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 
 - 履歴の `<UTC>` は `endedAtUtc` の `yyyyMMdd'T'HHmmssfff'Z'`（JSON の時刻と同じミリ秒。**同じ切り捨て済みの値から両方を作る**）。UTC、UUID、種類を本体と照合する。列挙は直下だけ。終了時刻の降順、同時刻なら UUID の昇順（`N` 形式の文字列の序数順。§2）。種類ごとに正常な最新 200 件を残す（今保存したファイルは必ず残し、その 200 件の 1 枠を使う。§4.1）。基準値は台ごとに最大 200 観測を持ち、時計逆行で保留中なら次の比較元を残す。旧基準値の上限と保留は `PL/Storage/Baseline.cs:223`、`:341`、`:365`。
 - 同じディレクトリの一意な `.tmp` に `CreateNew` で書く。`Flush(true)` 後に閉じて、同一ボリューム上で rename／replace。履歴の初回と移行コピーは上書きなし。基準値の更新は読み取りから比較、書き込みまで、ユーザーと保存先を識別するプロセス間ロックの下で行う。ロックは `baseline\` の中のロック用ファイルを共有なし（`FileShare.None`）で開いて持つ形にする（名前つき mutex は `Local\` だとセッションごとに分かれ、パスの別名（8.3 名・ジャンクション・subst）で名前が割れるため。ファイルならフォルダごとに 1 つに決まる）。取れなければ短い間隔で再試行し、期限で諦めて `baseline_read_failed`。長い採取中はロックを持たない。先に採取した回が遅れて到着した場合は古い値で比較元を更新しない。未確定の `.tmp` は一覧から除く。放置された一時ファイル（名前の形と経過時間で判断する。pid は見ない）だけを、保存の確定後に片付ける（昇格か削除。細則は §4.1）。履歴の確定は write-through の rename で、同名を置き換えない。
-- 壊れた JSON、必須欄の不整合は GUI／CLI が検出したとき `name.json.bad-<UTC>` に退避する。別ファイルを上書きせず、理由コードと件数を表示する。共有違反、権限エラー、将来の `format` は現物を保持する。退避に失敗しても壊れたファイルへ書き戻さない。MCP は読めない履歴を飛ばして件数を返す。退避も削除も行わない。
+- 壊れた JSON、必須欄の不整合は CLI の一覧と `GetAsync` が検出したとき `name.json.bad-<UTC>` に退避する（GUI の履歴タブは `CheckHistory.OpenReadOnly` で読むだけで、退避もフォルダの作成もしない。ページを開いただけで何も変えないため。壊れたファイルは CLI が一覧するまで `history_unreadable` として出し続ける。手順 9 の点検で決めた）。別ファイルを上書きせず、理由コードと件数を表示する。共有違反、権限エラー、将来の `format` は現物を保持する。退避に失敗しても壊れたファイルへ書き戻さない。MCP は読めない履歴を飛ばして件数を返す。退避も削除も行わない。
 - 保存 I/O の失敗は `CheckRun` の保存状態に出す。確定した結果ファイルを削除して取り消す処理は作らない。基準値を更新できなかった回は次回までの比較元を進めない。履歴保存に先立って確定した基準値は有効な観測として残す。
 
 ### 4.1 結果ストアの細則（段 A 手順 2 で決めた。実装は `src/PcMieru.Checks/History/`）
@@ -284,6 +284,8 @@ v2|sn=SN%257%7CA_|uid=eui.0123456789abcdef|model=ATA Example SSD|size=1000204886
 - 強い鍵の表示番号は `disk-ordinals.json` に保持する。弱い鍵や恒久番号をまだ持たない台は、その結果内で未使用の `disk-N` を割り当てる。弱い鍵と番号の対応は保存しない。番号を履歴間で名寄せする用途には使わない。
 
 ### 5.3 v0.7.4 からの読み取り専用移行
+
+旧フォルダの既定 `%APPDATA%\PartsLife\checks` と保存先の既定は、Checks が公開の既定値（`DefaultLegacyDirectory()`、`CheckHistoryStore.DefaultRoot()`）として返す。GUI・CLI は自前でパスを組まない（手順 9 の点検で決めた。旧フォルダ名を知るのは Checks の 1 か所だけ）。
 
 最初の記憶媒体点検で、比較の前に `%APPDATA%\PartsLife\checks\` を読む。旧版の `BaselineHistory` は camelCase の `{key, model, entries:[{at,counters,withheld?}]}`。`twins.json` はキー文字列の配列。旧ファイル名は `disk-<SafeName(label)の先頭40文字>-<SHA-256(UTF-8 key)の先頭8バイトを小文字hex>.json`。`PL/Storage/Baseline.cs:7`、`:23`、`:196`、`:232`、`:243`、`:474`、`:537`。
 
@@ -336,8 +338,10 @@ WMI は固定の問い合わせごとに接続、実行、全件列挙・変換�
 - `PageCatalog` に `checks`／`gui.nav.checks` を `diagnose` の直前に追加。`ChecksPage : PageBase` に `SystemCheckTab`、`LoadCheckTab`、`StorageCheckTab`、`CheckHistoryTab` を置く。`GuiContext` に点検の実行と閲覧を差し込み、実行状態は `CheckController` が持つ。既存のページ順、遅延生成、依存の受け渡しは `src/PcMieru.Gui/Shell/PageCatalog.cs:3`、`:9`、`src/PcMieru.Gui/Shell/MainForm.cs:169`、`src/PcMieru.Gui/Program.cs:48`。
 - 「システム」は「点検する」。項目、判定、値、根拠を表示。「負荷」は CPU／メモリ、30 秒／2 分／5 分、進捗、速度、「止める」。「記憶媒体」は台ごとの状態と `1,204 → 1,227（+23）` のような根拠。通常権限で拒否された台があれば「管理者で読み直す」。管理者読み直しは 1 回の新しい採取として保存する。「履歴」は日時、種類、判定、実行結果。選ぶと保存時の値を表示する。
 - 状態は未実行、実行中、停止待ち、完了、停止、失敗。完了後に保存失敗を追記できる。履歴は読み込み中、空、一覧、読み取りの警告を持つ。タブと左ナビを移っても実行は続く。閉じるときは確認し、承認後に停止と保存の完了を `await` して閉じ直す。`OnFormClosing` は最初の閉じ要求をキャンセルし、再入を 1 回に抑える。既存の終了処理は `src/PcMieru.Gui/Shell/MainForm.cs:284`。
+- 閉じの細則（手順 9 の点検で決めた）: Windows の終了・タスクマネージャーからの閉じは、確認中・停止待ちでも問わずに停止を要求して閉じる（閉じを取り消さない。取り消すと Windows が「終了を妨げている」と出す）。その回の保存は `Application.Run` の後で最大 3 秒だけ待つ。間に合わなければ §4.1 の `.tmp` 片付けに任せる（この場合の保存は努力目標）。承認後の停止待ちは最大 15 秒で、超えたら保存を待たずに閉じる（止まらない実行で窓が閉じられなくならないため）。停止待ちの間は「停止しています。終わり次第閉じます」を状態欄に出す。ランナーの例外は固定の失敗文と型名・HRESULT で示し、例外のメッセージは画面に出さない（OS の言語の文や利用者名入りのパスが出るため）。自分の停止によらない取り消し（`OperationCanceledException`）は「停止」ではなく「失敗」。
+- 表示の細則（手順 9 で決めた）: 判定の表示語は ja が OK／注意／要確認／測れず／参考、en が OK／Caution／Needs review／Not measured／Info（CLI も同じ語を使う）。参考の行には判定の色を付けない。記憶媒体は台ごとに見出し行（その台の総合）を置き、`.delta` は元のカウンター行の直下に字下げして `1,204 → 1,227（+23）`（en は半角括弧）を出す。直下に `.delta` があるときは元の行には変化を重ねて書かない。数は不変カルチャの桁区切り、日時は OS の地域設定。検証を通らなかった結果（`CheckRun.UnsavedResult`）は「保存されなかった」旨を付けて表示する。その値がどんな形でも描画で例外を出さない（欄ごとに生の文字へ戻す）。実行中は前回の表を「前回の結果」と明示するか消す。
 - `HardwarePage` に「構成コードをコピー（/my-config 用）」を追加。公開する部品一覧とコードのプレビューを表示し、「コピー」と「JSON を保存」を出す。空の構成や欠測の根拠も見える形にする。隣のボタンと配置を合わせる。先行実装のクリックとプレビューは `area/parts-share@9e068c4:src/PcMieru.Gui/Pages/HardwarePage.cs:84`、`:488`、`:513`。
-- `--smoke --shots --fakes` は `FakeCheckRunner`、メモリ内履歴、偽 PCB1 を組み立て時に注入する。4 判定、停止待ち、停止済み履歴、増分、双子で比較不能、PCB1 のプレビューを写す。実負荷、実 WMI、UAC、実ユーザーの点検データへの書き込みを伴わない。既存の fake 起動とページ巡回は `src/PcMieru.Gui/Program.cs:48`、`src/PcMieru.Gui/Smoke/SmokeRun.cs:14`、`:280`。発行時の fake smoke は `tools/publish.ps1:298`。
+- `--smoke --shots --fakes` は `FakeCheckRunner`、メモリ内履歴、偽 PCB1 を組み立て時に注入する。4 判定、停止待ち、停止済み履歴、増分、双子で比較不能、PCB1 のプレビューを写す。実負荷、実 WMI、UAC、実ユーザーの点検データへの書き込みを伴わない。`FakeCheckRunner` とメモリ内履歴は既存の偽物（Core の `FakeHardwareData` など）と同じく出荷アセンブリ（Gui）に置く。既存の fake 起動とページ巡回は `src/PcMieru.Gui/Program.cs:48`、`src/PcMieru.Gui/Smoke/SmokeRun.cs:14`、`:280`。発行時の fake smoke は `tools/publish.ps1:298`。
 
 ## 8. CLI と MCP
 
