@@ -57,9 +57,14 @@
              script's own environment is not changed). It then runs as an ordinary window of your session, shows the same process
              list, and CloseMainWindow works on it. The comparison is therefore PC Mieru against the NON-elevated Task Manager. The
              summary records taskmgr_launch = "as_invoker" and the integrity level that was measured for it. If Task Manager still
-             comes up elevated (integrity high), the script does not try to close it: it prints one line asking you to close it,
-             waits (up to 3 minutes) and records closed_by = "manual". A counter that cannot be read is recorded as missing with
-             the reason; the script never elevates, never shows or answers a UAC prompt.
+             comes up elevated (integrity high), the script does not try to close it: it records closed_by = "left_open", leaves it
+             running and says so at the end (close it yourself). On some Windows 11 builds Task Manager restarts ITSELF elevated
+             even when started as the invoker (the started process ends at once and an elevated one takes its place): the script
+             then follows the Task Manager that stays (task_manager.measured_pid, task_manager.start_note) and reads it through
+             the limited-information handle, which works on an elevated process too. When a Task Manager is already open before a
+             run, no new one is started (Windows would only bring the open one to the front): the run measures the open one and
+             the summary says it was not a fresh start. A counter that cannot be read is recorded as missing with the reason; the
+             script never elevates, never shows or answers a UAC prompt.
              Fairness is checked and recorded, never changed: before each Task Manager run the script READS Task Manager's settings
              (the page it starts on and its small-view flag from settings.json under %LOCALAPPDATA%\Microsoft\Windows\TaskManager;
              the update speed is not stored in a readable place on Windows 11, so it is recorded as unknown) and 5 s into each run
@@ -1364,22 +1369,36 @@ function Get-TaskMgrInfo {
     return $info
 }
 
+# Returns @{ Proc; LaunchedPid; Note }. The Task Manager measured is the one that has a main window: a started process that hands over to an
+# elevated copy of itself (it ends at once, without a window) is followed to the copy; an already-open Task Manager is used as it is.
 function Start-TaskMgr {
+    $open = @(Get-ProcessesNamed 'Taskmgr')
+    foreach ($p in $open) {
+        if ((Test-Alive $p) -and (Get-MainWindow $p) -ne [IntPtr]::Zero) {
+            foreach ($q in $open) { if ($q.Id -ne $p.Id) { Dispose-Quietly $q } }
+            return @{ Proc = $p; LaunchedPid = $null; Note = 'Task Manager was already open (pid ' + $p.Id + '): this run measures it as it is, not a fresh start' }
+        }
+    }
     $before = @{}
-    foreach ($p in [System.Diagnostics.Process]::GetProcessesByName('Taskmgr')) { $before[$p.Id] = $true; $p.Dispose() }
+    foreach ($p in $open) { $before[$p.Id] = $true; Dispose-Quietly $p }
     $started = $null
     try { $started = [System.Diagnostics.Process]::Start((New-TaskMgrStartInfo)) }
     catch { throw ('Task Manager did not start (' + (Get-ShortError $_) + ')') }
+    $launchedPid = [int]$started.Id
     Dispose-Quietly $started
     $limit = [Diagnostics.Stopwatch]::StartNew()
     while ($limit.Elapsed.TotalSeconds -lt 90) {
-        foreach ($p in [System.Diagnostics.Process]::GetProcessesByName('Taskmgr')) {
-            if (-not $before.ContainsKey($p.Id)) { return $p }
-            $p.Dispose()
+        foreach ($p in @(Get-ProcessesNamed 'Taskmgr')) {
+            if (-not $before.ContainsKey($p.Id) -and (Test-Alive $p) -and (Get-MainWindow $p) -ne [IntPtr]::Zero) {
+                $note = $null
+                if ($p.Id -ne $launchedPid) { $note = 'the started Task Manager (pid ' + $launchedPid + ') handed over to pid ' + $p.Id + ' (it restarted itself); pid ' + $p.Id + ' is measured' }
+                return @{ Proc = $p; LaunchedPid = $launchedPid; Note = $note }
+            }
+            Dispose-Quietly $p
         }
         [Threading.Thread]::Sleep(250)
     }
-    throw 'Task Manager did not appear within 90 s'
+    throw 'Task Manager did not show a window within 90 s'
 }
 
 # ---- fairness of the comparison (read only: Task Manager's settings are never written) ----
@@ -1559,14 +1578,30 @@ function Invoke-MeasuredRun {
     $windowSize = $null
     $tmSettings = $null
     $tmInfo = $null
+    $tmStart = $null
     if (-not $isApp) { $tmSettings = Read-TaskMgrSettings; $tmInfo = Get-TaskMgrInfo }
 
     $clock = [Diagnostics.Stopwatch]::StartNew()
     try {
         if ($isApp) { $proc = Start-App $markFile }
-        else { $proc = Start-TaskMgr; $clock.Restart() }
+        else {
+            $tmStart = Start-TaskMgr
+            $proc = $tmStart.Proc
+            $clock.Restart()
+            $tmInfo['launched_pid'] = $tmStart.LaunchedPid
+            $tmInfo['measured_pid'] = [int]$proc.Id
+            $tmInfo['start_note'] = $tmStart.Note
+            if ($null -ne $tmStart.Note) { [void]$warnings.Add($tmStart.Note) }
+        }
         $startNow = [DateTime]::UtcNow
         $main = New-Series $proc 'main' 0.0 $startNow $true
+        if (-not $isApp -and $null -eq $tmStart.LaunchedPid -and $null -ne $main.Handle) {
+            # A Task Manager that was already open has been running long before this run: its first interval starts at clock zero, not at its
+            # creation (or the first second would carry all the CPU of its earlier life).
+            $c0 = [PcmProc]::Read($main.Handle)
+            if ($c0.TimesError -eq 0) { $main.PrevT = 0.0; $main.PrevCpu = [double]$c0.CpuSeconds }
+            if ($c0.CyclesError -eq 0) { $main.PrevCycT = 0.0; $main.PrevCycles = [double]$c0.Cycles }
+        }
         if ($isApp -and $null -ne $main.StartUtc) {
             $main.PrevT = 0.0   # the stopwatch was started just before the process; the creation time is not used for the zero
         }
@@ -1621,6 +1656,10 @@ function Invoke-MeasuredRun {
                     $f = $pair[0]
                     if ($null -eq $total[$f] -or $null -eq $r[$f]) { $total[$f] = $null } else { $total[$f] = $total[$f] + $r[$f] }
                 }
+            }
+            foreach ($r in $tick) {
+                if ($null -ne $r.Dt -and $r.Dt -gt $total.Dt) { $total.Dt = $r.Dt }
+                if ($null -ne $total.CycDt -and $null -ne $r.CycDt -and $r.CycDt -gt $total.CycDt) { $total.CycDt = $r.CycDt }
             }
             $prevTickT = $t
 
@@ -1703,13 +1742,10 @@ function Invoke-MeasuredRun {
             }
             else { $close = Close-Politely $proc 15 -NoKill }
             if ($isHigh -or $close.method -eq 'left-running') {
-                Write-Host '  Task Manager is still open and elevated: please close it yourself (waiting up to 3 minutes).' -ForegroundColor Yellow
-                $wait = [Diagnostics.Stopwatch]::StartNew()
-                while ((Test-SeriesAlive $main) -and $wait.Elapsed.TotalSeconds -lt 180) { [Threading.Thread]::Sleep(500) }
-                $close.waited_seconds = [math]::Round($wait.Elapsed.TotalSeconds, 1)
-                if (Test-SeriesAlive $main) { Close-AllSeries $main $children $finished; throw 'Task Manager is still open: close it and run again' }
-                $close.note = $close.note + '; it was closed by hand'
-                $close['closed_by'] = 'manual'
+                # Left open (the next run measures the same window). Nothing here waits for a person: the runs go on unattended.
+                Write-Host ('  Task Manager (pid {0}) is left open: it cannot be closed from this script. Close it yourself when the runs are done.' -f $proc.Id) -ForegroundColor Yellow
+                $close.note = $close.note + '; it was left open'
+                $close['closed_by'] = 'left_open'
             }
             else { $close['closed_by'] = $(switch ($close.method) { 'CloseMainWindow' { 'script' } 'already-exited' { 'already_exited' } default { $close.method } }) }
         }
@@ -2026,7 +2062,14 @@ function Invoke-Main {
             $summary.temperature = 'warm (after one unmeasured run)'
             if ($Mode -eq 'compare') {
                 $open = @([System.Diagnostics.Process]::GetProcessesByName('Taskmgr'))
-                if ($open.Count -gt 0) { throw 'Task Manager is open: close it and run again (compare starts and ends its own)' }
+                if ($open.Count -gt 0) {
+                    # An elevated Task Manager cannot be closed from here, and one left open by an earlier compare would stop every later run.
+                    # It is measured as it is, and the PC Mieru runs then share the machine with it: both are said, never hidden.
+                    $w = 'Task Manager was already open before the runs (pid ' + (($open | ForEach-Object { $_.Id }) -join ', ') + '): its runs measure that window, not a fresh start, and it stays open during the PC Mieru runs'
+                    [void]$summary.warnings.Add($w)
+                    Write-Host ('  warning: ' + $w) -ForegroundColor Yellow
+                }
+                foreach ($p in $open) { Dispose-Quietly $p }
             }
             $summary.warmup = (Invoke-MeasuredRun -Target pcmieru -Label ($Mode + '-warmup') -RunDir $Output -DurationSeconds 0 -Cpus $cpus -Warmup)
             Add-RunWarnings $summary $summary.warmup
