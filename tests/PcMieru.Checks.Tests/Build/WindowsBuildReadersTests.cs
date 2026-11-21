@@ -14,6 +14,15 @@ public class WindowsBuildReadersTests
 
     private static string MemoryText(int form) => WindowsBuildReaders.MemoryQueries[form].Text;
 
+    /// <summary>The reader says the category could not be read, and why (it is not an empty list).</summary>
+    private static async Task<CheckReason> UnreadAsync(Func<Task> read) => (await Assert.ThrowsAsync<BuildCategoryUnreadException>(read)).Reason;
+
+    /// <summary>
+    /// What a real timeout looks like to the readers: the question ran the whole of its deadline of 5 s. (A Timeout answer with the clock
+    /// left where it was is the other timeout, a lane with no free slot, which refuses at once.)
+    /// </summary>
+    private static Action PastTheDeadline(ManualTimeProvider clock) => () => clock.Advance(SystemWmiFacts.Budget + TimeSpan.FromSeconds(1));
+
     // --- The questions are the old ones ---
 
     [Fact]
@@ -93,7 +102,25 @@ public class WindowsBuildReadersTests
         Assert.Equal((null, null), await Readers(none).BoardAsync(default));
 
         var broken = new ScriptedWmi().Reason(WindowsBuildReaders.BoardQuery.Text, CheckReason.Denied);
-        Assert.Equal((null, null), await Readers(broken).BoardAsync(default));
+        Assert.Equal(CheckReason.Denied, await UnreadAsync(() => Readers(broken).BoardAsync(default))); // not "no board": it could not be read
+    }
+
+    [Theory]
+    [InlineData(CheckReason.Timeout)]
+    [InlineData(CheckReason.Denied)]
+    [InlineData(CheckReason.Unsupported)]
+    [InlineData(CheckReason.Error)]
+    [InlineData(CheckReason.Partial)]
+    public async Task A_question_with_no_fall_back_passes_its_reason_up(CheckReason reason)
+    {
+        var wmi = new ScriptedWmi()
+            .Reason(WindowsBuildReaders.CpuQuery.Text, reason)
+            .Reason(WindowsBuildReaders.MonitorQuery.Text, reason)
+            .Reason(WindowsBuildReaders.OpticalQuery.Text, reason);
+        var r = Readers(wmi);
+        Assert.Equal(reason, await UnreadAsync(() => r.CpusAsync(default)));
+        Assert.Equal(reason, await UnreadAsync(() => r.MonitorsAsync(default)));
+        Assert.Equal(reason, await UnreadAsync(() => r.OpticalsAsync(default)));
     }
 
     // --- Memory: three forms, newest first ---
@@ -146,19 +173,50 @@ public class WindowsBuildReadersTests
     }
 
     [Fact]
-    public async Task Memory_no_form_answering_is_an_empty_category()
+    public async Task Memory_no_form_answering_is_unread_with_the_reason_of_the_last_form()
     {
-        var wmi = new ScriptedWmi();
-        Assert.Empty(await Readers(wmi).MemoryAsync(default));
+        var wmi = new ScriptedWmi() // nothing is scripted: each question fails
+            .Reason(MemoryText(0), CheckReason.Denied)
+            .Reason(MemoryText(1), CheckReason.Unsupported);
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => Readers(wmi).MemoryAsync(default)));
         Assert.Equal(3, wmi.Asked.Count);
     }
 
     [Fact]
-    public async Task Memory_out_of_time_is_an_empty_category_and_no_older_form_is_tried()
+    public async Task Memory_out_of_time_is_unread_for_timeout_and_no_older_form_is_tried()
     {
-        var wmi = new ScriptedWmi().Reason(MemoryText(0), CheckReason.Timeout).Rows(MemoryText(1), StickRow(false));
-        Assert.Empty(await Readers(wmi).MemoryAsync(default));
+        var clock = new ManualTimeProvider();
+        var wmi = new ScriptedWmi().TimesOut(MemoryText(0), PastTheDeadline(clock)).Rows(MemoryText(1), StickRow(false));
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi, clock: clock).MemoryAsync(default)));
         Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Memory_stopped_is_unread_for_partial_and_no_older_form_is_tried()
+    {
+        var wmi = new ScriptedWmi().Reason(MemoryText(0), CheckReason.Partial).Rows(MemoryText(1), StickRow(false));
+        Assert.Equal(CheckReason.Partial, await UnreadAsync(() => Readers(wmi).MemoryAsync(default)));
+        Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Memory_a_lane_with_no_free_slot_while_time_is_left_still_tries_the_older_form()
+    {
+        // The lane refuses at once (Timeout) and the clock has not moved: the 5 s are still there, so the next form is tried (DESIGN-A 6.1).
+        var wmi = new ScriptedWmi().Reason(MemoryText(0), CheckReason.Timeout).Rows(MemoryText(1), StickRow(false));
+        Assert.Single(await Readers(wmi).MemoryAsync(default));
+        Assert.Equal(new[] { MemoryText(0), MemoryText(1) }, wmi.Asked.Select(a => a.Text).ToArray());
+    }
+
+    [Fact]
+    public async Task Memory_when_every_form_is_refused_for_no_free_slot_it_is_unread_for_timeout()
+    {
+        var wmi = new ScriptedWmi()
+            .Reason(MemoryText(0), CheckReason.Timeout)
+            .Reason(MemoryText(1), CheckReason.Timeout)
+            .Reason(MemoryText(2), CheckReason.Timeout);
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi).MemoryAsync(default)));
+        Assert.Equal(3, wmi.Asked.Count);
     }
 
     [Fact]
@@ -214,12 +272,48 @@ public class WindowsBuildReadersTests
     }
 
     [Fact]
-    public async Task Gpu_out_of_time_is_an_empty_category_and_the_video_controller_is_not_asked()
+    public async Task Gpu_out_of_time_is_unread_for_timeout_and_the_video_controller_is_not_asked()
+    {
+        var clock = new ManualTimeProvider();
+        var wmi = new ScriptedWmi().Rows(WindowsBuildReaders.VideoControllerQuery.Text, Row(("Name", "X"), ("PNPDeviceID", @"PCI\X")));
+        var gpu = ScriptedGpu.TimesOut(PastTheDeadline(clock));
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi, gpu, clock).GpusAsync(default)));
+        Assert.Empty(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Gpu_stopped_is_unread_for_partial_and_the_video_controller_is_not_asked()
     {
         var wmi = new ScriptedWmi().Rows(WindowsBuildReaders.VideoControllerQuery.Text, Row(("Name", "X"), ("PNPDeviceID", @"PCI\X")));
-        Assert.Empty(await Readers(wmi, ScriptedGpu.Reason(CheckReason.Timeout)).GpusAsync(default));
-        Assert.Empty(await Readers(wmi, ScriptedGpu.Reason(CheckReason.Partial)).GpusAsync(default));
+        Assert.Equal(CheckReason.Partial, await UnreadAsync(() => Readers(wmi, ScriptedGpu.Reason(CheckReason.Partial)).GpusAsync(default)));
         Assert.Empty(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Gpu_a_lane_with_no_free_slot_while_time_is_left_still_tries_the_video_controller()
+    {
+        // DXGI's lane refused at once (Timeout) and the clock has not moved: the deadline is not expired, so Win32_VideoController is asked.
+        var wmi = new ScriptedWmi().Rows(WindowsBuildReaders.VideoControllerQuery.Text, Row(("Name", "NVIDIA GeForce RTX 3080 Ti"), ("PNPDeviceID", @"PCI\VEN_10DE&DEV_2208\4&2")));
+        var gpu = ScriptedGpu.Reason(CheckReason.Timeout);
+        var gpus = await Readers(wmi, gpu).GpusAsync(default);
+        Assert.Equal(new RawGpu("NVIDIA GeForce RTX 3080 Ti", 0, true), Assert.Single(gpus));
+        Assert.Equal(1, gpu.Asked);
+        Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Gpu_when_both_lanes_have_no_free_slot_it_is_unread_for_timeout()
+    {
+        var wmi = new ScriptedWmi().Reason(WindowsBuildReaders.VideoControllerQuery.Text, CheckReason.Timeout);
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi, ScriptedGpu.Reason(CheckReason.Timeout)).GpusAsync(default)));
+        Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Gpu_the_fall_back_that_cannot_be_read_gives_its_own_reason()
+    {
+        var wmi = new ScriptedWmi().Reason(WindowsBuildReaders.VideoControllerQuery.Text, CheckReason.Denied);
+        Assert.Equal(CheckReason.Denied, await UnreadAsync(() => Readers(wmi, ScriptedGpu.Reason(CheckReason.Error)).GpusAsync(default)));
     }
 
     // --- Disks: the storage class, then Win32_DiskDrive ---
@@ -269,13 +363,53 @@ public class WindowsBuildReadersTests
     }
 
     [Fact]
-    public async Task Disks_out_of_time_is_an_empty_category_and_win32_diskdrive_is_not_asked()
+    public async Task Disks_out_of_time_is_unread_for_timeout_and_win32_diskdrive_is_not_asked()
+    {
+        var clock = new ManualTimeProvider();
+        var wmi = new ScriptedWmi()
+            .TimesOut(WindowsBuildReaders.PhysicalDiskQuery.Text, PastTheDeadline(clock))
+            .Rows(WindowsBuildReaders.DiskDriveQuery.Text, Row(("Model", "X")));
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi, clock: clock).DisksAsync(default)));
+        Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Disks_stopped_is_unread_for_partial_and_win32_diskdrive_is_not_asked()
+    {
+        var wmi = new ScriptedWmi()
+            .Reason(WindowsBuildReaders.PhysicalDiskQuery.Text, CheckReason.Partial)
+            .Rows(WindowsBuildReaders.DiskDriveQuery.Text, Row(("Model", "X")));
+        Assert.Equal(CheckReason.Partial, await UnreadAsync(() => Readers(wmi).DisksAsync(default)));
+        Assert.Single(wmi.Asked);
+    }
+
+    [Fact]
+    public async Task Disks_a_lane_with_no_free_slot_while_time_is_left_still_tries_win32_diskdrive()
     {
         var wmi = new ScriptedWmi()
             .Reason(WindowsBuildReaders.PhysicalDiskQuery.Text, CheckReason.Timeout)
-            .Rows(WindowsBuildReaders.DiskDriveQuery.Text, Row(("Model", "X")));
-        Assert.Empty(await Readers(wmi).DisksAsync(default));
-        Assert.Single(wmi.Asked);
+            .Rows(WindowsBuildReaders.DiskDriveQuery.Text, Row(("Model", "WDC WD20EZAZ-00GGJB0"), ("Size", 2000396321280UL), ("InterfaceType", "IDE"), ("PNPDeviceID", @"IDE\DISK\1"), ("MediaType", "Fixed hard disk media")));
+        Assert.Single(await Readers(wmi).DisksAsync(default));
+        Assert.Equal(2, wmi.Asked.Count);
+    }
+
+    [Fact]
+    public async Task Disks_when_the_fall_back_runs_out_of_the_shared_time_it_is_unread_for_timeout()
+    {
+        // The storage class refused at once, then Win32_DiskDrive ran the whole deadline of the category: the category is unread, Timeout.
+        var clock = new ManualTimeProvider();
+        var wmi = new ScriptedWmi()
+            .Reason(WindowsBuildReaders.PhysicalDiskQuery.Text, CheckReason.Timeout)
+            .TimesOut(WindowsBuildReaders.DiskDriveQuery.Text, PastTheDeadline(clock));
+        Assert.Equal(CheckReason.Timeout, await UnreadAsync(() => Readers(wmi, clock: clock).DisksAsync(default)));
+        Assert.Equal(2, wmi.Asked.Count);
+    }
+
+    [Fact]
+    public async Task Disks_when_the_storage_class_has_no_row_and_the_fall_back_cannot_be_read_it_is_unread()
+    {
+        var wmi = new ScriptedWmi().Rows(WindowsBuildReaders.PhysicalDiskQuery.Text); // nothing is scripted for Win32_DiskDrive: it fails
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => Readers(wmi).DisksAsync(default)));
     }
 
     // --- Monitors, optical drives ---
@@ -317,14 +451,14 @@ public class WindowsBuildReadersTests
         var wmi = new ScriptedWmi(); // nothing is scripted: every question fails, so every fall-back is asked
         var readers = Readers(wmi, ScriptedGpu.Reason(CheckReason.Error), clock);
 
-        await readers.MemoryAsync(default);
+        await Assert.ThrowsAsync<BuildCategoryUnreadException>(() => readers.MemoryAsync(default));
         var memory = wmi.Deadlines.ToArray();
         Assert.Equal(3, memory.Length);
         Assert.Same(memory[0], memory[1]);
         Assert.Same(memory[0], memory[2]);
         Assert.Equal(SystemWmiFacts.Budget, memory[0].Duration);
 
-        await readers.DisksAsync(default);
+        await Assert.ThrowsAsync<BuildCategoryUnreadException>(() => readers.DisksAsync(default));
         var all = wmi.Deadlines.ToArray();
         Assert.Equal(5, all.Length);
         Assert.Same(all[3], all[4]); // MSFT_PhysicalDisk and Win32_DiskDrive
@@ -337,7 +471,7 @@ public class WindowsBuildReadersTests
     // --- Failure and cancellation ---
 
     [Fact]
-    public async Task A_reader_that_throws_is_an_empty_category_for_every_source()
+    public async Task A_reader_that_throws_is_an_unread_category_for_every_source()
     {
         var wmi = new ScriptedWmi();
         foreach (var text in new[]
@@ -351,13 +485,13 @@ public class WindowsBuildReadersTests
         }
 
         var r = Readers(wmi, ScriptedGpu.Throws(new InvalidOperationException("a bug below")));
-        Assert.Empty(await r.CpusAsync(default));
-        Assert.Equal((null, null), await r.BoardAsync(default));
-        Assert.Empty(await r.MemoryAsync(default));
-        Assert.Empty(await r.GpusAsync(default));
-        Assert.Empty(await r.DisksAsync(default));
-        Assert.Empty(await r.MonitorsAsync(default));
-        Assert.Empty(await r.OpticalsAsync(default));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.CpusAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.BoardAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.MemoryAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.GpusAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.DisksAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.MonitorsAsync(default)));
+        Assert.Equal(CheckReason.Error, await UnreadAsync(() => r.OpticalsAsync(default)));
     }
 
     [Fact]

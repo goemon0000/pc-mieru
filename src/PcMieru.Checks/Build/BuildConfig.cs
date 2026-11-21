@@ -30,15 +30,22 @@ public sealed class BuildConfig
     /// The categories this app can read, in the order the code writes them. Only names the receiver (the /my-config page of
     /// web-autoai.com) knows are used.
     /// </summary>
-    public static readonly IReadOnlyList<string> Categories = new[]
+    /// <remarks>
+    /// A read-only wrapper, not the array: a cast back to <c>string[]</c> fails, and the <c>IList&lt;string&gt;</c> view throws on a write,
+    /// so nobody can reorder the categories (the order is the order of the code).
+    /// </remarks>
+    public static readonly IReadOnlyList<string> Categories = Array.AsReadOnly(new[]
     {
         "cpu", "gpu", "motherboard", "ram", "ssd", "hdd", "monitor", "optical-drive",
-    };
+    });
+
+    private static readonly IReadOnlyList<BuildPart> NoParts = Array.AsReadOnly(Array.Empty<BuildPart>());
 
     private readonly Dictionary<string, List<BuildPart>> _parts = new();
 
+    /// <summary>The parts of a category (empty when there are none, or it was not read). A read-only view: it cannot be cast back to a list and changed.</summary>
     public IReadOnlyList<BuildPart> this[string category] =>
-        _parts.TryGetValue(category, out var l) ? l : Array.Empty<BuildPart>();
+        _parts.TryGetValue(category, out var l) ? l.AsReadOnly() : NoParts;
 
     internal void Set(string category, IEnumerable<BuildPart> parts)
     {

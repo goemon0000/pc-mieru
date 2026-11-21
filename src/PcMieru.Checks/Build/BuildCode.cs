@@ -1,8 +1,9 @@
 // Provenance: PartsLife.Checks.Build.BuildCode and BuildCodeResult (pl-cloud 25e4571, src/PartsLife.Checks/Build/BuildCode.cs), MIT, same owner.
 // The format, the field and category order, the omission rules, the merge of equal parts, the limits and the order in which parts are dropped
 // are the old ones, byte for byte (the receiver, the /my-config page of web-autoai.com, reads this string). What changed: the names, the
-// namespace, the surface (only Make, the result and the limits are public), the comments, and the notes: the old code built bilingual texts
-// with L.T, here a note is a code plus its category and count and the screen turns it into words (DESIGN-A: no display text in Checks).
+// namespace, the surface (the result, its DTOs and the limits are public; Make is internal, see BuildCodeProviders), the comments, and the
+// notes: the old code built bilingual texts with L.T, here a note is a code plus its category and count and the screen turns it into words
+// (DESIGN-A: no display text in Checks). New: the result also lists the categories that could not be read (it is not in the code string).
 using System.Buffers.Text;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -31,12 +32,25 @@ public enum BuildNoteKind
 /// <param name="Count">For <see cref="BuildNoteKind.KindsLeftOut"/>: how many kinds; 0 for the others.</param>
 public sealed record BuildNote(BuildNoteKind Kind, string Category, int Count = 0);
 
+/// <summary>
+/// A category that could not be read, and why. It is not in the code string (the old code has no such thing, and the receiver reads that
+/// string): the screen uses it to tell "this machine has none" from "we could not look" (DESIGN-A 2 and 7).
+/// </summary>
+/// <param name="Category">The category name as written in the code ("gpu", "ssd", "optical-drive"...). The storage question gives two: "ssd" and "hdd".</param>
+/// <param name="Reason">
+/// <see cref="CheckReason.Timeout"/> (the deadline of 5 s passed, or the lane had no free slot), <see cref="CheckReason.Denied"/>,
+/// <see cref="CheckReason.Unsupported"/>, or <see cref="CheckReason.Error"/> (it failed, or a source threw). When a fall-back was tried too,
+/// the reason of the last try.
+/// </param>
+public sealed record BuildUnread(string Category, CheckReason Reason);
+
 /// <summary>The result of making a configuration code.</summary>
 /// <param name="Code"><c>PCB1.</c> plus the base64url of the JSON: the text that goes to the clipboard.</param>
 /// <param name="Json">The same content in a readable, indented form (the file that is saved, and what "look inside" shows).</param>
 /// <param name="Config">The parts that are really in the code (after the length limit).</param>
 /// <param name="Notes">What was left out, in the order it happened.</param>
-public sealed record BuildCodeResult(string Code, string Json, BuildConfig Config, IReadOnlyList<BuildNote> Notes);
+/// <param name="Unread">The categories that could not be read, in the order the code writes the categories. Empty when everything was read.</param>
+public sealed record BuildCodeResult(string Code, string Json, BuildConfig Config, IReadOnlyList<BuildNote> Notes, IReadOnlyList<BuildUnread> Unread);
 
 /// <summary>
 /// The configuration code (the string pasted into /my-config of web-autoai.com to register "my PC").
@@ -65,15 +79,31 @@ public static class BuildCode
     /// </summary>
     internal static readonly string[] DropFirst = { "optical-drive", "monitor", "hdd" };
 
-    /// <summary>From the list of parts: the code, the JSON and what was left out.</summary>
-    public static BuildCodeResult Make(BuildConfig raw)
+    /// <summary>
+    /// From the list of parts: the code, the JSON and what was left out. Internal (the way in from outside is
+    /// <see cref="BuildCodeProviders"/>). <paramref name="unread"/> goes into the result as it is: it is not part of the code.
+    /// </summary>
+    internal static BuildCodeResult Make(BuildConfig raw, IReadOnlyList<BuildUnread>? unread = null)
     {
         ArgumentNullException.ThrowIfNull(raw);
         var notes = new List<BuildNote>();
         var c = Normalize(raw, notes);
         string code = Encode(c);
         if (code.Length - Prefix.Length > MaxLength) code = Trim(c, notes);
-        return new BuildCodeResult(code, ToJson(c, indented: true), c, notes);
+
+        // What the result hands out cannot be cast back to a List and changed: the lists below are read-only wrappers.
+        var unreadInOrder = (unread ?? []).OrderBy(u => IndexOfCategory(u.Category)).ToList();
+        return new BuildCodeResult(code, ToJson(c, indented: true), c, notes.AsReadOnly(), unreadInOrder.AsReadOnly());
+
+        static int IndexOfCategory(string category)
+        {
+            for (int i = 0; i < BuildConfig.Categories.Count; i++)
+            {
+                if (BuildConfig.Categories[i] == category) return i;
+            }
+
+            return int.MaxValue;
+        }
     }
 
     /// <summary>

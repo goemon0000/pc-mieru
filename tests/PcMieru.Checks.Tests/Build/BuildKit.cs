@@ -51,6 +51,17 @@ internal sealed class ScriptedWmi : IWmiReader
     public ScriptedWmi Reason(string text, CheckReason reason) => Add(text, _ =>
         Task.FromResult<(IReadOnlyList<IWmiRow>?, CheckReason?)>((null, reason)));
 
+    /// <summary>
+    /// A real timeout: the question runs the whole of its deadline (<paramref name="elapse"/> moves the test's clock past it) and then gets no
+    /// value for <see cref="CheckReason.Timeout"/>. A plain <see cref="Reason"/> of Timeout leaves the clock where it was, which is the
+    /// other kind of timeout: a lane that refused at once (no free slot) with the whole deadline still left.
+    /// </summary>
+    public ScriptedWmi TimesOut(string text, Action elapse) => Add(text, _ =>
+    {
+        elapse();
+        return Task.FromResult<(IReadOnlyList<IWmiRow>?, CheckReason?)>((null, CheckReason.Timeout));
+    });
+
     /// <summary>The reader itself throws (a bug below it; the readers must still give an empty category).</summary>
     public ScriptedWmi Throws(string text, Exception exception) => Add(text, _ => throw exception);
 
@@ -113,6 +124,13 @@ internal sealed class ScriptedGpu(Func<QueryDeadline, CancellationToken, Task<Ch
     public static ScriptedGpu Ok(params RawGpu[] gpus) => new((_, _) => Task.FromResult(CheckReading<IReadOnlyList<RawGpu>>.Ok(gpus)));
 
     public static ScriptedGpu Reason(CheckReason reason) => new((_, _) => Task.FromResult(CheckReading<IReadOnlyList<RawGpu>>.Missing(reason)));
+
+    /// <summary>A real timeout of the graphics reader: it ran the whole deadline (<paramref name="elapse"/> moves the clock past it). See <see cref="ScriptedWmi.TimesOut"/>.</summary>
+    public static ScriptedGpu TimesOut(Action elapse) => new((_, _) =>
+    {
+        elapse();
+        return Task.FromResult(CheckReading<IReadOnlyList<RawGpu>>.TimedOut());
+    });
 
     public static ScriptedGpu Throws(Exception exception) => new((_, _) => throw exception);
 

@@ -1,9 +1,13 @@
 // Provenance: PartsLife.Checks.Build.WindowsReaders (pl-cloud 25e4571, src/PartsLife.Checks/Build/BuildCollector.cs) and SystemCheck.ReadCpus
-// (src/PartsLife.Checks/SystemInfo/SystemCheck.cs), MIT, same owner. The questions (the SELECT texts and namespaces), their order and
-// their fall-backs are the old ones: the three memory queries (dropping the columns an old Windows does not have), DXGI and then
-// Win32_VideoController, MSFT_PhysicalDisk and then Win32_DiskDrive, and the way each value is read (the old "as string" and
-// Convert rules, so the same machine gives the same material). What is new: every question goes through the WMI reader with a deadline
-// of its own (DESIGN-A 6.1), and a question that is out of time, denied or broken gives an empty category.
+// (src/PartsLife.Checks/SystemInfo/SystemCheck.cs), MIT, same owner. The questions (the SELECT texts and namespaces), their order, the
+// chain of fall-backs (the three memory queries, dropping the columns an old Windows does not have; DXGI and then Win32_VideoController;
+// MSFT_PhysicalDisk and then Win32_DiskDrive) and the way each value is read (the old "as string" and Convert rules, so the same machine
+// gives the same material) are the old ones. WHEN a fall-back is taken is not exactly the old rule (DESIGN-A 9, "differences from the
+// old version"): the old code fell back on any ManagementException, also after the time was gone, and an unexpected DXGI exception left
+// the GPU empty; here a fall-back follows an error, a refusal or "not supported" (an unexpected DXGI exception too), and also a lane that
+// refused at once while time was left, but never a real timeout or a stop. What is new: every question goes through the WMI reader with
+// a deadline of its own (DESIGN-A 6.1), and a category that is out of time, denied or broken is reported with its reason
+// (BuildCategoryUnreadException), not as an empty list.
 using System.Globalization;
 using PcMieru.Checks.SystemInfo;
 
@@ -12,8 +16,9 @@ namespace PcMieru.Checks.Build;
 /// <summary>
 /// Reads the raw material of the configuration code from Windows: only reads; no serial number is asked for. **Each category has a
 /// deadline of 5 s** (<see cref="SystemWmiFacts.Budget"/>), and the fall-backs of one category (three memory queries, DXGI then the video
-/// controller, the storage class then the disk drive) share it. A category that is out of time, or could not be read, is an empty list,
-/// never an exception; only the caller's cancellation is thrown.
+/// controller, the storage class then the disk drive) share it. A category that is out of time, or could not be read, is a
+/// <see cref="BuildCategoryUnreadException"/> with the reason (the collector turns it into an empty category that is listed as unread);
+/// a category that was read and has nothing is an empty list. The caller's cancellation is thrown as it is.
 /// </summary>
 internal sealed class WindowsBuildReaders
 {
@@ -103,24 +108,26 @@ internal sealed class WindowsBuildReaders
     // =====================================================================
 
     public async Task<IReadOnlyList<string>> CpusAsync(CancellationToken ct) =>
-        RowsOrNothing(await AskAsync(CpuQuery, NewDeadline(), ct).ConfigureAwait(false));
+        RowsOrThrow(await AskAsync(CpuQuery, NewDeadline(), ct).ConfigureAwait(false));
 
     public async Task<(string? Manufacturer, string? Product)> BoardAsync(CancellationToken ct)
     {
-        var rows = RowsOrNothing(await AskAsync(BoardQuery, NewDeadline(), ct).ConfigureAwait(false));
+        var rows = RowsOrThrow(await AskAsync(BoardQuery, NewDeadline(), ct).ConfigureAwait(false));
         return rows.Count > 0 ? rows[0] : (null, null);
     }
 
     public async Task<IReadOnlyList<RawMemory>> MemoryAsync(CancellationToken ct)
     {
         var deadline = NewDeadline();
-        for (int i = 0; i < MemoryQueries.Count; i++)
+        CheckReading<IReadOnlyList<RawMemory>>? reading = null;
+        foreach (var query in MemoryQueries)
         {
-            var reading = await AskAsync(MemoryQueries[i], deadline, ct).ConfigureAwait(false);
+            reading = await AskAsync(query, deadline, ct).ConfigureAwait(false);
             if (reading.HasValue) return reading.Value;
-            if (!CanTryAnother(reading.Reason) || i == MemoryQueries.Count - 1) break;
+            if (!CanTryAnother(reading.Reason, deadline)) break;
         }
-        return Array.Empty<RawMemory>();
+
+        throw Unread(reading); // the reason of the last form that was tried
     }
 
     /// <summary>
@@ -132,8 +139,8 @@ internal sealed class WindowsBuildReaders
         var deadline = NewDeadline();
         var dxgi = await ReadGpuAsync(deadline, ct).ConfigureAwait(false);
         if (dxgi.HasValue && dxgi.Value.Count > 0) return dxgi.Value;
-        if (!dxgi.HasValue && !CanTryAnother(dxgi.Reason)) return Array.Empty<RawGpu>();
-        return RowsOrNothing(await AskAsync(VideoControllerQuery, deadline, ct).ConfigureAwait(false));
+        if (!dxgi.HasValue && !CanTryAnother(dxgi.Reason, deadline)) throw Unread(dxgi);
+        return RowsOrThrow(await AskAsync(VideoControllerQuery, deadline, ct).ConfigureAwait(false));
     }
 
     /// <summary>MSFT_PhysicalDisk (it has the bus and SSD or HDD). When it cannot be read, or has no row: Win32_DiskDrive.</summary>
@@ -142,16 +149,16 @@ internal sealed class WindowsBuildReaders
         var deadline = NewDeadline();
         var storage = await AskAsync(PhysicalDiskQuery, deadline, ct).ConfigureAwait(false);
         if (storage.HasValue && storage.Value.Count > 0) return storage.Value;
-        if (!storage.HasValue && !CanTryAnother(storage.Reason)) return Array.Empty<RawDisk>();
-        return RowsOrNothing(await AskAsync(DiskDriveQuery, deadline, ct).ConfigureAwait(false));
+        if (!storage.HasValue && !CanTryAnother(storage.Reason, deadline)) throw Unread(storage);
+        return RowsOrThrow(await AskAsync(DiskDriveQuery, deadline, ct).ConfigureAwait(false));
     }
 
     /// <summary>WmiMonitorID (the name in the EDID). A monitor with no name is not counted (by the rules).</summary>
     public async Task<IReadOnlyList<RawMonitor>> MonitorsAsync(CancellationToken ct) =>
-        RowsOrNothing(await AskAsync(MonitorQuery, NewDeadline(), ct).ConfigureAwait(false));
+        RowsOrThrow(await AskAsync(MonitorQuery, NewDeadline(), ct).ConfigureAwait(false));
 
     public async Task<IReadOnlyList<RawOptical>> OpticalsAsync(CancellationToken ct) =>
-        RowsOrNothing(await AskAsync(OpticalQuery, NewDeadline(), ct).ConfigureAwait(false));
+        RowsOrThrow(await AskAsync(OpticalQuery, NewDeadline(), ct).ConfigureAwait(false));
 
     // =====================================================================
     // Helpers
@@ -161,11 +168,19 @@ internal sealed class WindowsBuildReaders
 
     /// <summary>
     /// Another query may be tried after this one did not answer, unless the time is gone or the caller stopped. (The old code tried the next
-    /// form on any ManagementException; a reason of error, denied or unsupported is where such an exception ends up.)
+    /// form on any ManagementException; a reason of error, denied or unsupported is where such an exception ends up.) A timeout with time
+    /// left on the deadline is a lane that refused at once (no free slot, DESIGN-A 6.1): that is no reason to give up the category, so the
+    /// fall-back is tried. A timeout with no time left is a real one, and so is a stop (partial): no fall-back.
     /// </summary>
-    private static bool CanTryAnother(CheckReason? reason) => reason is CheckReason.Error or CheckReason.Denied or CheckReason.Unsupported;
+    private static bool CanTryAnother(CheckReason? reason, QueryDeadline deadline) =>
+        reason is CheckReason.Error or CheckReason.Denied or CheckReason.Unsupported
+        || (reason is CheckReason.Timeout && !deadline.IsExpired);
 
-    private static IReadOnlyList<T> RowsOrNothing<T>(CheckReading<IReadOnlyList<T>> reading) => reading.HasValue ? reading.Value : Array.Empty<T>();
+    /// <summary>The rows, or the reason there are none: a category that could not be read is not an empty list.</summary>
+    private static IReadOnlyList<T> RowsOrThrow<T>(CheckReading<IReadOnlyList<T>> reading) =>
+        reading.HasValue ? reading.Value : throw Unread(reading);
+
+    private static BuildCategoryUnreadException Unread<T>(CheckReading<T>? reading) => new(reading?.Reason ?? CheckReason.Error);
 
     private async Task<CheckReading<IReadOnlyList<T>>> AskAsync<T>(WmiQuery<T> query, QueryDeadline deadline, CancellationToken ct)
     {

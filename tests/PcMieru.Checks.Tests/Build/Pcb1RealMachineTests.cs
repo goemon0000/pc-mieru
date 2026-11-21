@@ -57,6 +57,39 @@ public sealed class Pcb1RealMachineTests(ITestOutputHelper output)
         return process.ExitCode;
     }
 
+    /// <summary>How many times the temporary folder is deleted before it counts as "could not be removed" (a scanner or the harness may still hold a file).</summary>
+    private const int DeleteAttempts = 5;
+
+    /// <summary>Deletes the folder, trying again a few times. Returns whether it is gone. Never says the path.</summary>
+    private static bool RemoveFolder(string dir)
+    {
+        for (int attempt = 1; attempt <= DeleteAttempts; attempt++)
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            if (!Directory.Exists(dir))
+            {
+                return true;
+            }
+
+            if (attempt < DeleteAttempts)
+            {
+                Thread.Sleep(200); // a short pause between tries; nothing asserts on time
+            }
+        }
+
+        return false;
+    }
+
     private static bool SameBytes(string a, string b) => Encoding.UTF8.GetBytes(a).AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(b));
 
     [Fact]
@@ -69,6 +102,7 @@ public sealed class Pcb1RealMachineTests(ITestOutputHelper output)
 
         var dir = Path.Combine(Path.GetTempPath(), "pcmieru-pcb1-real-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
+        Exception? failed = null;
         try
         {
             // 1. One reading of this machine through the new readers: that material, replayed to the old code and to the new one.
@@ -88,7 +122,7 @@ public sealed class Pcb1RealMachineTests(ITestOutputHelper output)
             int windowsExit = Run(exe, "windows", oldWindowsFile);
             Assert.True(windowsExit == 0, $"the old Windows readers failed, exit {windowsExit}");
             var oldWindows = File.ReadAllText(oldWindowsFile, Encoding.UTF8);
-            var newWindows = BuildCode.Make(await BuildCollector.CollectAsync());
+            var newWindows = await BuildCodeProviders.Windows().CreateAsync(default);
             bool windowsEqual = SameBytes(newWindows.Code, oldWindows);
 
             // Only counts. Never a name, the code or the JSON.
@@ -108,20 +142,23 @@ public sealed class Pcb1RealMachineTests(ITestOutputHelper output)
             Assert.True(replayEqual, "same material: the new code differs from the old code");
             Assert.True(windowsEqual, "same machine: the new readers' code differs from the old readers' code");
         }
+        catch (Exception ex)
+        {
+            failed = ex;
+            throw;
+        }
         finally
         {
-            try
+            // Also when the test failed for another reason: a folder that is still there is a failure of its own, and its message has no
+            // path. (A failure that came first is named only when it is one of our own assertions, whose text has no path either.)
+            if (!RemoveFolder(dir))
             {
-                Directory.Delete(dir, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
+                const string message = "the temporary folder of the test could not be removed (it may hold material of this machine)";
+                throw new InvalidOperationException(
+                    failed is Xunit.Sdk.XunitException own ? message + "; the test had already failed: " + own.Message
+                    : failed is not null ? message + "; the test had already failed with " + failed.GetType().Name
+                    : message);
             }
         }
-
-        Assert.False(Directory.Exists(dir), "the temporary folder was not removed");
     }
 }

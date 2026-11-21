@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using PcMieru.Checks.Build;
+using PcMieru.Checks.Tests.SystemInfo;
 
 namespace PcMieru.Checks.Tests.Build;
 
@@ -44,11 +45,12 @@ public sealed class Pcb1GoldenTests
 
     private static string FilePath(string name, string extension) => Path.Combine(Dir, name + extension);
 
-    private static async Task<BuildCodeResult> MakeAsync(string name)
-    {
-        var material = Pcb1Material.Load(FilePath(name, ".material.json"));
-        return BuildCode.Make(await BuildCollector.CollectAsync(material.ToSources()));
-    }
+    // The same way in as the app has for a machine: the sources, the collector and Make, through the provider.
+    private static Task<BuildCodeResult> MakeAsync(Pcb1Material material) =>
+        new SourcesBuildCodeProvider(material.ToSources).CreateAsync(default);
+
+    private static Task<BuildCodeResult> MakeAsync(string name) =>
+        MakeAsync(Pcb1Material.Load(FilePath(name, ".material.json")));
 
     [Fact]
     public void The_fixture_folder_holds_exactly_the_agreed_cases_and_all_their_files()
@@ -280,5 +282,157 @@ public sealed class Pcb1GoldenTests
         Assert.Equal(6, r.Config["gpu"].Count);
         Assert.Equal(8, r.Config["cpu"].Count);
         Assert.True(r.Code.Length - BuildCode.Prefix.Length <= BuildCode.MaxLength);
+    }
+
+    [Fact]
+    public async Task A_source_that_throws_is_listed_as_failed_and_the_code_is_still_the_golden_one()
+    {
+        var r = await MakeAsync("throwing-category");
+
+        // Listed in the order the code writes the categories, not the order the collector read them (the board is read before the gpu).
+        Assert.Equal(
+            new[] { new BuildUnread("gpu", CheckReason.Error), new BuildUnread("motherboard", CheckReason.Error), new BuildUnread("monitor", CheckReason.Error) },
+            r.Unread.ToArray());
+        Assert.Equal(File.ReadAllText(FilePath("throwing-category", ".code.txt"), Encoding.UTF8), r.Code);
+    }
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public async Task A_golden_machine_has_an_unread_category_only_when_its_source_throws(string name)
+    {
+        var material = Pcb1Material.Load(FilePath(name, ".material.json"));
+        var r = await MakeAsync(material);
+
+        // A category that is empty because the machine has nothing in it was read: it is not unread.
+        Assert.Equal(material.Throws.Count, r.Unread.Count);
+        Assert.All(r.Unread, u => Assert.Equal(CheckReason.Error, u.Reason));
+    }
+
+    // ---- the temporary material of the real-machine comparison: no USB serial in the file, and a null is read as the harness reads it
+
+    private const string OpticalName = "HL-DT-ST BD-RE WH16NS60";
+
+    // Real ids end in a number the device made up, and for a USB drive that can be its serial number. These are invented.
+    public static TheoryData<string> OpticalIds => new()
+    {
+        @"SCSI\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\4&2A5B3C1D&0&010000", // an ordinary internal drive: counted
+        @"IDE\CDROMHL-DT-ST_BD-RE__WH16NS60_______\5&1F0E2D3C&0&0.0.0",
+        @"USBSTOR\CDROM&VEN_ASUS&PROD_SDRW-08D2S-U&REV_1.00\0123456789ABCDEF&0", // a USB drive (prefix USB): not counted
+        @"usb\vid_0e8d&pid_1806\serial-synthetic-0001",                          // the prefix is not case sensitive
+        @"SCSI\CDROM&VEN_MSFT&PROD_VIRTUAL_DVD-ROM\2&1F4ADFCF&0&000002",          // the virtual drive of an opened ISO: not counted
+        @"scsi\cdrom&ven_msft&prod_virtual_dvd-rom\1",                            // MSFT is not case sensitive either
+        @"USBSTOR\CDROM&VEN_MSFT&PROD_X\SERIAL1",                                 // both
+        @"xxxUSB\CDROM\1",                                                        // USB inside, not at the start: counted
+        @"SCSI\CDROM&VEN_USB&PROD_ONLY_INSIDE\1&MSF\T",                           // pieces of the words that do not make them: counted
+        "",                                                                       // no id: counted
+    };
+
+    [Theory]
+    [MemberData(nameof(OpticalIds))]
+    public async Task A_reduced_optical_id_gives_the_same_code_as_the_full_one_under_the_old_rule(string pnpDeviceId)
+    {
+        static Pcb1Material With(string id)
+        {
+            var m = new Pcb1Material();
+            m.Cpus.Add("AMD Ryzen 7 5800X 8-Core Processor");
+            m.Opticals.Add(new RawOptical(OpticalName, id));
+            return m;
+        }
+
+        var reducedId = Pcb1Material.ReduceOpticalId(pnpDeviceId);
+        var full = await MakeAsync(With(pnpDeviceId));
+        var reduced = await MakeAsync(With(reducedId));
+
+        Assert.Equal(full.Code, reduced.Code);
+        Assert.Equal(full.Json, reduced.Json);
+
+        // The old rule, written out again here (parts-life 0.7.4: not "MSFT" anywhere and not "USB" at the start, both ignoring case).
+        bool counted = !(pnpDeviceId.Contains("MSFT", StringComparison.OrdinalIgnoreCase) || pnpDeviceId.StartsWith("USB", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(counted ? 1 : 0, full.Config["optical-drive"].Count);
+        Assert.Equal(counted ? 1 : 0, reduced.Config["optical-drive"].Count);
+
+        // What is left of the id is at most the two words the rule looks for, and reducing twice changes nothing.
+        Assert.Contains(reducedId, new[] { "", "USB", "MSFT", "USBMSFT" });
+        Assert.Equal(reducedId, Pcb1Material.ReduceOpticalId(reducedId));
+    }
+
+    [Fact]
+    public void A_missing_optical_id_is_reduced_to_nothing()
+    {
+        Assert.Equal("", Pcb1Material.ReduceOpticalId(null));
+    }
+
+    [Fact]
+    public async Task The_material_read_from_windows_has_no_usb_serial_and_makes_the_same_code_as_the_full_ids()
+    {
+        const string serial = "0123456789ABCDEF"; // invented
+        const string usbName = "ASUS SDRW-08D2S-U";
+        var usbId = @"USBSTOR\CDROM&VEN_ASUS&PROD_SDRW-08D2S-U\" + serial + "&0";
+        var internalId = @"SCSI\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\4&" + serial + "&0&010000";
+        var wmi = new ScriptedWmi().Rows(
+            WindowsBuildReaders.OpticalQuery.Text,
+            ScriptedWmi.Row(("Name", usbName), ("PNPDeviceID", usbId)),
+            ScriptedWmi.Row(("Name", OpticalName), ("PNPDeviceID", internalId)));
+        var readers = new WindowsBuildReaders(wmi, ScriptedGpu.Ok(), new ManualTimeProvider());
+
+        var material = await Pcb1Material.ReadAsync(readers);
+
+        Assert.DoesNotContain(serial, material.ToJson(), StringComparison.Ordinal);
+        Assert.Equal(new[] { "USB", "" }, material.Opticals.Select(o => o.PnpDeviceId).ToArray());
+        // The names are as they were read (the rules clean them later).
+        Assert.Equal(new[] { usbName, OpticalName }, material.Opticals.Select(o => o.Name).ToArray());
+
+        var full = new Pcb1Material();
+        full.Opticals.Add(new RawOptical(usbName, usbId));
+        full.Opticals.Add(new RawOptical(OpticalName, internalId));
+        Assert.Equal((await MakeAsync(full)).Code, (await MakeAsync(material)).Code);
+    }
+
+    [Fact]
+    public async Task A_null_in_a_material_is_read_the_way_the_harness_reads_it()
+    {
+        // A null list is an empty list, a null text of a row is "", the board may stay null (tools/pcb1-golden/Program.cs, Make).
+        const string json = """
+            {
+              "cpus": null,
+              "board": null,
+              "memory": [ { "partNumber": null, "manufacturer": null, "capacity": 17179869184, "speed": 3200, "smbiosType": 26, "memoryType": 0, "configuredSpeed": 0 } ],
+              "gpus": null,
+              "disks": [ { "name": null, "busType": 11, "mediaType": 3, "size": 2000398934016 } ],
+              "monitors": [ { "name": null, "active": true } ],
+              "opticals": [ { "name": "HL-DT-ST BD-RE WH16NS60", "pnpDeviceId": null }, { "name": null, "pnpDeviceId": "SCSI\\CDROM\\1" } ],
+              "throws": null
+            }
+            """;
+
+        var material = Pcb1Material.Parse(json);
+
+        Assert.Empty(material.Cpus);
+        Assert.Empty(material.Gpus);
+        Assert.Empty(material.Throws);
+        Assert.Null(material.Board);
+        var stick = Assert.Single(material.Memory);
+        Assert.Equal(("", ""), (stick.PartNumber, stick.Manufacturer));
+        Assert.Equal("", Assert.Single(material.Disks).Name);
+        Assert.Equal("", Assert.Single(material.Monitors).Name);
+        Assert.Equal(new[] { "", @"SCSI\CDROM\1" }, material.Opticals.Select(o => o.PnpDeviceId).ToArray());
+        Assert.Equal("", material.Opticals[1].Name);
+
+        // It can be turned into a code (a null id is an id with nothing in it, so the drive is counted), and no category is unread.
+        var r = await MakeAsync(material);
+        Assert.Empty(r.Unread);
+        Assert.Equal(OpticalName, Assert.Single(r.Config["optical-drive"]).Name);
+
+        // And it survives being saved and read again.
+        Assert.Equal(material.ToJson(), Pcb1Material.Parse(material.ToJson()).ToJson());
+    }
+
+    [Theory]
+    [InlineData("""{ "memory": [ null ] }""")]
+    [InlineData("""{ "opticals": [ null ] }""")]
+    [InlineData("null")]
+    public void A_row_that_is_itself_null_is_refused(string json)
+    {
+        Assert.Throws<InvalidDataException>(() => Pcb1Material.Parse(json));
     }
 }

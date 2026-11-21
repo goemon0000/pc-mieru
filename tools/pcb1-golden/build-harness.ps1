@@ -25,7 +25,15 @@ $work = Join-Path $Out 'src'
 if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
-$tar = Join-Path $Out 'old.tar'
+# MSBuild reads the first Directory.Build.props / .targets it finds on the way up from the project. An empty pair here, above everything
+# that is built, stops that search at $Out: a file in a folder above %TEMP% (a Directory.Build.props somewhere on the machine) must not
+# change the build of the old code, because the goldens it makes are the contract.
+$empty = New-Object System.Text.UTF8Encoding($false)
+foreach ($name in 'Directory.Build.props', 'Directory.Build.targets') {
+    [IO.File]::WriteAllText((Join-Path $Out $name), "<Project />`r`n", $empty)
+}
+
+$tar =Join-Path $Out 'old.tar'
 # Only the two folders the harness needs (the old tree also holds Japanese file names that tar cannot extract).
 & git -C $OldRepo archive --format=tar -o $tar $Commit src/PartsLife.Checks src/Shared
 if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
