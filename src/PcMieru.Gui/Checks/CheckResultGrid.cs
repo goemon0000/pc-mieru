@@ -44,16 +44,80 @@ internal sealed class CheckResultGrid : GridView
     /// <summary>The tone of a cell, as it is drawn.</summary>
     public CellTone ToneAt(int row, int column) => row >= 0 && row < _rows.Count ? Cell(row, column).Tone : CellTone.Normal;
 
+    /// <summary>
+    /// The cells whose text the column cuts and that the person cannot read in full anyway ("row:column text"). A label of an item and a verdict
+    /// word must never be cut. Any other cell may be (a long evidence line, a part's name in its header row) when its tooltip holds the whole
+    /// text. The smoke run asks this of every table it takes a picture of (DESIGN-A §7).
+    /// </summary>
+    internal IReadOnlyList<string> UnreadableCuts()
+    {
+        var cuts = new List<string>();
+        for (var row = 0; row < _rows.Count; row++)
+        {
+            for (var column = 0; column < Columns.Count; column++)
+            {
+                if (!IsCut(row, column))
+                {
+                    continue;
+                }
+
+                var text = Cell(row, column).Text;
+                var never = !_rows[row].Header && column is ItemColumn or VerdictColumn;
+                if (never || Tip(row, column) != text)
+                {
+                    cuts.Add(row.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + column.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + text);
+                }
+            }
+        }
+
+        return cuts;
+    }
+
     /// <summary>The columns, written for the widths of the logical pixel at the design font (a window that is denser scales them).</summary>
     public void PrepareColumns(Func<int, int> px, string accessibleName)
     {
         PageLayout.Prepare(
             this,
             accessibleName,
-            (Strings.Get("gui.chk.col.item"), px(320), HorizontalAlignment.Left),
+            (Strings.Get("gui.chk.col.item"), ItemColumnWidth(), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.verdict"), px(110), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.value"), px(190), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.evidence"), px(310), HorizontalAlignment.Left));
+    }
+
+    /// <summary>
+    /// The item column, in pixels of the scale the grid is at now: the longest item label of the registry (in the language on show) with the
+    /// room the grid keeps around a text (its padding on both sides, and the indent of a change row under a part). A fixed width was too wide
+    /// for the short labels of one language and cut the long ones of the other. It is measured in device pixels, not written in logical ones:
+    /// a window at 150% grows its font as well, and the text grows with the font and the DPI while the room around it grows with the DPI only.
+    /// </summary>
+    internal int ItemColumnWidth()
+    {
+        var widest = 0;
+        foreach (var spec in CheckItemRegistry.All)
+        {
+            var width = TextRenderer.MeasureText(
+                CheckFormat.ItemLabel(spec.Id),
+                Font,
+                new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+            widest = Math.Max(widest, width);
+        }
+
+        // The padding on both sides, the steps the grid keeps in the first column for the widest case (a change row under a part has the
+        // indent 2, and the grid keeps the indent plus one step), and a few pixels of air.
+        const int indentSteps = 3;
+        return widest + (Scaled(8) * 2) + (indentSteps * Scaled(16)) + Scaled(4);
+    }
+
+    /// <summary>The columns were scaled for a new DPI or font: the item column is measured again at that scale.</summary>
+    protected override void OnColumnsRescaled()
+    {
+        base.OnColumnsRescaled();
+        if (Columns.Count == EvidenceColumn + 1)
+        {
+            Columns[ItemColumn].Width = ItemColumnWidth();
+        }
     }
 
     /// <summary>Shows a result (or nothing). Rebuilds the rows and keeps the list's position at the top.</summary>
@@ -72,6 +136,9 @@ internal sealed class CheckResultGrid : GridView
             Columns[VerdictColumn].Text = Strings.Get("gui.chk.col.verdict");
             Columns[ValueColumn].Text = Strings.Get("gui.chk.col.value");
             Columns[EvidenceColumn].Text = Strings.Get("gui.chk.col.evidence");
+            // The labels are written again in the other language: the item column follows its longest.
+            Columns[ItemColumn].Width = ItemColumnWidth();
+            FitLastColumn();
         }
 
         Rebuild();
@@ -220,17 +287,25 @@ internal sealed class CheckResultGrid : GridView
 
     private string? Tip(int row, int column)
     {
-        if (row < 0 || row >= _rows.Count || _rows[row].Item is not { } item)
+        if (row < 0 || row >= _rows.Count)
         {
             return null;
         }
 
         var line = _rows[row];
+        if (line.Item is not { } item)
+        {
+            // A part's header row: its name, in full, when the column cuts it.
+            return column == ItemColumn && IsCut(row, column) ? line.Label : null;
+        }
+
         return column switch
         {
+            ItemColumn when IsCut(row, column) => line.Label,
             VerdictColumn when item.Verdict == ItemVerdict.Info => Strings.Get("gui.chk.info.tip"),
             EvidenceColumn => Evidence(line) is { Length: > 0 } text ? text : null,
-            ValueColumn => item.Value is null ? Evidence(line) is { Length: > 0 } why ? why : null : null,
+            ValueColumn when item.Value is null => Evidence(line) is { Length: > 0 } why ? why : null,
+            ValueColumn when IsCut(row, column) => Cell(row, column).Text,
             _ => null,
         };
     }

@@ -18,6 +18,11 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>How many parts the list shows before it scrolls.</summary>
     private const int MaxShownRows = 10;
 
+    /// <summary>The fewest parts the list shows, and the fewest lines of the code the box shows, when the screen is too low for the dialog.</summary>
+    private const int MinShownRows = 3;
+
+    private const int MinCodeLines = 3;
+
     private readonly BuildCodeResult _result;
     private readonly Func<string, bool> _copyToClipboard;
     private readonly List<PartRow> _rows = [];
@@ -37,6 +42,9 @@ internal sealed class BuildCodeDialog : Form
     private readonly Button _close = new() { Name = "pcb1Close", DialogResult = DialogResult.Cancel, AutoSize = true };
     private readonly Font _mono;
     private readonly Font _bold;
+    private readonly bool _empty;
+    private TableLayoutPanel _root = null!;
+    private int _codeLines = CodeLines;
     private bool _saving;
 
     private readonly record struct PartRow(string Category, string Name, string Detail, string Count);
@@ -46,6 +54,7 @@ internal sealed class BuildCodeDialog : Form
     {
         ArgumentNullException.ThrowIfNull(result);
         _result = result;
+        _empty = result.Config.IsEmpty;
         _copyToClipboard = copyToClipboard;
         Name = "BuildCodeDialog";
         Text = Strings.Get("gui.hw.pcb1.title");
@@ -74,6 +83,7 @@ internal sealed class BuildCodeDialog : Form
             Dock = DockStyle.Fill,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _root = root;
 
         _lead.Text = Strings.Get("gui.hw.pcb1.lead");
         _lead.MaximumSize = new Size(width, 0);
@@ -96,11 +106,15 @@ internal sealed class BuildCodeDialog : Form
             _parts.Cells = Cell;
             _parts.VirtualListSize = _rows.Count;
 
-            // Every part that goes into the code is meant to be seen: the list grows to its rows (a long one scrolls after ten, so the dialog stays on a screen).
-            var rowHeight = Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(28));
-            _parts.Size = new Size(width, (rowHeight * (Math.Min(_rows.Count, MaxShownRows) + 1)) + LogicalToDeviceUnits(6));
+            // Every part that goes into the code is meant to be seen: the list grows to its rows (a long one scrolls after ten, so the dialog stays
+            // on a screen; on a screen too low for that, FitToHeight gives up rows).
+            _parts.Size = new Size(width, PartsListHeight(Math.Min(_rows.Count, MaxShownRows)));
             _parts.Margin = new Padding(0, 0, 0, pad / 4);
-            _parts.SizeChanged += (_, _) => _parts.FitLastColumn();
+            _parts.SizeChanged += (_, _) => FitPartColumns();
+            _parts.HandleCreated += (_, _) => FitPartColumns();
+            _parts.ColumnsRescaled += (_, _) => FitPartColumns();
+            _parts.CellTip = PartTip;
+            FitPartColumns();
             root.Controls.Add(_parts);
         }
         else
@@ -112,7 +126,7 @@ internal sealed class BuildCodeDialog : Form
 
         Head(_codeHead, Strings.Get("gui.hw.pcb1.code"), headMargin, root);
         _code.Text = result.Code;
-        _code.Size = new Size(width, LogicalToDeviceUnits(84));
+        _code.Width = width;
         _code.Margin = new Padding(0, 0, 0, pad / 4);
         _code.AccessibleName = Strings.Get("gui.hw.pcb1.code");
         root.Controls.Add(_code);
@@ -120,14 +134,14 @@ internal sealed class BuildCodeDialog : Form
         if (result.Notes.Count > 0)
         {
             Head(_notesHead, Strings.Get("gui.hw.pcb1.notes"), headMargin, root);
-            _notes.Text = string.Join("\n", result.Notes.Select(static n => "・" + BuildCodeText.Note(n)));
+            _notes.Text = string.Join("\n", BuildCodeText.NoteLines(result.Notes).Select(static line => BuildCodeText.Bullet + line));
             _notes.MaximumSize = new Size(width, 0);
             root.Controls.Add(_notes);
         }
 
         Head(_unreadHead, Strings.Get("gui.hw.pcb1.unread"), headMargin, root);
         _unread.Text = result.Unread.Count > 0
-            ? string.Join("\n", result.Unread.Select(static u => "・" + BuildCodeText.UnreadLine(u)))
+            ? string.Join("\n", result.Unread.Select(static u => BuildCodeText.Bullet + BuildCodeText.UnreadLine(u)))
             : Strings.Get("gui.hw.pcb1.unread.none");
         _unread.MaximumSize = new Size(width, 0);
         root.Controls.Add(_unread);
@@ -149,13 +163,19 @@ internal sealed class BuildCodeDialog : Form
         root.Controls.Add(buttons);
         Controls.Add(root);
 
-        AcceptButton = _copy;
+        // An empty configuration has nothing to copy or save: both buttons are off (the line above the code says why) and Enter closes the window.
+        _copy.Enabled = !_empty;
+        _save.Enabled = !_empty;
+        AcceptButton = _empty ? _close : _copy;
         CancelButton = _close;
-        ActiveControl = _copy;
+        ActiveControl = _empty ? _close : _copy;
         _copy.Click += (_, _) => CopyNow();
         _save.Click += async (_, _) => await SaveAsync().ConfigureAwait(true);
         theme.Apply(this);
         _code.Font = _mono;
+        // The box is whole lines high (no half line at the bottom): its client area is CodeLines lines of the code's own font plus a little air.
+        // The list and the box give up rows and lines when the screen is too low for the whole dialog.
+        FitToScreen();
         _status.ForeColor = theme.Palette.TextDim;
         _partsNone.ForeColor = theme.Palette.TextDim;
         if (result.Unread.Count == 0)
@@ -186,6 +206,124 @@ internal sealed class BuildCodeDialog : Form
 
     internal Button CopyButton => _copy;
 
+    /// <summary>How many lines of the code the box shows before it scrolls.</summary>
+    internal const int CodeLines = 5;
+
+    /// <summary>The box the code is in, for tests and the smoke run.</summary>
+    internal TextBox CodeBox => _code;
+
+    /// <summary>The height of the code box's client area: <see cref="CodeLinesShown"/> lines of the code's font and a little air, never a part of a line.</summary>
+    internal int CodeBoxClientHeight => (_codeLines * CodeLineHeight) + LogicalToDeviceUnits(CodeBoxPadding);
+
+    /// <summary>The air in the code box, in logical pixels.</summary>
+    internal const int CodeBoxPadding = 6;
+
+    /// <summary>The line height of the code's font (the box's own, so a window at another scale is asked what it has now), in pixels.</summary>
+    internal int CodeLineHeight => _code.Font.Height;
+
+    /// <summary>How many lines the box shows now: <see cref="CodeLines"/>, or fewer on a screen too low for the whole dialog.</summary>
+    internal int CodeLinesShown => _codeLines;
+
+    /// <summary>How many parts the list shows now before it scrolls: ten, or fewer on a screen too low for the whole dialog.</summary>
+    internal int PartRowsShown => _rows.Count == 0 ? 0 : Math.Max((_parts.Height - LogicalToDeviceUnits(6)) / Math.Max(RowHeightNow(), 1) - 1, 0);
+
+    /// <summary>The height the whole window needs now: its content and the frame round it.</summary>
+    internal int PreferredHeight => _root.GetPreferredSize(Size.Empty).Height + (Height - ClientSize.Height);
+
+    private int RowHeightNow() => Math.Max(Font.Height + LogicalToDeviceUnits(14), LogicalToDeviceUnits(28));
+
+    private int PartsListHeight(int rows) => (RowHeightNow() * (rows + 1)) + LogicalToDeviceUnits(6);
+
+    /// <summary>
+    /// Makes the window as low as the screen allows: the list gives up rows first (down to <see cref="MinShownRows"/>; it scrolls), then the box
+    /// gives up lines of the code (down to <see cref="MinCodeLines"/>; it scrolls too). Each call starts from the full size, so a window that
+    /// goes to a roomier screen gets its rows back. Returns the height the window needs then.
+    /// </summary>
+    internal int FitToHeight(int available)
+    {
+        var floorRows = Math.Min(_rows.Count, MinShownRows);
+        var rows = Math.Min(_rows.Count, MaxShownRows);
+        var lines = CodeLines;
+        SetHeights(rows, lines);
+        while (PreferredHeight > available && (rows > floorRows || lines > MinCodeLines))
+        {
+            if (rows > floorRows)
+            {
+                rows--;
+            }
+            else
+            {
+                lines--;
+            }
+
+            SetHeights(rows, lines);
+        }
+
+        return PreferredHeight;
+    }
+
+    private void SetHeights(int rows, int lines)
+    {
+        if (_rows.Count > 0)
+        {
+            _parts.Height = PartsListHeight(rows);
+        }
+
+        _codeLines = lines;
+        _code.ClientSize = new Size(_code.ClientSize.Width, CodeBoxClientHeight);
+    }
+
+    /// <summary>Fits the window to the working area of the screen it is on (the primary one while it has no window yet), leaving a little air.</summary>
+    private void FitToScreen()
+    {
+        var area = IsHandleCreated ? Screen.FromControl(this).WorkingArea : (Screen.PrimaryScreen ?? Screen.AllScreens[0]).WorkingArea;
+        FitToHeight(area.Height - LogicalToDeviceUnits(24));
+    }
+
+    /// <summary>
+    /// The columns of the list are made for what the rows hold, in pixels of the scale the window is at now: the category, the detail and the
+    /// count take what their longest text needs (the design widths are the least), and the name takes what is left over, so the names of the
+    /// parts get the room the other columns do not need. Widths written in logical pixels went wrong at a scale where the font grows with it.
+    /// </summary>
+    private void FitPartColumns()
+    {
+        if (_rows.Count == 0 || _parts.Columns.Count != 4)
+        {
+            return;
+        }
+
+        var detailCeiling = Math.Max(_parts.ClientSize.Width * 45 / 100, _parts.Scaled(120));
+        _parts.Columns[0].Width = Math.Max(_parts.WidestNeed(0), _parts.Scaled(120));
+        _parts.Columns[2].Width = Math.Min(Math.Max(_parts.WidestNeed(2), _parts.Scaled(120)), detailCeiling);
+        _parts.Columns[3].Width = Math.Max(_parts.WidestNeed(3), _parts.Scaled(56));
+        _parts.FitLastColumn();
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        // The window is on its screen now: a screen lower than the first guess takes rows and lines away before the window is placed.
+        FitToScreen();
+        base.OnLoad(e);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+
+        // The window and everything in it are scaled after this call returns: the fit is done once that is over.
+        if (IsHandleCreated)
+        {
+            BeginInvoke(() =>
+            {
+                if (!IsDisposed)
+                {
+                    FitPartColumns();
+                    FitToScreen();
+                }
+            });
+        }
+    }
+
     private bool _noActivate;
 
     /// <summary>The smoke run shows the dialog to take its picture: it must not take the keyboard focus, as the main window does not.</summary>
@@ -200,6 +338,11 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>What the Copy button does; the tests call it without a mouse. The clipboard gets the code string and nothing else.</summary>
     internal void CopyNow()
     {
+        if (_empty)
+        {
+            return;
+        }
+
         var ok = _copyToClipboard(_result.Code);
         _status.Text = Strings.Get(ok ? "gui.common.copied" : "gui.hw.pcb1.copy.failed");
     }
@@ -211,7 +354,7 @@ internal sealed class BuildCodeDialog : Form
     /// </summary>
     internal async Task SaveAsync()
     {
-        if (_saving)
+        if (_saving || _empty)
         {
             return;
         }
@@ -239,7 +382,7 @@ internal sealed class BuildCodeDialog : Form
         _saving = false;
         if (!IsDisposed)
         {
-            _save.Enabled = true;
+            _save.Enabled = !_empty;
             _status.Text = status;
         }
     }
@@ -284,6 +427,21 @@ internal sealed class BuildCodeDialog : Form
             2 => new GridCell(r.Detail, CellTone.Dim),
             _ => new GridCell(r.Count),
         };
+    }
+
+    /// <summary>
+    /// The full text of a name or a detail that the column cuts (a long model name, a part with many details). Nothing for a cell that fits: a
+    /// tooltip that repeats what is already on the screen is noise.
+    /// </summary>
+    private string? PartTip(int row, int column)
+    {
+        if (row < 0 || row >= _rows.Count || column is not (1 or 2) || column >= _parts.Columns.Count)
+        {
+            return null;
+        }
+
+        var text = column == 1 ? _rows[row].Name : _rows[row].Detail;
+        return text.Length > 0 && _parts.IsCut(row, column) ? text : null;
     }
 
     private void Head(Label label, string text, Padding margin, Control parent)

@@ -174,19 +174,27 @@ internal sealed class GuiContext
         NavigateRequested?.Invoke(pageId, process);
     }
 
-    /// <summary>Text to the clipboard. A busy clipboard is a normal failure on Windows: it goes to the status bar, not a crash.</summary>
+    /// <summary>What puts the text on the clipboard. The system's by default; a test puts one that fails.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Action<string> ClipboardWriter { get; set; } = static text => Clipboard.SetText(text);
+
+    /// <summary>
+    /// Text to the clipboard. A busy clipboard is a normal failure on Windows: it goes to the status bar, not a crash. The failure is said with the
+    /// fixed text and the type and HRESULT of the exception, never its message (the message is the OS's, in its language, and can carry a path or
+    /// a user name; DESIGN-A §7).
+    /// </summary>
     /// <param name="doneKey">The status text for success (default "copied"). Returns false when the clipboard was busy.</param>
     public bool CopyText(string text, string doneKey = "gui.common.copied")
     {
         try
         {
-            Clipboard.SetText(text);
+            ClipboardWriter(text);
             ReportKey(doneKey);
             return true;
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or ThreadStateException)
         {
-            Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+            Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = CheckFormat.ExceptionDetail(ex) }));
             return false;
         }
     }

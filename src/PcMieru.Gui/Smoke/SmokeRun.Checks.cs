@@ -82,14 +82,25 @@ internal static partial class SmokeRun
         /// <summary>What a folder holds, as a short text (how many entries and the newest write time), so that "nothing was written here" can be checked without naming a path.</summary>
         private static string FolderStamp(string path)
         {
-            if (!Directory.Exists(path))
+            try
             {
-                return "none";
-            }
+                if (!Directory.Exists(path))
+                {
+                    return "none";
+                }
 
-            var entries = new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories).ToList();
-            return entries.Count + " entries, newest " + (entries.Count == 0 ? 0 : entries.Max(static e => e.LastWriteTimeUtc.Ticks));
+                var entries = new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories).ToList();
+                return entries.Count + " entries, newest " + (entries.Count == 0 ? 0 : entries.Max(static e => e.LastWriteTimeUtc.Ticks));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A folder that cannot be looked at is a failed check line (see <see cref="StampUnreadable"/>), never an exception that ends the run.
+                return StampUnreadable + CheckFormat.ExceptionDetail(ex);
+            }
         }
+
+        /// <summary>The start of the text <see cref="FolderStamp"/> gives when it could not look at the folder.</summary>
+        private const string StampUnreadable = "unreadable ";
 
         private async Task ShootChecksTab(ChecksPage page, string tabId, Func<Task>? settle = null)
         {
@@ -106,6 +117,20 @@ internal static partial class SmokeRun
                 Check($"checks: tab {tabId} has its texts ({look})", missing.Count == 0, string.Join(" | ", missing));
                 var clipped = SmokeClip.Clipped(form).Distinct().Take(6).ToList();
                 Check($"checks: tab {tabId} has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));
+                // SmokeClip looks at the headers only: every cell of the result table is asked of the grid itself (an item label and a verdict word
+                // are never cut; a long evidence line or a part's name may be, when its tooltip holds the whole text).
+                var grid = page.TabOf(tabId) switch
+                {
+                    RunCheckTab run => run.Grid,
+                    CheckHistoryTab history => history.Detail,
+                    _ => null,
+                };
+                if (grid is not null)
+                {
+                    var cuts = grid.UnreadableCuts().Take(4).ToList();
+                    Check($"checks: no cell of the {tabId} table is cut short without a tooltip that holds it ({look})", cuts.Count == 0, string.Join(" | ", cuts) + " (columns " + string.Join("/", grid.Columns.Cast<ColumnHeader>().Select(static c => c.Width)) + ")");
+                }
+
                 if (shotsDirectory is not null)
                 {
                     _shots.Add(await Capture(shotsDirectory, $"{look}-checks-{tabId}{ScaleSuffix}.png").ConfigureAwait(true));
@@ -182,8 +207,13 @@ internal static partial class SmokeRun
             var twinDelta2 = FindRow(storage.Grid, "storage.nvme.power_on_hours.delta", "disk-4");
             var twinText = twinDelta >= 0 ? storage.Grid.TextAt(twinDelta, 3) : string.Empty;
             Check("checks: two disks that look the same say they cannot be compared (no before and after)", twinDelta > 0 && twinDelta2 > 0 && twinText.Length > 0 && !twinText.Contains('→', StringComparison.Ordinal) && !SmokeText.IsPlaceholder(twinText) && storage.Grid.TextAt(twinDelta2, 3) == twinText, twinText);
-            var fits = twinDelta - hoursRow < RowsOnShow(storage.Grid);
-            Check("checks: the counter's change and the twin disk's row are on one screen when the table starts at the counter", hoursRow >= 0 && twinDelta > hoursRow && fits, "rows " + hoursRow + ".." + twinDelta + " of " + RowsOnShow(storage.Grid) + " on show");
+            // At the normal scale the counter, its change and the twin disk's row are on one screen. The same window at a denser scale is the same
+            // number of pixels, so it holds fewer rows (a 1080-line screen at 150% shows about a dozen): there the rule is the part that still
+            // matters, the counter and its change sit together on the screen, the change directly under the counter.
+            var onShow = RowsOnShow(storage.Grid);
+            var denser = dpiPercent > 100;
+            var fits = denser ? hoursDelta == hoursRow + 1 && hoursDelta - hoursRow < onShow : twinDelta - hoursRow < onShow;
+            Check("checks: the counter's change and the twin disk's row are on one screen when the table starts at the counter" + (denser ? " (at a denser scale: the counter and its change)" : string.Empty), hoursRow >= 0 && twinDelta > hoursRow && fits, "rows " + hoursRow + ".." + twinDelta + " of " + onShow + " on show" + (denser ? ", " + dpiPercent + "%: the counter and its change only" : string.Empty));
             await ShootChecksTab(page, "storage", () =>
             {
                 ScrollToTop(storage.Grid, hoursRow);
@@ -244,7 +274,7 @@ internal static partial class SmokeRun
             }
 
             var folderAfter = FolderStamp(folder);
-            Check("checks: the fake checks wrote nothing under the data folder", folderAfter == folderBefore, folderBefore + " -> " + folderAfter);
+            Check("checks: the fake checks wrote nothing under the data folder", !folderBefore.StartsWith(StampUnreadable, StringComparison.Ordinal) && !folderAfter.StartsWith(StampUnreadable, StringComparison.Ordinal) && folderAfter == folderBefore, folderBefore + " -> " + folderAfter);
             Check("checks: nothing is running at the end", !context.Checks.IsBusy, context.Checks.State.ToString());
             page.SelectTab("system");
         }
@@ -286,9 +316,28 @@ internal static partial class SmokeRun
             var line = Dialogs.Log.Skip(logged).FirstOrDefault() ?? string.Empty;
             Check("hardware: the button gives the dialog the code, and is back afterwards", button.Enabled && line.Contains("| PCB1.", StringComparison.Ordinal) && !SmokeText.IsPlaceholder(line), line.Length > 40 ? line[..40] + "..." : line);
 
-            var result = await context.BuildCode.CreateAsync(CancellationToken.None).ConfigureAwait(true);
-            Check("hardware: the sample code is a PCB1 code within the length limit", result.Code.StartsWith("PCB1.", StringComparison.Ordinal) && result.Code.Length <= BuildCode.MaxLength, result.Code.Length + " characters");
+            // The plain sample (nothing left out) and the trimmed one (cut to the length limit by the real rules, with categories that could not be read):
+            // both are the library's own results, shown in every look.
+            var plain = await context.BuildCode.CreateAsync(CancellationToken.None).ConfigureAwait(true);
+            Check("hardware: the sample code is a PCB1 code within the length limit", plain.Code.StartsWith("PCB1.", StringComparison.Ordinal) && plain.Code.Length <= BuildCode.MaxLength, plain.Code.Length + " characters");
+            Check("hardware: the plain sample has nothing left out and every category read", plain.Notes.Count == 0 && plain.Unread.Count == 0, plain.Notes.Count + " notes, " + plain.Unread.Count + " unread");
+            var trimmed = await new FakeBuildCode(SampleVariant.Trimmed).CreateAsync(CancellationToken.None).ConfigureAwait(true);
+            Check("hardware: the trimmed sample is a PCB1 code within the length limit, with notes and unread categories from the rules", trimmed.Code.StartsWith("PCB1.", StringComparison.Ordinal) && trimmed.Code.Length <= BuildCode.MaxLength && trimmed.Notes.Count > 0 && trimmed.Unread.Count > 0, trimmed.Code.Length + " characters, " + trimmed.Notes.Count + " notes, " + trimmed.Unread.Count + " unread");
+            Check("hardware: the trimmed sample has several kinds of note and several reasons for what could not be read", trimmed.Notes.Select(static n => n.Kind).Distinct().Count() >= 3 && trimmed.Unread.Select(static u => u.Reason).Distinct().Count() >= 3, string.Join(",", trimmed.Notes.Select(static n => n.Kind)) + " / " + string.Join(",", trimmed.Unread.Select(static u => u.Reason)));
+            await ShootPcb1Dialog(plain, string.Empty, mayCut: false).ConfigureAwait(true);
+            await ShootPcb1Dialog(trimmed, "-trimmed", mayCut: true).ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// Shows the configuration code dialog of one result, without the focus, in every look, and checks it: the texts, the notes and the unread
+        /// lines as the screen writes them, the cut-off text (headers by <see cref="SmokeClip"/>, every cell of the parts list by the grid itself) and the
+        /// fit on the screen. With <paramref name="mayCut"/> a name or a detail that its column cuts is accepted when the tooltip holds the whole text (a
+        /// long model name is real); without it nothing may be cut.
+        /// </summary>
+        private async Task ShootPcb1Dialog(BuildCodeResult result, string nameSuffix, bool mayCut)
+        {
             var work = Screen.FromControl(form).WorkingArea;
+            var kind = nameSuffix.Length == 0 ? "plain" : nameSuffix.TrimStart('-');
             await ForEachLook(async look =>
             {
                 using var dialog = new BuildCodeDialog(context.Theme, result, _ => true);
@@ -304,36 +353,38 @@ internal static partial class SmokeRun
                 }
 
                 var partCount = BuildConfig.Categories.Sum(c => result.Config[c].Count);
-                Check($"hardware: the dialog shows the parts, the code, the notes and the unread categories ({look})", dialog.PartLines.Count == partCount && dialog.CodeText == result.Code && dialog.NotesText.Split('\n').Length == result.Notes.Count && dialog.UnreadText.Split('\n').Length == result.Unread.Count, dialog.PartLines.Count + " parts, " + dialog.NotesText.Split('\n').Length + " notes, " + dialog.UnreadText.Split('\n').Length + " unread");
+                var noteLines = BuildCodeText.NoteLines(result.Notes).Count;
+                Check($"hardware: the {kind} dialog shows the parts, the code, the notes and the unread categories ({look})", dialog.PartLines.Count == partCount && dialog.CodeText == result.Code && (noteLines == 0 ? dialog.NotesText.Length == 0 : dialog.NotesText.Split('\n').Length == noteLines) && dialog.UnreadText.Split('\n').Length == Math.Max(result.Unread.Count, 1), dialog.PartLines.Count + " parts, " + dialog.NotesText.Split('\n').Length + " note lines, " + dialog.UnreadText.Split('\n').Length + " unread");
                 var all = string.Join("\n", dialog.PartLines.Select(static p => p.Category + p.Name + p.Detail + p.Count)) + "\n" + dialog.NotesText + "\n" + dialog.UnreadText;
                 var missing = SmokeText.Missing(dialog).Distinct().Take(5).ToList();
-                Check($"hardware: the dialog has no missing strings ({look})", missing.Count == 0 && !SmokeText.IsPlaceholder(all), string.Join(" | ", missing));
+                Check($"hardware: the {kind} dialog has no missing strings ({look})", missing.Count == 0 && !SmokeText.IsPlaceholder(all), string.Join(" | ", missing));
                 var clipped = SmokeClip.Clipped(dialog).Distinct().Take(6).ToList();
-                Check($"hardware: the dialog has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));
+                Check($"hardware: the {kind} dialog has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));
                 var grid = dialog.PartsList;
                 var cells = new List<string>();
                 if (grid.Columns.Count >= 4)
                 {
-                    foreach (var (_, name, detail, _) in dialog.PartLines)
+                    for (var row = 0; row < dialog.PartLines.Count; row++)
                     {
-                        // A table cell that is too narrow ends in "..." and nothing else says so (SmokeClip looks at the headers only).
-                        if (TextRenderer.MeasureText(name, grid.Font).Width + grid.LogicalToDeviceUnits(14) > grid.Columns[1].Width)
+                        // A table cell that is too narrow ends in "..." and nothing else says so (SmokeClip looks at the headers only): the grid is asked cell by cell.
+                        var (_, name, detail, _) = dialog.PartLines[row];
+                        if (grid.IsCut(row, 1) && !(mayCut && grid.CellTip?.Invoke(row, 1) == name))
                         {
                             cells.Add(name);
                         }
 
-                        if (TextRenderer.MeasureText(detail, grid.Font).Width + grid.LogicalToDeviceUnits(14) > grid.Columns[2].Width)
+                        if (grid.IsCut(row, 2) && !(mayCut && grid.CellTip?.Invoke(row, 2) == detail))
                         {
                             cells.Add(detail);
                         }
                     }
                 }
 
-                Check($"hardware: no part name or detail is cut short by its column ({look})", grid.Columns.Count >= 4 && cells.Count == 0, string.Join(" | ", cells.Take(4)) + " (columns " + string.Join("/", grid.Columns.Cast<ColumnHeader>().Select(static c => c.Width)) + ")");
-                Check($"hardware: the dialog fits on the screen ({look})", dialog.Height <= work.Height && dialog.Width <= work.Width && dialog.BackColor == context.Theme.Palette.Window, dialog.Width + "x" + dialog.Height + " in " + work.Width + "x" + work.Height);
+                Check($"hardware: no part name or detail of the {kind} dialog is cut short without a tooltip that holds it ({look})", grid.Columns.Count >= 4 && cells.Count == 0, string.Join(" | ", cells.Take(4)) + " (columns " + string.Join("/", grid.Columns.Cast<ColumnHeader>().Select(static c => c.Width)) + ")");
+                Check($"hardware: the {kind} dialog fits on the screen ({look})", dialog.Height <= work.Height && dialog.Width <= work.Width && dialog.BackColor == context.Theme.Palette.Window, dialog.Width + "x" + dialog.Height + " in " + work.Width + "x" + work.Height);
                 if (shotsDirectory is not null)
                 {
-                    _shots.Add(await Capture(shotsDirectory, $"{look}-hardware-pcb1{ScaleSuffix}.png", dialog).ConfigureAwait(true));
+                    _shots.Add(await Capture(shotsDirectory, $"{look}-hardware-pcb1{nameSuffix}{ScaleSuffix}.png", dialog).ConfigureAwait(true));
                 }
 
                 dialog.Close();

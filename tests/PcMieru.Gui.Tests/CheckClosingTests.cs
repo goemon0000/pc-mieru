@@ -86,6 +86,9 @@ public class CheckClosingTests
 
         public bool? BusyAtClose { get; private set; }
 
+        /// <summary>Pumps until the given number of runs (in all) have ended and been told to the UI context (see <see cref="RunEnd"/>).</summary>
+        public bool UntilRunEnded(QueueContext ui, int expected = 1) => ui.UntilRunEnded(Controller, expected);
+
         public void Dispose() => Controller.Dispose();
     }
 
@@ -110,7 +113,7 @@ public class CheckClosingTests
             // A check that is over is no reason to ask either.
             StartAndWait(rig, ui);
             rig.Runner.Release();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
             Assert.True(rig.Guard.OnCloseRequested());
             Assert.Equal(0, rig.Asked);
             Assert.Null(rig.Guard.Pending);
@@ -158,7 +161,7 @@ public class CheckClosingTests
 
             // When the check ends by itself the close is let through, and nobody is asked again.
             rig.Runner.Release();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
             Assert.True(rig.Guard.OnCloseRequested());
             Assert.Equal(2, rig.Asked);
             Assert.Equal(0, rig.Closed);
@@ -246,7 +249,7 @@ public class CheckClosingTests
 
             // Let the scripted run end so nothing is left hanging from this test.
             neverSaved.SetResult();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
         });
     }
 
@@ -288,7 +291,7 @@ public class CheckClosingTests
             rig.DuringAsk = () =>
             {
                 rig.Runner.Release();
-                Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+                Assert.True(rig.UntilRunEnded(ui));
             };
 
             Assert.False(rig.Guard.OnCloseRequested());
@@ -361,7 +364,7 @@ public class CheckClosingTests
             Assert.Null(rig.Guard.Pending);
             Assert.True(ui.Until(() => rig.Runner.WasStopped));
             save.SetResult();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
         });
     }
 
@@ -384,7 +387,7 @@ public class CheckClosingTests
             Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
             Assert.True(ui.Until(() => rig.Runner.WasStopped));
             save.SetResult();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
         });
     }
 
@@ -433,7 +436,7 @@ public class CheckClosingTests
             Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
             Assert.True(ui.Until(() => second.WasStopped));
             secondSave.SetResult();
-            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui, 2));
             Assert.Equal(1, rig.Asked);
         });
     }
@@ -513,6 +516,9 @@ public class CheckClosingTests
 
         public CheckKindState? AtClosing { get; private set; }
 
+        /// <summary>Pumps until the given number of runs (in all) have ended and been told to the UI context (see <see cref="RunEnd"/>).</summary>
+        public bool UntilRunEnded(QueueContext ui, int expected = 1) => ui.UntilRunEnded(Checks, expected);
+
         public void Dispose()
         {
             Dialogs.AutoAnswer = null;
@@ -573,7 +579,7 @@ public class CheckClosingTests
 
             // Once the check is over the window closes without a question.
             runner.Release();
-            Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
             rig.Form.Close();
             Assert.Equal(1, rig.Closed);
             Assert.Equal(2, Dialogs.Log.Count);

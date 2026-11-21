@@ -305,7 +305,7 @@ internal class GridView : ListView, IThemed
         _palette = palette;
         BackColor = palette.Surface;
         ForeColor = palette.Text;
-        _selectedDim = Blend(palette.SelectionText, palette.Selection, 0.25);
+        _selectedDim = SelectedDim(palette);
         Invalidate();
     }
 
@@ -814,7 +814,17 @@ internal class GridView : ListView, IThemed
     /// <summary>The DPI the window is at now. The form is asked first: it is the first to learn about a change.</summary>
     private int CurrentDpi => FindForm()?.DeviceDpi ?? DeviceDpi;
 
-    private int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
+    /// <summary>A length written in logical pixels, in pixels for the DPI the window is at now (the font size does not enter: it is the room the grid keeps around a text).</summary>
+    internal int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
+
+    /// <summary>
+    /// The columns were brought to a new DPI or font size (after <see cref="SyncDpi"/> scaled them by the ratio). A grid that sizes a column by
+    /// what its text needs measures again here, in pixels of the scale it is at now.
+    /// </summary>
+    protected virtual void OnColumnsRescaled() => ColumnsRescaled?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Raised after the columns were brought to a new DPI or font size (see <see cref="OnColumnsRescaled"/>).</summary>
+    internal event EventHandler? ColumnsRescaled;
 
     /// <summary>A column width written in logical pixels at the design font size, in pixels for this table's DPI and font.</summary>
     public int ColumnWidth(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0 * Font.SizeInPoints / DesignPoints);
@@ -849,6 +859,7 @@ internal class GridView : ListView, IThemed
         }
 
         UpdateRowHeight();
+        OnColumnsRescaled();
         FitLastColumn();
         Invalidate();
     }
@@ -863,6 +874,71 @@ internal class GridView : ListView, IThemed
             _rowHeight.ImageSize = new Size(1, Math.Min(RowHeight, 256));
         }
     }
+
+    /// <summary>
+    /// True when the text of a cell does not fit its column, so the grid draws it with an ellipsis. It measures what <c>DrawCell</c> draws (the
+    /// font of the cell, the padding on both sides and, in the first column, the indent and the glyph slot), so the smoke run and the tests ask
+    /// the grid itself and never a copy of its arithmetic.
+    /// </summary>
+    internal bool IsCut(int row, int column) =>
+        column >= 0 && column < Columns.Count && NeededWidth(row, column) > Columns[column].Width;
+
+    /// <summary>
+    /// The width the column has to be for the text of this cell to be drawn whole: the text, the padding on both sides and, in the first column,
+    /// the indent and the glyph slot (0 for a cell with no text). Measured in pixels of the scale the grid is at now.
+    /// </summary>
+    internal int NeededWidth(int row, int column)
+    {
+        if (Cells is not { } cells || row < 0 || row >= VirtualListSize || column < 0 || column >= Columns.Count)
+        {
+            return 0;
+        }
+
+        var cell = cells(row, column);
+        if (cell.Text.Length == 0)
+        {
+            return 0;
+        }
+
+        var header = RowStyles?.Invoke(row) == RowStyle.Header;
+        var font = cell.Link ? UnderlineFont : (cell.Bold || header) ? BoldFont : Font;
+        var around = Scaled(8) * 2;
+        if (column == 0)
+        {
+            around += (cell.Indent + 1) * Scaled(16);
+            if (cell.IconSlot)
+            {
+                around += Scaled(16) + Scaled(6);
+            }
+        }
+
+        return around + TextRenderer.MeasureText(
+            cell.Text,
+            font,
+            new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+    }
+
+    /// <summary>The widest <see cref="NeededWidth"/> of the column over every row now on show.</summary>
+    internal int WidestNeed(int column)
+    {
+        var widest = 0;
+        for (var row = 0; row < VirtualListSize; row++)
+        {
+            widest = Math.Max(widest, NeededWidth(row, column));
+        }
+
+        return widest;
+    }
+
+    /// <summary>How far the dim text of a selected row goes toward the selection's own text colour (the rest is the selection's background).</summary>
+    internal const double SelectedDimAmount = 0.75;
+
+    /// <summary>
+    /// The colour of a dim cell (a detail, an evidence line) on a selected row: mostly the selection's text colour, so it stays readable on the
+    /// selection's background (a 25% blend, as it was, came out at about 1.6:1 in the light theme). Every grid draws it.
+    /// </summary>
+    internal static Color SelectedDim(Palette palette) => Blend(palette.SelectionText, palette.Selection, SelectedDimAmount);
 
     private static Color Blend(Color a, Color b, double amountOfA) =>
         Color.FromArgb(

@@ -487,14 +487,29 @@ internal static class CheckFormat
         && result.Items.Any(static item => item.Reason == CheckReason.Denied && item.Subject is { } subject && subject.Id.StartsWith("disk-", StringComparison.Ordinal));
 
     /// <summary>The summary line under a table: the overall verdict and how many rows carry each verdict.</summary>
-    public static string SummaryText(CheckResult result) =>
-        Strings.Format("gui.chk.summary", Fmt.Dict(
-            ("verdict", VerdictWord(result.Verdict)),
-            ("check", result.Counts.Check.ToString(Inv)),
-            ("caution", result.Counts.Caution.ToString(Inv)),
-            ("ok", result.Counts.Ok.ToString(Inv)),
-            ("unavailable", result.Counts.Unavailable.ToString(Inv)),
-            ("info", result.Counts.Info.ToString(Inv))));
+    public static string SummaryText(CheckResult result)
+    {
+        // A count of zero is not written: a run with no row (a stopped CPU run) reads "Overall: Not measured", not "Not measured (… Not measured 0 …)".
+        var counts = new List<string>();
+        foreach (var (verdict, count) in new[]
+                 {
+                     (ItemVerdict.Check, result.Counts.Check),
+                     (ItemVerdict.Caution, result.Counts.Caution),
+                     (ItemVerdict.Ok, result.Counts.Ok),
+                     (ItemVerdict.Unavailable, result.Counts.Unavailable),
+                     (ItemVerdict.Info, result.Counts.Info),
+                 })
+        {
+            if (count > 0)
+            {
+                counts.Add(VerdictWord(verdict) + " " + count.ToString(Inv));
+            }
+        }
+
+        return Strings.Format(
+            counts.Count == 0 ? "gui.chk.summary.none" : "gui.chk.summary",
+            Fmt.Dict(("verdict", VerdictWord(result.Verdict)), ("counts", string.Join(" / ", counts))));
+    }
 
     public static string RanAtText(CheckResult result) =>
         Strings.Format("gui.chk.ranat", Fmt.Dict(("time", LocalTime(result.StartedAtUtc)), ("seconds", Seconds(result.StartedAtUtc, result.EndedAtUtc))));

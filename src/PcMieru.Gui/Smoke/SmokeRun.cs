@@ -17,9 +17,9 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// </summary>
 internal static partial class SmokeRun
 {
-    // 150 s: the run with --fakes --shots walks the checks page and the configuration code dialog in four looks each (about 80 s in all);
+    // 240 s: the run with --fakes --shots walks the checks page and the two configuration code dialogs (plain and trimmed) in four looks each (about 100 s in all, more at 150%);
     // the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(150);
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(240);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();

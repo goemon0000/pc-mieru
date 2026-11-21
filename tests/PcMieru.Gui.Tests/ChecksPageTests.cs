@@ -39,7 +39,7 @@ public class ChecksPageTests
             _locale = Harness.Locale(language);
             Services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
             Pump = new SnapshotPump(Services);
-            Checks = checks(Services);
+            Checks = checks(Services).Watched();
             Context = new GuiContext(Services, Pump, _theme, new GuiSettings(), checks: Checks);
             Page = new ChecksPage(Context);
             Host = new Form { ShowInTaskbar = false };
@@ -70,6 +70,9 @@ public class ChecksPageTests
         public StorageCheckTab StorageTab => (StorageCheckTab)Page.TabOf("storage");
 
         public CheckHistoryTab HistoryTab => (CheckHistoryTab)Page.TabOf("history");
+
+        /// <summary>Pumps until the given number of runs (in all) have ended and been told to the UI context (see <see cref="RunEnd"/>), not merely until the controller is idle.</summary>
+        public bool UntilRunEnded(QueueContext ui, int expected = 1) => ui.UntilRunEnded(Checks, expected);
 
         /// <summary>Brings the page and its history tab to the front, and waits (pumping) until the list reached the given view.</summary>
         public CheckHistoryTab ShowHistory(QueueContext ui, HistoryView until)
@@ -237,7 +240,7 @@ public class ChecksPageTests
             using var rig = new PageRig(new RunnerQueue(first, second).Controller());
 
             rig.LoadTab.PressStart();
-            Assert.True(ui.Until(() => first.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => first.Started.IsCompleted && rig.Checks.RunEnded()));
             var one = Assert.Single(first.Requests);
             Assert.Equal(CheckKind.Cpu, one.Kind);
             Assert.Equal(TimeSpan.FromSeconds(30), one.Duration);
@@ -246,7 +249,7 @@ public class ChecksPageTests
             rig.LoadTab.PressKind(CheckKind.Memory);
             rig.LoadTab.Duration.SelectedIndex = 2;
             rig.LoadTab.PressStart();
-            Assert.True(ui.Until(() => second.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => second.Started.IsCompleted && rig.Checks.RunEnded(2)));
             var two = Assert.Single(second.Requests);
             Assert.Equal(CheckKind.Memory, two.Kind);
             Assert.Equal(TimeSpan.FromSeconds(300), two.Duration);
@@ -327,7 +330,7 @@ public class ChecksPageTests
             Assert.True(runner.WasStopped);
 
             gate.SetResult();
-            Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui));
             ui.Pump();
             Assert.Equal("Stopped", load.StateLabel.Text);
             Assert.False(load.ProgressShown);
@@ -355,10 +358,11 @@ public class ChecksPageTests
             rig.Page.OnActivated();
             var system = rig.SystemTab;
 
+            var ended = 0;
             void Finish(ScriptedRunner runner)
             {
                 Assert.True(ui.Until(() => runner.Started.IsCompleted));
-                Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+                Assert.True(rig.UntilRunEnded(ui, ++ended));
                 ui.Pump();
             }
 
@@ -436,7 +440,7 @@ public class ChecksPageTests
             using var rig = new PageRig(new RunnerQueue(runner).Controller());
             rig.Page.OnActivated();
             rig.SystemTab.PressStart();
-            Assert.True(ui.Until(() => runner.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => runner.Started.IsCompleted && rig.Checks.RunEnded()));
             ui.Pump();
 
             var grid = rig.SystemTab.Grid;
@@ -487,7 +491,7 @@ public class ChecksPageTests
             rig.Page.OnActivated();
             rig.Page.SelectTab("storage");
             rig.StorageTab.PressStart();
-            Assert.True(ui.Until(() => runner.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => runner.Started.IsCompleted && rig.Checks.RunEnded()));
             ui.Pump();
 
             var grid = rig.StorageTab.Grid;
@@ -631,7 +635,7 @@ public class ChecksPageTests
             var system = rig.SystemTab;
 
             system.PressStart();
-            Assert.True(ui.Until(() => first.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => first.Started.IsCompleted && rig.Checks.RunEnded()));
             ui.Pump();
             Assert.DoesNotContain("Previous result", system.HintLabel.Text, StringComparison.Ordinal);
             var shown = system.Grid.Result;
@@ -652,7 +656,7 @@ public class ChecksPageTests
             rig.Page.ApplyLanguage();
 
             second.Release();
-            Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui, 2));
             ui.Pump();
             Assert.DoesNotContain("Previous result", system.HintLabel.Text, StringComparison.Ordinal);
             Assert.NotSame(shown, system.Grid.Result);
@@ -674,7 +678,7 @@ public class ChecksPageTests
             Assert.Equal("Read again as administrator", storage.ElevateButton.Text);
 
             storage.PressStart();
-            Assert.True(ui.Until(() => recorder.Requests.Count == 1 && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => recorder.Requests.Count == 1 && rig.Checks.RunEnded()));
             ui.Pump();
             Assert.True(storage.ElevateOffered);
             Assert.Equal("Some disks could not be read with normal rights", storage.Notice.Text);
@@ -685,7 +689,7 @@ public class ChecksPageTests
             var firstResult = storage.Grid.Result!;
 
             storage.PressElevate();
-            Assert.True(ui.Until(() => recorder.Requests.Count == 2 && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => recorder.Requests.Count == 2 && rig.Checks.RunEnded(2)));
             ui.Pump();
 
             Assert.Equal(new[] { false, true }, recorder.Requests.Select(static r => r.AllowElevation));
@@ -717,7 +721,7 @@ public class ChecksPageTests
             var storage = rig.StorageTab;
 
             storage.PressStart();
-            Assert.True(ui.Until(() => normal.Started.IsCompleted && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => normal.Started.IsCompleted && rig.Checks.RunEnded()));
             ui.Pump();
             Assert.True(storage.ElevateOffered);
             Assert.True(storage.ElevateButton.Enabled);
@@ -735,7 +739,7 @@ public class ChecksPageTests
             Assert.Single(elevated.Requests);
 
             elevated.Release();
-            Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+            Assert.True(rig.UntilRunEnded(ui, 2));
             ui.Pump();
             Assert.False(storage.ElevateOffered);
             Assert.Equal("Completed", storage.StateLabel.Text);
@@ -1017,7 +1021,7 @@ public class ChecksPageTests
 
             // Not on screen: the run is saved, nothing is read, and the list is read when the tab is shown.
             rig.SystemTab.PressStart();
-            Assert.True(ui.Until(() => rig.Checks.StateOf(CheckKind.System).State == CheckRunState.Completed));
+            Assert.True(rig.UntilRunEnded(ui));
             ui.Pump();
             Assert.Equal(HistoryView.NotLoaded, rig.HistoryTab.View);
             rig.Page.SelectTab("history");
@@ -1026,7 +1030,7 @@ public class ChecksPageTests
 
             // On screen: the list is read again by itself when the run ends.
             rig.SystemTab.PressStart();
-            Assert.True(ui.Until(() => rig.HistoryTab.Entries.Count == 6 && rig.HistoryTab.View == HistoryView.List && !rig.Checks.IsBusy));
+            Assert.True(ui.Until(() => rig.HistoryTab.Entries.Count == 6 && rig.HistoryTab.View == HistoryView.List && rig.Checks.RunEnded(2)));
         });
     }
 

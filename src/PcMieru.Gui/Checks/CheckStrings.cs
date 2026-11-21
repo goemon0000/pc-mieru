@@ -31,7 +31,9 @@ internal static class CheckStrings
         new("gui.chk.col.evidence", "根拠", "Evidence"),
         new("gui.chk.ranat", "{time} に実行（{seconds} 秒）", "Ran at {time} ({seconds} s)"),
         new("gui.chk.info.tip", "参考: 判定には使わない、観測した値です", "Info: an observed value that is not judged"),
-        new("gui.chk.summary", "総合: {verdict}（要確認 {check} / 注意 {caution} / OK {ok} / 測れず {unavailable} / 参考 {info}）", "Overall: {verdict} (Needs review {check} / Caution {caution} / OK {ok} / Not measured {unavailable} / Info {info})"),
+        // The counts are the verdict words with a number; a count of zero is not written (a run that stopped before it had a row reads "Overall: Not measured", not "... Not measured 0 / Info 0").
+        new("gui.chk.summary", "総合: {verdict}（{counts}）", "Overall: {verdict} ({counts})"),
+        new("gui.chk.summary.none", "総合: {verdict}", "Overall: {verdict}"),
         new("gui.chk.nothing", "表示する項目がありません", "There are no items to show"),
 
         new("gui.chk.sys.intro", "この PC の構成、ドライブ、イベントログを調べて、項目ごとに判定します。負荷はかけません。", "Looks at this PC's configuration, drives and event logs and judges each item. It puts no load on the PC."),
@@ -189,7 +191,7 @@ internal static class CheckStrings
         new("gui.chk.ev.baseline_inventory_incomplete", "ディスクの一覧が揃わず、前回とは比べていません", "The disk list was incomplete, so nothing was compared"),
         new("gui.chk.ev.baseline_first", "初めての記録で、比べる前回がありません", "First reading: there is no earlier one to compare with"),
         new("gui.chk.ev.baseline_no_identity", "ディスクを見分ける情報がなく、前回とは比べられません", "The disk could not be identified, so it cannot be compared"),
-        new("gui.chk.ev.baseline_duplicate", "見分けのつかない同じディスクが複数あり、比べられません", "Several disks look the same, so they cannot be compared"),
+        new("gui.chk.ev.baseline_duplicate", "見分けのつかない同じディスクが複数あり、比べられません", "Same-looking disks, cannot compare"),
         new("gui.chk.ev.baseline_device_changed", "前回とは別のディスクのため、比べていません", "A different disk than last time, so nothing was compared"),
         new("gui.chk.ev.baseline_counter_reset", "カウンターが戻っていたため、比べていません", "The counters went back, so nothing was compared"),
         new("gui.chk.ev.baseline_clock", "時計が戻っていたため、比べていません", "The clock went back, so nothing was compared"),

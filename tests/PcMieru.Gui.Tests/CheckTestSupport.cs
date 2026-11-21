@@ -247,5 +247,48 @@ internal sealed class RunnerQueue(params ScriptedRunner[] runners)
         }
     }
 
-    public CheckController Controller(IReadOnlyCheckHistory? history = null) => new(Make, history ?? new InMemoryCheckHistory([]));
+    public CheckController Controller(IReadOnlyCheckHistory? history = null) => new CheckController(Make, history ?? new InMemoryCheckHistory([])).Watched();
+}
+
+/// <summary>
+/// Tells when a run has really ended for the UI. <see cref="CheckController.IsBusy"/> goes false the moment the worker clears the active run,
+/// and only then are "changed" and "run finished" posted to the UI context, so a wait on the flag alone can end before the page has been
+/// told (the flake: a state line that still said "Running"). The posts are first in, first out, so once the delivery of "run finished" has been
+/// counted on the context, the "changed" before it has been delivered too. A controller is watched from its creation on (<see cref="Watched"/>);
+/// the count is of deliveries, never of time.
+/// </summary>
+internal static class RunEnd
+{
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CheckController, Counter> Counters = new();
+
+    /// <summary>Starts counting the "run finished" events the UI context delivers for this controller. Call it before the first run; a second call changes nothing.</summary>
+    public static CheckController Watched(this CheckController controller)
+    {
+        Counters.GetValue(
+            controller,
+            static watched =>
+            {
+                var counter = new Counter();
+                watched.RunFinished += _ => Interlocked.Increment(ref counter.Delivered);
+                return counter;
+            });
+        return controller;
+    }
+
+    /// <summary>How many "run finished" events the UI context has delivered so far.</summary>
+    public static int FinishedDelivered(this CheckController controller) =>
+        Counters.TryGetValue(controller, out var counter)
+            ? Volatile.Read(ref counter.Delivered)
+            : throw new InvalidOperationException("The controller was not created watched: build it with RunnerQueue.Controller() or call Watched() before the first run.");
+
+    /// <summary>True when no run is active and the end of at least <paramref name="expected"/> runs (in all, since the controller was made) has been delivered to the UI.</summary>
+    public static bool RunEnded(this CheckController controller, int expected = 1) => !controller.IsBusy && controller.FinishedDelivered() >= expected;
+
+    /// <summary>Pumps until <paramref name="expected"/> runs of this controller have ended and been told to the UI.</summary>
+    public static bool UntilRunEnded(this QueueContext ui, CheckController controller, int expected = 1) => ui.Until(() => controller.RunEnded(expected));
+
+    private sealed class Counter
+    {
+        public int Delivered;
+    }
 }

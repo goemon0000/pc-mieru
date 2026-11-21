@@ -32,7 +32,7 @@ internal static class BuildCodeStrings
         new("gui.hw.pcb1.failed", "構成コードを作れませんでした（{detail}）", "Could not make the configuration code ({detail})"),
 
         new("gui.hw.pcb1.parts", "コードに入る部品", "Parts in the code"),
-        new("gui.hw.pcb1.parts.none", "コードに入る部品がありません", "No parts are in the code"),
+        new("gui.hw.pcb1.parts.none", "コードに入る部品がないので、コピーも保存もできません", "No parts are in the code, so there is nothing to copy or save"),
         new("gui.hw.pcb1.col.category", "種類", "Category"),
         new("gui.hw.pcb1.col.name", "名前", "Name"),
         new("gui.hw.pcb1.col.detail", "詳細", "Details"),
@@ -53,6 +53,8 @@ internal static class BuildCodeStrings
         new(NotePrefix + "category_left_out_for_length", "{category}: 長さの上限（{max} 字）に収めるため、省きました", "{category}: left out to stay within {max} characters"),
         new(NotePrefix + "memory_first_kind_only", "{category}: 長さの上限（{max} 字）に収めるため、1 種類目だけにしました", "{category}: only the first kind was kept, to stay within {max} characters"),
         new(NotePrefix + "one_part_left_out_for_length", "{category}: 長さの上限に収めるため、1 つ省きました", "{category}: one part was left out to fit"),
+        // The same note repeated for one category is one line with a count on the screen (the notes themselves stay one each).
+        new(NotePrefix + "one_part_left_out_for_length_many", "{category}: 長さの上限に収めるため、{count} 個省きました", "{category}: {count} parts were left out to fit"),
         new(NotePrefix + "unknown", "{category}: 省いた内容があります（{kind}）", "{category}: something was left out ({kind})"),
 
         new(CategoryPrefix + "cpu", "CPU", "CPU"),
@@ -94,6 +96,59 @@ internal static class BuildCodeText
             : Strings.Format(BuildCodeStrings.NotePrefix + "unknown", Fmt.Dict(("category", Category(note.Category)), ("kind", note.Kind.ToString())));
     }
 
+    /// <summary>
+    /// The lines of the notes on the screen. The same kind for the same category, repeated, is one line with the count (the last-resort cut
+    /// takes one part at a time, so a tight configuration gives the same note again and again); every other note is one line of its own.
+    /// The notes themselves are not changed: this is only how the screen says them.
+    /// </summary>
+    public static IReadOnlyList<string> NoteLines(IEnumerable<BuildNote> notes)
+    {
+        var lines = new List<string>();
+        var onePart = new Dictionary<string, int>(StringComparer.Ordinal);
+        var onePartAt = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var note in notes)
+        {
+            if (note.Kind == BuildNoteKind.OnePartLeftOutForLength)
+            {
+                onePart[note.Category] = onePart.GetValueOrDefault(note.Category) + 1;
+                if (!onePartAt.ContainsKey(note.Category))
+                {
+                    onePartAt[note.Category] = lines.Count;
+                    lines.Add(string.Empty);
+                }
+
+                continue;
+            }
+
+            lines.Add(Note(note));
+        }
+
+        foreach (var (category, count) in onePart)
+        {
+            lines[onePartAt[category]] = count == 1
+                ? Note(new BuildNote(BuildNoteKind.OnePartLeftOutForLength, category))
+                : Strings.Format(BuildCodeStrings.NotePrefix + "one_part_left_out_for_length_many", Fmt.Dict(("category", Category(category)), ("count", count.ToString("N0", Inv))));
+        }
+
+        return lines;
+    }
+
+    /// <summary>The mark that starts a line of a list: "・" in Japanese, "• " (with its space) in English.</summary>
+    public static string Bullet => Strings.Current == Language.Ja ? "・" : "• ";
+
+    /// <summary>What stands between the details of a part: " ・ " in Japanese, " · " in English.</summary>
+    public static string DetailSeparator => Strings.Current == Language.Ja ? " ・ " : " · ";
+
+    /// <summary>The name of a storage interface as it is written on the box: NVMe, SATA, USB; one that has no usual spelling is upper-cased.</summary>
+    public static string TypeName(string type) => type.ToLowerInvariant() switch
+    {
+        "nvme" => "NVMe",
+        "sata" => "SATA",
+        "usb" => "USB",
+        "sas" => "SAS",
+        _ => type.ToUpperInvariant(),
+    };
+
     /// <summary>Why a category could not be read.</summary>
     public static string Reason(CheckReason reason) =>
         CheckFormat.Label(BuildCodeStrings.ReasonPrefix + CheckFormat.Snake(reason.ToString())) ?? reason.ToString();
@@ -110,12 +165,12 @@ internal static class BuildCodeText
         var items = new List<string>();
         if (!string.IsNullOrEmpty(part.Type))
         {
-            items.Add(part.Type);
+            items.Add(TypeName(part.Type));
         }
 
         if (part.Cap is { } cap)
         {
-            items.Add(cap.ToString(Inv) + " GB");
+            items.Add(cap.ToString("N0", Inv) + " GB");
         }
 
         if (part.Speed is { } speed)
@@ -133,7 +188,7 @@ internal static class BuildCodeText
             items.Add(part.Mfr);
         }
 
-        return string.Join(" ・ ", items);
+        return string.Join(DetailSeparator, items);
     }
 
     // The limit a sentence names is the library's own constant, not a number copied here.

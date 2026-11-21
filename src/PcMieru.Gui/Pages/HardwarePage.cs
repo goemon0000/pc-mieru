@@ -193,10 +193,17 @@ internal sealed class HardwarePage : PageBase
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        // A control can be disposed twice (its parent disposes it and so does its owner): the source is cancelled and let go of once.
+        if (disposing && !_codeSourceDisposed)
         {
+            _codeSourceDisposed = true;
             // A configuration code that is still being read is not wanted any more (the read gives up; no dialog opens on a page that is gone).
             _codeCancel.Cancel();
+            _codeCancel.Dispose();
+        }
+
+        if (disposing)
+        {
             _tips.Dispose();
         }
 
@@ -547,6 +554,7 @@ internal sealed class HardwarePage : PageBase
     internal IBuildCodeProvider? BuildCodeProvider { get; set; }
 
     private readonly CancellationTokenSource _codeCancel = new();
+    private bool _codeSourceDisposed;
     private bool _codeRunning;
 
     /// <summary>
@@ -557,7 +565,7 @@ internal sealed class HardwarePage : PageBase
     /// </summary>
     internal async Task BuildCodeAsync()
     {
-        if (_codeRunning)
+        if (_codeRunning || IsDisposed)
         {
             return;
         }
@@ -573,8 +581,10 @@ internal sealed class HardwarePage : PageBase
             {
                 result = await Task.Run(() => provider.CreateAsync(cancel), cancel).ConfigureAwait(true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
             {
+                // Our own cancel (the page is going away): quiet. Any other cancellation (a provider that gives up on a token of its own) is a
+                // failed read and falls through to the fixed text below, so a button press never ends with no dialog and no word.
                 return;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

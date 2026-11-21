@@ -105,7 +105,7 @@ public class CheckControllerTests
             Assert.True(controller.IsBusy);
             Assert.False(controller.Stop()); // a second request does not stop twice
 
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             Assert.True(runner.WasStopped);
             Assert.Equal(CheckRunState.Stopped, controller.State);
             var run = controller.StateOf(CheckKind.Memory).Run;
@@ -129,7 +129,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(broken, fine).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.Storage)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var state = controller.StateOf(CheckKind.Storage);
             Assert.Equal(CheckRunState.Failed, state.State);
             Assert.Null(state.Run);
@@ -154,7 +154,7 @@ public class CheckControllerTests
             }
 
             Assert.True(controller.TryStart(Request(CheckKind.Storage)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller, 2));
             Assert.Equal(CheckRunState.Completed, controller.StateOf(CheckKind.Storage).State);
             Assert.Null(controller.StateOf(CheckKind.Storage).Error);
         });
@@ -170,7 +170,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(runner).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var state = controller.StateOf(CheckKind.System);
             Assert.Equal(CheckRunState.Failed, state.State);
             Assert.NotNull(state.Run);
@@ -189,7 +189,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(runner).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var state = controller.StateOf(CheckKind.System);
             Assert.Equal(CheckRunState.Completed, state.State); // the measurement is done; the save is a separate fact
             Assert.True(state.SaveFailed);
@@ -217,7 +217,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(runner).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             Assert.Equal(Strings.Get("gui.chk.state.completed"), CheckFormat.StateText(controller.StateOf(CheckKind.System)));
         });
     }
@@ -264,12 +264,12 @@ public class CheckControllerTests
             Assert.False(controller.TryStart(Request(CheckKind.System))); // stopping still counts as a run
             Assert.Equal(1, queue.Made);
 
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             Assert.Equal(CheckKind.Cpu, Assert.Single(first.Requests).Kind);
             Assert.Equal(CheckRunState.NotRun, controller.StateOf(CheckKind.System).State);
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller, 2));
             Assert.Equal(2, queue.Made);
             Assert.Equal(CheckRunState.Completed, controller.StateOf(CheckKind.System).State);
             Assert.Equal(CheckRunState.Stopped, controller.StateOf(CheckKind.Cpu).State);
@@ -303,7 +303,7 @@ public class CheckControllerTests
             Assert.True(controller.TryStart(Request(CheckKind.System)));
             Assert.True(ui.Until(() => runner.Started.IsCompleted));
             Assert.True(controller.Stop());
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var state = controller.StateOf(CheckKind.System);
             Assert.Equal(CheckRunState.Stopped, state.State);
             Assert.Null(state.Run);
@@ -325,7 +325,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(runner).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var state = controller.StateOf(CheckKind.System);
             Assert.Equal(CheckRunState.Failed, state.State);
             Assert.Null(state.Run);
@@ -347,7 +347,7 @@ public class CheckControllerTests
             using var controller = new RunnerQueue(system, load).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             var systemRun = controller.StateOf(CheckKind.System).Run;
             Assert.NotNull(systemRun);
 
@@ -360,7 +360,7 @@ public class CheckControllerTests
             // The state of the latest run of any kind is the one that is going.
             Assert.Equal(CheckRunState.Running, controller.State);
             load.Release();
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller, 2));
             Assert.Same(systemRun, controller.StateOf(CheckKind.System).Run);
             Assert.Equal(CheckRunState.Completed, controller.StateOf(CheckKind.Cpu).State);
         });
@@ -388,7 +388,7 @@ public class CheckControllerTests
             Assert.Same(second, controller.Progress);
 
             runner.Release();
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             Assert.Null(controller.Progress);
 
             ui.Pump();
@@ -423,7 +423,7 @@ public class CheckControllerTests
             Assert.All(delivered, id => Assert.Equal(ui.OwnerThread, id));
 
             runner.Release();
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
         });
     }
 
@@ -464,7 +464,7 @@ public class CheckControllerTests
 
             controller.Dispose();
             Assert.True(ui.Until(() => runner.WasStopped));
-            Assert.True(ui.Until(() => !controller.IsBusy));
+            Assert.True(ui.UntilRunEnded(controller));
             Assert.False(controller.TryStart(Request(CheckKind.System)));
             Assert.Equal(1, queue.Made);
             controller.Dispose(); // a second dispose is harmless

@@ -411,6 +411,77 @@ public class BuildCollectorTests
     }
 
     [Fact]
+    public async Task The_plain_sample_is_what_the_sample_without_an_argument_makes()
+    {
+        var plain = await BuildCodeProviders.Sample(SampleVariant.Plain).CreateAsync(default);
+        var bare = await BuildCodeProviders.Sample().CreateAsync(default);
+
+        Assert.Equal(bare.Code, plain.Code);
+        Assert.Equal(bare.Json, plain.Json);
+        Assert.Empty(plain.Notes);
+        Assert.Empty(plain.Unread);
+        Assert.Throws<ArgumentOutOfRangeException>(() => BuildCodeProviders.Sample((SampleVariant)99));
+    }
+
+    [Fact]
+    public async Task The_trimmed_sample_is_cut_to_the_limit_by_the_real_rules_and_says_exactly_what_they_left_out()
+    {
+        var provider = BuildCodeProviders.Sample(SampleVariant.Trimmed);
+
+        var a = await provider.CreateAsync(default);
+        var b = await provider.CreateAsync(default);
+
+        // The same every time (a shot of it must not change between runs).
+        Assert.Equal(a.Code, b.Code);
+        Assert.Equal(a.Json, b.Json);
+
+        // It was cut to fit: the code is within the limit, and it is a code (the prefix, then the base64url of the JSON that is saved).
+        Assert.StartsWith(BuildCode.Prefix, a.Code, StringComparison.Ordinal);
+        Assert.True(a.Code.Length - BuildCode.Prefix.Length <= BuildCode.MaxLength, a.Code.Length + " characters");
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(BuildCode.Decode(a.Code)), JsonNode.Parse(a.Json)));
+
+        // What the rules did, in the order they did it. The rules stop as soon as the code fits, so each step in this list was needed for the next one.
+        Assert.Equal(
+            new[]
+            {
+                (BuildNoteKind.KindsLeftOut, "ssd", 2),
+                (BuildNoteKind.CategoryLeftOutForLength, "optical-drive", 0),
+                (BuildNoteKind.CategoryLeftOutForLength, "hdd", 0),
+                (BuildNoteKind.MemoryFirstKindOnly, "ram", 0),
+            },
+            a.Notes.Select(static n => (n.Kind, n.Category, n.Count)).ToArray());
+
+        // The categories that could not be read, in the order the code writes the categories, each with its own reason.
+        Assert.Equal(
+            new[] { ("gpu", CheckReason.Timeout), ("motherboard", CheckReason.Denied), ("monitor", CheckReason.Unsupported) },
+            a.Unread.Select(static u => (u.Category, u.Reason)).ToArray());
+
+        // No part is listed for a category that is unread or that was dropped (not in the parts, and not in the JSON that is the code).
+        var absent = a.Unread.Select(static u => u.Category)
+            .Concat(a.Notes.Where(static n => n.Kind == BuildNoteKind.CategoryLeftOutForLength).Select(static n => n.Category))
+            .ToArray();
+        Assert.Equal(5, absent.Length);
+        var written = ((JsonObject)JsonNode.Parse(a.Json)!["p"]!).Select(static p => p.Key).ToArray();
+        foreach (var category in absent)
+        {
+            Assert.Empty(a.Config[category]);
+            Assert.DoesNotContain(category, written);
+        }
+
+        Assert.Equal(new[] { "cpu", "ram", "ssd" }, written);
+        Assert.Equal(BuildCode.MaxPerCategory, a.Config["ssd"].Count);
+        Assert.Single(a.Config["ram"]);
+        Assert.Single(a.Config["cpu"]);
+
+        // Synthetic: no serial-looking text, and every name is a made-up one (a stem and a repeated filler).
+        foreach (var part in BuildConfig.Categories.SelectMany(c => a.Config[c]))
+        {
+            Assert.False(BuildRules.LooksLikeSerial(part.Name));
+            Assert.True(part.Name.Length <= 80);
+        }
+    }
+
+    [Fact]
     public void The_windows_provider_is_made_without_reading_anything()
     {
         // The sources are made (and WMI is touched) only when CreateAsync runs; the factory itself reads nothing.
@@ -430,13 +501,13 @@ public class BuildCollectorTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "BuildCode", "BuildCodeProviders", "BuildCodeResult", "BuildConfig", "BuildNote", "BuildNoteKind", "BuildPart", "BuildUnread", "IBuildCodeProvider" },
+            new[] { "BuildCode", "BuildCodeProviders", "BuildCodeResult", "BuildConfig", "BuildNote", "BuildNoteKind", "BuildPart", "BuildUnread", "IBuildCodeProvider", "SampleVariant" },
             exported);
 
-        // The collector, the rules and Make are not in it (internal): only the two factories of the providers are public methods here.
+        // The collector, the rules and Make are not in it (internal): only the factories of the providers (Windows, and Sample with and without a variant) are public methods here.
         Assert.Empty(typeof(BuildCode).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly));
         Assert.Equal(
-            new[] { "Sample", "Windows" },
+            new[] { "Sample", "Sample", "Windows" },
             typeof(BuildCodeProviders).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly).Select(m => m.Name).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(new[] { "CreateAsync" }, typeof(IBuildCodeProvider).GetMethods().Select(m => m.Name).ToArray());
     }
