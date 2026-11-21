@@ -507,10 +507,16 @@ public class ChecksPageTests
             delta = RowOf(grid, "storage.nvme.power_on_hours.delta", "disk-1");
             Assert.Contains("1,204 → 1,227（+23）", grid.TextAt(delta, 3), StringComparison.Ordinal);
 
-            // One header row for each disk, with that disk's own verdict; the disk that Windows refused says "not measured".
+            // One header row for each disk (the two samples that look the same come after the first two), with that disk's own verdict; the disk that Windows refused says "not measured".
             var headers = Rows(grid).Where(row => grid.ItemAt(row) is null).ToArray();
-            Assert.Equal(2, headers.Length);
+            Assert.Equal(4, headers.Length);
             Assert.Equal("測れず", grid.TextAt(headers[1], 1));
+
+            // The two disks that look the same: every change row says why it was not compared, and none of them shows a number.
+            var twin = RowOf(grid, "storage.nvme.power_on_hours.delta", "disk-3");
+            Assert.Equal("storage.nvme.power_on_hours", grid.ItemAt(twin - 1)!.Id);
+            Assert.DoesNotContain("→", grid.TextAt(twin, 3), StringComparison.Ordinal);
+            Assert.Contains("同じディスク", grid.TextAt(twin, 3), StringComparison.Ordinal);
         });
     }
 

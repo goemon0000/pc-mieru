@@ -14,13 +14,16 @@ internal sealed class FakeCheckRunner : ICheckRunner, IFakeImplementation
 
     private readonly TimeSpan _step;
     private readonly Action<CheckResult>? _saved;
+    private readonly FakeCheckHold? _hold;
 
     /// <param name="step">How long one reported step takes (zero: no wait at all).</param>
     /// <param name="saved">Told about each result that was "saved" (the in-memory history takes it).</param>
-    public FakeCheckRunner(TimeSpan? step = null, Action<CheckResult>? saved = null)
+    /// <param name="hold">The smoke run's way to hold one load run still (see <see cref="FakeCheckHold"/>). Null or unarmed: no run is held.</param>
+    public FakeCheckRunner(TimeSpan? step = null, Action<CheckResult>? saved = null, FakeCheckHold? hold = null)
     {
         _step = step ?? TimeSpan.FromMilliseconds(180);
         _saved = saved;
+        _hold = hold;
     }
 
     public async Task<CheckRun> RunAsync(CheckRequest request, IProgress<CheckProgress>? progress, CancellationToken ct)
@@ -33,6 +36,7 @@ internal sealed class FakeCheckRunner : ICheckRunner, IFakeImplementation
         var start = CheckTime.TruncateToMilliseconds(DateTimeOffset.UtcNow);
         var isLoad = request.Kind is CheckKind.Cpu or CheckKind.Memory;
         var target = isLoad ? (request.Duration ?? TimeSpan.FromSeconds(30)).TotalSeconds : 0;
+        var gates = isLoad ? _hold?.Take() : null;
 
         progress?.Report(new CheckProgress(runId, CheckStage.Starting, 0, target));
         CheckResult result;
@@ -47,6 +51,11 @@ internal sealed class FakeCheckRunner : ICheckRunner, IFakeImplementation
                     progress?.Report(request.Kind == CheckKind.Cpu
                         ? new CheckProgress(runId, CheckStage.Loading, elapsed, target, 38 + (i % 3), "chunks/s")
                         : new CheckProgress(runId, CheckStage.Loading, elapsed, target, 5200 + (i * 40), "MiB/s"));
+                    if (i == 1 && gates is not null)
+                    {
+                        // Held for the smoke run to look at a load that is running (and, when it asks, to stop it and look at "stopping").
+                        await gates.HoldRunningAsync(ct).ConfigureAwait(false);
+                    }
                 }
             }
             else
@@ -61,6 +70,11 @@ internal sealed class FakeCheckRunner : ICheckRunner, IFakeImplementation
         }
         catch (OperationCanceledException)
         {
+            if (gates is not null)
+            {
+                await gates.HoldStoppedAsync().ConfigureAwait(false);
+            }
+
             result = FakeCheckData.Stopped(request.Kind, runId, start, isLoad ? Math.Max(1, target / 4) : 0);
         }
 

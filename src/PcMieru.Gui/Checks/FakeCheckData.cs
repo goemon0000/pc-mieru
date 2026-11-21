@@ -208,6 +208,11 @@ internal static class FakeCheckData
     {
         var disk1 = new CheckSubject("disk-1", "Samsung SSD 980 PRO 2TB");
         var disk2 = new CheckSubject("disk-2", "CT500MX500SSD1");
+
+        // Two disks of one model that Windows cannot tell apart: whichever one was read before, the counters are not compared (the whole disk
+        // says so with one code on every delta row, DESIGN-A 5.3), and the counters themselves are shown.
+        var twin1 = new CheckSubject("disk-3", "WD Blue SN570 1TB");
+        var twin2 = new CheckSubject("disk-4", "WD Blue SN570 1TB");
         var since = start.AddDays(-3);
 
         CheckEvidence Delta(string before, string after, CheckEvidenceCode? code = null) =>
@@ -215,7 +220,7 @@ internal static class FakeCheckData
 
         List<CheckItem> items =
         [
-            I("storage.devices", Int(2), ItemVerdict.Info, CheckSource.StorageQuery),
+            I("storage.devices", Int(4), ItemVerdict.Info, CheckSource.StorageQuery),
 
             I("storage.health", T("healthy"), ItemVerdict.Ok, CheckSource.StorageQuery, subject: disk1),
             I("storage.capacity", D("2000398934016"), ItemVerdict.Info, CheckSource.StorageQuery, subject: disk1),
@@ -260,6 +265,26 @@ internal static class FakeCheckData
             ]);
         }
 
+        // After the second disk: the screens list the disks in the order they first appear, and the tests count on disk 2 being the second.
+        items.AddRange(TwinDisk(twin1, "1000204886016", 36, "812", "9"));
+        items.AddRange(TwinDisk(twin2, "1000204886016", 37, "815", "11"));
+
         return CheckResult.Create(App, runId, CheckKind.Storage, start, start.AddMilliseconds(820), CheckOutcome.Completed, items);
+    }
+
+    /// <summary>One of two disks that look the same: its health, size, temperature and two counters, and the changes of those counters that could not be compared (every one with the one code of the disk).</summary>
+    private static IEnumerable<CheckItem> TwinDisk(CheckSubject disk, string capacity, double temperature, string powerOnHours, string unsafeShutdowns)
+    {
+        var duplicate = CheckEvidence.OfCode(CheckEvidenceCode.BaselineDuplicate);
+        return
+        [
+            I("storage.health", T("healthy"), ItemVerdict.Ok, CheckSource.StorageQuery, subject: disk),
+            I("storage.capacity", D(capacity), ItemVerdict.Info, CheckSource.StorageQuery, subject: disk),
+            I("storage.temperature", N(temperature), ItemVerdict.Ok, CheckSource.Nvme, subject: disk),
+            I("storage.nvme.unsafe_shutdowns", D(unsafeShutdowns), ItemVerdict.Info, CheckSource.Nvme, subject: disk),
+            I("storage.nvme.power_on_hours", D(powerOnHours), ItemVerdict.Info, CheckSource.Nvme, subject: disk),
+            I("storage.nvme.unsafe_shutdowns.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk, duplicate),
+            I("storage.nvme.power_on_hours.delta", null, ItemVerdict.Info, CheckSource.Baseline, CheckReason.Partial, disk, duplicate),
+        ];
     }
 }

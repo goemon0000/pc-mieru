@@ -50,10 +50,10 @@ internal sealed class CheckResultGrid : GridView
         PageLayout.Prepare(
             this,
             accessibleName,
-            (Strings.Get("gui.chk.col.item"), px(250), HorizontalAlignment.Left),
+            (Strings.Get("gui.chk.col.item"), px(320), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.verdict"), px(110), HorizontalAlignment.Left),
             (Strings.Get("gui.chk.col.value"), px(190), HorizontalAlignment.Left),
-            (Strings.Get("gui.chk.col.evidence"), px(380), HorizontalAlignment.Left));
+            (Strings.Get("gui.chk.col.evidence"), px(310), HorizontalAlignment.Left));
     }
 
     /// <summary>Shows a result (or nothing). Rebuilds the rows and keeps the list's position at the top.</summary>

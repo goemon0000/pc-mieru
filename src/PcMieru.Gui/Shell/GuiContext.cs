@@ -1,3 +1,5 @@
+using PcMieru.Checks.Build;
+
 namespace PcMieru.Gui;
 
 /// <summary>Everything a page may use. Pages take this in their constructor and never reach for a global.</summary>
@@ -5,19 +7,34 @@ internal sealed class GuiContext
 {
     /// <param name="netMeter">The network meter the pages control. Null: the one in <paramref name="services"/>. A test passes its own.</param>
     /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null)
+    /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null)
     {
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
         NetMeter = netMeter ?? services.NetMeter;
+        if (checks is null && services.Options.ForceFakes)
+        {
+            // Only with --fakes: the smoke run may hold one fake load run still to look at it (see FakeCheckHold).
+            FakeHold = new FakeCheckHold();
+            checks = CheckComposition.Create(services, hold: FakeHold);
+        }
+
         Checks = checks ?? CheckComposition.Create(services);
+        BuildCode = buildCode ?? CheckComposition.CreateBuildCode(services);
     }
 
     public PcMieruServices Services { get; }
 
     public INetMeterControl NetMeter { get; }
+
+    /// <summary>The maker of the configuration code (PCB1). The hardware page asks it only when its button is pressed.</summary>
+    public IBuildCodeProvider BuildCode { get; }
+
+    /// <summary>With <c>--fakes</c> and no controller given: the smoke run's way to hold one fake load run still. Null otherwise.</summary>
+    internal FakeCheckHold? FakeHold { get; }
 
     /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
     public CheckController Checks { get; }
