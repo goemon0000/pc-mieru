@@ -134,6 +134,15 @@ internal class GridView : ListView, IThemed
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal Func<int, RowStyle>? RowStyles { get; set; }
 
+    /// <summary>
+    /// <c>--measure</c> only: told which cells (row, column) one paint of the control drew, after that paint is complete (the native paint of a
+    /// double-buffered list has presented its buffer when the window procedure returns from WM_PAINT). Null in a normal start: no cell is recorded.
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Action<IReadOnlyList<(int Row, int Column)>>? PaintObserver { get; set; }
+
+    private List<(int Row, int Column)>? _paintedCells;
+
     /// <summary>Why a cell shows what it shows (the reason a value is "-"). Null for no tooltip.</summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal Func<int, int, string?>? CellTip { get; set; }
@@ -513,10 +522,23 @@ internal class GridView : ListView, IThemed
         if (m.Msg == WmPaint)
         {
             BlankBelowRows();
+            ReportPaint();
         }
 
         // The list raises its own horizontal bar at moments of its choosing (after an item count or a size change): checked after every message.
         HideStaleHorizontalScroll();
+    }
+
+    private void ReportPaint()
+    {
+        if (_paintedCells is not { Count: > 0 } cells)
+        {
+            return;
+        }
+
+        var drawn = cells.ToArray();
+        cells.Clear();
+        PaintObserver?.Invoke(drawn);
     }
 
     /// <summary>
@@ -645,6 +667,11 @@ internal class GridView : ListView, IThemed
         {
             e.DrawDefault = true;
             return;
+        }
+
+        if (PaintObserver is not null)
+        {
+            (_paintedCells ??= []).Add((e.ItemIndex, e.ColumnIndex));
         }
 
         var cell = Cells(e.ItemIndex, e.ColumnIndex);

@@ -8,8 +8,10 @@ internal sealed class GuiContext
     /// <param name="netMeter">The network meter the pages control. Null: the one in <paramref name="services"/>. A test passes its own.</param>
     /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
     /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null)
+    /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null)
     {
+        Measure = measure;
         Services = services;
         Pump = pump;
         Theme = theme;
@@ -27,6 +29,9 @@ internal sealed class GuiContext
     }
 
     public PcMieruServices Services { get; }
+
+    /// <summary>The marks of a <c>--measure</c> run; null in a normal start (DESIGN-A 10, <see cref="MeasureMarks"/>).</summary>
+    public MeasureMarks? Measure { get; }
 
     public INetMeterControl NetMeter { get; }
 

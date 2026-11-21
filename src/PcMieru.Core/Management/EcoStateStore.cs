@@ -17,11 +17,17 @@ public sealed record EcoRecord(uint PriorityClass, uint Control, uint State, boo
 public sealed class EcoStateStore
 {
     private readonly string _path;
+    private readonly bool _persist;
     private readonly object _gate = new();
     private Dictionary<string, EcoRecord>? _records;
 
-    public EcoStateStore(string? path = null) =>
+    /// <param name="path">The file. Null: <c>%LOCALAPPDATA%\PCMieru\eco-state.json</c>.</param>
+    /// <param name="persist">False: memory only. The file is neither read nor created nor changed (the GUI's <c>--measure</c> run, <see cref="PcMieruOptions.NoStateFiles"/>).</param>
+    public EcoStateStore(string? path = null, bool persist = true)
+    {
         _path = path ?? Path.Combine(ManagementFolder.Path, "eco-state.json");
+        _persist = persist;
+    }
 
     /// <summary>The record of that exact process, or null.</summary>
     public EcoRecord? Get(ProcessKey key)
@@ -102,6 +108,11 @@ public sealed class EcoStateStore
         }
 
         _records = [];
+        if (!_persist)
+        {
+            return _records;
+        }
+
         try
         {
             if (File.Exists(_path))
@@ -139,6 +150,11 @@ public sealed class EcoStateStore
 
     private void Save(Dictionary<string, EcoRecord> records)
     {
+        if (!_persist)
+        {
+            return;
+        }
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);

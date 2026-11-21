@@ -101,6 +101,14 @@ internal sealed class GuiSettings
 
     public void SetBool(string key, bool value) => SetValue(key, value ? "1" : "0");
 
+    /// <summary>
+    /// The settings of this run. A normal start reads the user's file (and saves to it). A smoke run and a <c>--measure</c> run get the defaults in
+    /// memory: nothing is read from <paramref name="path"/>, and since the store has no file <see cref="Save"/> writes nothing, on close or ever.
+    /// A measurement therefore neither depends on what the owner chose nor changes it.
+    /// </summary>
+    internal static GuiSettings ForRun(GuiOptions options, string path) =>
+        options.SmokeOutput is null && options.MeasureOutput is null ? Load(path) : new GuiSettings();
+
     public static GuiSettings Load(string path)
     {
         var settings = new GuiSettings(path);
