@@ -63,6 +63,11 @@ internal static class Program
         }
 
         Application.Run(form);
+
+        // A window closed by Windows ending (or the task manager) did not wait for a check that was told to stop. The message loop is gone, so
+        // waiting here blocks no screen: the stopped run gets a few seconds to write its result, and what is not saved by then is left to the
+        // folder's own .tmp clean-up (DESIGN-A §7).
+        context.Checks.WaitUntilIdle(CheckController.ExitWait);
         return 0;
     }
 }

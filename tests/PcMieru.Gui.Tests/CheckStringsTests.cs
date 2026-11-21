@@ -118,21 +118,20 @@ public class CheckStringsTests
     [Fact]
     public void Every_state_and_stage_the_page_can_show_has_words_in_both_languages()
     {
-        string[] keys =
+        // Every member of the two enums goes through the one function that names its words (CheckFormat.StateKey / StageKey), so a member
+        // added later cannot be left out here by forgetting to list it: it either maps to words or this fails.
+        var states = Enum.GetValues<CheckRunState>().Select(CheckFormat.StateKey);
+        var stages = Enum.GetValues<CheckStage>().Select(CheckFormat.StageKey);
+        string[] fixedKeys =
         [
-            "gui.chk.state.notrun",
-            "gui.chk.state.running",
-            "gui.chk.state.stopping",
-            "gui.chk.state.completed",
-            "gui.chk.state.stopped",
-            "gui.chk.state.failed",
             "gui.chk.state.savefailed",
-            "gui.chk.load.stage.collecting",
-            "gui.chk.load.stage.judging",
-            "gui.chk.load.stage.saving",
+            "gui.chk.state.detail",
+            "gui.chk.load.stage.unknown",
+            "gui.chk.previous",
             "gui.chk.close.title",
             "gui.chk.close.message",
             "gui.chk.close.yes",
+            "gui.chk.close.stopping",
             "gui.chk.tab.system",
             "gui.chk.tab.load",
             "gui.chk.tab.storage",
@@ -140,7 +139,31 @@ public class CheckStringsTests
             "gui.nav.checks",
         ];
 
-        Assert.Empty(Unlabelled(keys));
+        Assert.Empty(Unlabelled(states.Concat(stages).Concat(fixedKeys)));
+    }
+
+    [Fact]
+    public void No_stage_or_state_reads_as_nothing_not_even_one_this_version_does_not_know()
+    {
+        using var _ = Harness.Locale();
+        var unknownStage = (CheckStage)9999;
+        var unknownState = (CheckRunState)9999;
+
+        Assert.Equal("gui.chk.load.stage.unknown", CheckFormat.StageKey(unknownStage));
+        Assert.Equal("gui.chk.state.notrun", CheckFormat.StateKey(unknownState));
+        foreach (var language in new[] { Language.Ja, Language.En })
+        {
+            Assert.False(string.IsNullOrWhiteSpace(Strings.Get(CheckFormat.StageKey(unknownStage), language)));
+            Assert.False(string.IsNullOrWhiteSpace(Strings.Get(CheckFormat.StateKey(unknownState), language)));
+        }
+
+        foreach (var stage in Enum.GetValues<CheckStage>().Append(unknownStage))
+        {
+            Assert.NotEqual(string.Empty, CheckFormat.ProgressText(new CheckProgress(Guid.Empty, stage, 0, 0)));
+        }
+
+        Assert.Equal("Finished", CheckFormat.ProgressText(new CheckProgress(Guid.Empty, CheckStage.Done, 0, 0)));
+        Assert.Equal("Working", CheckFormat.ProgressText(new CheckProgress(Guid.Empty, unknownStage, 0, 0)));
     }
 
     [Fact]

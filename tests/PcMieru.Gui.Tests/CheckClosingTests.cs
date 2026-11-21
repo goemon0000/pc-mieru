@@ -17,13 +17,36 @@ public class CheckClosingTests
 
     // ---- the guard alone ----
 
+    /// <summary>The bound of the stop wait, driven by hand: it is over when the test says so, never by the clock.</summary>
+    private sealed class HandDelay
+    {
+        private readonly TaskCompletionSource _over = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool _released;
+
+        /// <summary>The limits the guard asked for.</summary>
+        public List<TimeSpan> Asked { get; } = [];
+
+        /// <summary>True once the guard let the bound go (its token was cancelled: the run ended first, or the bound was up).</summary>
+        public bool Released => _released;
+
+        public Func<TimeSpan, CancellationToken, Task> AsFunc => (limit, token) =>
+        {
+            Asked.Add(limit);
+            token.Register(() => _released = true);
+            return _over.Task;
+        };
+
+        /// <summary>The bound is up.</summary>
+        public void Elapse() => _over.TrySetResult();
+    }
+
     private sealed class GuardRig : IDisposable
     {
-        public GuardRig(ScriptedRunner runner, bool answer)
+        public GuardRig(ScriptedRunner runner, bool answer, HandDelay? delay = null, ScriptedRunner? second = null)
         {
             Runner = runner;
             Answer = answer;
-            Controller = new RunnerQueue(runner).Controller();
+            Controller = new RunnerQueue(second is null ? new[] { runner } : new[] { runner, second }).Controller();
             Guard = new CheckCloseGuard(
                 Controller,
                 () =>
@@ -37,8 +60,13 @@ public class CheckClosingTests
                     Closed++;
                     AtClose = Controller.StateOf(CheckKind.System);
                     BusyAtClose = Controller.IsBusy;
-                });
+                },
+                () => Announced++,
+                delay?.AsFunc);
         }
+
+        /// <summary>How many times the window was told "stopping, closes when done" (the status line).</summary>
+        public int Announced { get; private set; }
 
         public ScriptedRunner Runner { get; }
 
@@ -113,6 +141,7 @@ public class CheckClosingTests
             Assert.False(rig.Guard.OnCloseRequested());
             Assert.Equal(1, rig.Asked);
             Assert.Equal(0, rig.Closed);
+            Assert.Equal(0, rig.Announced);
             Assert.Null(rig.Guard.Pending);
             Assert.True(rig.Controller.IsBusy);
             Assert.Equal(CheckRunState.Running, rig.Controller.State);
@@ -150,6 +179,9 @@ public class CheckClosingTests
             var pending = rig.Guard.Pending;
             Assert.NotNull(pending);
 
+            // The status line is told once that the window is stopping and closes when it is done.
+            Assert.Equal(1, rig.Announced);
+
             // The stop was asked for, and it is being waited for: the save is still open, so nothing closed.
             Assert.True(ui.Until(() => rig.Runner.WasStopped));
             Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
@@ -174,8 +206,73 @@ public class CheckClosingTests
             Assert.True(rig.Guard.OnCloseRequested());
             Assert.Equal(1, rig.Asked);
             Assert.Equal(1, rig.Closed);
+            Assert.Equal(1, rig.Announced);
             Assert.Equal(1, rig.Runner.Runs);
             Assert.Same(pending, rig.Guard.Pending);
+        });
+    }
+
+    [Fact]
+    public void A_run_that_does_not_stop_keeps_the_window_open_only_until_the_bound_is_up_and_then_the_window_closes_anyway()
+    {
+        Ui.Run(ui =>
+        {
+            // The save never finishes: the run is told to stop and never ends. The bound is the test's own (no clock).
+            var neverSaved = Gate();
+            var bound = new HandDelay();
+            using var rig = new GuardRig(new ScriptedRunner { SaveGate = neverSaved }, answer: true, bound);
+            StartAndWait(rig, ui);
+
+            Assert.False(rig.Guard.OnCloseRequested());
+            var pending = rig.Guard.Pending;
+            Assert.NotNull(pending);
+            Assert.Equal(1, rig.Announced);
+            Assert.Equal(new[] { CheckCloseGuard.StopWait }, bound.Asked);
+            Assert.Equal(TimeSpan.FromSeconds(15), CheckCloseGuard.StopWait);
+
+            // While the bound is not up the window waits for the run, however long that takes.
+            Assert.True(ui.Until(() => rig.Runner.WasStopped));
+            ui.Pump();
+            Assert.Equal(0, rig.Closed);
+            Assert.False(pending.IsCompleted);
+
+            // The bound is up: the window closes although the run is still going.
+            bound.Elapse();
+            Assert.True(ui.Until(() => rig.Closed == 1));
+            Assert.True(ui.Until(() => pending.IsCompleted));
+            Assert.True(rig.BusyAtClose);
+            Assert.Equal(1, rig.Closed);
+            Assert.Equal(1, rig.Asked);
+
+            // Let the scripted run end so nothing is left hanging from this test.
+            neverSaved.SetResult();
+            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+        });
+    }
+
+    [Fact]
+    public void A_run_that_ends_before_the_bound_lets_the_bound_go_and_the_window_closes_once_with_the_run_over()
+    {
+        Ui.Run(ui =>
+        {
+            var save = Gate();
+            var bound = new HandDelay();
+            using var rig = new GuardRig(new ScriptedRunner { SaveGate = save }, answer: true, bound);
+            StartAndWait(rig, ui);
+
+            Assert.False(rig.Guard.OnCloseRequested());
+            Assert.True(ui.Until(() => rig.Runner.WasStopped));
+            Assert.False(bound.Released);
+
+            save.SetResult();
+            Assert.True(ui.Until(() => rig.Closed == 1));
+            Assert.False(rig.BusyAtClose);
+            Assert.True(bound.Released);
+
+            // The bound passing later changes nothing: there is one close.
+            bound.Elapse();
+            ui.Pump();
+            Assert.Equal(1, rig.Closed);
         });
     }
 
@@ -253,14 +350,91 @@ public class CheckClosingTests
     {
         Ui.Run(ui =>
         {
-            using var rig = new GuardRig(new ScriptedRunner(), answer: false);
+            // The save is held open so that "stopping" is a state the run stays in while it is looked at (without it the run ends by itself).
+            var save = Gate();
+            using var rig = new GuardRig(new ScriptedRunner { SaveGate = save }, answer: false);
             StartAndWait(rig, ui);
 
             Assert.True(rig.Guard.OnCloseRequested(systemEnding: true));
+            Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
             Assert.Equal(0, rig.Asked);
             Assert.Null(rig.Guard.Pending);
             Assert.True(ui.Until(() => rig.Runner.WasStopped));
+            save.SetResult();
             Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+        });
+    }
+
+    [Fact]
+    public void When_windows_ends_the_session_while_the_question_is_open_the_close_is_still_let_through_and_the_run_is_told_to_stop()
+    {
+        Ui.Run(ui =>
+        {
+            var save = Gate();
+            using var rig = new GuardRig(new ScriptedRunner { SaveGate = save }, answer: false);
+            StartAndWait(rig, ui);
+
+            // The session ends while the question is on the screen (its message loop delivers the close request).
+            var inside = new List<bool>();
+            rig.DuringAsk = () => inside.Add(rig.Guard.OnCloseRequested(systemEnding: true));
+
+            Assert.False(rig.Guard.OnCloseRequested());
+            Assert.Equal(new[] { true }, inside);
+            Assert.Equal(1, rig.Asked);
+            Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
+            Assert.True(ui.Until(() => rig.Runner.WasStopped));
+            save.SetResult();
+            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+        });
+    }
+
+    [Fact]
+    public void When_windows_ends_the_session_while_the_stop_is_awaited_the_close_is_let_through_and_not_asked_again()
+    {
+        Ui.Run(ui =>
+        {
+            var save = Gate();
+            using var rig = new GuardRig(new ScriptedRunner { SaveGate = save }, answer: true);
+            StartAndWait(rig, ui);
+
+            Assert.False(rig.Guard.OnCloseRequested());
+            Assert.True(ui.Until(() => rig.Runner.WasStopped));
+            Assert.False(rig.Guard.OnCloseRequested());
+
+            // A cancelled close here is what Windows reports as "this app is stopping the shutdown": it must go on.
+            Assert.True(rig.Guard.OnCloseRequested(systemEnding: true));
+            Assert.Equal(1, rig.Asked);
+            Assert.Equal(1, rig.Runner.Runs);
+            Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
+
+            save.SetResult();
+            Assert.True(ui.Until(() => rig.Closed == 1));
+        });
+    }
+
+    [Fact]
+    public void When_windows_ends_the_session_after_the_close_was_approved_a_run_that_is_going_is_still_told_to_stop()
+    {
+        Ui.Run(ui =>
+        {
+            var secondSave = Gate();
+            var second = new ScriptedRunner { SaveGate = secondSave };
+            using var rig = new GuardRig(new ScriptedRunner(), answer: true, delay: null, second);
+            StartAndWait(rig, ui);
+
+            Assert.False(rig.Guard.OnCloseRequested());
+            Assert.True(ui.Until(() => rig.Closed == 1));
+            Assert.True(rig.Guard.OnCloseRequested());
+
+            // A check that began after the approval (nothing the window does starts one, a test does) is stopped like any other.
+            Assert.True(rig.Controller.TryStart(Request(CheckKind.Memory)));
+            Assert.True(ui.Until(() => second.Started.IsCompleted));
+            Assert.True(rig.Guard.OnCloseRequested(systemEnding: true));
+            Assert.Equal(CheckRunState.Stopping, rig.Controller.State);
+            Assert.True(ui.Until(() => second.WasStopped));
+            secondSave.SetResult();
+            Assert.True(ui.Until(() => !rig.Controller.IsBusy));
+            Assert.Equal(1, rig.Asked);
         });
     }
 
@@ -306,6 +480,7 @@ public class CheckClosingTests
             Pump = new SnapshotPump(Services);
             Checks = Queue.Controller();
             var context = new GuiContext(Services, Pump, _theme, new GuiSettings(), checks: Checks);
+            context.StatusMessage += Statuses.Add;
             Form = new MainForm(context);
             _ = Form.Handle;
             Form.FormClosing += (_, _) =>
@@ -329,6 +504,9 @@ public class CheckClosingTests
         public MainForm Form { get; }
 
         public int Closed { get; private set; }
+
+        /// <summary>What the status line was told, in order.</summary>
+        public List<string> Statuses { get; } = [];
 
         /// <summary>One entry per time the window really went on closing (a cancelled request does not raise the event): was a check still going then?</summary>
         public List<bool> ClosingBusy { get; } = [];
@@ -424,6 +602,9 @@ public class CheckClosingTests
             var pending = rig.Form.ClosePending;
             Assert.NotNull(pending);
             Assert.False(pending.IsCompleted);
+
+            // The status line says that the window is stopping and closes when it is done, once.
+            Assert.Single(rig.Statuses, "Stopping. The window closes as soon as it is done");
 
             // A second close while it stops: no second question, no second stop, no close.
             rig.Form.Close();

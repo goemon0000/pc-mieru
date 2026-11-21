@@ -481,6 +481,17 @@ public sealed class HistorySaveTests : IDisposable
     }
 
     [Fact]
+    public void The_default_legacy_directory_is_the_roaming_checks_folder_of_v074_and_is_only_computed()
+    {
+        var expected = Path.Combine(Environment.GetEnvironmentVariable("APPDATA")!, "PartsLife", "checks");
+
+        // A path and nothing else: the call neither reads nor creates the folder (a test must never depend on the owner's real data).
+        Assert.Equal(expected, CheckHistoryStore.DefaultLegacyDirectory());
+        Assert.NotEqual(CheckHistoryStore.DefaultRoot(), CheckHistoryStore.DefaultLegacyDirectory());
+        Assert.True(Path.IsPathRooted(CheckHistoryStore.DefaultLegacyDirectory()));
+    }
+
+    [Fact]
     public void The_save_failure_codes_are_the_fixed_list()
     {
         Assert.Equal(["invalid_result", "already_exists", "access_denied", "disk_full", "io_error"], CheckSaveFailureCodes.All.ToArray());

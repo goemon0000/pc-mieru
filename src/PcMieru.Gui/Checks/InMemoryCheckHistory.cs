@@ -6,7 +6,7 @@ namespace PcMieru.Gui;
 /// The history of <c>--fakes</c>, kept in memory: the sample runs, plus every run the fake runner "saved". It lists like the real history (newest
 /// end first, equal times by the run's UUID, at most the limit asked for) and reads and writes nothing on disk.
 /// </summary>
-internal sealed class InMemoryCheckHistory : IReadOnlyCheckHistory
+internal sealed class InMemoryCheckHistory : IReadOnlyCheckHistory, IFakeImplementation
 {
     private readonly object _gate = new();
     private readonly List<CheckResult> _results;

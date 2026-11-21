@@ -155,13 +155,11 @@ internal sealed class ChecksPage : PageBase
             return;
         }
 
-        Guard(() =>
+        // One tab that cannot draw its state must not leave the others stale: each is guarded on its own.
+        foreach (var entry in _tabs)
         {
-            foreach (var entry in _tabs)
-            {
-                entry.Tab.RefreshState();
-            }
-        });
+            Guard(entry.Tab.RefreshState);
+        }
     }
 
     private void OnRunFinished(PcMieru.Checks.CheckKind kind)
@@ -171,18 +169,16 @@ internal sealed class ChecksPage : PageBase
             return;
         }
 
-        Guard(() =>
+        foreach (var entry in _tabs)
         {
-            foreach (var entry in _tabs)
+            if (entry.Tab is CheckHistoryTab history)
             {
-                if (entry.Tab is CheckHistoryTab history)
-                {
-                    history.OnRunFinished();
-                }
+                Guard(history.OnRunFinished);
             }
-        });
+        }
     }
 
+    /// <summary>A refresh that throws is told in the status line (the type and the HRESULT, never the message) and does not stop the next one.</summary>
     private void Guard(Action work)
     {
         try
@@ -191,7 +187,7 @@ internal sealed class ChecksPage : PageBase
         }
         catch (Exception ex)
         {
-            Context.Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+            Context.Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = CheckFormat.ExceptionDetail(ex) }));
         }
     }
 

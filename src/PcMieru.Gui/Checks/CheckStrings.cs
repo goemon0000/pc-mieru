@@ -48,6 +48,8 @@ internal static class CheckStrings
         new("gui.chk.load.stage.collecting", "準備しています", "Preparing"),
         new("gui.chk.load.stage.judging", "判定しています", "Judging"),
         new("gui.chk.load.stage.saving", "結果を保存しています", "Saving the result"),
+        new("gui.chk.load.stage.done", "終わりました", "Finished"),
+        new("gui.chk.load.stage.unknown", "処理しています", "Working"),
 
         new("gui.chk.sto.intro", "ディスクの状態と、前回の点検からの増え方を調べます。増えた数は前回の記録との差で出します。", "Reads the state of each disk and how its counters grew since the last check. Growth is the difference from the previous record."),
         new("gui.chk.sto.denied", "通常の権限では読めなかったディスクがあります", "Some disks could not be read with normal rights"),
@@ -72,6 +74,7 @@ internal static class CheckStrings
         new("gui.chk.close.title", "点検が動いています", "A check is running"),
         new("gui.chk.close.message", "点検が動いています。止めて閉じますか", "A check is running. Stop it and close?"),
         new("gui.chk.close.yes", "止めて閉じる", "Stop and close"),
+        new("gui.chk.close.stopping", "停止しています。終わり次第閉じます", "Stopping. The window closes as soon as it is done"),
     ];
 
     private static readonly StringEntry[] Words =
@@ -97,6 +100,8 @@ internal static class CheckStrings
         new("gui.chk.state.completed", "完了しました", "Completed"),
         new("gui.chk.state.stopped", "停止しました", "Stopped"),
         new("gui.chk.state.failed", "失敗しました: {reason}", "Failed: {reason}"),
+        new("gui.chk.state.detail", "{text}（{detail}）", "{text} ({detail})"),
+        new("gui.chk.previous", "前回の結果", "Previous result"),
         new("gui.chk.state.savefailed", "結果を保存できませんでした: {reason}", "The result could not be saved: {reason}"),
 
         new("gui.chk.reason.unsupported", "この PC では読めません", "Not supported on this PC"),

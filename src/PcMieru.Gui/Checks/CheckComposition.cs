@@ -13,7 +13,7 @@ internal static class CheckComposition
     /// <param name="services">The app's services (the storage check reads the drives through them, so the administrator's permission goes the way every other helper call goes).</param>
     /// <param name="dataRoot">The data folder. Null: <c>%LOCALAPPDATA%\PCMieru</c>. Tests give a temporary one.</param>
     /// <param name="fake">True: the fake runner and the in-memory history, touching nothing. Null: follows <c>--fakes</c>.</param>
-    /// <param name="legacyDirectory">The checks folder of v0.7.4, only read, once, by the baseline. With the default data folder it is <c>%APPDATA%\PartsLife\checks</c>; with a given one, null unless given.</param>
+    /// <param name="legacyDirectory">The checks folder of v0.7.4, only read, once, by the baseline. With the default data folder it is <see cref="CheckHistoryStore.DefaultLegacyDirectory"/>; with a given one, null unless given.</param>
     public static CheckController Create(PcMieruServices services, string? dataRoot = null, bool? fake = null, string? legacyDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -23,11 +23,10 @@ internal static class CheckComposition
             return new CheckController(() => new FakeCheckRunner(saved: history.Add), history);
         }
 
-        var root = dataRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru");
-        var legacy = dataRoot is null
-            ? legacyDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PartsLife", "checks")
-            : legacyDirectory;
-        var checksFolder = Path.Combine(root, "checks");
+        // The defaults are the Checks library's to name (its one place for the folder names); only a root a test gives is joined here.
+        var checksFolder = dataRoot is null ? CheckHistoryStore.DefaultRoot() : Path.Combine(dataRoot, "checks");
+        var root = dataRoot ?? Path.GetDirectoryName(checksFolder)!;
+        var legacy = dataRoot is null ? legacyDirectory ?? CheckHistoryStore.DefaultLegacyDirectory() : legacyDirectory;
         var live = new LiveRunner(services, root, legacy, checksFolder);
         return new CheckController(live.Get, CheckHistory.OpenReadOnly(checksFolder));
     }

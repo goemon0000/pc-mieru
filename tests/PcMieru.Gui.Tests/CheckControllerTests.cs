@@ -1,3 +1,4 @@
+using System.Globalization;
 using PcMieru.Checks;
 
 namespace PcMieru.Gui.Tests;
@@ -116,12 +117,14 @@ public class CheckControllerTests
     }
 
     [Fact]
-    public void A_runner_that_throws_makes_the_run_failed_with_the_reason_and_the_next_check_can_start()
+    public void A_runner_that_throws_makes_the_run_failed_with_a_code_and_the_type_and_never_the_message_and_the_next_check_can_start()
     {
         Ui.Run(ui =>
         {
             using var _ = Harness.Locale();
-            var broken = new ScriptedRunner { Hold = false, Failure = new InvalidOperationException("the helper is gone") };
+            const string Message = @"could not open C:\Users\someone\x";
+            var thrown = new InvalidOperationException(Message);
+            var broken = new ScriptedRunner { Hold = false, Failure = thrown };
             var fine = new ScriptedRunner { Hold = false };
             using var controller = new RunnerQueue(broken, fine).Controller();
 
@@ -129,10 +132,26 @@ public class CheckControllerTests
             Assert.True(ui.Until(() => !controller.IsBusy));
             var state = controller.StateOf(CheckKind.Storage);
             Assert.Equal(CheckRunState.Failed, state.State);
-            Assert.Equal("the helper is gone", state.Error);
             Assert.Null(state.Run);
             Assert.Equal(CheckRunState.Failed, controller.State);
-            Assert.Contains("the helper is gone", CheckFormat.StateText(state), StringComparison.Ordinal);
+
+            // The state holds a code and "TypeName 0x<HResult>": the exception's message (a path, a user name) is held nowhere.
+            Assert.Equal(CheckRunFailureCodes.InternalError, state.FailureCode);
+            Assert.Equal("InvalidOperationException 0x" + thrown.HResult.ToString("X8", CultureInfo.InvariantCulture), state.Error);
+            Assert.DoesNotContain("someone", state.Error, StringComparison.Ordinal);
+
+            // And the screen says the code in words, then the type: never the message.
+            var text = CheckFormat.StateText(state);
+            Assert.Equal("Failed: " + CheckFormat.FailureText(CheckRunFailureCodes.InternalError) + " (" + state.Error + ")", text);
+            Assert.DoesNotContain("someone", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(@"C:\", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("could not open", text, StringComparison.Ordinal);
+            using (Harness.Locale(Language.Ja))
+            {
+                var ja = CheckFormat.StateText(state);
+                Assert.Contains(CheckFormat.FailureText(CheckRunFailureCodes.InternalError), ja, StringComparison.Ordinal);
+                Assert.DoesNotContain("someone", ja, StringComparison.Ordinal);
+            }
 
             Assert.True(controller.TryStart(Request(CheckKind.Storage)));
             Assert.True(ui.Until(() => !controller.IsBusy));
@@ -277,15 +296,44 @@ public class CheckControllerTests
     {
         Ui.Run(ui =>
         {
-            var runner = new ScriptedRunner { Hold = false, Failure = new OperationCanceledException() };
+            // Our own stop reaches the runner, and it answers with a cancellation instead of a result.
+            var runner = new ScriptedRunner { Failure = new OperationCanceledException() };
             using var controller = new RunnerQueue(runner).Controller();
 
             Assert.True(controller.TryStart(Request(CheckKind.System)));
+            Assert.True(ui.Until(() => runner.Started.IsCompleted));
+            Assert.True(controller.Stop());
             Assert.True(ui.Until(() => !controller.IsBusy));
             var state = controller.StateOf(CheckKind.System);
             Assert.Equal(CheckRunState.Stopped, state.State);
             Assert.Null(state.Run);
             Assert.Null(state.Error);
+            Assert.Null(state.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void A_cancellation_this_run_did_not_ask_for_is_a_failure_like_any_other_and_says_so_without_a_message()
+    {
+        Ui.Run(ui =>
+        {
+            using var _ = Harness.Locale();
+
+            // A timeout or a token of the runner's own: nobody pressed stop, so the run did not end because it was stopped.
+            var foreign = new OperationCanceledException(@"the helper timed out for C:\Users\someone\x", new CancellationTokenSource().Token);
+            var runner = new ScriptedRunner { Hold = false, Failure = foreign };
+            using var controller = new RunnerQueue(runner).Controller();
+
+            Assert.True(controller.TryStart(Request(CheckKind.System)));
+            Assert.True(ui.Until(() => !controller.IsBusy));
+            var state = controller.StateOf(CheckKind.System);
+            Assert.Equal(CheckRunState.Failed, state.State);
+            Assert.Null(state.Run);
+            Assert.Equal(CheckRunFailureCodes.InternalError, state.FailureCode);
+            Assert.Equal("OperationCanceledException 0x" + foreign.HResult.ToString("X8", CultureInfo.InvariantCulture), state.Error);
+            var text = CheckFormat.StateText(state);
+            Assert.StartsWith("Failed: ", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("someone", text, StringComparison.Ordinal);
         });
     }
 
@@ -421,5 +469,97 @@ public class CheckControllerTests
             Assert.Equal(1, queue.Made);
             controller.Dispose(); // a second dispose is harmless
         });
+    }
+
+    /// <summary>A UI context that is gone: every post is refused (the window closed, or the control has no handle any more).</summary>
+    private sealed class RefusingContext : SynchronizationContext
+    {
+        private int _refused;
+
+        public int Refused => Volatile.Read(ref _refused);
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            Interlocked.Increment(ref _refused);
+            throw new InvalidOperationException("the window is gone");
+        }
+    }
+
+    [Fact]
+    public void A_ui_context_that_refuses_every_post_neither_skips_the_end_of_the_run_nor_faults_it()
+    {
+        var previous = SynchronizationContext.Current;
+        var gone = new RefusingContext();
+        SynchronizationContext.SetSynchronizationContext(gone);
+        try
+        {
+            var told = new List<string>();
+            var runner = new ScriptedRunner { Hold = false };
+            using var controller = new RunnerQueue(runner).Controller();
+            controller.Changed += () => told.Add("changed");
+            controller.RunFinished += kind => told.Add("finished:" + kind);
+
+            // The start posts too: a refused post is not an exception of the caller's.
+            Assert.True(controller.TryStart(Request(CheckKind.System)));
+
+            // 30 s is a hang guard only: the wait ends as soon as the run does.
+            var idle = controller.WhenIdleAsync();
+            Assert.True(SpinWait.SpinUntil(() => idle.IsCompleted, 30_000));
+            Assert.False(idle.IsFaulted);
+            Assert.False(controller.IsBusy);
+            Assert.Equal(CheckRunState.Completed, controller.StateOf(CheckKind.System).State);
+
+            // Three posts were tried (start, end, run finished): the first refusal did not skip the ones after it, and nothing was drawn.
+            Assert.True(gone.Refused >= 3, "posts tried: " + gone.Refused);
+            Assert.Empty(told);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    [Fact]
+    public void The_end_of_the_program_waits_for_a_stopped_run_only_as_long_as_it_is_given()
+    {
+        Ui.Run(ui =>
+        {
+            var save = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var runner = new ScriptedRunner { SaveGate = save };
+            using var controller = new RunnerQueue(runner).Controller();
+
+            // Nothing runs: nothing to wait for, and no limit is needed.
+            Assert.True(controller.WaitUntilIdle(TimeSpan.Zero));
+
+            Assert.True(controller.TryStart(Request(CheckKind.Storage)));
+            Assert.True(ui.Until(() => runner.Started.IsCompleted));
+
+            // The window was closed, the run was told to stop and its save is still going: a wait with no time left gives up at once, with false.
+            controller.Dispose();
+            Assert.True(ui.Until(() => runner.WasStopped));
+            Assert.False(controller.WaitUntilIdle(TimeSpan.Zero));
+            Assert.True(controller.IsBusy);
+
+            // The save finishes: the wait ends at once and says so. (30 s is a hang guard; the wait returns when the run is over.)
+            save.SetResult();
+            Assert.True(controller.WaitUntilIdle(TimeSpan.FromSeconds(30)));
+            Assert.False(controller.IsBusy);
+            Assert.True(controller.StateOf(CheckKind.Storage).Run!.IsSaved);
+        });
+    }
+
+    [Fact]
+    public void The_program_gives_the_stopped_run_three_seconds_after_the_message_loop_and_asks_for_them_there()
+    {
+        // Program.Main cannot be run by a test (it starts the application), so the two things it does are looked at separately: the limit is a
+        // named constant, and the call that uses it comes after Application.Run and nowhere before.
+        Assert.Equal(TimeSpan.FromSeconds(3), CheckController.ExitWait);
+
+        var source = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+        var run = source.IndexOf("Application.Run(form);", StringComparison.Ordinal);
+        var wait = source.IndexOf("Checks.WaitUntilIdle(CheckController.ExitWait);", StringComparison.Ordinal);
+        Assert.True(run > 0, "Application.Run(form) was not found in Program.cs");
+        Assert.True(wait > run, "WaitUntilIdle(ExitWait) must come after Application.Run(form)");
+        Assert.Equal(source.IndexOf("WaitUntilIdle", StringComparison.Ordinal), source.LastIndexOf("WaitUntilIdle", StringComparison.Ordinal));
     }
 }

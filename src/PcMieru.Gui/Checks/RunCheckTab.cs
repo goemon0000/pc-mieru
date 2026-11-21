@@ -120,14 +120,20 @@ internal abstract class RunCheckTab : CheckTab
         var result = CheckFormat.DisplayResult(state.Run);
         if (!ReferenceEquals(result, _shown))
         {
-            _shown = result;
+            // Remembered only after the table was drawn: a result whose drawing threw is tried again by the next refresh, not taken for shown.
             Grid.Show(result);
+            _shown = result;
         }
 
         StateLabel.Text = CheckFormat.StateText(state);
+
+        // While this kind runs again, the table and the line under it are still the last run's: the line says so (it never sits unlabelled under "Running").
+        var again = state.State is CheckRunState.Running or CheckRunState.Stopping;
         HintLabel.Text = active is { } other && other != kind
             ? busyText
-            : result is null ? string.Empty : CheckFormat.ResultLine(result);
+            : result is null ? string.Empty
+            : again ? CheckFormat.Pair(Strings.Get("gui.chk.previous"), CheckFormat.ResultLine(result))
+            : CheckFormat.ResultLine(result);
         StateRefreshed(state);
     }
 

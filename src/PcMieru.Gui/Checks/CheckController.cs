@@ -14,10 +14,12 @@ internal enum CheckRunState
 }
 
 /// <summary>
-/// The state of one kind of check: how it stands, the run it ended with (null: none, or it never began), for a failed run that threw why,
-/// and the request that run was started with (the storage tab asks whether it was already the elevated one).
+/// The state of one kind of check: how it stands, the run it ended with (null: none, or it never began), for a failed run that threw what it
+/// was (<paramref name="Error"/> is the type and the HRESULT, never the exception's message, which can carry a path or a user name; the
+/// words come from <paramref name="FailureCode"/>), and the request that run was started with (the storage tab asks whether it was already
+/// the elevated one).
 /// </summary>
-internal sealed record CheckKindState(CheckRunState State, CheckRun? Run, string? Error, CheckRequest? Request = null)
+internal sealed record CheckKindState(CheckRunState State, CheckRun? Run, string? Error, CheckRequest? Request = null, string? FailureCode = null)
 {
     public static CheckKindState NotRun { get; } = new(CheckRunState.NotRun, null, null);
 
@@ -218,6 +220,15 @@ internal sealed class CheckController : IDisposable
         }
     }
 
+    /// <summary>How long the program waits, after the message loop ended, for a run that was told to stop to save its result (DESIGN-A §7).</summary>
+    internal static readonly TimeSpan ExitWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Blocks until no run is going, or until <paramref name="limit"/> has passed; true when it is idle. For the end of the program only, after
+    /// the message loop is gone: nothing of the UI is left to block, and the posts a finishing run makes are dropped (see <see cref="TryPost"/>).
+    /// </summary>
+    internal bool WaitUntilIdle(TimeSpan limit) => WhenIdleAsync().Wait(limit);
+
     /// <summary>The window is closing for good: a run that is still going is told to stop. Nothing waits here.</summary>
     public void Dispose()
     {
@@ -257,13 +268,15 @@ internal sealed class CheckController : IDisposable
                 var runner = _runnerFactory();
                 result = await runner.RunAsync(run.Request, new Reporter(this, run), run.Cancel.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (run.Cancel.IsCancellationRequested)
             {
-                // Stopped before the runner made a run of it: no result, the state is "stopped".
+                // Our own stop reached the runner before it made a run of it: no result, the state is "stopped". A cancellation this run did not ask
+                // for (a timeout inside the runner, a token of its own) is a failure like any other and goes to the next catch.
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                // The type and the HRESULT only: the message of an exception can carry a path, a user name or the OS language's sentence.
+                error = CheckFormat.ExceptionDetail(ex);
             }
 
             Finish(run, result, error);
@@ -289,7 +302,7 @@ internal sealed class CheckController : IDisposable
         var kind = run.Request.Kind;
         lock (_gate)
         {
-            _last[kind] = new CheckKindState(state, result, error, run.Request);
+            _last[kind] = new CheckKindState(state, result, error, run.Request, error is null ? null : CheckRunFailureCodes.InternalError);
             _lastKind = kind;
             _active = null;
             _progress = null;
@@ -330,7 +343,7 @@ internal sealed class CheckController : IDisposable
         }
         else
         {
-            context.Post(_ => handler(), null);
+            TryPost(context, _ => handler());
         }
     }
 
@@ -348,7 +361,23 @@ internal sealed class CheckController : IDisposable
         }
         else
         {
-            context.Post(_ => handler(argument), null);
+            TryPost(context, _ => handler(argument));
+        }
+    }
+
+    /// <summary>
+    /// A UI context that is gone (the window closed while a run ended, or a control without a handle) refuses the post. That must neither
+    /// skip the posts that come after it (the run's end is told twice) nor fault the run's task: nobody is left to draw, so the post is dropped.
+    /// </summary>
+    private static void TryPost(SynchronizationContext context, SendOrPostCallback callback)
+    {
+        try
+        {
+            context.Post(callback, null);
+        }
+        catch (Exception)
+        {
+            // Dropped on purpose (see above).
         }
     }
 

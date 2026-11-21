@@ -85,6 +85,13 @@ public sealed class CheckHistoryStore : ICheckHistoryMaintainer
     public static string DefaultRoot() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru", "checks");
 
+    /// <summary>
+    /// The folder the v0.7.4 app kept its checks in (a <c>checks</c> folder under its own name in the roaming application data): the one the
+    /// baseline reads once when it has no record of its own. Only computes the path; nothing is created or read. The app and the CLI pass this and
+    /// never build the path themselves. (The old name is written in one file only, <c>BaselineEngine.cs</c>, which NOTICE.txt lists.)
+    /// </summary>
+    public static string DefaultLegacyDirectory() => Storage.BaselineEngine.DefaultLegacyDirectory();
+
     public string Root => _scanner.Root;
 
     /// <summary>

@@ -85,6 +85,14 @@ public sealed class BaselineEngine
     /// <summary>How long a run waits for the lock, in all, before it gives up (<c>baseline_read_failed</c>). The lock is held for a few file reads and writes.</summary>
     internal static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// <c>%APPDATA%\PartsLife\checks</c>: where the v0.7.4 app kept its history, the folder the import reads once. Only computes the path; nothing
+    /// is created or read. This is the one place that knows the old folder's name (it is in NOTICE.txt with this file); the app reaches it through
+    /// <see cref="CheckHistoryStore.DefaultLegacyDirectory"/> and never builds the path itself.
+    /// </summary>
+    internal static string DefaultLegacyDirectory() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PartsLife", "checks");
+
     private readonly BaselineStore _store;
     private readonly IBaselineLock _lock;
     private readonly ICheckHistoryFileReader _legacyReader;

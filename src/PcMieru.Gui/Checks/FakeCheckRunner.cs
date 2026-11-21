@@ -8,7 +8,7 @@ namespace PcMieru.Gui;
 /// history. A load takes the length of its request on the screen but only about a second in fact: the reported seconds are scaled, the work is not.
 /// A stop is answered with a stopped result, saved too, like the real runner does.
 /// </summary>
-internal sealed class FakeCheckRunner : ICheckRunner
+internal sealed class FakeCheckRunner : ICheckRunner, IFakeImplementation
 {
     private const int LoadSteps = 8;
 

@@ -49,7 +49,8 @@ internal sealed class MainForm : Form
                 [],
                 Strings.Get("gui.chk.close.yes"),
                 destructive: false),
-            Close);
+            Close,
+            () => _context.ReportKey("gui.chk.close.stopping"));
         ApplyFont();
         AutoScaleMode = AutoScaleMode.Dpi;
         Name = "MainForm";

@@ -136,9 +136,6 @@ goemon0000/parts-life and the owner's pl-sensors helper
       src/PartsLife.Check/PartsLife.Check.csproj
   src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
       the same post-link check, copied for the network meter
-  src/PcMieru.Gui/Checks/CheckComposition.cs
-      only the name of the v0.7.4 data folder (%APPDATA%\PartsLife\checks)
-      that the baseline reads once; no code taken
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART

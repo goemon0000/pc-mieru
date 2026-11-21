@@ -169,9 +169,12 @@ internal sealed class CheckResultGrid : GridView
             }
 
             shown.Add(item);
+            var counterAt = _rows.Count;
             _rows.Add(new Row(item, CheckFormat.ItemLabel(item.Id), item.Verdict, Header: false, Indent: indent));
             if (CheckItemRegistry.DeltaId(item.Id) is { } deltaId && deltas is not null && deltas.TryGetValue(item.Id, out var delta) && delta.Id == deltaId && shown.Add(delta))
             {
+                // The change is written once, on the change row; the counter row above it does not repeat it (DESIGN-A §7).
+                _rows[counterAt] = _rows[counterAt] with { DeltaBelow = true };
                 _rows.Add(new Row(delta, CheckFormat.ItemLabel(delta.Id), delta.Verdict, Header: false, Indent: indent + 1));
             }
         }
@@ -205,11 +208,15 @@ internal sealed class CheckResultGrid : GridView
             case ValueColumn:
                 return item.Value is null
                     ? new GridCell(Fmt.Dash, CellTone.Dim)
-                    : new GridCell(CheckFormat.ValueText(item));
+                    : new GridCell(CheckFormat.Safe(() => CheckFormat.ValueText(item), () => CheckFormat.RawValueText(item)));
             default:
-                return new GridCell(CheckFormat.EvidenceText(item), CellTone.Dim);
+                return new GridCell(Evidence(line), CellTone.Dim);
         }
     }
+
+    /// <summary>The evidence cell of a row. A value that cannot be written (a result that did not pass validation is shown anyway) falls back to its raw text and never takes the table down.</summary>
+    private static string Evidence(Row line) =>
+        CheckFormat.Safe(() => CheckFormat.EvidenceText(line.Item!, withChange: !line.DeltaBelow), () => CheckFormat.RawEvidenceText(line.Item!));
 
     private string? Tip(int row, int column)
     {
@@ -218,14 +225,16 @@ internal sealed class CheckResultGrid : GridView
             return null;
         }
 
+        var line = _rows[row];
         return column switch
         {
             VerdictColumn when item.Verdict == ItemVerdict.Info => Strings.Get("gui.chk.info.tip"),
-            EvidenceColumn => CheckFormat.EvidenceText(item) is { Length: > 0 } text ? text : null,
-            ValueColumn => item.Value is null ? CheckFormat.EvidenceText(item) is { Length: > 0 } why ? why : null : null,
+            EvidenceColumn => Evidence(line) is { Length: > 0 } text ? text : null,
+            ValueColumn => item.Value is null ? Evidence(line) is { Length: > 0 } why ? why : null : null,
             _ => null,
         };
     }
 
-    private sealed record Row(CheckItem? Item, string Label, ItemVerdict? Verdict, bool Header, int Indent);
+    /// <param name="DeltaBelow">The change row of this counter sits directly under it, so the change text is written there and not here.</param>
+    private sealed record Row(CheckItem? Item, string Label, ItemVerdict? Verdict, bool Header, int Indent, bool DeltaBelow = false);
 }

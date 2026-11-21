@@ -384,7 +384,8 @@ public class ChecksPageTests
 
             system.PressStart();
             Finish(thrown);
-            Assert.Equal("Failed: boom", system.StateLabel.Text);
+            Assert.Equal("Failed: An internal error occurred (InvalidOperationException 0x80131509)", system.StateLabel.Text);
+            Assert.DoesNotContain("boom", system.StateLabel.Text, StringComparison.Ordinal);
 
             system.PressStart();
             Finish(failed);
@@ -510,6 +511,145 @@ public class ChecksPageTests
             var headers = Rows(grid).Where(row => grid.ItemAt(row) is null).ToArray();
             Assert.Equal(2, headers.Length);
             Assert.Equal("測れず", grid.TextAt(headers[1], 1));
+        });
+    }
+
+    [Fact]
+    public void The_change_of_a_counter_is_written_on_its_change_row_only_and_not_twice()
+    {
+        Ui.Run(ui =>
+        {
+            var runId = Guid.NewGuid();
+            var disk = new CheckSubject("disk-1", "Test disk");
+            CheckEvidence Change() => new() { Before = "1204", After = "1227" };
+            var items = new[]
+            {
+                // The counter row itself carries the same before and after (a writer may put them on both rows): they show on the change row, once.
+                CheckItem.Create("storage.nvme.power_on_hours", CheckValue.Dec("1227"), ItemVerdict.Info, CheckSource.Nvme, subject: disk, evidence: Change()),
+                CheckItem.Create("storage.nvme.power_on_hours.delta", CheckValue.SignedDec("23"), ItemVerdict.Info, CheckSource.Baseline, subject: disk, evidence: Change()),
+                // A change row whose counter is not in the result stands alone and keeps its own change text.
+                CheckItem.Create("storage.nvme.unsafe_shutdowns.delta", CheckValue.SignedDec("1"), ItemVerdict.Info, CheckSource.Baseline, subject: disk, evidence: new CheckEvidence { Before = "44", After = "45" }),
+            };
+            var result = CheckResult.Create(FakeCheckData.App, runId, CheckKind.Storage, FakeCheckData.Start, FakeCheckData.Start.AddSeconds(1), CheckOutcome.Completed, items);
+            using var rig = new PageRig(new CheckController(() => new FixedRunner(new CheckRun(result, CheckSaveState.Saved("x.json"))), new InMemoryCheckHistory([])));
+            rig.Page.OnActivated();
+            rig.Page.SelectTab("storage");
+
+            rig.StorageTab.PressStart();
+            Assert.True(ui.Until(() => rig.Checks.StateOf(CheckKind.Storage).State == CheckRunState.Completed));
+            ui.Pump();
+
+            var grid = rig.StorageTab.Grid;
+            var counter = RowOf(grid, "storage.nvme.power_on_hours", "disk-1");
+            var delta = RowOf(grid, "storage.nvme.power_on_hours.delta", "disk-1");
+            Assert.Equal(counter + 1, delta);
+            Assert.DoesNotContain("→", grid.TextAt(counter, 3), StringComparison.Ordinal);
+            Assert.Contains("1,204 → 1,227 (+23)", grid.TextAt(delta, 3), StringComparison.Ordinal);
+
+            var alone = RowOf(grid, "storage.nvme.unsafe_shutdowns.delta", "disk-1");
+            Assert.Contains("44 → 45 (+1)", grid.TextAt(alone, 3), StringComparison.Ordinal);
+
+            // The same in Japanese: the language change draws the rows again with the same rule.
+            Strings.Current = Language.Ja;
+            rig.Page.ApplyLanguage();
+            Assert.DoesNotContain("→", grid.TextAt(RowOf(grid, "storage.nvme.power_on_hours", "disk-1"), 3), StringComparison.Ordinal);
+            Assert.Contains("1,204 → 1,227（+23）", grid.TextAt(RowOf(grid, "storage.nvme.power_on_hours.delta", "disk-1"), 3), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void A_result_that_did_not_validate_is_drawn_row_by_row_even_with_a_value_no_cell_can_be_written_from()
+    {
+        Ui.Run(ui =>
+        {
+            var runId = Guid.NewGuid();
+            var disk = new CheckSubject("disk-1", "Test disk");
+            var items = new[]
+            {
+                CheckItem.Create("system.os.uptime", CheckValue.Number(1e300), ItemVerdict.Info, CheckSource.Win32),
+                CheckItem.Create("storage.nvme.critical_warning", CheckValue.Int(1L << 40), ItemVerdict.Ok, CheckSource.Nvme, subject: disk),
+                CheckItem.Create("storage.capacity", CheckValue.Dec("340282366920938463463374607431768211455"), ItemVerdict.Info, CheckSource.StorageQuery, subject: disk),
+                CheckItem.Create("storage.temperature", CheckValue.Number(41), ItemVerdict.Ok, CheckSource.Nvme, subject: disk, evidence: new CheckEvidence { Cv = double.NaN, ClockSteadiness = double.PositiveInfinity }),
+                CheckItem.Create("storage.nvme.power_on_hours", CheckValue.Dec("5"), ItemVerdict.Info, CheckSource.Nvme, subject: disk),
+            };
+            var built = CheckResult.Create(FakeCheckData.App, runId, CheckKind.System, FakeCheckData.Start, FakeCheckData.Start.AddSeconds(1), CheckOutcome.Completed, items);
+            var empty = CheckResult.Create(FakeCheckData.App, runId, CheckKind.System, FakeCheckData.Start, FakeCheckData.Start.AddSeconds(1), CheckOutcome.Failed, []);
+            var run = new CheckRun(empty, CheckSaveState.Saved("empty.json"), CheckRunFailureCodes.ResultInvalid, "invalid", built, null, "first problem");
+            using var rig = new PageRig(new CheckController(() => new FixedRunner(run), new InMemoryCheckHistory([])));
+            rig.Page.OnActivated();
+
+            rig.SystemTab.PressStart();
+            Assert.True(ui.Until(() => rig.Checks.StateOf(CheckKind.System).State == CheckRunState.Failed));
+            ui.Pump();
+
+            var grid = rig.SystemTab.Grid;
+            Assert.Same(built, grid.Result);
+            foreach (var item in items)
+            {
+                var row = RowOf(grid, item.Id, item.Subject?.Id);
+                Assert.False(string.IsNullOrEmpty(grid.TextAt(row, 0)));
+                Assert.False(string.IsNullOrEmpty(grid.TextAt(row, 2)), $"No value text for {item.Id}.");
+            }
+
+            // 1 << 40 is more than a byte, and the mask is still written from the number itself.
+            Assert.Equal("0x10000000000", grid.TextAt(RowOf(grid, "storage.nvme.critical_warning", "disk-1"), 2));
+            var temperature = grid.TextAt(RowOf(grid, "storage.temperature", "disk-1"), 3);
+            Assert.False(string.IsNullOrEmpty(temperature));
+            Assert.Equal("Failed: The result did not pass validation and was replaced by an empty one", rig.SystemTab.StateLabel.Text);
+        });
+    }
+
+    [Fact]
+    public void A_cell_that_cannot_be_written_falls_back_to_its_raw_text_and_never_throws()
+    {
+        Assert.Equal("fine", CheckFormat.Safe(static () => "fine", static () => "raw"));
+        Assert.Equal("raw", CheckFormat.Safe(static () => throw new InvalidOperationException("no"), static () => "raw"));
+
+        // The mask of a whole number of any size, written from the number itself: 0x05, 0xFF, and 128 bits (a valid dec) with no cast in between.
+        Assert.Equal("0x05", CheckFormat.HexText(5));
+        Assert.Equal("0xFF", CheckFormat.HexText(255));
+        Assert.Equal("0x00", CheckFormat.HexText(0));
+        Assert.Equal("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", CheckFormat.HexText(System.Numerics.BigInteger.Parse("340282366920938463463374607431768211455", CultureInfo.InvariantCulture)));
+        Assert.Null(CheckFormat.HexText(-1));
+    }
+
+    [Fact]
+    public void While_a_kind_runs_again_the_table_and_the_line_under_it_say_they_are_the_previous_result()
+    {
+        Ui.Run(ui =>
+        {
+            var first = new ScriptedRunner { Hold = false };
+            var second = new ScriptedRunner();
+            using var rig = new PageRig(new RunnerQueue(first, second).Controller());
+            rig.Page.OnActivated();
+            var system = rig.SystemTab;
+
+            system.PressStart();
+            Assert.True(ui.Until(() => first.Started.IsCompleted && !rig.Checks.IsBusy));
+            ui.Pump();
+            Assert.DoesNotContain("Previous result", system.HintLabel.Text, StringComparison.Ordinal);
+            var shown = system.Grid.Result;
+            Assert.NotNull(shown);
+
+            system.PressStart();
+            Assert.True(ui.Until(() => second.Started.IsCompleted));
+            ui.Pump();
+            Assert.Equal("Running", system.StateLabel.Text);
+            Assert.Same(shown, system.Grid.Result);
+            Assert.StartsWith("Previous result", system.HintLabel.Text, StringComparison.Ordinal);
+            Assert.Contains("Overall:", system.HintLabel.Text, StringComparison.Ordinal);
+
+            Strings.Current = Language.Ja;
+            rig.Page.ApplyLanguage();
+            Assert.StartsWith("前回の結果", system.HintLabel.Text, StringComparison.Ordinal);
+            Strings.Current = Language.En;
+            rig.Page.ApplyLanguage();
+
+            second.Release();
+            Assert.True(ui.Until(() => !rig.Checks.IsBusy));
+            ui.Pump();
+            Assert.DoesNotContain("Previous result", system.HintLabel.Text, StringComparison.Ordinal);
+            Assert.NotSame(shown, system.Grid.Result);
         });
     }
 
@@ -893,6 +1033,8 @@ public class ChecksPageTests
         {
             using var temp = new Ui.TempRoot();
             var root = Path.Combine(temp.Path, "PCMieru");
+
+            // Not covered here: the default legacy folder (CheckHistoryStore.DefaultLegacyDirectory, in the roaming profile) is never read before a start, and this test only watches the data root it was given.
             using var rig = new PageRig(services => CheckComposition.Create(services, dataRoot: root, fake: false));
             Assert.Empty(temp.Entries());
 
