@@ -186,6 +186,137 @@ public class MeasureTests
     }
 
     [Fact]
+    public void The_watch_ends_sixty_seconds_after_the_first_paint_and_a_late_cpu_mark_is_not_written()
+    {
+        var now = T0;
+        var lines = new List<string>();
+        var marks = new MeasureMarks(lines.Add, () => now);
+
+        marks.Painted(hasRows: true, hasCpuValues: false);
+        Assert.False(marks.Done);
+
+        // Inside the window the CPU mark still comes (one tick short of the limit).
+        now = T0 + MeasureMarks.WatchTime - TimeSpan.FromTicks(1);
+        marks.Painted(hasRows: true, hasCpuValues: true);
+        Assert.Equal([MeasureMarks.FirstList, MeasureMarks.CpuList], marks.Written);
+        Assert.False(marks.Expired);
+        Assert.True(marks.Done); // both marks written: done, though not expired
+
+        // The same run with the CPU paint 60 s after the first paint: expired, the CPU mark stays missing, nothing is written afterwards.
+        now = T0;
+        var late = new List<string>();
+        var lateMarks = new MeasureMarks(late.Add, () => now);
+        lateMarks.Painted(hasRows: true, hasCpuValues: false);
+        now = T0 + MeasureMarks.WatchTime;
+        lateMarks.Painted(hasRows: true, hasCpuValues: true);
+        Assert.True(lateMarks.Expired);
+        Assert.True(lateMarks.Done);
+        Assert.False(lateMarks.Complete);
+        Assert.Equal([MeasureMarks.FirstList], lateMarks.Written);
+        lateMarks.Painted(hasRows: true, hasCpuValues: true);
+        Assert.Single(late);
+    }
+
+    [Fact]
+    public void The_watch_also_ends_after_thirty_samples_counted_from_the_first_paint_not_before_it()
+    {
+        var now = T0;
+        var lines = new List<string>();
+        var marks = new MeasureMarks(lines.Add, () => now);
+
+        // Samples before any paint are not counted: a slow first paint does not eat the allowance.
+        for (var i = 0; i < 100; i++)
+        {
+            marks.Sampled();
+        }
+
+        Assert.False(marks.Done);
+
+        marks.Painted(hasRows: true, hasCpuValues: false);
+        for (var i = 1; i < MeasureMarks.WatchSamples; i++)
+        {
+            marks.Sampled();
+            Assert.False(marks.Done);
+        }
+
+        marks.Sampled();
+        Assert.True(marks.Expired);
+        Assert.True(marks.Done);
+
+        marks.Painted(hasRows: true, hasCpuValues: true);
+        Assert.Equal([MeasureMarks.FirstList], marks.Written);
+        Assert.Single(lines);
+    }
+
+    [Fact]
+    public void A_sample_that_comes_sixty_seconds_after_the_first_paint_ends_the_watch_and_a_finished_watch_is_not_expired()
+    {
+        var now = T0;
+        var marks = new MeasureMarks(_ => { }, () => now);
+        marks.Painted(hasRows: true, hasCpuValues: false);
+        now = T0 + MeasureMarks.WatchTime;
+        marks.Sampled();
+        Assert.True(marks.Expired);
+
+        // Both marks written: Done, never Expired, and a later sample changes nothing.
+        now = T0;
+        var complete = new MeasureMarks(_ => { }, () => now);
+        complete.Painted(hasRows: true, hasCpuValues: true);
+        now = T0 + MeasureMarks.WatchTime + MeasureMarks.WatchTime;
+        complete.Sampled();
+        Assert.True(complete.Complete);
+        Assert.True(complete.Done);
+        Assert.False(complete.Expired);
+    }
+
+    [Fact]
+    public void A_bad_marker_path_is_one_stderr_line_and_no_file_and_the_gui_has_no_message_box_for_it()
+    {
+        using var root = new Ui.TempRoot();
+        var path = Path.Combine(root.Path, "no", "such", "folder", "marks.jsonl");
+        using var error = new StringWriter();
+
+        Assert.False(Program.TryOpenMeasureMarks(path, error, out var marks));
+        Assert.Null(marks);
+        var lines = error.ToString().Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(lines);
+        Assert.StartsWith("--measure: ", lines[0], StringComparison.Ordinal);
+        Assert.Empty(root.Entries());
+
+        // A good path makes the file, says nothing, and hands the marks back.
+        var good = Path.Combine(root.Path, "marks.jsonl");
+        using var quiet = new StringWriter();
+        Assert.True(Program.TryOpenMeasureMarks(good, quiet, out var made));
+        Assert.NotNull(made);
+        Assert.Equal(string.Empty, quiet.ToString());
+        Assert.Equal([good], root.Entries());
+
+        // Not a box: the measurement is unattended, so the measure path of Program.cs never opens one (the other start problems may).
+        var program = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+        var start = program.IndexOf("internal static bool TryOpenMeasureMarks(", StringComparison.Ordinal);
+        Assert.True(start > 0);
+        Assert.DoesNotContain("MessageBox", program[start..], StringComparison.Ordinal);
+        Assert.DoesNotContain("--measure: \" + ex.Message, \"PCMieru\"", program, StringComparison.Ordinal);
+        var guard = program.IndexOf("if (options.MeasureOutput is { } markerFile)", StringComparison.Ordinal);
+        Assert.True(guard > 0);
+        var block = program.Substring(guard, 200);
+        Assert.DoesNotContain("MessageBox", block, StringComparison.Ordinal);
+        Assert.Contains("TryOpenMeasureMarks(markerFile, Console.Error", block, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_command_line_problem_of_a_measure_run_goes_to_stderr_as_well()
+    {
+        Assert.True(Program.IsMeasureRun(["--measure"]));
+        Assert.True(Program.IsMeasureRun(["--fakes", "--measure", "m.jsonl"]));
+        Assert.False(Program.IsMeasureRun([]));
+        Assert.False(Program.IsMeasureRun(["--smoke", "s.json"]));
+
+        var program = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+        Assert.Contains("if (IsMeasureRun(args))", program, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_marker_file_is_made_at_once_as_utf8_without_a_bom_with_one_object_per_line()
     {
         using var root = new Ui.TempRoot();
@@ -466,6 +597,7 @@ public class MeasureTests
             Assert.Single(rig.Lines);
             Assert.False(rig.Marks.Complete);
             Assert.NotNull(rig.Page.List.PaintObserver);
+            Assert.True(rig.Page.List.RecordsPaintedCells); // the same probe as in the without-measure test, here true: it can tell the two apart
 
             // Painting again with the same data adds nothing.
             rig.PaintList();
@@ -484,6 +616,40 @@ public class MeasureTests
             rig.Sample(3);
             Assert.Equal(2, rig.Lines.Count);
             Assert.Null(rig.Page.List.PaintObserver);
+            Assert.False(rig.Page.List.RecordsPaintedCells); // detached: what was recorded is dropped
+        });
+    }
+
+    [Fact]
+    public void A_list_that_never_shows_cpu_values_stops_being_watched_after_thirty_samples_and_cpu_list_stays_missing()
+    {
+        Ui.Run(queue =>
+        {
+            using var rig = new PaintRig(measure: true);
+
+            // Tick 0 again and again: rows, never a CPU value. The first paint is first_list; the watch counts the samples that come after it.
+            rig.Sample(0);
+            Assert.Equal([MeasureMarks.FirstList], rig.Marks!.Written);
+            for (var i = 1; i < MeasureMarks.WatchSamples; i++)
+            {
+                rig.Sample(0);
+                Assert.NotNull(rig.Page.List.PaintObserver);
+                Assert.False(rig.Marks.Expired);
+            }
+
+            // The 30th sample after the first paint ends the watch (the 31st sample of the run).
+            rig.Sample(0);
+            Assert.True(rig.Marks.Expired);
+            Assert.True(rig.Marks.Done);
+            Assert.Null(rig.Page.List.PaintObserver);
+            Assert.False(rig.Page.List.RecordsPaintedCells);
+
+            // A CPU value after that is not marked: the mark stays missing, and nothing is recorded or written any more.
+            rig.Sample(1);
+            rig.Sample(2);
+            Assert.Equal([MeasureMarks.FirstList], rig.Marks.Written);
+            Assert.Single(rig.Lines);
+            Assert.False(rig.Page.List.RecordsPaintedCells);
         });
     }
 
@@ -513,11 +679,16 @@ public class MeasureTests
 
             Assert.Null(rig.Context.Measure);
             Assert.Null(rig.Page.List.PaintObserver);
+            Assert.False(rig.Page.List.RecordsPaintedCells);
             rig.Sample(0);
             rig.Sample(1);
             rig.Sample(2);
             Assert.True(rig.Page.VisibleRowCount > 0);
+
+            // Nothing is watched after real paints of real rows: the observer is not wired, and the grid never built the drawn-cell list (a second
+            // guard: a grid that recorded cells for nobody would fail here even with the observer left null).
             Assert.Null(rig.Page.List.PaintObserver);
+            Assert.False(rig.Page.List.RecordsPaintedCells);
             Assert.Empty(rig.Lines);
 
             // The page's own hook does nothing either, even when asked directly.
@@ -550,5 +721,24 @@ public class MeasureTests
             rig.Page.NotePainted([(rows[0], cpu)]);
             Assert.Equal([MeasureMarks.FirstList, MeasureMarks.CpuList], rig.Marks.Written);
         });
+    }
+
+    // ---- tools/measure.ps1 reads the checks page's title from the navigation list; the script's copy of it is pinned here ----
+
+    [Fact]
+    public void The_titles_tools_measure_ps1_looks_for_in_the_navigation_list_are_the_checks_pages_ja_and_en_titles()
+    {
+        var entry = GuiStrings.All.Single(e => e.Key == "gui.nav.checks");
+        var script = File.ReadAllText(Path.Combine(Harness.Root, "tools", "measure.ps1"));
+        var line = script.Split('\n').Single(l => l.StartsWith("$script:ChecksTitles", StringComparison.Ordinal));
+
+        Assert.Contains("'" + entry.En + "'", line, StringComparison.Ordinal);
+        foreach (var c in entry.Ja)
+        {
+            Assert.Contains("[char]0x" + ((int)c).ToString("X4", CultureInfo.InvariantCulture), line, StringComparison.Ordinal);
+        }
+
+        // The script is ASCII only (Windows PowerShell 5.1 reads a file without a BOM as ANSI), so the Japanese title is written as char codes.
+        Assert.True(File.ReadAllBytes(Path.Combine(Harness.Root, "tools", "measure.ps1")).All(b => b < 128), "tools/measure.ps1 must stay ASCII only");
     }
 }

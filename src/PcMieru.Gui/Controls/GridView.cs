@@ -139,9 +139,26 @@ internal class GridView : ListView, IThemed
     /// double-buffered list has presented its buffer when the window procedure returns from WM_PAINT). Null in a normal start: no cell is recorded.
     /// </summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    internal Action<IReadOnlyList<(int Row, int Column)>>? PaintObserver { get; set; }
+    internal Action<IReadOnlyList<(int Row, int Column)>>? PaintObserver
+    {
+        get => _paintObserver;
+        set
+        {
+            _paintObserver = value;
+            if (value is null)
+            {
+                // Detached: nothing is recorded from here on, and what was recorded is dropped.
+                _paintedCells = null;
+            }
+        }
+    }
+
+    private Action<IReadOnlyList<(int Row, int Column)>>? _paintObserver;
 
     private List<(int Row, int Column)>? _paintedCells;
+
+    /// <summary>Tests: the drawn-cell list exists only while a paint observer is attached (a normal start never builds it).</summary>
+    internal bool RecordsPaintedCells => _paintedCells is not null;
 
     /// <summary>Why a cell shows what it shows (the reason a value is "-"). Null for no tooltip.</summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]

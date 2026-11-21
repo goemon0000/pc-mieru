@@ -8,7 +8,16 @@ internal static class Program
         var startedAt = DateTime.Now;
         if (!GuiArgs.TryParse(args, out var options, out var problem))
         {
-            MessageBox.Show(problem, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            // A measurement run is unattended and read from outside (tools/measure.ps1): its problems go to stderr, never to a box nobody clicks.
+            if (IsMeasureRun(args))
+            {
+                Console.Error.WriteLine(problem.ReplaceLineEndings(" "));
+            }
+            else
+            {
+                MessageBox.Show(problem, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
             return 1;
         }
 
@@ -49,13 +58,8 @@ internal static class Program
         MeasureMarks? marks = null;
         if (options.MeasureOutput is { } markerFile)
         {
-            try
+            if (!TryOpenMeasureMarks(markerFile, Console.Error, out marks))
             {
-                marks = MeasureMarks.Create(markerFile);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-            {
-                MessageBox.Show("--measure: " + ex.Message, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
         }
@@ -84,6 +88,28 @@ internal static class Program
         // folder's own .tmp clean-up (DESIGN-A §7).
         context.Checks.WaitUntilIdle(CheckController.ExitWait);
         return 0;
+    }
+
+    /// <summary>The command line asks for a measurement run (<c>--measure</c> is on it, however well the rest parses).</summary>
+    internal static bool IsMeasureRun(string[] args) => Array.IndexOf(args, "--measure") >= 0;
+
+    /// <summary>
+    /// <c>--measure</c>: makes the marker file before any window exists. A path that cannot be made is one line on <paramref name="error"/> (what
+    /// <c>tools/measure.ps1</c> reads) and the caller exits 1; no message box, because nobody is there to click it in an unattended measurement.
+    /// </summary>
+    internal static bool TryOpenMeasureMarks(string path, TextWriter error, out MeasureMarks? marks)
+    {
+        try
+        {
+            marks = MeasureMarks.Create(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            marks = null;
+            error.WriteLine("--measure: " + ex.Message.ReplaceLineEndings(" "));
+            return false;
+        }
     }
 }
 

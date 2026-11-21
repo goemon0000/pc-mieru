@@ -268,7 +268,26 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         marks.Painted(rows, cpu);
-        if (marks.Complete)
+        if (marks.Done)
+        {
+            _list.PaintObserver = null;
+        }
+    }
+
+    /// <summary>
+    /// <c>--measure</c>: one more sample reached the page. The watch ends after <see cref="MeasureMarks.WatchSamples"/> samples or
+    /// <see cref="MeasureMarks.WatchTime"/> since the first paint even when the CPU mark never came (it stays missing), so a list that never
+    /// shows CPU values does not record every paint for the rest of the run.
+    /// </summary>
+    private void NoteSampled()
+    {
+        if (Context.Measure is not { } marks)
+        {
+            return;
+        }
+
+        marks.Sampled();
+        if (marks.Done)
         {
             _list.PaintObserver = null;
         }
@@ -802,6 +821,7 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         UpdateFooter();
+        NoteSampled();
     }
 
     private bool ComputeFrozen() => _menuOpen || (_selectedKey is not null && _list.SelectedRow >= 0);
