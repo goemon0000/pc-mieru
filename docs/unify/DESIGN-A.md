@@ -53,7 +53,7 @@ public interface IBuildCodeProvider
 }
 ```
 
-- PCB1 の公開面（手順 8 の点検で確定）: 公開するのは `IBuildCodeProvider`、結果の DTO（`BuildCodeResult`・`BuildPart`・`BuildNote`）、工場 `BuildCodeProviders` の 2 つ（`Windows()`＝この機械を読む既定、`Sample()`＝合成の部品を規則に通した固定の結果。`--fakes` とプレビューの写し用）だけ。`BuildCollector`・`BuildCode.Make`・`BuildRules` は内部。偽 PCB1 は `IBuildCodeProvider` の差し替えで作る。
+- PCB1 の公開面（手順 8 の点検で確定）: 公開するのは `IBuildCodeProvider`、結果の DTO（`BuildCodeResult`・`BuildPart`・`BuildNote`）、工場 `BuildCodeProviders` の 2 つ（`Windows()`＝この機械を読む既定、`Sample()`＝合成の部品を規則に通した固定の結果。`--fakes` とプレビューの写し用）だけ。`BuildCollector`・`BuildCode.Make`・`BuildRules` は内部。偽 PCB1 は `IBuildCodeProvider` の差し替えで作る。 `Sample()` には形を 1 つだけ足せる（手順 10 の点検で決めた）: `Sample(SampleVariant.Trimmed)` は大きな合成の構成を本物の規則と符号化に通し、種類の上限・長さの上限による省略と、読めなかった種類（期限切れ・権限なし・非対応）を本当に起きる形で返す。画面側で注記や未読を作り足さない（作り足すと、部品一覧と食い違う写しになる）。
 - `BuildCodeResult` は読めなかったカテゴリと理由（カテゴリ名＋`CheckReason`。期限切れ・空き枠なし・拒否・失敗）を持つ。コードの文字列には入れない（旧版とバイト一致を保つ）。画面はこれで「空の構成や欠測の根拠」（§7）を出す。
 
 - 履歴の型（§14 の確定に合わせて固定）:
@@ -338,10 +338,10 @@ WMI は固定の問い合わせごとに接続、実行、全件列挙・変換�
 - `PageCatalog` に `checks`／`gui.nav.checks` を `diagnose` の直前に追加。`ChecksPage : PageBase` に `SystemCheckTab`、`LoadCheckTab`、`StorageCheckTab`、`CheckHistoryTab` を置く。`GuiContext` に点検の実行と閲覧を差し込み、実行状態は `CheckController` が持つ。既存のページ順、遅延生成、依存の受け渡しは `src/PcMieru.Gui/Shell/PageCatalog.cs:3`、`:9`、`src/PcMieru.Gui/Shell/MainForm.cs:169`、`src/PcMieru.Gui/Program.cs:48`。
 - 「システム」は「点検する」。項目、判定、値、根拠を表示。「負荷」は CPU／メモリ、30 秒／2 分／5 分、進捗、速度、「止める」。「記憶媒体」は台ごとの状態と `1,204 → 1,227（+23）` のような根拠。通常権限で拒否された台があれば「管理者で読み直す」。管理者読み直しは 1 回の新しい採取として保存する。「履歴」は日時、種類、判定、実行結果。選ぶと保存時の値を表示する。
 - 状態は未実行、実行中、停止待ち、完了、停止、失敗。完了後に保存失敗を追記できる。履歴は読み込み中、空、一覧、読み取りの警告を持つ。タブと左ナビを移っても実行は続く。閉じるときは確認し、承認後に停止と保存の完了を `await` して閉じ直す。`OnFormClosing` は最初の閉じ要求をキャンセルし、再入を 1 回に抑える。既存の終了処理は `src/PcMieru.Gui/Shell/MainForm.cs:284`。
-- 閉じの細則（手順 9 の点検で決めた）: Windows の終了・タスクマネージャーからの閉じは、確認中・停止待ちでも問わずに停止を要求して閉じる（閉じを取り消さない。取り消すと Windows が「終了を妨げている」と出す）。その回の保存は `Application.Run` の後で最大 3 秒だけ待つ。間に合わなければ §4.1 の `.tmp` 片付けに任せる（この場合の保存は努力目標）。承認後の停止待ちは最大 15 秒で、超えたら保存を待たずに閉じる（止まらない実行で窓が閉じられなくならないため）。停止待ちの間は「停止しています。終わり次第閉じます」を状態欄に出す。ランナーの例外は固定の失敗文と型名・HRESULT で示し、例外のメッセージは画面に出さない（OS の言語の文や利用者名入りのパスが出るため）。自分の停止によらない取り消し（`OperationCanceledException`）は「停止」ではなく「失敗」。
-- 表示の細則（手順 9 で決めた）: 判定の表示語は ja が OK／注意／要確認／測れず／参考、en が OK／Caution／Needs review／Not measured／Info（CLI も同じ語を使う）。参考の行には判定の色を付けない。記憶媒体は台ごとに見出し行（その台の総合）を置き、`.delta` は元のカウンター行の直下に字下げして `1,204 → 1,227（+23）`（en は半角括弧）を出す。直下に `.delta` があるときは元の行には変化を重ねて書かない。数は不変カルチャの桁区切り、日時は OS の地域設定。検証を通らなかった結果（`CheckRun.UnsavedResult`）は「保存されなかった」旨を付けて表示する。その値がどんな形でも描画で例外を出さない（欄ごとに生の文字へ戻す）。実行中は前回の表を「前回の結果」と明示するか消す。
-- `HardwarePage` に「構成コードをコピー（/my-config 用）」を追加。公開する部品一覧とコードのプレビューを表示し、「コピー」と「JSON を保存」を出す。空の構成や欠測の根拠も見える形にする。隣のボタンと配置を合わせる。先行実装のクリックとプレビューは `area/parts-share@9e068c4:src/PcMieru.Gui/Pages/HardwarePage.cs:84`、`:488`、`:513`。
-- `--smoke --shots --fakes` は `FakeCheckRunner`、メモリ内履歴、偽 PCB1 を組み立て時に注入する。4 判定、停止待ち、停止済み履歴、増分、双子で比較不能、PCB1 のプレビューを写す。実負荷、実 WMI、UAC、実ユーザーの点検データへの書き込みを伴わない。`FakeCheckRunner` とメモリ内履歴は既存の偽物（Core の `FakeHardwareData` など）と同じく出荷アセンブリ（Gui）に置く。既存の fake 起動とページ巡回は `src/PcMieru.Gui/Program.cs:48`、`src/PcMieru.Gui/Smoke/SmokeRun.cs:14`、`:280`。発行時の fake smoke は `tools/publish.ps1:298`。
+- 閉じの細則（手順 9 の点検で決めた）: Windows の終了・タスクマネージャーからの閉じは、確認中・停止待ちでも問わずに停止を要求して閉じる（閉じを取り消さない。取り消すと Windows が「終了を妨げている」と出す）。その回の保存は `Application.Run` の後で最大 3 秒だけ待つ。間に合わなければ §4.1 の `.tmp` 片付けに任せる（この場合の保存は努力目標）。承認後の停止待ちは最大 15 秒で、超えたら保存を待たずに閉じる（止まらない実行で窓が閉じられなくならないため）。停止待ちの間は「停止しています。終わり次第閉じます」を状態欄に出す。ランナーの例外は固定の失敗文と型名・HRESULT で示し、例外のメッセージは画面に出さない（OS の言語の文や利用者名入りのパスが出るため）。自分の停止によらない取り消し（`OperationCanceledException`）は「停止」ではなく「失敗」。 この取り消しの規則は PCB1 の読み取りにも当てはめる（自分の取り消しによらない `OperationCanceledException` は失敗の定型文。手順 10 の点検）。
+- 表示の細則（手順 9 で決めた）: 判定の表示語は ja が OK／注意／要確認／測れず／参考、en が OK／Caution／Needs review／Not measured／Info（CLI も同じ語を使う）。参考の行には判定の色を付けない。記憶媒体は台ごとに見出し行（その台の総合）を置き、`.delta` は元のカウンター行の直下に字下げして `1,204 → 1,227（+23）`（en は半角括弧）を出す。直下に `.delta` があるときは元の行には変化を重ねて書かない。数は不変カルチャの桁区切り、日時は OS の地域設定。検証を通らなかった結果（`CheckRun.UnsavedResult`）は「保存されなかった」旨を付けて表示する。その値がどんな形でも描画で例外を出さない（欄ごとに生の文字へ戻す）。実行中は前回の表を「前回の結果」と明示するか消す。 選択行の上でも、薄い色（測れず等）は読める濃さを保つ（選択の文字色との混ぜ合わせに下限を置く。手順 10 の点検）。
+- `HardwarePage` に「構成コードをコピー（/my-config 用）」を追加。公開する部品一覧とコードのプレビューを表示し、「コピー」と「JSON を保存」を出す。空の構成や欠測の根拠も見える形にする。隣のボタンと配置を合わせる。先行実装のクリックとプレビューは `area/parts-share@9e068c4:src/PcMieru.Gui/Pages/HardwarePage.cs:84`、`:488`、`:513`。 構成が空（全部の種類が読めなかった）ときは「コピー」と「JSON を保存」を押せなくし、理由の行だけを出す（旧版の BuildNothing と同じ。手順 10 の点検）。
+- `--smoke --shots --fakes` は `FakeCheckRunner`、メモリ内履歴、偽 PCB1 を組み立て時に注入する。4 判定、停止待ち、停止済み履歴、増分、双子で比較不能、PCB1 のプレビューを写す。実負荷、実 WMI、UAC、実ユーザーの点検データへの書き込みを伴わない。`FakeCheckRunner` とメモリ内履歴は既存の偽物（Core の `FakeHardwareData` など）と同じく出荷アセンブリ（Gui）に置く。既存の fake 起動とページ巡回は `src/PcMieru.Gui/Program.cs:48`、`src/PcMieru.Gui/Smoke/SmokeRun.cs:14`、`:280`。発行時の fake smoke は `tools/publish.ps1:298`。 写しは 100% と 150% で撮る。結果の表は見出しだけでなく各セルの切れも smoke で確かめる（手順 10 の点検）。PCB1 の写しは、省略のない `Sample()` と `Sample(SampleVariant.Trimmed)` の 2 枚。
 
 ## 8. CLI と MCP
 
@@ -367,7 +367,7 @@ MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(ro
 
 ## 9. PCB1 の互換試験
 
-- `BuildConfig`、`BuildRules`、`BuildCode`、`BuildCollector` を §1 のとおり移す。`PCB1.`＋UTF-8 の compact JSON の base64url。`v: 1`、`src: "parts-life"`、カテゴリ・プロパティ順、省略、重複集約、長さ上限をそのまま固定。保存版は同じ内容の整形済み JSON。`PL/Build/BuildCode.cs:29`、`:44`、`:138`、`:155`。注記は旧版の日英の文ではなく `BuildNote`（種類・カテゴリ・件数）で返し、文言は画面側が持つ（golden とは件数と、上限の 3 段では種類・カテゴリで突き合わせる）。
+- `BuildConfig`、`BuildRules`、`BuildCode`、`BuildCollector` を §1 のとおり移す。`PCB1.`＋UTF-8 の compact JSON の base64url。`v: 1`、`src: "parts-life"`、カテゴリ・プロパティ順、省略、重複集約、長さ上限をそのまま固定。保存版は同じ内容の整形済み JSON。`PL/Build/BuildCode.cs:29`、`:44`、`:138`、`:155`。注記は旧版の日英の文ではなく `BuildNote`（種類・カテゴリ・件数）で返し、文言は画面側が持つ（golden とは件数と、上限の 3 段では種類・カテゴリで突き合わせる）。 「JSON を保存」は提供元の JSON をそのまま UTF-8（BOM なし）・末尾の改行なしで書く（旧版は改行を足していた。内容の一致は保つ。試験はバイトで比べる。手順 10 の点検）。
 - Windows 入力は旧 `BuildSources` の順序と意味を守る。CPU、基板、メモリ、DXGI と WMI の GPU フォールバック、物理ディスク、モニター、光学ドライブを同じ条件で取る。WMI の薄いアダプターに期限を追加する。Core の収集値への差し替えは、同じ入力と同じ実機で文字列一致を証明できたものから。旧ソースとフォールバックは `PL/Build/BuildCollector.cs:11`、`:72`、`:94`、`:126`、`:141`、`:165`、`:174`。
   - 手順 8 で決めた: GPU は Core の `GpuAdapters` ではなく旧 DXGI＋D3DKMT の列挙を移す（Core の一覧は PCI アドレスが無く別名を落とせない・ソフトウェアアダプターを残す・D3DKMT が無い。上限 64 枚）。CPU 名は旧と同じ Win32_Processor.Name。
   - 旧版との差（通常の出力は変わらない）: 期限で切れたカテゴリは空（旧は期限切れの ManagementException でもフォールバックし、遅い DXGI の一覧も保った）。呼び出し元のものでない OperationCanceledException は空のカテゴリ（旧は収集ごと止めた）。Trace には例外の型名だけ（旧は本文も出した）。DXGI の想定外の例外は Win32_VideoController へフォールバックする（旧は GPU が空）。
