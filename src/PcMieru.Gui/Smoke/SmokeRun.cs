@@ -486,7 +486,53 @@ internal static partial class SmokeRun
                 Check("settings: the startup measuring choice can be turned off again", !context.Settings.NetMeterAutostart);
             }
 
+            await ChecksRun().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// Walks the four tabs of the checks page and looks at the history. It never starts a check (a smoke run measures nothing, loads nothing and writes
+        /// nothing under the data folder): it only reads what the tabs show.
+        /// </summary>
+        private async Task ChecksRun()
+        {
+            if (await Open("checks").ConfigureAwait(true) is not ChecksPage checksPage)
+            {
+                Check("checks: the page opens", false, LastOpen);
+                return;
+            }
+
+            string[] order = ["system", "load", "storage", "history"];
+            Check("checks: the tabs are system, load, storage and history, in that order", checksPage.TabIds.SequenceEqual(order), string.Join(",", checksPage.TabIds));
+            Check("checks: opening the page starts no check", !context.Checks.IsBusy && context.Checks.State == CheckRunState.NotRun, context.Checks.State.ToString());
+            foreach (var id in order)
+            {
+                checksPage.SelectTab(id);
+                await Until(() => checksPage.IsReady, 4000).ConfigureAwait(true);
+                await Task.Delay(150).ConfigureAwait(true);
+                var missing = SmokeText.Missing(checksPage).Distinct().Take(5).ToList();
+                Check($"checks: tab {id} has its texts", checksPage.IsReady && missing.Count == 0, string.Join(" | ", missing));
+                var clipped = SmokeClip.Clipped(form).Distinct().Take(6).ToList();
+                Check($"checks: tab {id} has no cut-off text", clipped.Count == 0, string.Join(" | ", clipped));
+            }
+
+            if (checksPage.TabOf("history") is CheckHistoryTab history)
+            {
+                if (context.Services.Options.ForceFakes)
+                {
+                    Check("checks: the history of the sample data lists the sample runs", history.View == HistoryView.List && history.Entries.Count == FakeCheckData.Seed.Count, history.View + " / " + history.Entries.Count);
+                    history.SelectEntry(0);
+                    await Until(() => history.DetailTask.IsCompleted && history.Detail.RowCount > 0, 4000).ConfigureAwait(true);
+                    Check("checks: selecting a run shows its saved values", history.Detail.RowCount > 0, history.Detail.RowCount + " rows");
+                }
+                else
+                {
+                    Check("checks: the history was read", history.View is HistoryView.Empty or HistoryView.List or HistoryView.Failed, history.View.ToString());
+                }
+            }
+
+            Check("checks: walking the tabs started no check", !context.Checks.IsBusy && context.Checks.State == CheckRunState.NotRun, context.Checks.State.ToString());
+            checksPage.SelectTab("system");
         }
 
         /// <summary>Generates a report for the shortest duration, then checks the text, the redaction default and both formats.</summary>

@@ -18,6 +18,7 @@ internal sealed class MainForm : Form
     private readonly Panel _controls = new() { Dock = DockStyle.Right, Name = "statusControls" };
     private readonly ToolTip _tips = new();
     private readonly PageBase?[] _pages = new PageBase?[PageCatalog.All.Count];
+    private readonly CheckCloseGuard _closeGuard;
     private int _current = -1;
     private bool _rebuildingNav;
 
@@ -38,6 +39,17 @@ internal sealed class MainForm : Form
     public MainForm(GuiContext context)
     {
         _context = context;
+        _closeGuard = new CheckCloseGuard(
+            context.Checks,
+            () => Dialogs.Confirm(
+                this,
+                _context.Theme,
+                Strings.Get("gui.chk.close.title"),
+                Strings.Get("gui.chk.close.message"),
+                [],
+                Strings.Get("gui.chk.close.yes"),
+                destructive: false),
+            Close);
         ApplyFont();
         AutoScaleMode = AutoScaleMode.Dpi;
         Name = "MainForm";
@@ -281,8 +293,19 @@ internal sealed class MainForm : Form
             Math.Min(height, Math.Max(work.Height - frame, MinimumSize.Height)));
     }
 
+    /// <summary>The stop-and-close that "yes" started (null before). A test awaits it; the window never does.</summary>
+    internal Task? ClosePending => _closeGuard.Pending;
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // A check is running (DESIGN-A §7): the first request is cancelled and asked about; on yes the stop and its save are awaited and the window is
+        // closed again, and nothing below runs until then. Windows ending the session cannot be asked: the stop is requested and the close goes on.
+        if (!_closeGuard.OnCloseRequested(e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
+        {
+            e.Cancel = true;
+            return;
+        }
+
         foreach (var page in _pages)
         {
             page?.SaveState();
@@ -301,6 +324,7 @@ internal sealed class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _context.Pump.Stop();
+        _context.Checks.Dispose();
         base.OnFormClosed(e);
     }
 

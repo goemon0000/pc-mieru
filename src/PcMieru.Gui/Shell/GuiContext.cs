@@ -4,18 +4,23 @@ namespace PcMieru.Gui;
 internal sealed class GuiContext
 {
     /// <param name="netMeter">The network meter the pages control. Null: the one in <paramref name="services"/>. A test passes its own.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null)
+    /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null)
     {
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
         NetMeter = netMeter ?? services.NetMeter;
+        Checks = checks ?? CheckComposition.Create(services);
     }
 
     public PcMieruServices Services { get; }
 
     public INetMeterControl NetMeter { get; }
+
+    /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
+    public CheckController Checks { get; }
 
     public SnapshotPump Pump { get; }
 
