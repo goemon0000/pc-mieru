@@ -152,13 +152,16 @@ internal static class StorageCollector
         return result;
     }
 
-    private static StorageBus MapBus(int busType) => busType switch
+    internal static StorageBus MapBus(int busType) => busType switch
     {
         17 => StorageBus.Nvme,
         3 or 11 => StorageBus.Sata,
         7 => StorageBus.Usb,
         8 => StorageBus.Raid,
         1 or 10 => StorageBus.Scsi,
+        9 => StorageBus.Iscsi,
+        14 or 15 => StorageBus.Virtual,
+        16 => StorageBus.Spaces,
         0 => StorageBus.Unknown,
         _ => StorageBus.Other,
     };

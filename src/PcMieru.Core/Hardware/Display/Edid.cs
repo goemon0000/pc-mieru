@@ -93,7 +93,8 @@ internal static class EdidParser
         }
 
         var timings = new List<EdidTiming>();
-        string? name = null;
+        // A name longer than 13 characters is split over several 0xFC descriptors; they are joined in descriptor order.
+        StringBuilder? nameParts = null;
         string? serialText = null;
         int? minV = null;
         int? maxV = null;
@@ -114,7 +115,7 @@ internal static class EdidParser
             switch (d[3])
             {
                 case 0xFC:
-                    name = Text(d.Slice(5, 13));
+                    (nameParts ??= new StringBuilder()).Append(UntrimmedText(d.Slice(5, 13)));
                     break;
                 case 0xFF:
                     serialText = Text(d.Slice(5, 13));
@@ -133,6 +134,12 @@ internal static class EdidParser
                         break;
                     }
             }
+        }
+
+        var name = nameParts is null ? null : nameParts.ToString().Trim();
+        if (name is { Length: 0 })
+        {
+            name = null;
         }
 
         var extCount = block0[126];
@@ -204,6 +211,13 @@ internal static class EdidParser
         }
 
         return sum & 0xFF;
+    }
+
+    /// <summary>The text of one descriptor up to its line feed, with its spaces kept: a name that continues in the next descriptor has no line feed.</summary>
+    private static string UntrimmedText(ReadOnlySpan<byte> field)
+    {
+        var end = field.IndexOf((byte)0x0A);
+        return Encoding.ASCII.GetString(end < 0 ? field : field[..end]);
     }
 
     private static string? Text(ReadOnlySpan<byte> field)

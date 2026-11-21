@@ -115,10 +115,46 @@ internal static class GpuSensorMerge
 
         if (extras.PowerLimitDefaultWatts.Status == ValueStatus.Ok)
         {
-            parts.Add(string.Create(CultureInfo.InvariantCulture, $"board default {extras.PowerLimitDefaultWatts.Data:0.#} W"));
+            parts.Add(BoardDefaultNote(extras.PowerLimitDefaultWatts.Data));
         }
 
         return parts.Count == 0 ? limit : Probe.Note(limit.Data, limit.Source, "limit in force now; " + string.Join(", ", parts));
+    }
+
+    /// <summary>The words that carry the board's default power limit in the Detail of <c>GpuHardware.PowerLimitWatts</c>. Written by <see cref="BoardDefaultNote"/> and read back by <see cref="TryParseBoardDefaultWatts"/>.</summary>
+    private const string BoardDefaultLead = "board default ";
+
+    /// <summary>"board default 250 W". The typed model has no field for the default limit, so it travels in the Detail text; the parser below is its only reader.</summary>
+    internal static string BoardDefaultNote(double watts) =>
+        string.Create(CultureInfo.InvariantCulture, $"{BoardDefaultLead}{watts:0.#} W");
+
+    /// <summary>
+    /// Reads the number back out of a Detail written by <see cref="BoardDefaultNote"/>. False when the text has no such note, the number is
+    /// not a plain non-negative decimal, or the unit is not W. A round-trip test keeps this and the writer in step.
+    /// </summary>
+    internal static bool TryParseBoardDefaultWatts(string? detail, out double watts)
+    {
+        watts = 0;
+        if (detail is null)
+        {
+            return false;
+        }
+
+        var at = detail.IndexOf(BoardDefaultLead, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return false;
+        }
+
+        var rest = detail.AsSpan(at + BoardDefaultLead.Length);
+        var end = rest.IndexOf(" W", StringComparison.Ordinal);
+        if (end <= 0 || !double.TryParse(rest[..end], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value) || !double.IsFinite(value))
+        {
+            return false;
+        }
+
+        watts = value;
+        return true;
     }
 
     private static GpuSensorReading? Find(GpuHardware gpu, IReadOnlyList<GpuSensorReading> readings)

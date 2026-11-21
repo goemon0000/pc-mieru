@@ -194,6 +194,7 @@ public static class CliLabels
         ("service", "サービス", "Service"),
         ("depth", "USB の階層", "Depth in the USB tree"),
         ("chemistry", "電池の種類", "Chemistry"),
+        ("systemBattery", "本体のバッテリー", "System battery"),
         ("remainingMinutes", "残り時間", "Time remaining"),
         ("edition", "エディション", "Edition"),
         ("displayVersion", "表示用のバージョン", "Display version"),
