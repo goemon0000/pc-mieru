@@ -79,7 +79,7 @@ public sealed record CheckHistoryGetResult       // 作れる形は Found(result
   `Warnings.Code` は次の 7 つだけで、この順に並べる。`history_unreadable`（壊れている・必須欄の不整合・名前と本体の食い違い）、`history_future_format`（未知の `format` と未知の `kind` の両方。新しい版が書いたものとして現物を残す）、`history_quarantined`（今回 `.bad-` へ退避した）、`history_quarantine_failed`（退避できず残した）、`history_locked`（他のプロセスが握っている）、`history_access_denied`（権限がない）、`history_read_failed`（そのほかの I/O 失敗）。後ろの 3 つは、段 A 手順 2 で §4 の「共有違反、権限エラー」用に足した。同じコードは 1 行にまとめて件数を持つ。MCP は退避しないので `history_quarantined` と `history_quarantine_failed` は出さず、残りの 5 つを出す。JSON は camelCase、`kind`・`outcome`・`verdict` は小文字の文字列、`counts` は 5 値のキー。
 - 一覧は終了時刻の降順で、同時刻なら UUID の昇順。この「UUID の昇順」は、UUID を `N` 形式（ハイフンなしの小文字 32 桁）にした文字列の序数（Ordinal）比較の昇順で、`Guid` 型の比較ではない。それも同じなら種類名の順。
 - `GetAsync` は、ファイルがあるのに読めない run を「見つからない」と答えない。`Found`、`NotFound`（その UUID のファイルが履歴に無い）、`Unreadable`（ファイルはあるが読めない。`WarningCode` が理由）の 3 通りで返す。履歴フォルダ自体を開けないときは例外 `CheckHistoryFolderException`（§4.1）。
-- `CheckRequest` は `CheckKind`、負荷の `Duration`、記憶媒体の `AllowElevation`。長さは 30／120／300 秒。`AllowElevation` は `storage` に限る。`CheckRun` は `CheckResult` と保存状態を返す。保存の成否と測定の `outcome` は別に扱う。
+- `CheckRequest` は `CheckKind`、負荷の `Duration`、記憶媒体の `AllowElevation`。長さは 30／120／300 秒。`AllowElevation` は `storage` に限る。`CheckRun` は `CheckResult` と保存状態を返す。保存の成否と測定の `outcome` は別に扱う。`CheckRun.Elevation`（`CheckElevation(int Needed, int ReRead)`、storage 以外と昇格を求めなかった回は null または 0 台）は、管理者権限が必要だった台の数と、そのうち昇格で読み直せた台の数を持つ。結果ファイル（`pcm-check/1`）には載せない実行時の事実で、CLI の終了コード 4 の判定に使う（§8）。
 - `CheckProgress` は実行 ID、段階、経過秒、目標秒、直近の速度と単位。CPU は `chunks/s`、メモリは書き込み／照合の `MiB/s`。負荷の通知はおよそ毎秒 1 回で、0.9 秒より詰めて送らない（タイマーの揺れで 1 回が少し早く来ても落とさない余裕）。段階変更と最終結果は別に届ける。通知は結果の確定や停止処理を待たせない。
 - `CheckServices` は `IHardwareProvider` と新設する Core の `IStorageInspectionSource`、CPU 点検用測定セッションのファクトリー、時計と保存先を受ける。Windows の依存は組み立て側で差し込む。`IHardwareProvider.GetAsync` と既存 `IStorageHealthProvider` の入口は `src/PcMieru.Core/Contracts/Interfaces.cs:76`、`:84`。現行の採取の振り分けは `src/PcMieru.Core/Hardware/RealHardwareProvider.cs:32`、`:49`。Core の `Value<T>` を採取境界で使い、Checks の結果に変換する。`src/PcMieru.Core/Contracts/Value.cs:14`、`:30`。
 - GUI はウィンドウにつき実行を 1 本持つ。実行・採取・WMI・履歴操作・PCB1 の収集と保存はバックグラウンドで行う。UI は進捗と結果の描画、ダイアログ、クリップボードを担当する。`Task.Run` より前に同期 I/O を置かない。明示的な GC を呼ばない。負荷のサンプルは独立したセッションで採り、`SamplerLoop` に設定要求を出さない。GUI の既存接続は `src/PcMieru.Gui/Data/SnapshotPump.cs:37`、`:222`、`:249`。
@@ -256,7 +256,7 @@ CPU の持続性、コア比較、クロックの閾値の出所は `PL/Load/Ste
 
 ### 5.1 1 台分の入力
 
-Core の `IStorageInspectionSource` は 1 回分のインベントリと、台ごとの `StorageInspectionDrive` を返す。内部入力は `PhysicalDriveNumber`、デバイス記述子由来の型番・シリアル・ファームウェア・数値のバス、容量、`UniqueId`、`Location`、健康の値と状態、採取時刻。台の認識と健康値は別の状態を持つ。健康が読めなかった台も重複判定の対象。
+Core の `IStorageInspectionSource` は 1 回分のインベントリと、台ごとの `StorageInspectionDrive` を返す。内部入力は `PhysicalDriveNumber`、デバイス記述子由来の型番・シリアル・ファームウェア・数値のバス、容量、`UniqueId`、`Location`、健康の値と状態、採取時刻。台の認識と健康値は別の状態を持つ。健康が読めなかった台も重複判定の対象。`StorageInspection` は 1 回分の数として `ElevationNeeded`（権限が無くて読めなかった台）と `ElevationReRead`（そのうち昇格で読み直せた台）を持ち、`RealStorageInspectionSource` が入れる。
 
 - `StorageCollector` の記述子・容量・列挙を共用する。点検は新しく列挙し、表示キャッシュと健康応答をドライブ番号だけで結合しない。通常権限で健康を試し、結果と同じハンドルで識別子を採る。採取を通じて同一性を確かめられない台は比較と基準値更新を止める。現行の記述子・容量・表示名の組み立ては `src/PcMieru.Core/Hardware/Collectors/StorageCollector.cs:177`、`:184`、`:262`。現行の健康収集は `src/PcMieru.Core/Hardware/Collectors/StorageHealthReader.cs:57`、`:77`、`:124`、`:219`。
 - 昇格を許された回は通常権限で `denied` の番号だけを `disk-health-all --drives ...` へ渡す。既存の固定要求、nonce、結果ファイルを使う。1 要求の範囲は番号 0～255、最大 16 台。既存 Reader は分割して起動する。点検は自動で次の UAC を重ねず、許可した 1 要求で取得できなかった台を `denied` として残す。根拠は `src/PcMieru.Wire/HelperOperations.cs:41`、`src/PcMieru.Wire/DriveList.cs:6`、`:13`、`src/PcMieru.Core/Hardware/Collectors/HelperStorageReader.cs:43`、`:59`、`src/PcMieru.Core/Management/HelperClient.cs:153`、`:237`。
@@ -359,9 +359,17 @@ pcmi parts --code [-o file]
 | `0` | 正常に完了して履歴を保存した、または履歴・PCB1 の取得が成功した。点検の注意、要確認、一部欠測を含む。履歴の一覧は、1 ページを返せたら警告があっても 0（`history_locked`、`history_access_denied`、`history_read_failed` などは件数つきで表示する）。履歴フォルダが無いのも空の履歴で 0。 |
 | `1` | 実行失敗、停止、結果の保存失敗。履歴は、履歴フォルダ自体を開けない・列挙できない障害（`CheckHistoryFolderException`）。回を 1 件取る呼び出しで、ファイルはあるのに読めない（`Unreadable`）ときも 1（警告コードを stderr に出し、「見つからない」とは区別する）。取得済み結果があれば `--json` で返す。 |
 | `2` | コマンド、動詞、引数の誤り。 |
-| `4` | `--elevate` が拒否され、必要だった台を 1 台も読み直せなかった。取得済み結果と個別の理由は返す。 |
+| `4` | `--elevate` を付けた storage で、管理者権限が必要だった台が 1 台以上あり、そのどれも読み直せなかった。取得済み結果と個別の理由は返す。UAC の拒否と昇格の失敗（Helper の失敗・期限切れ）は区別しない（下の層に区別する信号が無い）。判定は温度などの行から推さず、ライブラリの `CheckRun.Elevation`（`CheckElevation(Needed, ReRead)`。`StorageInspection` の数から storage だけが入れる。`pcm-check/1` には載せない）の `Needed > 0` かつ `ReRead = 0` で決める。必要な台が 0 台なら 0（手順 11 の点検）。 |
 
 空の履歴は成功。履歴の終了コードを決めるのは履歴フォルダ自体の失敗だけで、ファイルごとの警告（共有違反、権限、I/O、将来の形式、壊れたファイルの退避）は終了コードを変えない（表示するだけ）。値は既存の `ExitCode`（`src/PcMieru.Cli/ExitCode.cs:5`。0 Success・1 Failure・2 BadArguments・4 Denied）をそのまま使い、新しい値は足さない（凍結済みの番号）。停止は既存の Ctrl+C トークンを使う。強制終了までの猶予が点検の後処理を打ち切らないように、CLI の終了経路を点検コマンドと MCP の stdin 待ちで確認する。現行は `src/PcMieru.Cli/Program.cs:42`。
+
+手順 11 の点検で決めた細則:
+- 履歴の警告（`history_*`）はデータの一部として stdout に出す（`--json` では `warnings` 欄、人向けでは一覧の後の表）。stderr に出すのは履歴フォルダが読めないときの理由だけ（終了コード 1）。
+- 退避（§4 の `name.json.bad-<UTC>`）をするのは CLI の `pcmi check history` だけ（`CheckHistoryStore` の一覧。フォルダは作らない）。GUI と MCP は `OpenReadOnly` で読むだけで、壊れたファイルは CLI が一覧するまで `history_unreadable` のまま出る。
+- 段 A の CLI には 1 回分を runId で取る動詞は無い。§4.1 の `Unreadable` は MCP の `get_check_history`（runId 指定）でだけ現れ、tool error として返す。文言は警告の種類ごとに分ける（使用中なら「後でもう一度」、壊れていれば「`pcmi check history` で退避できる」、新しい版の形式ならそう言う）。
+- Ctrl+C の終了コードは Main が決める。後から来た Ctrl+C で、完了済みの回の 0 を 1 に変えない。2 回目の Ctrl+C でも保存中は猶予の間だけ待つ。`pcmi check history` も保存と同じく終了を保留する（退避の途中で切らない）。
+- `pcmi parts --code -o` はファイルを書けてからコードを stdout に出す。書けないときは stdout は空で終了コード 1（4 は `--elevate` の拒否専用）。
+- 人向けの表の項目名は段 A では項目 ID のまま（判定・種類・経過・理由の語は日英）。項目の名前は後で GUI の `CheckStrings` から PcMieru.Checks の中立な表へ移し、GUI と CLI が同じ物を読む。
 
 MCP `get_check_history` に注入する履歴は、`CheckHistory.OpenReadOnly(root)` の戻り値（`IReadOnlyCheckHistory`）だけ。`CheckHistoryStore` は `IReadOnlyCheckHistory` を実装しないので、保存・退避・削除ができる物は型の上で渡せない。`tools/list` の `readOnlyHint: true`。引数は `{kind?, limit?}`（既定 20、1～200）、または `{runId}`。前者は CLI と同じ要約、後者は当時の `pcm-check/1` を `{result}` で返す。`{runId}` の結果は `Found`／`NotFound`／`Unreadable` で、`NotFound`（その UUID の回が無い）は「見つからない」の tool error、`Unreadable`（回はあるが読めない）は別の tool error として警告コード（`history_locked` など）を載せる。「見つからない」とは答えない。履歴フォルダ自体の失敗（`CheckHistoryFolderException`）も tool error。既存のサイズ制限とキャンセルを適用する。出力は共通 redactor へ通す。チェック履歴は起動時に伏せ字解除が指定されても伏せ字済み。採取、移行、昇格、退避を呼べる型をサーバーに渡さない。現行の境界、注釈、出力は `src/PcMieru.Cli/Mcp/McpServer.cs:19`、`:40`、`:256`、`:324`、`:387`、`src/PcMieru.Cli/Mcp/McpTools.cs:23`、`src/PcMieru.Cli/Commands/McpCommand.cs:23`。境界の固定試験は `tests/PcMieru.Cli.Tests/McpBoundaryTests.cs:43`、`:59`、`:68`、`:84`。
 
