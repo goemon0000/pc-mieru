@@ -9,6 +9,9 @@ internal enum SummaryRowKind
     /// <summary>A group title ("by reading", "why clocks were held back").</summary>
     Heading,
 
+    /// <summary>The line about the whole recording (its length, its rows, how it ended): one sentence across the table, so the readings start higher up.</summary>
+    Record,
+
     /// <summary>A fact about the whole run (its length, its rows, how it ended).</summary>
     Fact,
 
@@ -65,21 +68,6 @@ internal static class RunSummaryRows
         var language = Strings.Current;
         var rows = new List<SummaryRow>();
 
-        // This recording.
-        rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.record")));
-        rows.Add(Fact(Strings.Get("gui.rec.sum.duration"), sum.Freshness == SummaryFreshness.LegacyEstimated ? RecordFormat.ApproxLength((long)(sum.DurationSec * 1_000_000)) : RecordFormat.ExactLength(sum.DurationSec)));
-        rows.Add(Fact(Strings.Get("gui.rec.sum.rows"), Strings.Format("gui.rtab.sum.count.rows", Fmt.Dict(("count", RecordFormat.Whole(sum.Rows))))));
-        if (sum.DroppedTicks > 0)
-        {
-            rows.Add(Fact(Strings.Get("gui.rec.sum.dropped"), Strings.Format("gui.rtab.sum.count.dropped", Fmt.Dict(("count", RecordFormat.Whole(sum.DroppedTicks)))), CellTone.Warning));
-        }
-
-        rows.Add(Fact(Strings.Get("gui.rtab.sum.fact.end"), EndText(info)));
-        if (sum.Freshness == SummaryFreshness.LegacyEstimated)
-        {
-            rows.Add(Fact(Strings.Get("gui.rtab.sum.fact.seconds"), Strings.Get("gui.rtab.legacy.tag"), CellTone.Warning));
-        }
-
         // By reading.
         rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.metrics")));
         foreach (var metric in sum.Metrics)
@@ -96,6 +84,32 @@ internal static class RunSummaryRows
         {
             // There is no CPU temperature in a recording of this version, and the table says so instead of leaving it out.
             rows.Add(NeverMeasured(Strings.Get("gui.rtab.sum.cputemp"), Strings.Get("gui.chk.note.cpu.temperature_not_measured"), wholeNote: true));
+        }
+
+        // How the sustained value is made: a row of the table, right under the readings (it was a label under the table, which took a third of the room at 200 %).
+        if (sum.Metrics.Any(static m => m.ObservedSeconds > 0))
+        {
+            rows.Add(new SummaryRow(SummaryRowKind.Note, string.Empty, Time: Strings.Get("gui.rtab.sum.sustained.note"), Tone: CellTone.Dim));
+        }
+
+        // This recording, after the readings (a person comes for the readings; what it is, is on the head above the table): one line (the length of the data that is left, for a run that ended some other way than the user's stop).
+        rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.record")));
+        var lengthLabel = Strings.Get(info.Status is RunStatus.Interrupted or RunStatus.Failed ? "gui.rtab.sum.fact.saved" : "gui.rec.sum.duration");
+        var length = sum.Freshness == SummaryFreshness.LegacyEstimated ? RecordFormat.ApproxLength((long)(sum.DurationSec * 1_000_000)) : RecordFormat.ExactLength(sum.DurationSec);
+        var record = string.Join(
+            "・",
+            Labelled(lengthLabel, length),
+            Labelled(Strings.Get("gui.rec.sum.rows"), Strings.Format("gui.rtab.sum.count.rows", Fmt.Dict(("count", RecordFormat.Whole(sum.Rows))))),
+            Labelled(Strings.Get("gui.rtab.sum.fact.end"), EndText(info)));
+        rows.Add(new SummaryRow(SummaryRowKind.Record, record));
+        if (sum.DroppedTicks > 0)
+        {
+            rows.Add(Fact(Strings.Get("gui.rec.sum.dropped"), Strings.Format("gui.rtab.sum.count.dropped", Fmt.Dict(("count", RecordFormat.Whole(sum.DroppedTicks)))), CellTone.Warning));
+        }
+
+        if (sum.Freshness == SummaryFreshness.LegacyEstimated)
+        {
+            rows.Add(Fact(Strings.Get("gui.rtab.sum.fact.seconds"), Strings.Get("gui.rtab.legacy.tag"), CellTone.Warning));
         }
 
         // Why clocks were held back.
@@ -166,6 +180,8 @@ internal static class RunSummaryRows
         return rows;
     }
 
+    private static string Labelled(string label, string value) => label + ": " + value;
+
     private static SummaryRow Fact(string label, string value, CellTone tone = CellTone.Normal) =>
         new(SummaryRowKind.Fact, label, Time: value, Tone: tone);
 
@@ -197,12 +213,16 @@ internal static class RunSummaryRows
             Tone: CellTone.Normal);
     }
 
-    /// <summary>A reading with no value at all. Every number cell says "not measured"; the time cell says why when it is known.</summary>
+    /// <summary>
+    /// A reading with no value at all. The four number cells hold the dash (never 0, and not the words four times over, which made every number column
+    /// as wide as "not measured" and left the last column too narrow at 200 %); the last column says "Not measured" in words, and why when it is known.
+    /// </summary>
     private static SummaryRow NeverMeasured(string label, string why, bool wholeNote = false)
     {
-        var word = Strings.Get("gui.rtab.sum.notmeasured");
-        var time = why.Length == 0 ? string.Empty : wholeNote ? why : Strings.Format("gui.rtab.sum.time.none", Fmt.Dict(("why", why)));
-        return new SummaryRow(SummaryRowKind.NotMeasured, label, word, word, word, word, time, Tone: CellTone.Dim, Missing: true);
+        var time = why.Length == 0
+            ? Strings.Get("gui.rtab.sum.time.nothing")
+            : wholeNote ? why : Strings.Format("gui.rtab.sum.time.none", Fmt.Dict(("why", why)));
+        return new SummaryRow(SummaryRowKind.NotMeasured, label, Fmt.Dash, Fmt.Dash, Fmt.Dash, Fmt.Dash, time, Tone: CellTone.Dim, Missing: true);
     }
 
     private static string CoText(RunCoOccurrence co) =>
@@ -299,7 +319,9 @@ internal static class RunSummaryRows
 /// <summary>
 /// The summary of one run as a table: item, min, average, max, sustained value, and "time and notes". The rows are built once per run and language
 /// (<see cref="RunSummaryRows"/>), so painting asks a list and does nothing else. The item and number columns are as wide as what they hold; the last
-/// column takes the rest, and a sentence it cuts has its whole text in the tooltip.
+/// column takes the rest. A sentence that is longer than its column wraps onto the lines under it (the table is made of those lines, one list row
+/// each: a native list has one row height), and a sentence of the summary's own (a note, the line about the recording) runs across the whole width;
+/// nothing ends in an ellipsis. <see cref="RowCount"/> and <see cref="TextAt"/> speak of the summary's rows; <see cref="LineCount"/> of the lines drawn.
 /// </summary>
 internal sealed class RunSummaryGrid : GridView
 {
@@ -308,53 +330,101 @@ internal sealed class RunSummaryGrid : GridView
     private const int SustainedColumn = 4;
     private const int TimeColumn = 5;
 
-    private IReadOnlyList<SummaryRow> _rows = [];
-    private RunDetail? _detail;
-    private int _itemNeed;
     private readonly int[] _numberNeed = new int[4];
+    private IReadOnlyList<SummaryRow> _rows = [];
+    private List<Line> _lines = [];
+    private RunDetail? _detail;
+    private int _readingItemNeed;
+    private int _readingTimeNeed;
+    private int _itemWordNeed;
+    private (int Item, int Time, int Span) _wrapKey = (-1, -1, -1);
 
     public RunSummaryGrid()
     {
         Dock = DockStyle.Fill;
-        Cells = Cell;
-        RowStyles = row => row >= 0 && row < _rows.Count && _rows[row].Kind == SummaryRowKind.Heading ? RowStyle.Header : RowStyle.Normal;
+        RowPadding = 6;
+        Cells = LineCell;
+        RowStyles = line => line >= 0 && line < _lines.Count && _lines[line].Row is var row and >= 0 && row < _rows.Count && _rows[row].Kind == SummaryRowKind.Heading ? RowStyle.Header : RowStyle.Normal;
         CellTip = Tip;
+        HeaderTip = column => column == SustainedColumn ? Strings.Get("gui.rtab.sum.sustained.tip") : null;
         FillColumn = TimeColumn;
         ScrollsBackWhenWhole = true;
         SizeChanged += (_, _) => FitContentColumns();
     }
 
+    /// <summary>One line of the table as drawn: part <see cref="Part"/> (0 is the first) of one row of the summary, with the text that is on it.</summary>
+    private readonly record struct Line(int Row, int Part, string Item, string Time, bool Span);
+
     public RunDetail? Detail => _detail;
 
+    /// <summary>The rows of the summary (a long sentence is one row; see <see cref="LineCount"/> for the lines it is drawn on).</summary>
     public int RowCount => _rows.Count;
 
     public IReadOnlyList<SummaryRow> Rows => _rows;
 
-    /// <summary>The text of a cell, as it is drawn.</summary>
+    /// <summary>The lines the table has: a row that wraps takes several.</summary>
+    public int LineCount => _lines.Count;
+
+    /// <summary>The text of a cell of a row of the summary, whole as it was written (a wrapped sentence is not cut here).</summary>
     public string TextAt(int row, int column) => row >= 0 && row < _rows.Count ? Cell(row, column).Text : string.Empty;
 
     public CellTone ToneAt(int row, int column) => row >= 0 && row < _rows.Count ? Cell(row, column).Tone : CellTone.Normal;
 
+    /// <summary>The text of a cell of a line of the table, as it is drawn (a test and the smoke run read what a person would see).</summary>
+    public string LineText(int line, int column) => line >= 0 && line < _lines.Count ? LineCell(line, column).Text : string.Empty;
+
+    /// <summary>The row of the summary a line of the table belongs to, or -1.</summary>
+    public int RowOfLine(int line) => line >= 0 && line < _lines.Count ? _lines[line].Row : -1;
+
+    /// <summary>The first line of a row of the summary, or -1.</summary>
+    public int FirstLineOf(int row) => _lines.FindIndex(line => line.Row == row);
+
     /// <summary>
-    /// The cells whose text the column cuts and that the person cannot read in full anyway ("row:column text"): an item label and a number must never
-    /// be cut; the last column may be (its tooltip holds the whole text). The smoke run asks this of every table it takes a picture of.
+    /// How many readings (a row with numbers, or one that was not measured) the grid shows whole from its top: every line of the row is among the lines that
+    /// fit. At 200 % on a 1920 x 1080 screen the table has to show several at once; a test and the smoke run ask this.
     /// </summary>
+    internal int ReadingsWholeAtTop()
+    {
+        var fit = RowsThatFit(Height);
+        var count = 0;
+        for (var row = 0; row < _rows.Count; row++)
+        {
+            if (_rows[row].Kind is not (SummaryRowKind.Metric or SummaryRowKind.NotMeasured))
+            {
+                continue;
+            }
+
+            var last = FirstLineOf(row);
+            if (last < 0)
+            {
+                continue;
+            }
+
+            while (last + 1 < _lines.Count && _lines[last + 1].Row == row)
+            {
+                last++;
+            }
+
+            if (last < fit)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>The cells of the table whose text the column cuts ("line:column text"): none must be, now that a sentence wraps. The smoke run asks this of every table it takes a picture of.</summary>
     internal IReadOnlyList<string> UnreadableCuts()
     {
         var cuts = new List<string>();
-        for (var row = 0; row < _rows.Count; row++)
+        for (var line = 0; line < _lines.Count; line++)
         {
             for (var column = 0; column < Columns.Count; column++)
             {
-                if (!IsCut(row, column))
+                if (IsCut(line, column))
                 {
-                    continue;
-                }
-
-                var text = Cell(row, column).Text;
-                if (column != TimeColumn || Tip(row, column) != text)
-                {
-                    cuts.Add(row.ToString(CultureInfo.InvariantCulture) + ":" + column.ToString(CultureInfo.InvariantCulture) + " " + text);
+                    cuts.Add(line.ToString(CultureInfo.InvariantCulture) + ":" + column.ToString(CultureInfo.InvariantCulture) + " " + LineCell(line, column).Text);
                 }
             }
         }
@@ -405,36 +475,73 @@ internal sealed class RunSummaryGrid : GridView
         FitContentColumns();
     }
 
+    private static bool IsBold(SummaryRowKind kind) => kind is SummaryRowKind.Heading or SummaryRowKind.Section;
+
+    /// <summary>A sentence of the summary's own: it starts in the first column and runs across the others.</summary>
+    private static bool IsSpan(SummaryRow row) => row.Kind is SummaryRowKind.Record or SummaryRowKind.Heading || (row.Kind == SummaryRowKind.Note && row.Item.Length == 0);
+
+    private static string SpanText(SummaryRow row) => row.Kind is SummaryRowKind.Record or SummaryRowKind.Heading ? row.Item : row.Time;
+
+    /// <summary>A reading: a line with numbers in it (a reading of the run, a not-measured one, a reading of a bench or load section).</summary>
+    private static bool IsReading(SummaryRow row) => row.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured || (row.Kind == SummaryRowKind.Detail && row.Min.Length > 0);
+
     private void Rebuild()
     {
         // The native list keeps its place when the rows change: a table scrolled down for a long run would show nothing at all for a short one.
         // It goes back to its first row while it still has the rows it was scrolled in.
         ScrollToFirstRow();
         _rows = _detail is null ? [] : RunSummaryRows.Build(_detail);
-        SelectedIndices.Clear();
-        VirtualListSize = _rows.Count;
 
+        // The lines say which row they belong to: the lines of the old run mean nothing to the rows of the new one. Between here and the new lines (the
+        // columns change width, and the native list may ask for a line then) the grid has none, so it answers with empty cells and never with the rows
+        // of one run under the lines of another.
+        _lines = [];
+        SelectedIndices.Clear();
         MeasureNeeds();
-        FitContentColumns();
+        FitContentColumns(force: true);
         Invalidate();
     }
 
     private void MeasureNeeds()
     {
-        _itemNeed = 0;
+        _readingItemNeed = 0;
+        _readingTimeNeed = 0;
+        _itemWordNeed = 0;
         Array.Clear(_numberNeed);
-        for (var row = 0; row < _rows.Count; row++)
+        var around = Scaled(8) * 2;
+        foreach (var row in _rows)
         {
-            _itemNeed = Math.Max(_itemNeed, NeededWidth(row, ItemColumn));
+            if (IsSpan(row))
+            {
+                continue;
+            }
+
+            var indent = around + ((row.Indent + 1) * Scaled(16));
+            // A label wraps between its words, never inside one: the column is at least as wide as the widest word, or that word would be cut.
+            foreach (var word in Tokens(row.Item))
+            {
+                _itemWordNeed = Math.Max(_itemWordNeed, indent + TextWidth(word.Trim(), IsBold(row.Kind)));
+            }
+
+            // What the readings need, one line each: their label, and the line saying how long they were measured. Everything else may wrap.
+            if (IsReading(row))
+            {
+                _readingItemNeed = Math.Max(_readingItemNeed, indent + TextWidth(row.Item, IsBold(row.Kind)));
+                if (row.Kind != SummaryRowKind.NotMeasured)
+                {
+                    _readingTimeNeed = Math.Max(_readingTimeNeed, around + TextWidth(row.Time, bold: false));
+                }
+            }
+
             for (var i = 0; i < _numberNeed.Length; i++)
             {
-                _numberNeed[i] = Math.Max(_numberNeed[i], NeededWidth(row, MinColumn + i));
+                _numberNeed[i] = Math.Max(_numberNeed[i], around + TextWidth(NumberText(row, MinColumn + i), bold: false));
             }
         }
     }
 
-    /// <summary>The item and number columns are as wide as their own content (and header); the last column takes what is left.</summary>
-    private void FitContentColumns()
+    /// <summary>The item and number columns are as wide as their own content (and header); the last column takes what is left. The lines are made again when the room for a sentence changed.</summary>
+    private void FitContentColumns(bool force = false)
     {
         if (Columns.Count != TimeColumn + 1)
         {
@@ -442,53 +549,207 @@ internal sealed class RunSummaryGrid : GridView
         }
 
         var air = Scaled(8);
-        var itemCeiling = Math.Max(ClientSize.Width * 40 / 100, Scaled(200));
-        Columns[ItemColumn].Width = Math.Min(Math.Max(Math.Max(HeaderNeed(ItemColumn), _itemNeed), Scaled(140)), itemCeiling) + air;
+        var numbers = 0;
         for (var i = 0; i < _numberNeed.Length; i++)
         {
-            Columns[MinColumn + i].Width = Math.Max(Math.Max(HeaderNeed(MinColumn + i), _numberNeed[i]), Scaled(70)) + air;
+            var width = Math.Max(Math.Max(HeaderNeed(MinColumn + i), _numberNeed[i]), Scaled(56)) + Scaled(2);
+            Columns[MinColumn + i].Width = width;
+            numbers += width;
         }
 
+        // The item column is as wide as the labels of the readings (a longer label, of a limit or a note, wraps), but it leaves the last column room for
+        // its own header and for the line that says how long a reading was measured, whole on one line: at 200 % on a 1080-line screen a reading took two
+        // lines for that line, and the table showed two readings. The columns together are never wider than the list (the right end was cut off).
+        var itemCeiling = Math.Max(ClientSize.Width * 40 / 100, Scaled(200));
+        var itemWanted = Math.Min(Math.Max(Math.Max(HeaderNeed(ItemColumn), _readingItemNeed), Scaled(110)), itemCeiling) + air;
+        var timeFloor = Math.Max(HeaderNeed(TimeColumn), Math.Max(Scaled(200), _readingTimeNeed + air));
+        var itemFloor = Math.Max(Math.Max(HeaderNeed(ItemColumn), Scaled(110)), _itemWordNeed + air);
+        var itemRoom = Math.Max(ColumnRoom() - numbers - timeFloor, itemFloor);
+        Columns[ItemColumn].Width = Math.Max(Math.Min(itemWanted, itemRoom), itemFloor);
+
         FitLastColumn();
+        var key = (TextRoom(ItemColumn, 0, false), TextRoom(TimeColumn, 0, false), TextRoom(ItemColumn, 0, true));
+        if (force || key != _wrapKey)
+        {
+            _wrapKey = key;
+            _lines = BuildLines();
+            VirtualListSize = _lines.Count;
+            Invalidate();
+        }
     }
+
+    private List<Line> BuildLines()
+    {
+        var lines = new List<Line>(_rows.Count);
+        for (var r = 0; r < _rows.Count; r++)
+        {
+            var row = _rows[r];
+            if (IsSpan(row))
+            {
+                var parts = Wrap(SpanText(row), TextRoom(ItemColumn, row.Indent, true), IsBold(row.Kind));
+                for (var i = 0; i < Math.Max(parts.Count, 1); i++)
+                {
+                    lines.Add(new Line(r, i, i < parts.Count ? parts[i] : string.Empty, string.Empty, Span: true));
+                }
+
+                continue;
+            }
+
+            var items = Wrap(row.Item, TextRoom(ItemColumn, row.Indent, false), IsBold(row.Kind));
+            var times = Wrap(row.Time, TextRoom(TimeColumn, 0, false), bold: false);
+            for (var i = 0; i < Math.Max(Math.Max(items.Count, times.Count), 1); i++)
+            {
+                lines.Add(new Line(r, i, i < items.Count ? items[i] : string.Empty, i < times.Count ? times[i] : string.Empty, Span: false));
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>A text broken into lines that each fit <paramref name="room"/> pixels (a single word wider than that stays whole on a line of its own). A text that fits is one line; no text, none.</summary>
+    internal List<string> Wrap(string text, int room, bool bold)
+    {
+        var lines = new List<string>();
+        if (text.Length == 0)
+        {
+            return lines;
+        }
+
+        if (room <= 0 || TextWidth(text, bold) <= room)
+        {
+            lines.Add(text);
+            return lines;
+        }
+
+        var line = string.Empty;
+        foreach (var token in Tokens(text))
+        {
+            var candidate = line + token;
+            if (line.Length == 0 || TextWidth(candidate.TrimEnd(), bold) <= room)
+            {
+                line = candidate;
+                continue;
+            }
+
+            lines.Add(line.TrimEnd());
+            line = token.TrimStart();
+        }
+
+        if (line.Length > 0)
+        {
+            lines.Add(line.TrimEnd());
+        }
+
+        return lines;
+    }
+
+    private const string NoStart = "、。，．）」』】〕！？：；・ー…）,.:;!?)]%";
+    private const string NoEnd = "（「『【〔([";
+
+    /// <summary>The places a text may be broken at: after a space, and between two letters of a language that does not use spaces (not before a closing mark, not after an opening one).</summary>
+    private static List<string> Tokens(string text)
+    {
+        var tokens = new List<string>();
+        var start = 0;
+        for (var i = 1; i < text.Length; i++)
+        {
+            var before = text[i - 1];
+            var at = text[i];
+            var afterSpace = before == ' ' && at != ' ';
+            var betweenWide = (IsWide(before) || IsWide(at)) && before != ' ' && at != ' '
+                && NoStart.IndexOf(at, StringComparison.Ordinal) < 0 && NoEnd.IndexOf(before, StringComparison.Ordinal) < 0;
+            var breakHere = afterSpace || betweenWide;
+            if (breakHere)
+            {
+                tokens.Add(text[start..i]);
+                start = i;
+            }
+        }
+
+        tokens.Add(text[start..]);
+        return tokens;
+    }
+
+    /// <summary>True for a letter of the languages that are written without spaces (kana, kanji, full-width forms).</summary>
+    private static bool IsWide(char c) => c >= 0x2E80 && c <= 0xFFEF;
 
     private GridCell Cell(int row, int column)
     {
-        if (row < 0 || row >= _rows.Count)
-        {
-            return new GridCell(string.Empty);
-        }
-
         var line = _rows[row];
         switch (column)
         {
             case ItemColumn:
                 return new GridCell(line.Item, line.Kind is SummaryRowKind.Detail or SummaryRowKind.Note ? CellTone.Dim : CellTone.Normal)
                 {
-                    Bold = line.Kind is SummaryRowKind.Heading or SummaryRowKind.Section,
+                    Bold = IsBold(line.Kind),
                     Indent = line.Indent,
                 };
             case TimeColumn:
                 return new GridCell(line.Time, line.Tone == CellTone.Normal && line.Kind == SummaryRowKind.Metric ? CellTone.Dim : line.Tone);
             default:
-                var text = column switch
-                {
-                    1 => line.Min,
-                    2 => line.Avg,
-                    3 => line.Max,
-                    _ => line.Sustained,
-                };
+                var text = NumberText(line, column);
                 return new GridCell(text, line.Missing || text == Fmt.Dash ? CellTone.Dim : CellTone.Normal);
         }
     }
 
-    private string? Tip(int row, int column)
+    private static string NumberText(SummaryRow line, int column) => column switch
     {
-        if (row < 0 || row >= _rows.Count || !IsCut(row, column))
+        1 => line.Min,
+        2 => line.Avg,
+        3 => line.Max,
+        _ => line.Sustained,
+    };
+
+    /// <summary>One cell of one line of the table: what a paint draws.</summary>
+    private GridCell LineCell(int lineIndex, int column)
+    {
+        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        {
+            return new GridCell(string.Empty);
+        }
+
+        var line = _lines[lineIndex];
+        if (line.Row < 0 || line.Row >= _rows.Count)
+        {
+            return new GridCell(string.Empty);
+        }
+
+        var row = _rows[line.Row];
+        if (line.Span)
+        {
+            return column == ItemColumn
+                ? new GridCell(line.Item, row.Tone) { Indent = row.Indent, Span = true, Bold = IsBold(row.Kind) }
+                : new GridCell(string.Empty);
+        }
+
+        switch (column)
+        {
+            case ItemColumn:
+                return new GridCell(line.Item, row.Kind is SummaryRowKind.Detail or SummaryRowKind.Note ? CellTone.Dim : CellTone.Normal)
+                {
+                    Bold = IsBold(row.Kind),
+                    Indent = row.Indent,
+                };
+            case TimeColumn:
+                return new GridCell(line.Time, row.Tone == CellTone.Normal && row.Kind == SummaryRowKind.Metric ? CellTone.Dim : row.Tone);
+            default:
+                if (line.Part != 0)
+                {
+                    return new GridCell(string.Empty);
+                }
+
+                var text = NumberText(row, column);
+                return new GridCell(text, row.Missing || text == Fmt.Dash ? CellTone.Dim : CellTone.Normal);
+        }
+    }
+
+    private string? Tip(int line, int column)
+    {
+        if (line < 0 || line >= _lines.Count || !IsCut(line, column))
         {
             return null;
         }
 
-        return Cell(row, column).Text;
+        return LineCell(line, column).Text;
     }
 }

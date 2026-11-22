@@ -63,6 +63,7 @@ internal sealed class RecordingHub : IDisposable
     private readonly Func<IRecordingBackend> _makeBackend;
     private readonly Func<IRunStore> _makeStore;
     private readonly Func<string> _folder;
+    private string? _folderCache;
     private readonly Func<DateTime> _utcNow;
     private readonly List<RunMarker> _marks = [];
     private IRecordingBackend? _backend;
@@ -115,13 +116,38 @@ internal sealed class RecordingHub : IDisposable
 
     public string ProblemText => ProblemKey is null ? string.Empty : Strings.Format(ProblemKey, new Dictionary<string, string> { ["error"] = ProblemDetail ?? string.Empty });
 
-    public string Folder => _folder();
+    /// <summary>Where the recordings are kept. Asked of the provider the first time it is needed (the tab being shown, "open folder") and kept: the tab reads it on the UI thread and must not ask Windows again.</summary>
+    public string Folder => _folderCache ??= _folder();
 
     /// <summary>Tells whether a folder is there. Replaced by the fakes (their folder is made up); a click on "open folder" asks it.</summary>
     internal Func<string, bool> FolderExists { get; set; } = Directory.Exists;
 
     /// <summary>Tells whether a file is there (the CSV of a run, before it is handed to the shell). Replaced by the fakes.</summary>
     internal Func<string, bool> FileExists { get; set; } = File.Exists;
+
+    /// <summary>The temp folder an old-app CSV is copied into before it is opened. Replaced by a test.</summary>
+    internal Func<string> TempFolder { get; set; } = Path.GetTempPath;
+
+    /// <summary>Copies a file over another (the old-app CSV into the temp folder). Replaced by a test that must not touch the disk.</summary>
+    internal Action<string, string> CopyFile { get; set; } = static (from, to) => File.Copy(from, to, overwrite: true);
+
+    /// <summary>
+    /// The file to hand to the shell for a run's "open CSV". The app's own recordings are opened themselves; an old-app record never is (a program that
+    /// opens a file can write to it, and the earlier app's files are read only for this one): a copy in the temp folder, <c>PCMieru-legacy-&lt;id&gt;.csv</c>,
+    /// replaced each time, is. Does disk work: call it off the UI thread.
+    /// </summary>
+    internal string CsvToOpen(RunInfo info)
+    {
+        if (!info.IsLegacy)
+        {
+            return info.CsvPath;
+        }
+
+        var id = new string((info.LegacyId ?? info.RunId.ToString("N")).Where(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
+        var copy = Path.Combine(TempFolder(), "PCMieru-legacy-" + id + ".csv");
+        CopyFile(info.CsvPath, copy);
+        return copy;
+    }
 
     /// <summary>True once the recorder was made (a recording was started in this window). A test reads it to show nothing is made at the start.</summary>
     internal bool BackendCreated => _backend is not null;
@@ -232,8 +258,10 @@ internal sealed class RecordingHub : IDisposable
     /// For the window closing and the session ending, where nothing can be awaited: stops the run through the library's bounded stop
     /// (<see cref="RunRecorderExtensions.StopCurrentBlocking"/>, 2 s by default) with the reason <see cref="RunStopReason.WindowClose"/>. Returns the
     /// result, or null when nothing was recording or the stop did not finish in time (the run is then left to the next start to recover). Makes
-    /// nothing when no recording was ever started in this window. It tells <see cref="Changed"/> and not <see cref="RunEnded"/> (the window is going
-    /// away: no list is read).
+    /// nothing when no recording was ever started in this window. It tells nobody while it runs: not <see cref="RunEnded"/> (the window is going away:
+    /// no list is read) and not <see cref="Changed"/> either, because the handlers of the tab and the status bar must not run in the middle of a close.
+    /// A close that is refused after all (another program can veto the end of a Windows session) leaves the window open and the hub idle: that is
+    /// told to <see cref="Changed"/> afterwards, once the message loop has the thread again (and never when the hub was disposed with the window).
     /// </summary>
     public RunResult? StopForClose(TimeSpan? bound = null)
     {
@@ -267,7 +295,8 @@ internal sealed class RecordingHub : IDisposable
         LastResult = result;
         _run = null;
         _phase = RecordingPhase.Idle;
-        Raise();
+        // The window's own thread, the one this is called on (it is the UI thread's context only once a window exists, so it is not asked for before).
+        SynchronizationContext.Current?.Post(static state => ((RecordingHub)state!).Raise(), this);
         return result;
     }
 

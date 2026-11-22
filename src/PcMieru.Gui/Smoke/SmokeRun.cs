@@ -1091,9 +1091,10 @@ internal static class SmokeClip
             case ListView list:
                 foreach (ColumnHeader column in list.Columns)
                 {
-                    if (column.Width > 0 && column.Text.Length > 0 && TextRenderer.MeasureText(column.Text, list.Font).Width + list.LogicalToDeviceUnits(14) > column.Width)
+                    var headerNeed = column.Text.Length == 0 ? 0 : TextRenderer.MeasureText(column.Text, list.Font).Width + list.LogicalToDeviceUnits(14);
+                    if (column.Width > 0 && headerNeed > column.Width)
                     {
-                        return $"{name} header \"{Short(column.Text)}\" is wider than its column ({column.Width}px)";
+                        return $"{name} header \"{Short(column.Text)}\" is wider than its column ({column.Width}px, needs {headerNeed}px at {list.DeviceDpi} dpi)";
                     }
                 }
 

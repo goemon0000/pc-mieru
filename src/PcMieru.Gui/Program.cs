@@ -242,6 +242,9 @@ internal static class GuiArgs
                 case MeasureRecordPlan.LeadSwitch:
                 case MeasureRecordPlan.ForSwitch:
                 case MeasureRecordPlan.IntervalSwitch:
+                case MeasureRecordPlan.TimesSwitch:
+                case MeasureRecordPlan.GapSwitch:
+                case MeasureRecordPlan.GcSwitch:
                     // Test-only (tools/measure.ps1 -Mode record), with --measure: a recording of the measured run itself. Read after the loop.
                     var recordSwitch = args[i];
                     var recordValue = Next();

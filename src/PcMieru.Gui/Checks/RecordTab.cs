@@ -37,11 +37,11 @@ internal sealed class RecordTab : CheckTab
     private const int StatusColumn = 2;
     private const int NoteColumn = 3;
 
-    /// <summary>The fewest recordings the list shows when the window is low.</summary>
-    private const int MinListRows = 3;
+    /// <summary>The fewest recordings the list shows by default when the window is low (the person can drag the bar for fewer).</summary>
+    private const int MinListRows = 2;
 
-    /// <summary>How tall the list may be, as a share of the area it and the summary divide.</summary>
-    private const int ListSharePercent = 32;
+    /// <summary>How tall the list is by default, as a share of the area it and the summary divide: the summary, which is what the page is for, gets the rest (well over half).</summary>
+    private const int DefaultListShare = 24;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -54,18 +54,20 @@ internal sealed class RecordTab : CheckTab
     private readonly ToggleButton _legacy = new() { Name = "recordLegacy" };
     private readonly ContextMenuStrip _markMenu = new() { Name = "recordMarkMenu" };
     private readonly List<ToolStripMenuItem> _markItems = [];
-    private readonly ToneLabel _state = new() { AutoSize = false, Name = "recordState" };
-    private readonly ToneLabel _folder = new() { AutoSize = false, Name = "recordFolder" };
-    private readonly ToneLabel _notice = new() { AutoSize = false, Name = "recordNotice", Visible = false };
+    private readonly WrapLabel _state = new() { Name = "recordState" };
+    private readonly ToneLabel _folder = new() { AutoSize = true, Name = "recordFolder" };
+    private readonly WrapLabel _notice = new() { Name = "recordNotice", Visible = false };
     private readonly GridView _list = new() { Name = "recordList" };
-    private readonly ToneLabel _detailHead = new() { AutoSize = false, Name = "recordDetailHead" };
+    private readonly WrapLabel _detailHead = new() { Name = "recordDetailHead" };
+    private readonly RecordDetailHeader _detailHeader;
     private readonly RunSummaryGrid _summary = new() { Name = "recordSummary" };
     private readonly Button _csv = new() { AutoSize = true, Name = "recordCsv" };
     private readonly Button _delete = new() { AutoSize = true, Name = "recordDelete" };
     private readonly Label _count = new() { AutoSize = true, Name = "recordCount" };
     private readonly ToneLabel _hint = new() { AutoSize = true, Name = "recordHint" };
     private readonly ToolTip _tips = new() { ShowAlways = true };
-    private readonly TableLayoutPanel _rows = new() { Name = "recordRows" };
+    private readonly Panel _body = new() { Name = "recordBody" };
+    private readonly SplitBar _split = new() { Name = "recordSplit" };
     private readonly Panel _detailPanel = new() { Name = "recordDetailPanel" };
 
     private IReadOnlyList<RunInfo> _all = [];
@@ -87,7 +89,15 @@ internal sealed class RecordTab : CheckTab
     private RecordDetailState _detailState = RecordDetailState.None;
     private string? _detailError;
     private string? _actionNote;
+    private bool _deleting;
+    private bool _fittingColumns;
     private RecordingPhase _lastPhase = RecordingPhase.Idle;
+
+    /// <summary>The share of the body the list takes once the person has moved the bar (a percentage, kept for this window's session only: nothing is saved to gui.ini). Null: the default.</summary>
+    private int? _listShare;
+
+    /// <summary>How long the run had been going when it was told to stop: the list's row shows that while the run is being saved, instead of a clock that goes on.</summary>
+    private TimeSpan _frozenElapsed;
 
     public RecordTab(GuiContext context, Func<int, int> px)
         : base(context.Checks, px, "checksRecord")
@@ -110,16 +120,17 @@ internal sealed class RecordTab : CheckTab
         _openFolder.TabIndex = 3;
         _legacy.TabIndex = 4;
         _list.TabIndex = 5;
-        _csv.TabIndex = 6;
-        _delete.TabIndex = 7;
-        _summary.TabIndex = 8;
+        _split.TabIndex = 6;
+        _csv.TabIndex = 7;
+        _delete.TabIndex = 8;
+        _summary.TabIndex = 9;
 
         _start.Click += (_, _) => _ = PressStart();
         _stop.Click += (_, _) => _ = PressStop();
         _mark.Click += (_, _) => ShowMarkMenu();
-        _openFolder.Click += (_, _) => PressOpenFolder();
+        _openFolder.Click += (_, _) => _ = PressOpenFolder();
         _legacy.Click += (_, _) => ToggleLegacy();
-        _csv.Click += (_, _) => PressOpenCsv();
+        _csv.Click += (_, _) => _ = PressOpenCsv();
         _delete.Click += (_, _) => _ = PressDelete();
 
         BuildMarkMenu();
@@ -131,6 +142,8 @@ internal sealed class RecordTab : CheckTab
             (Strings.Get("gui.rtab.col.length"), Px(110), HorizontalAlignment.Left),
             (Strings.Get("gui.rtab.col.status"), Px(90), HorizontalAlignment.Left),
             (Strings.Get("gui.rtab.col.note"), Px(260), HorizontalAlignment.Left));
+        _list.Dock = DockStyle.Top;
+        _list.RowPadding = 10;
         _list.Cells = ListCell;
         _list.ScrollsBackWhenWhole = true;
         _list.CellTip = ListTip;
@@ -139,47 +152,47 @@ internal sealed class RecordTab : CheckTab
         _list.SelectedIndexChanged += (_, _) => OnListSelection();
         _summary.PrepareColumns(Px, Strings.Get("gui.rtab.sum.name"));
 
-        StyleLine(_state, pad, 26, CellTone.Dim);
-        StyleLine(_folder, pad, 24, CellTone.Dim);
-        StyleLine(_notice, pad, 24, CellTone.Accent);
-        StyleLine(_detailHead, pad, 28, CellTone.Dim);
-        _detailHead.Padding = new Padding(pad, Px(4), pad, 0);
+        StyleLine(_state, pad, CellTone.Dim);
+        StyleLine(_notice, pad, CellTone.Accent);
+        StyleLine(_detailHead, 0, CellTone.Dim);
+        _folder.Margin = new Padding(0, 0, 0, 0);
 
-        var detailBar = PageLayout.Bar("recordDetailBar", pad, [_csv, _delete], []);
+        // The line above the summary (what the run is, the buttons) is one block that is as tall as it needs; the summary fills the rest (the note on the
+        // sustained value is a row of its table). The list and the summary are divided by a bar the person can move: the list ends on a whole row, as the history's does.
+        _detailHeader = new RecordDetailHeader(_detailHead, pad, _csv, _delete);
         _detailPanel.Dock = DockStyle.Fill;
         _detailPanel.Margin = new Padding(0);
         _detailPanel.Controls.Add(_summary);
-        _detailPanel.Controls.Add(detailBar);
-        _detailPanel.Controls.Add(_detailHead);
+        _detailPanel.Controls.Add(_detailHeader);
 
-        _rows.Dock = DockStyle.Fill;
-        _rows.ColumnCount = 1;
-        _rows.RowCount = 2;
-        _rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        _rows.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Percent, ListSharePercent));
-        _rows.RowStyles.Add(new System.Windows.Forms.RowStyle(SizeType.Percent, 100 - ListSharePercent));
-        _list.Margin = new Padding(0);
-        _rows.Controls.Add(_list, 0, 0);
-        _rows.Controls.Add(_detailPanel, 0, 1);
+        _split.Height = Px(14);
+        _split.Moved += OnSplitMoved;
+        _body.Dock = DockStyle.Fill;
+        _body.Controls.Add(_detailPanel);
+        _body.Controls.Add(_split);
+        _body.Controls.Add(_list);
 
-        // The list ends on a whole row, as the history's does: its height is a header and N rows as the list measures them.
-        _rows.SizeChanged += (_, _) => FitListRows();
-        _list.HandleCreated += (_, _) => _list.BeginInvoke(FitListRows);
+        _body.SizeChanged += (_, _) => FitBody();
+        _list.HandleCreated += (_, _) => _list.BeginInvoke(() =>
+        {
+            FitListColumns();
+            FitBody();
+        });
         _list.ColumnsRescaled += (_, _) =>
         {
-            FitListRows();
+            FitListColumns();
+            FitBody();
             if (_list.IsHandleCreated)
             {
-                _list.BeginInvoke(FitListRows);
+                _list.BeginInvoke(FitBody);
             }
         };
 
         _count.Margin = new Padding(0, 0, Px(16), 0);
         var bar = PageLayout.Bar("recordBar", pad, [_start, _mark, _stop, _openFolder, _legacy], []);
-        Controls.Add(_rows);
-        Controls.Add(PageLayout.Footer("recordFooter", pad, _count, _hint));
+        Controls.Add(_body);
+        Controls.Add(PageLayout.Footer("recordFooter", pad, _count, _folder, _hint));
         Controls.Add(_notice);
-        Controls.Add(_folder);
         Controls.Add(_state);
         Controls.Add(bar);
 
@@ -210,6 +223,14 @@ internal sealed class RecordTab : CheckTab
     internal RunSummaryGrid Summary => _summary;
 
     internal ToneLabel StateLabel => _state;
+
+    internal SplitBar Splitter => _split;
+
+    internal Panel Body => _body;
+
+    internal Panel DetailPanel => _detailPanel;
+
+    internal RecordDetailHeader DetailHeader => _detailHeader;
 
     internal ToneLabel FolderLabel => _folder;
 
@@ -298,10 +319,13 @@ internal sealed class RecordTab : CheckTab
         }
 
         _list.AccessibleName = Strings.Get("gui.rtab.list.name");
+        _split.AccessibleName = Strings.Get("gui.rtab.split.name");
         _summary.AccessibleName = Strings.Get("gui.rtab.sum.name");
         _summary.ApplyLanguage();
         _list.Invalidate();
         RenderAll();
+        FitListColumns();
+        FitBody();
     }
 
     public override void Release()
@@ -326,14 +350,12 @@ internal sealed class RecordTab : CheckTab
         base.Dispose(disposing);
     }
 
-    private static void StyleLine(ToneLabel label, int pad, int height, CellTone tone)
+    /// <summary>A line of the page that wraps instead of ending in an ellipsis: its height follows its text (see <see cref="WrapLabel"/>).</summary>
+    private static void StyleLine(WrapLabel label, int pad, CellTone tone)
     {
         label.SetTone(tone);
-        label.Dock = DockStyle.Top;
-        label.Height = label.LogicalToDeviceUnits(height);
-        label.Padding = new Padding(pad, 0, pad, 0);
-        label.TextAlign = ContentAlignment.MiddleLeft;
-        label.AutoEllipsis = true;
+        label.Padding = new Padding(pad, label.LogicalToDeviceUnits(4), pad, label.LogicalToDeviceUnits(4));
+        label.TextAlign = ContentAlignment.TopLeft;
     }
 
     private static void Cancel(ref CancellationTokenSource? source)
@@ -406,12 +428,21 @@ internal sealed class RecordTab : CheckTab
     /// <summary>A choice of the mark menu.</summary>
     internal Task PressMark(MarkerKind kind) => Track(async () => await _hub.MarkAsync(kind).ConfigureAwait(true));
 
-    /// <summary>The "open folder" button. A folder that is not there yet is said so (it is made by the first recording, not by this).</summary>
-    internal void PressOpenFolder()
+    /// <summary>The "open folder" button. A folder that is not there yet is said so (it is made by the first recording, not by this). The disk is asked off the UI thread.</summary>
+    internal Task PressOpenFolder() => Track(OpenFolderAsync);
+
+    private async Task OpenFolderAsync()
     {
         _actionNote = null;
         var path = _hub.Folder;
-        if (!_hub.FolderExists(path))
+        var exists = _hub.FolderExists;
+        var present = await Task.Run(() => exists(path)).ConfigureAwait(true);
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (!present)
         {
             _folderPresent = false;
             _actionNote = Strings.Get("gui.rtab.folder.notyet");
@@ -431,8 +462,14 @@ internal sealed class RecordTab : CheckTab
         RenderAll();
     }
 
-    /// <summary>The "open CSV" button: the file goes to the program Windows has for it, through <see cref="ShellActions"/>.</summary>
-    internal void PressOpenCsv()
+    /// <summary>
+    /// The "open CSV" button: the file goes to the program Windows has for it, through <see cref="ShellActions"/>. An old-app record is not handed over
+    /// itself (a program that opens a file can change it, and the earlier app's files are never touched): a copy in the temp folder is (see
+    /// <see cref="RecordingHub.CsvToOpen"/>). The disk is asked, and the copy made, off the UI thread.
+    /// </summary>
+    internal Task PressOpenCsv() => Track(OpenCsvAsync);
+
+    private async Task OpenCsvAsync()
     {
         _actionNote = null;
         if (SelectedInfo() is not { } info || _detailState == RecordDetailState.Running)
@@ -441,20 +478,41 @@ internal sealed class RecordTab : CheckTab
             return;
         }
 
-        if (!_hub.FileExists(info.CsvPath))
-        {
-            _actionNote = Strings.Get("gui.rtab.csv.missing");
-            RenderAll();
-            return;
-        }
-
+        var hub = _hub;
+        string? path = null;
+        string? failure = null;
         try
         {
-            ShellActions.OpenFile(info.CsvPath);
+            path = await Task.Run(() => hub.FileExists(info.CsvPath) ? hub.CsvToOpen(info) : null).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            _actionNote = Strings.Format("gui.rtab.csv.openfail", Fmt.Dict(("error", CheckFormat.ExceptionDetail(ex))));
+            failure = CheckFormat.ExceptionDetail(ex);
+        }
+
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (failure is not null)
+        {
+            _actionNote = Strings.Format("gui.rtab.csv.openfail", Fmt.Dict(("error", failure)));
+        }
+        else if (path is null)
+        {
+            _actionNote = Strings.Get("gui.rtab.csv.missing");
+        }
+        else
+        {
+            try
+            {
+                ShellActions.OpenFile(path);
+            }
+            catch (Exception ex)
+            {
+                _actionNote = Strings.Format("gui.rtab.csv.openfail", Fmt.Dict(("error", CheckFormat.ExceptionDetail(ex))));
+            }
         }
 
         RenderAll();
@@ -500,6 +558,10 @@ internal sealed class RecordTab : CheckTab
 
         RunDeleteResult? result = null;
         string? failure = null;
+
+        // The button is off while the files are being removed: a second click on it would ask the store for the same run again.
+        _deleting = true;
+        RenderButtons();
         try
         {
             var store = _hub.Store;
@@ -508,6 +570,10 @@ internal sealed class RecordTab : CheckTab
         catch (Exception ex)
         {
             failure = CheckFormat.ExceptionDetail(ex);
+        }
+        finally
+        {
+            _deleting = false;
         }
 
         if (IsDisposed)
@@ -583,8 +649,26 @@ internal sealed class RecordTab : CheckTab
             }
         }
 
+        if (phase == RecordingPhase.Stopping && _lastPhase != RecordingPhase.Stopping)
+        {
+            // The clock stops where the stop was pressed; the row says the run is being saved until the list has read it again.
+            _frozenElapsed = _hub.Elapsed;
+        }
+
+        var phaseChanged = phase != _lastPhase;
         _lastPhase = phase;
         RenderAll();
+        if (phaseChanged)
+        {
+            // The words of the live row change with the phase (a run being saved says more than one being recorded): its column grows or shrinks with them.
+            FitListColumns();
+        }
+
+        if (phase != RecordingPhase.Idle && LiveRow() >= 0)
+        {
+            // The running clock of the run's row.
+            _list.Invalidate();
+        }
     }
 
     private void OnRunEnded(RunResult? result)
@@ -692,10 +776,11 @@ internal sealed class RecordTab : CheckTab
             _suppressSelection = false;
         }
 
-        FitListRows();
+        FitListColumns();
+        FitBody();
         if (_list.IsHandleCreated)
         {
-            _list.BeginInvoke(FitListRows);
+            _list.BeginInvoke(FitBody);
         }
 
         _list.Invalidate();
@@ -747,31 +832,104 @@ internal sealed class RecordTab : CheckTab
         return index >= 0 ? _runs[index] : _detailInfo is { } info && info.RunId == id ? info : null;
     }
 
-    internal int WholeRowsHeight()
+    /// <summary>The height the list has now, whole rows: the share the bar was left at (or the default), at least two rows, and never so much that the summary has no room.</summary>
+    internal int WholeRowsHeight() => _list.HeightForRows(ListRowsFor(_body.ClientSize.Height));
+
+    /// <summary>The room the list and the summary divide: the body less the bar between them.</summary>
+    private int Divided(int bodyHeight) => Math.Max(bodyHeight - _split.Height, 1);
+
+    private int ListRowsFor(int bodyHeight)
     {
-        var available = _rows.ClientSize.Height;
-        var rows = Math.Max(_list.RowsThatFit(available * ListSharePercent / 100), MinListRows);
-        return _list.HeightForRows(rows);
+        var divided = Divided(bodyHeight);
+        var rows = _list.RowsThatFit(divided * (_listShare ?? DefaultListShare) / 100);
+        rows = Math.Max(rows, _listShare is null ? MinListRows : 1);
+
+        // The summary keeps a minimum of its own, whatever the share asks.
+        var most = _list.RowsThatFit(divided - SummaryMinimum());
+        return Math.Max(Math.Min(rows, most), 1);
     }
 
-    private void FitListRows()
+    private int SummaryMinimum() => _list.Scaled(150);
+
+    private void FitBody()
     {
-        if (_rows.ClientSize.Height <= 0 || _rows.RowStyles.Count != 2 || _list.IsDisposed)
+        if (_body.ClientSize.Height <= 0 || _list.IsDisposed)
         {
             return;
         }
 
         var height = WholeRowsHeight();
-        var first = _rows.RowStyles[0];
-        if (first.SizeType != SizeType.Absolute || Math.Abs(first.Height - height) > 0.5f)
+        if (_list.Height != height)
         {
-            first.SizeType = SizeType.Absolute;
-            first.Height = height;
-            var second = _rows.RowStyles[1];
-            second.SizeType = SizeType.Percent;
-            second.Height = 100;
+            _list.Height = height;
+        }
+
+        _split.KeyStep = Math.Max(_list.MeasuredRowHeight, 1);
+    }
+
+    /// <summary>The bar was dragged (or an arrow key was pressed on it) by this many pixels: the list takes the whole number of rows nearest to that, and the share is kept for this window's session.</summary>
+    private void OnSplitMoved(int delta)
+    {
+        var body = _body.ClientSize.Height;
+        if (body <= 0 || _list.IsDisposed)
+        {
+            return;
+        }
+
+        var row = Math.Max(_list.MeasuredRowHeight, 1);
+        var rows = (int)Math.Round((_list.Height + delta - _list.HeightForRows(0)) / (double)row, MidpointRounding.AwayFromZero);
+        var most = Math.Max(_list.RowsThatFit(Divided(body) - SummaryMinimum()), 1);
+        rows = Math.Clamp(rows, 1, most);
+        var height = _list.HeightForRows(rows);
+
+        // Rounded up, so that the whole rows the person chose fit in the share they are kept as.
+        var divided = Divided(body);
+        _listShare = Math.Min(((height * 100) + divided - 1) / divided, 100);
+        FitBody();
+    }
+
+    /// <summary>Content-wide columns for when, how long and the state; the note takes what is left and ends in an ellipsis when it is long (the whole note is in the summary's head and in a tip).</summary>
+    private void FitListColumns()
+    {
+        if (_fittingColumns || _list.Columns.Count != NoteColumn + 1 || _list.IsDisposed)
+        {
+            return;
+        }
+
+        _fittingColumns = true;
+        try
+        {
+            var air = _list.Scaled(8);
+            for (var column = StartColumn; column <= StatusColumn; column++)
+            {
+                var width = _list.ContentNeed(column) + air;
+                if (_list.Columns[column].Width != width)
+                {
+                    _list.Columns[column].Width = width;
+                }
+            }
+
+            _list.FitLastColumn();
+        }
+        finally
+        {
+            _fittingColumns = false;
         }
     }
+
+    /// <summary>The row of the run that is being recorded (or saved), or -1.</summary>
+    private int LiveRow()
+    {
+        if (_hub.Phase is not (RecordingPhase.Recording or RecordingPhase.Stopping) || _hub.ActiveRunId is not { } id)
+        {
+            return -1;
+        }
+
+        return IndexOf(id);
+    }
+
+    private bool IsLive(RunInfo run) =>
+        _hub.Phase is RecordingPhase.Recording or RecordingPhase.Stopping && _hub.ActiveRunId == run.RunId;
 
     private GridCell ListCell(int row, int column)
     {
@@ -781,6 +939,19 @@ internal sealed class RecordTab : CheckTab
         }
 
         var run = _runs[row];
+        if (IsLive(run))
+        {
+            // The run that is going: a clock, not an estimate; and, once it was told to stop, that it is being saved.
+            var stopping = _hub.Phase == RecordingPhase.Stopping;
+            return column switch
+            {
+                StartColumn => new GridCell(RecordFormat.StartText(run.StartedAtUtc)),
+                LengthColumn => new GridCell(RecordFormat.Elapsed(stopping ? _frozenElapsed : _hub.Elapsed)),
+                StatusColumn => new GridCell(Strings.Get(stopping ? "gui.rtab.status.stopping" : "gui.rtab.status.recording"), CellTone.Accent),
+                _ => new GridCell(string.Empty, CellTone.Dim),
+            };
+        }
+
         return column switch
         {
             StartColumn => new GridCell(RecordFormat.StartText(run.StartedAtUtc)),
@@ -807,8 +978,8 @@ internal sealed class RecordTab : CheckTab
 
         return column switch
         {
-            LengthColumn when RecordFormat.IsApproximate(_runs[row]) => Strings.Get("gui.rtab.footer.approx"),
-            NoteColumn => RecordFormat.NoteText(_runs[row]) is { Length: > 0 } note ? note : null,
+            LengthColumn when !IsLive(_runs[row]) && RecordFormat.IsApproximate(_runs[row]) => Strings.Get("gui.rtab.footer.approx"),
+            NoteColumn when !IsLive(_runs[row]) => RecordFormat.NoteText(_runs[row]) is { Length: > 0 } note ? note : null,
             _ => null,
         };
     }
@@ -928,7 +1099,7 @@ internal sealed class RecordTab : CheckTab
         }
 
         info = selected;
-        return !selected.IsLegacy && _hub.ActiveRunId != selected.RunId;
+        return !_deleting && !selected.IsLegacy && _hub.ActiveRunId != selected.RunId;
     }
 
     private void RenderAll()
@@ -987,8 +1158,9 @@ internal sealed class RecordTab : CheckTab
                 : Strings.Format("gui.rtab.state.ended", Fmt.Dict(("reason", Strings.Get(RecordStrings.KeyOf(result.StopReason))), ("length", length)));
         }
 
+        // Saving failed: what to do about it, in plain words (the reason is a technical one; the run's own note says it where the run is shown).
         tone = CellTone.Warning;
-        return Strings.Format("gui.rtab.state.failed", Fmt.Dict(("reason", Strings.Get(RecordStrings.KeyOf(result.StopReason)))));
+        return Strings.Get("gui.rtab.state.failed");
     }
 
     /// <summary>The marks set so far, one per line with the time of each, for the state line's tip. Empty when there are none.</summary>
@@ -1006,10 +1178,16 @@ internal sealed class RecordTab : CheckTab
 
     private void RenderFolder()
     {
-        var path = RecordFormat.ShortFolder(_hub.Folder);
+        // Where Documents is gets asked of Windows when the tab is first shown (the hub keeps the answer), not while the page is being built.
+        if (!_isShown)
+        {
+            return;
+        }
+
+        var folder = _hub.Folder;
         var key = _folderPresent == false ? "gui.rtab.folder.new" : "gui.rtab.folder";
-        _folder.Text = Strings.Format(key, Fmt.Dict(("path", path)));
-        _tips.SetToolTip(_folder, _hub.Folder);
+        _folder.Text = Strings.Format(key, Fmt.Dict(("path", RecordFormat.ShortFolder(folder))));
+        _tips.SetToolTip(_folder, folder);
     }
 
     private void RenderNotice()
@@ -1041,7 +1219,6 @@ internal sealed class RecordTab : CheckTab
         _notice.SetTone(warning ? CellTone.Warning : CellTone.Accent);
         _notice.Text = text;
         _notice.Visible = text.Length > 0;
-        _tips.SetToolTip(_notice, text);
     }
 
     private void RenderFooter()
@@ -1050,10 +1227,12 @@ internal sealed class RecordTab : CheckTab
         {
             HistoryView.Loading => Strings.Get("gui.rtab.footer.loading"),
             HistoryView.Empty => Strings.Get("gui.rtab.footer.empty"),
-            HistoryView.List => Strings.Format("gui.rtab.footer.count", Fmt.Dict(("count", _runs.Count.ToString(Inv)))),
+            HistoryView.List => RecordFormat.RecordingCount(_runs.Count),
             _ => string.Empty,
         };
-        _hint.Text = _view == HistoryView.List && _runs.Any(RecordFormat.IsApproximate) ? Strings.Get("gui.rtab.footer.approx") : string.Empty;
+
+        // The run that is being recorded shows a clock, not an estimate: it does not make "about" necessary.
+        _hint.Text = _view == HistoryView.List && _runs.Any(run => !IsLive(run) && RecordFormat.IsApproximate(run)) ? Strings.Get("gui.rtab.footer.approx") : string.Empty;
         _hint.Visible = _hint.Text.Length > 0;
     }
 
@@ -1063,21 +1242,33 @@ internal sealed class RecordTab : CheckTab
         var text = _detailState switch
         {
             RecordDetailState.Opening => Strings.Get("gui.rtab.detail.opening"),
-            RecordDetailState.Running => Strings.Get("gui.rtab.detail.running"),
+            RecordDetailState.Running => _hub.Phase == RecordingPhase.Recording
+                ? Strings.Format("gui.rtab.detail.running", Fmt.Dict(("time", RecordFormat.Elapsed(_hub.Elapsed))))
+                : Strings.Get("gui.rtab.detail.stopping"),
             RecordDetailState.NotFound => Strings.Get("gui.rtab.detail.notfound"),
             RecordDetailState.Unreadable => Strings.Format("gui.rtab.detail.unreadable", Fmt.Dict(("error", _detailError ?? string.Empty))),
             RecordDetailState.Found when info is not null => FoundHead(info),
-            _ => _view == HistoryView.List ? Strings.Get("gui.rtab.detail.pick") : string.Empty,
+            _ => _view switch
+            {
+                HistoryView.List => Strings.Get("gui.rtab.detail.pick"),
+                HistoryView.Empty => Strings.Get("gui.rtab.detail.empty"),
+                _ => string.Empty,
+            },
         };
         _detailHead.Text = text;
         _detailHead.SetTone(info is { IsLegacy: true } && _detailState == RecordDetailState.Found ? CellTone.Accent : CellTone.Dim);
-        _tips.SetToolTip(_detailHead, text);
     }
 
+    /// <summary>What the selected run is: when it started, how it ended, the word about it (why it stopped) and, for an old record, that it is read only.</summary>
     private static string FoundHead(RunInfo info)
     {
         var head = CheckFormat.Pair(RecordFormat.StartText(info.StartedAtUtc), RecordFormat.StatusWord(info.Status));
-        return info.IsLegacy ? CheckFormat.Pair(head, Strings.Get("gui.rtab.detail.legacy")) : head;
+        if (info.IsLegacy)
+        {
+            return CheckFormat.Pair(head, Strings.Get("gui.rtab.detail.legacy"));
+        }
+
+        return RecordFormat.NoteText(info) is { Length: > 0 } note ? CheckFormat.Pair(head, note) : head;
     }
 
     private void RenderButtons()

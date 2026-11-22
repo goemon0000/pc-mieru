@@ -23,6 +23,9 @@ internal sealed class InMemoryRunStore : IRunStore
     /// <summary>Said for every delete, whatever the run is (a test: "the run is being recorded by something else"). Null: the ordinary answers.</summary>
     public RunDeleteOutcome? ForcedDelete { get; set; }
 
+    /// <summary>When set, every delete waits on it before it answers (a test holds a delete in flight to look at the screen meanwhile). Null: no wait.</summary>
+    public ManualResetEventSlim? DeleteHold { get; set; }
+
     /// <summary>A pause every list read makes on its worker, so a test can see the list is not read on the window's thread.</summary>
     public TimeSpan ListDelay { get; set; }
 
@@ -153,6 +156,7 @@ internal sealed class InMemoryRunStore : IRunStore
         () =>
         {
             Interlocked.Increment(ref _deleteCalls);
+            DeleteHold?.Wait(CancellationToken.None);
             lock (_gate)
             {
                 if (ForcedDelete is { } forced)
@@ -350,12 +354,17 @@ internal sealed class FakeRecordingKit
     /// <summary>Whether the made-up folder "exists" (the folder button and the folder line ask the hub, which asks this).</summary>
     public bool FolderPresent { get; set; }
 
-    public RecordingHub CreateHub()
+    /// <param name="folder">Where the hub gets its folder from (a test passes one that counts). Null: the made-up folder.</param>
+    public RecordingHub CreateHub(Func<string>? folder = null)
     {
-        var hub = new RecordingHub(() => Backend, () => Store, () => Folder, UtcNow)
+        var hub = new RecordingHub(() => Backend, () => Store, folder ?? (() => Folder), UtcNow)
         {
             FolderExists = _ => FolderPresent,
             FileExists = _ => true,
+
+            // The made-up runs have no files: the old-app copy goes nowhere.
+            CopyFile = static (_, _) => { },
+            TempFolder = () => Path.Combine(Folder, "temp"),
         };
         return hub;
     }
@@ -502,7 +511,8 @@ internal static class RecordingComposition
     /// <param name="root">Where recordings are kept. Null: <c>Documents\PCMieru\runs</c> (and the old records of the earlier app, read only). A given folder has no old records.</param>
     /// <param name="fake">True: the in-memory recorder and store. Null: follows <c>--fakes</c>.</param>
     /// <param name="kit">With the fake one only: the objects the caller wants to reach (the smoke run, a test). Null: made here and kept by nobody.</param>
-    public static RecordingHub Create(PcMieruServices services, string? root = null, bool? fake = null, FakeRecordingKit? kit = null)
+    /// <param name="defaultFolder">Where the default folder comes from, asked only when the hub is first asked for its folder. Null: <see cref="RunStore.DefaultRunsFolder"/>. A test passes a counting one.</param>
+    public static RecordingHub Create(PcMieruServices services, string? root = null, bool? fake = null, FakeRecordingKit? kit = null, Func<string>? defaultFolder = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (fake ?? services.Options.ForceFakes)
@@ -510,10 +520,12 @@ internal static class RecordingComposition
             return (kit ?? new FakeRecordingKit()).CreateHub();
         }
 
-        var folder = root ?? RunStore.DefaultRunsFolder();
+        // The default folder is asked for when the tab is first shown or a recording starts (the hub keeps the answer), never here: building the
+        // window's context must not ask Windows where Documents is (that can be a slow redirected folder).
+        var provider = defaultFolder ?? RunStore.DefaultRunsFolder;
         return new RecordingHub(
             () => new LiveRecordingBackend(new RunRecorder(services.Recording, root)),
             () => new RunStore(root),
-            () => folder);
+            () => root ?? provider());
     }
 }

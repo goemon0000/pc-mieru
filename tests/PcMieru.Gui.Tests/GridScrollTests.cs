@@ -22,11 +22,11 @@ public class GridScrollTests
             Grid.Size = new Size(600, 200);
             _form.Controls.Add(Grid);
             _form.Show();
-            Pump();
+            Settle();
             Grid.VirtualListSize = rows;
-            Pump();
+            Settle();
             Grid.Height = Grid.HeightForRows(fitRows);
-            Pump();
+            Settle();
             RestTop = Grid.RowRect(0)?.Top ?? -1;
         }
 
@@ -35,14 +35,8 @@ public class GridScrollTests
         /// <summary>Where the first row sits when the list is not scrolled.</summary>
         public int RestTop { get; }
 
-        public static void Pump()
-        {
-            for (var i = 0; i < 8; i++)
-            {
-                Application.DoEvents();
-                Thread.Sleep(25);
-            }
-        }
+        /// <summary>Waits until the list has taken what was done to it (see <see cref="Ui.Settle"/>): what it reports no longer changes.</summary>
+        public void Settle() => Ui.Settle(() => Facts);
 
         public string Facts => $"top {Grid.TopRow}, size {Grid.VirtualListSize}, fit {Grid.RowsThatFit(Grid.Height)}, first row at {Grid.RowRect(0)?.Top} px (at rest {RestTop} px)";
 
@@ -63,11 +57,11 @@ public class GridScrollTests
             using var rig = new Rig(rows: 12, fitRows: 4, scrollsBack: false);
             Assert.True(rig.RestTop > 0, "no first row: " + rig.Facts);
             rig.Grid.SelectRow(11, scroll: true);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.Grid.TopRow > 0, "the list did not scroll: " + rig.Facts);
 
             rig.Grid.ScrollToFirstRow();
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.FirstRowAtRest, "the first row is not under the header: " + rig.Facts);
         });
     }
@@ -79,12 +73,12 @@ public class GridScrollTests
         {
             using var rig = new Rig(rows: 12, fitRows: 4, scrollsBack: true);
             rig.Grid.SelectRow(11, scroll: true);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.Grid.TopRow > 0, "the list did not scroll: " + rig.Facts);
 
             rig.Grid.SelectedIndices.Clear();
             rig.Grid.Height = rig.Grid.HeightForRows(12);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.FirstRowAtRest, "the first row is not under the header after the list grew: " + rig.Facts);
         });
     }
@@ -96,13 +90,13 @@ public class GridScrollTests
         {
             using var rig = new Rig(rows: 12, fitRows: 4, scrollsBack: true);
             rig.Grid.SelectRow(11, scroll: true);
-            Rig.Pump();
+            rig.Settle();
             var scrolled = rig.Grid.TopRow;
             Assert.True(scrolled > 0, "the list did not scroll: " + rig.Facts);
 
             // Room for six of the twelve rows: it is where the person scrolled it (as far as the longer window lets it be).
             rig.Grid.Height = rig.Grid.HeightForRows(6);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.Grid.TopRow > 0, "the list went back to its first row with rows left out of sight: " + rig.Facts);
         });
     }
@@ -114,25 +108,82 @@ public class GridScrollTests
         {
             using var rig = new Rig(rows: 5, fitRows: 4, scrollsBack: true);
             rig.Grid.SelectRow(4, scroll: true);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.Grid.TopRow > 0, "the list did not scroll: " + rig.Facts);
 
             rig.Grid.SelectedIndices.Clear();
             rig.Grid.SetRowCount(4);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.FirstRowAtRest, "the first row is not under the header after the rows were made fewer: " + rig.Facts);
 
             // Still more rows than room: the place it was scrolled to is kept.
             rig.Grid.SetRowCount(9);
-            Rig.Pump();
+            rig.Settle();
             rig.Grid.SelectRow(8, scroll: true);
-            Rig.Pump();
+            rig.Settle();
             rig.Grid.SelectedIndices.Clear();
             var scrolled = rig.Grid.TopRow;
             Assert.True(scrolled > 0, "the list did not scroll: " + rig.Facts);
             rig.Grid.SetRowCount(8);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.Grid.TopRow > 0, "the list went back to its first row with rows left out of sight: " + rig.Facts);
+        });
+    }
+
+    [Fact]
+    public void The_whole_rows_check_names_a_list_scrolled_although_all_its_rows_fit()
+    {
+        // The check below it starts from the top row on show and takes it for the first row, so a list scrolled with all its rows in the room would pass it.
+        var problem = GridView.ScrolledWithRoomProblem(topRow: 2, rows: 3, fit: 4);
+        Assert.NotNull(problem);
+        Assert.Contains("scrolled to row 2", problem, StringComparison.Ordinal);
+        Assert.Contains("all 3 rows fit", problem, StringComparison.Ordinal);
+
+        Assert.NotNull(GridView.ScrolledWithRoomProblem(topRow: 1, rows: 4, fit: 4));
+        Assert.Null(GridView.ScrolledWithRoomProblem(topRow: 0, rows: 3, fit: 4));
+        Assert.Null(GridView.ScrolledWithRoomProblem(topRow: 8, rows: 12, fit: 4));
+        Assert.Null(GridView.ScrolledWithRoomProblem(topRow: 1, rows: 5, fit: 4));
+    }
+
+    [Fact]
+    public void The_whole_rows_check_reports_a_list_that_kept_its_place_when_its_window_grew_to_hold_every_row()
+    {
+        Ui.Run(_ =>
+        {
+            // Twelve rows with room for four, scrolled to the last; the window then grows to hold all twelve. The native list does not put itself back (its
+            // first row sits far under the header), and the list here does not ask to be put back: the check is what must say so.
+            using var rig = new Rig(rows: 12, fitRows: 4, scrollsBack: false);
+            rig.Grid.SelectRow(11, scroll: true);
+            rig.Settle();
+            Assert.True(rig.Grid.TopRow > 0, "the list did not scroll: " + rig.Facts);
+
+            rig.Grid.SelectedIndices.Clear();
+            rig.Grid.Height = rig.Grid.HeightForRows(12);
+            rig.Settle();
+            Assert.True(rig.Grid.RowsThatFit(rig.Grid.Height) >= 12, "the test needs room for all twelve rows: " + rig.Facts);
+
+            var problem = rig.Grid.WholeRowsProblem(out var facts);
+            Assert.NotNull(problem);
+            Assert.Contains("first row starts at", problem, StringComparison.Ordinal);
+            Assert.Contains("12 of 12 rows", facts, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void The_whole_rows_check_is_quiet_for_a_list_that_asked_to_go_back_and_did()
+    {
+        Ui.Run(_ =>
+        {
+            using var rig = new Rig(rows: 4, fitRows: 3, scrollsBack: true);
+            rig.Grid.SelectRow(3, scroll: true);
+            rig.Settle();
+            Assert.True(rig.Grid.TopRow > 0, "the list did not scroll: " + rig.Facts);
+
+            rig.Grid.SelectedIndices.Clear();
+            rig.Grid.SetRowCount(3);
+            rig.Settle();
+            var problem = rig.Grid.WholeRowsProblem(out var facts);
+            Assert.True(problem is null, problem + " " + facts);
         });
     }
 
@@ -145,7 +196,7 @@ public class GridScrollTests
             rig.Grid.ScrollToFirstRow();
             Assert.True(rig.FirstRowAtRest, rig.Facts);
             rig.Grid.Height = rig.Grid.HeightForRows(6);
-            Rig.Pump();
+            rig.Settle();
             Assert.True(rig.FirstRowAtRest, rig.Facts);
 
             rig.Grid.VirtualListSize = 0;

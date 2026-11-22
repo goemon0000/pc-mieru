@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using PcMieru.Checks;
 
@@ -215,6 +218,62 @@ public class MeasureRecordTests
     }
 
     [Fact]
+    public void The_series_switches_are_a_number_of_recordings_a_gap_and_one_collection_and_default_to_one_recording_thirty_seconds_and_no_collection()
+    {
+        Assert.True(GuiArgs.TryParse(["--measure", "m.jsonl", "--measure-record", Folder], out var plain, out var problem), problem);
+        Assert.Equal(1, plain.MeasureRecord!.Times);
+        Assert.Equal(30, plain.MeasureRecord.GapSeconds);
+        Assert.Equal(0, plain.MeasureRecord.GcSeconds);
+
+        Assert.True(GuiArgs.TryParse(["--measure-record-gc", "60", "--measure", "m.jsonl", "--measure-record-times", "4", "--measure-record", Folder, "--measure-record-gap", "45", "--measure-record-for", "60"], out var o, out problem), problem);
+        Assert.Equal(new MeasureRecordPlan(Path.GetFullPath(Folder), 60, 60, 0, 4, 45, 60), o.MeasureRecord);
+
+        // Like the others they are only for a measured run, and mean nothing without the folder.
+        Assert.Contains("--measure-record-times is only for a --measure run", Refused("--measure-record-times", "4"), StringComparison.Ordinal);
+        Assert.Contains("--measure-record-gc needs --measure-record <folder>", Refused("--measure", "m.jsonl", "--measure-record-gc", "60"), StringComparison.Ordinal);
+        Assert.Contains("--measure-record-gap needs a value", Refused("--measure", "m.jsonl", "--measure-record", Folder, "--measure-record-gap"), StringComparison.Ordinal);
+        Assert.Contains("--measure-record-times is given twice", Refused("--measure", "m.jsonl", "--measure-record", Folder, "--measure-record-times", "2", "--measure-record-times", "3"), StringComparison.Ordinal);
+        Assert.True(Program.IsMeasureRun(["--measure-record-times", "4"]));
+        Assert.True(Program.IsMeasureRun(["--measure-record-gc"]));
+    }
+
+    [Theory]
+    [InlineData("--measure-record-times", "1", true)]
+    [InlineData("--measure-record-times", "20", true)]
+    [InlineData("--measure-record-times", "0", false)]
+    [InlineData("--measure-record-times", "21", false)]
+    [InlineData("--measure-record-times", "two", false)]
+    [InlineData("--measure-record-gap", "0", true)]
+    [InlineData("--measure-record-gap", "3600", true)]
+    [InlineData("--measure-record-gap", "3601", false)]
+    [InlineData("--measure-record-gap", "-1", false)]
+    [InlineData("--measure-record-gc", "1", true)]
+    [InlineData("--measure-record-gc", "3600", true)]
+    [InlineData("--measure-record-gc", "0", false)]
+    [InlineData("--measure-record-gc", "3601", false)]
+    [InlineData("--measure-record-gc", "1.5", false)]
+    public void The_series_numbers_are_whole_and_inside_their_ranges(string name, string value, bool accepted)
+    {
+        var args = new[] { "--measure", "m.jsonl", "--measure-record", Folder, name, value };
+        if (accepted)
+        {
+            Assert.True(GuiArgs.TryParse(args, out var o, out var problem), problem);
+            Assert.Equal(int.Parse(value, CultureInfo.InvariantCulture), name switch
+            {
+                MeasureRecordPlan.TimesSwitch => o.MeasureRecord!.Times,
+                MeasureRecordPlan.GapSwitch => o.MeasureRecord!.GapSeconds,
+                _ => o.MeasureRecord!.GcSeconds,
+            });
+        }
+        else
+        {
+            var problem = Refused(args);
+            Assert.Contains(name, problem, StringComparison.Ordinal);
+            Assert.Contains(name == MeasureRecordPlan.TimesSwitch ? "recordings" : "seconds", problem, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void A_command_line_problem_of_a_record_switch_goes_to_stderr_as_well()
     {
         Assert.True(Program.IsMeasureRun(["--measure-record", "x"]));
@@ -331,7 +390,7 @@ public class MeasureRecordTests
 
             // The window is gone: the driver is too (a begin after that is nothing), and it never started a recording.
             recording!.Begin();
-            Assert.Empty(File.ReadAllBytes(events));
+            Assert.Empty(ReadShared(events));
             Assert.Equal(RecordingPhase.Idle, hub!.Phase);
 
             Assert.Equal(bytes, File.ReadAllBytes(ini));
@@ -376,15 +435,15 @@ public class MeasureRecordTests
     {
         private readonly IDisposable _locale = Harness.Locale();
 
-        public Rig(int leadSeconds = 7, int recordSeconds = 11, int userIntervalMs = 1000)
+        public Rig(int leadSeconds = 7, int recordSeconds = 11, int userIntervalMs = 1000, int times = 1, int gapSeconds = 30, int gcSeconds = 0)
         {
             Temp = new Ui.TempRoot();
             Services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
             Pump = new SnapshotPump(Services, userIntervalMs);
             Kit = new FakeRecordingKit(Path.Combine(Temp.Path, "runs"), () => Now);
             Hub = Kit.CreateHub();
-            Plan = new MeasureRecordPlan(Path.Combine(Temp.Path, "runs"), leadSeconds, recordSeconds, 0);
-            Recording = new MeasureRecording(Plan, Hub, Pump, Lines.Add, () => Now, Delay);
+            Plan = new MeasureRecordPlan(Path.Combine(Temp.Path, "runs"), leadSeconds, recordSeconds, 0, times, gapSeconds, gcSeconds);
+            Recording = new MeasureRecording(Plan, Hub, Pump, Lines.Add, () => Now, Delay, () => Memory, Compact);
         }
 
         public Ui.TempRoot Temp { get; }
@@ -403,6 +462,11 @@ public class MeasureRecordTests
 
         public DateTime Now { get; set; } = T0;
 
+        /// <summary>What the process's memory reads (private bytes, managed heap); one compacting collection takes 10 MB and 8 MB off it.</summary>
+        public MeasureRecording.MemoryReading Memory { get; set; } = new(200_000_000, 60_000_000);
+
+        public int Compactions { get; private set; }
+
         public List<string> Lines { get; } = [];
 
         /// <summary>The waits the driver asked for, in order, each held until the test lets it go.</summary>
@@ -413,6 +477,12 @@ public class MeasureRecordTests
         public JsonElement Line(int index) => Json(Lines[index]);
 
         public JsonElement Last(string name) => Json(Lines.Last(l => Json(l).GetProperty("event").GetString() == name));
+
+        private void Compact()
+        {
+            Compactions++;
+            Memory = new MeasureRecording.MemoryReading(Memory.PrivateBytes - 10_000_000, Memory.ManagedBytes - 8_000_000);
+        }
 
         private Task Delay(TimeSpan span, CancellationToken token)
         {
@@ -559,6 +629,74 @@ public class MeasureRecordTests
             }
 
             Assert.Equal(2, rig.Asked.Count); // the lead and the record time, nothing else was waited for
+        });
+    }
+
+    [Fact]
+    public void A_series_records_again_after_each_gap_numbers_its_lines_and_makes_the_one_collection_only_after_the_last_stop()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new Rig(leadSeconds: 7, recordSeconds: 11, times: 3, gapSeconds: 30, gcSeconds: 60);
+            rig.Recording.Begin();
+            var begin = rig.Line(0);
+            Assert.Equal(3, begin.GetProperty("times").GetInt32());
+            Assert.Equal(30, begin.GetProperty("gapSeconds").GetInt32());
+            Assert.Equal(60, begin.GetProperty("gcSeconds").GetInt32());
+
+            // The lead once, then record / gap / record / gap / record, then the wait for the collection.
+            var expected = new[] { 7, 11, 30, 11, 30, 11, 60 };
+            for (var step = 0; step < expected.Length; step++)
+            {
+                Assert.True(ui.Until(() => rig.Asked.Count == step + 1), $"the wait {step + 1} was never asked for");
+                Assert.Equal(TimeSpan.FromSeconds(expected[step]), rig.Asked[step].Span);
+                Assert.Equal(0, rig.Compactions);
+                if (step < expected.Length - 1)
+                {
+                    rig.Asked[step].Gate.SetResult();
+                }
+            }
+
+            Assert.Equal(3, rig.Kit.Backend.StartCalls);
+            Assert.Equal(3, rig.Kit.Backend.StopCalls);
+            Assert.Equal(["start", "stop", "stopped", "start", "stop", "stopped", "start", "stop", "stopped"], rig.Events().Where(e => e is "start" or "stop" or "stopped").ToArray());
+            Assert.Equal([1, 1, 1, 2, 2, 2, 3, 3, 3], rig.Lines.Select(Json).Where(j => j.TryGetProperty("run", out _)).Select(j => j.GetProperty("run").GetInt32()).ToArray());
+            Assert.DoesNotContain("gc", rig.Events());
+
+            // The collection is one line with what the memory read just before it and just after it.
+            rig.Now = T0.AddSeconds(500);
+            rig.Asked[^1].Gate.SetResult();
+            Assert.True(ui.Until(() => rig.Events().Contains("gc")), "the collection never ran");
+            Assert.Equal(1, rig.Compactions);
+            var gc = rig.Last("gc");
+            Assert.Equal(60, gc.GetProperty("afterSeconds").GetInt32());
+            Assert.Equal(200_000_000, gc.GetProperty("privateBefore").GetInt64());
+            Assert.Equal(190_000_000, gc.GetProperty("privateAfter").GetInt64());
+            Assert.Equal(60_000_000, gc.GetProperty("managedBefore").GetInt64());
+            Assert.Equal(52_000_000, gc.GetProperty("managedAfter").GetInt64());
+            Assert.Equal(0, gc.GetProperty("collectMs").GetInt64());
+            Assert.Equal("gc", rig.Events()[^1]);
+            Assert.Equal(7, rig.Asked.Count); // and nothing is waited for after it
+        });
+    }
+
+    [Fact]
+    public void A_series_that_cannot_start_a_recording_ends_there_and_makes_no_collection()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new Rig(leadSeconds: 1, recordSeconds: 5, times: 3, gapSeconds: 2, gcSeconds: 9);
+            rig.Kit.Backend.FailStart = RunStartFailure.LowSpace;
+            rig.Recording.Begin();
+            rig.Asked[0].Gate.SetResult();
+            Assert.True(ui.Until(() => rig.Events().Contains("start")), "the start was never tried");
+            var start = rig.Last("start");
+            Assert.False(start.GetProperty("ok").GetBoolean());
+            Assert.Equal(1, start.GetProperty("run").GetInt32());
+            ui.Pump();
+            Assert.Single(rig.Asked);
+            Assert.Equal(0, rig.Compactions);
+            Assert.DoesNotContain("gc", rig.Events());
         });
     }
 
@@ -872,7 +1010,7 @@ public class MeasureRecordTests
             try
             {
                 Assert.True(MeasureRecording.TryAttach(plan, marker, context, form, TextWriter.Null, out var recording));
-                Assert.Empty(File.ReadAllBytes(events)); // emptied before any window shows, as the marker file is
+                Assert.Empty(ReadShared(events)); // emptied before any window shows, as the marker file is
                 Assert.Equal(MeasureRecording.PhaseBefore, recording!.Phase);
 
                 form.Show();
@@ -881,7 +1019,7 @@ public class MeasureRecordTests
                 {
                     Application.DoEvents();
                     queue.Pump();
-                    shown = new FileInfo(events).Length > 0;
+                    shown = ReadShared(events).Length > 0;
                     if (!shown)
                     {
                         Thread.Sleep(10);
@@ -889,7 +1027,7 @@ public class MeasureRecordTests
                 }
 
                 Assert.True(shown, "no begin line after the window was shown");
-                var lines = File.ReadAllLines(events);
+                var lines = ReadSharedLines(events);
                 Assert.Single(lines);
                 var begin = Json(lines[0]);
                 Assert.Equal("begin", begin.GetProperty("event").GetString());
@@ -905,8 +1043,227 @@ public class MeasureRecordTests
 
             // The window's end is the driver's end: its wait is cancelled and nothing is written after it.
             queue.Pump();
-            Assert.Single(File.ReadAllLines(events));
+            Assert.Single(ReadSharedLines(events));
             Assert.Equal(RecordingPhase.Idle, hub.Phase);
+        });
+    }
+
+    // ---- the folder guard: the same place under another spelling ----
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetShortPathNameW")]
+    private static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint length);
+
+    private static string ShortFormOf(string path)
+    {
+        var buffer = new StringBuilder(1024);
+        var length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
+        return length == 0 || length >= buffer.Capacity ? path : buffer.ToString();
+    }
+
+    /// <summary>Makes a junction (a link to a folder; it needs no elevation). The caller removes it with <see cref="Directory.Delete(string)"/>, which removes only the link.</summary>
+    private static string Junction(string link, string target)
+    {
+        var start = new ProcessStartInfo("cmd.exe")
+        {
+            Arguments = "/c mklink /J \"" + link + "\" \"" + target + "\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var process = Process.Start(start)!;
+        var said = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, "mklink failed: " + said);
+        return link;
+    }
+
+    private static byte[] ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
+
+    private static string[] ReadSharedLines(string path) =>
+        Encoding.UTF8.GetString(ReadShared(path)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+    [Fact]
+    public void A_start_with_no_record_switch_asks_nothing_of_Windows_and_a_given_one_asks_once()
+    {
+        var asked = 0;
+        Func<IEnumerable<string>> roots = () =>
+        {
+            asked++;
+            return [];
+        };
+
+        Assert.True(MeasureRecordPlan.TryRead(Given(), true, roots, out var plan, out var problem), problem);
+        Assert.Null(plan);
+        Assert.True(MeasureRecordPlan.TryRead(Given(), false, roots, out plan, out problem), problem);
+        Assert.Null(plan);
+        Assert.Equal(0, asked);
+
+        Assert.True(MeasureRecordPlan.TryRead(Given("--measure-record", Folder), true, roots, out plan, out problem), problem);
+        Assert.NotNull(plan);
+        Assert.Equal(1, asked);
+    }
+
+    [Fact]
+    public void The_users_folders_include_the_redirected_documents_and_the_plain_documents_of_the_profile()
+    {
+        var roots = MeasureRecordPlan.UserDataFolders();
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Assert.Contains(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), roots);
+        Assert.Contains(Path.Combine(profile, "Documents"), roots);
+        Assert.Contains(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), roots);
+        Assert.Contains(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru"), roots);
+
+        foreach (var inside in new[] { Path.Combine(profile, "Documents"), Path.Combine(profile, "Documents", "runs") })
+        {
+            Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", inside), true, out var plan, out var problem), inside);
+            Assert.Null(plan);
+            Assert.Contains("outside the user's own folders", problem, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void The_short_names_of_the_users_folders_are_the_same_folders_and_are_refused()
+    {
+        var proved = 0;
+        foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) })
+        {
+            var shortRoot = ShortFormOf(root);
+            if (shortRoot.Equals(root, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            proved++;
+            foreach (var inside in new[] { shortRoot, Path.Combine(shortRoot, "PCMieru", "runs") })
+            {
+                Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", inside), true, out var plan, out var problem), inside + " is " + root);
+                Assert.Null(plan);
+                Assert.Contains("outside the user's own folders", problem, StringComparison.Ordinal);
+            }
+        }
+
+        Assert.True(proved > 0, "this machine writes no 8.3 short names for the profile, so nothing was proved");
+    }
+
+    [Fact]
+    public void A_junction_into_a_users_folder_is_refused_and_one_into_a_harmless_place_is_allowed()
+    {
+        using var temp = new Ui.TempRoot();
+        var documents = Path.Combine(temp.Path, "Documents");
+        var harmless = Path.Combine(temp.Path, "Elsewhere");
+        Directory.CreateDirectory(documents);
+        Directory.CreateDirectory(harmless);
+        var intoDocuments = Junction(Path.Combine(temp.Path, "scratch-link"), documents);
+        var intoHarmless = Junction(Path.Combine(temp.Path, "other-link"), harmless);
+        try
+        {
+            string[] roots = [documents];
+            foreach (var through in new[] { intoDocuments, Path.Combine(intoDocuments, "runs"), Path.Combine(intoDocuments, "a", "b") })
+            {
+                Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", through), true, roots, out var plan, out var problem), through);
+                Assert.Null(plan);
+                Assert.Contains("outside the user's own folders", problem, StringComparison.Ordinal);
+            }
+
+            var allowed = Path.Combine(intoHarmless, "runs");
+            Assert.True(MeasureRecordPlan.TryRead(Given("--measure-record", allowed), true, roots, out var ok, out var why), why);
+            Assert.Equal(allowed, ok!.Folder);
+        }
+        finally
+        {
+            Directory.Delete(intoDocuments);
+            Directory.Delete(intoHarmless);
+        }
+
+        Assert.True(Directory.Exists(documents));
+        Assert.True(Directory.Exists(harmless));
+    }
+
+    [Fact]
+    public void A_link_that_leads_nowhere_is_refused_because_where_it_goes_is_not_known()
+    {
+        using var temp = new Ui.TempRoot();
+        var gone = Path.Combine(temp.Path, "gone");
+        Directory.CreateDirectory(gone);
+        var link = Junction(Path.Combine(temp.Path, "dangling"), gone);
+        Directory.Delete(gone);
+        try
+        {
+            foreach (var through in new[] { link, Path.Combine(link, "runs") })
+            {
+                Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", through), true, [Path.Combine(temp.Path, "Documents")], out var plan, out var problem), through);
+                Assert.Null(plan);
+                Assert.Contains("cannot be followed", problem, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
+
+    [Fact]
+    public void A_folder_that_is_not_there_yet_under_a_plain_scratch_folder_is_allowed_as_it_was_written()
+    {
+        using var temp = new Ui.TempRoot();
+        var folder = Path.Combine(temp.Path, "new", "deeper", "runs");
+
+        Assert.True(MeasureRecordPlan.TryRead(Given("--measure-record", folder), true, out var plan, out var problem), problem);
+        Assert.Equal(folder, plan!.Folder);
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "new")));
+
+        // The same folder through its short spelling is the same folder and is as allowed.
+        var shortTemp = ShortFormOf(temp.Path);
+        Assert.True(MeasureRecordPlan.TryRead(Given("--measure-record", Path.Combine(shortTemp, "new", "runs")), true, out _, out problem), problem);
+    }
+
+    [Fact]
+    public void The_events_file_is_held_open_by_one_stream_for_the_run_and_free_once_the_window_is_gone()
+    {
+        Ui.Run(queue =>
+        {
+            using var locale = Harness.Locale();
+            using var temp = new Ui.TempRoot();
+            using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
+            using var pump = new SnapshotPump(services, 2000);
+            using var theme = new ThemeService(ThemeMode.Light);
+            var plan = new MeasureRecordPlan(Path.Combine(temp.Path, "recordings"), 3600, 180, 0);
+            var hub = MeasureRecording.CreateHub(services, plan)!;
+            var context = new GuiContext(services, pump, theme, new GuiSettings(), recording: hub);
+            var marker = Path.Combine(temp.Path, "marks.jsonl");
+            var events = MeasureRecording.EventsPathFor(marker);
+
+            var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-24000, -24000), Size = new Size(300, 200) };
+            try
+            {
+                Assert.True(MeasureRecording.TryAttach(plan, marker, context, form, TextWriter.Null, out var recording));
+                Assert.NotNull(recording);
+
+                // Held from the start of the run: nobody else can take the file for themselves, and a reader (the script) still can read it.
+                Assert.Throws<IOException>(() => new FileStream(events, FileMode.Open, FileAccess.ReadWrite, FileShare.None).Dispose());
+                Assert.Empty(ReadShared(events));
+
+                form.Show();
+                Assert.True(Ui.PumpUntil(() => ReadShared(events).Length > 0), "no begin line after the window was shown");
+                Assert.Throws<IOException>(() => new FileStream(events, FileMode.Open, FileAccess.ReadWrite, FileShare.None).Dispose());
+                Assert.Single(ReadSharedLines(events));
+            }
+            finally
+            {
+                form.Dispose();
+            }
+
+            queue.Pump();
+            using (new FileStream(events, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+            }
         });
     }
 

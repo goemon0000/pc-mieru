@@ -1451,18 +1451,146 @@ function Split-CsvLine([string]$Line) {
 
 # The folders a measured run must never write into (the GUI refuses a --measure-record folder inside any of them; so does this script, before it starts anything).
 function Get-UserDataFolders {
+    # The same four as the GUI's MeasureRecordPlan.UserDataFolders: the Documents folder as Windows says it (E:\MovedFromC\Documents when it is redirected),
+    # the plain Documents of the profile (a redirected one leaves it behind), the app's own data folder and Roaming.
     return @(
         [Environment]::GetFolderPath('MyDocuments')
+        (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Documents')
         (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PCMieru')
         [Environment]::GetFolderPath('ApplicationData')
     )
 }
 
+# The real place a path leads to (the GUI's FolderGuard): the nearest part that exists is opened and asked for its final path, which follows every link
+# (junction, symbolic link) and expands every 8.3 short name (ADMINI~1); the part that does not exist yet is appended as written. Nothing is created.
+# Plain C# 5 on purpose (Windows PowerShell 5.1 compiles it with the old CodeDom compiler).
+function Initialize-RealPath {
+    if ('PcmRealPath' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class PcmRealPath
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+    private static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "GetFinalPathNameByHandleW")]
+    private static extern uint GetFinalPathNameByHandle(IntPtr file, StringBuilder path, uint length, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private static readonly IntPtr Invalid = new IntPtr(-1);
+
+    private static string TrimEnd(string path)
+    {
+        string root = Path.GetPathRoot(path);
+        if (path.Length > 0 && path.Length > (root == null ? 0 : root.Length)) { return path.TrimEnd('\\', '/'); }
+        return path;
+    }
+
+    private static bool TryAttributes(string path, out FileAttributes attributes)
+    {
+        try { attributes = File.GetAttributes(path); return true; }
+        catch (Exception) { attributes = 0; return false; }
+    }
+
+    private static string Final(string existing)
+    {
+        string name = existing.StartsWith(@"\\?\", StringComparison.Ordinal) ? existing
+            : existing.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + existing.Substring(2)
+            : @"\\?\" + existing;
+        IntPtr handle = CreateFile(name, 0x80, 0x7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        if (handle == Invalid || handle == IntPtr.Zero) { return null; }
+        try
+        {
+            StringBuilder buffer = new StringBuilder(512);
+            while (true)
+            {
+                uint length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+                if (length == 0) { return null; }
+                if (length < buffer.Capacity) { break; }
+                buffer.EnsureCapacity((int)length + 1);
+            }
+            string text = buffer.ToString();
+            if (text.StartsWith(@"\\?\UNC\", StringComparison.Ordinal)) { return @"\\" + text.Substring(8); }
+            return text.StartsWith(@"\\?\", StringComparison.Ordinal) ? text.Substring(4) : text;
+        }
+        finally { CloseHandle(handle); }
+    }
+
+    private static bool HasLinkAbove(string path)
+    {
+        for (string parent = Path.GetDirectoryName(path); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+        {
+            FileAttributes attributes;
+            if (TryAttributes(parent, out attributes) && (attributes & FileAttributes.ReparsePoint) != 0) { return true; }
+        }
+        return false;
+    }
+
+    // The real spelling of the path, or null when it cannot be known (a link on the way that cannot be followed: a junction whose target is gone).
+    public static string Resolve(string path)
+    {
+        string full;
+        try { full = TrimEnd(Path.GetFullPath(path)); }
+        catch (Exception) { return null; }
+        Stack<string> tail = new Stack<string>();
+        string existing = full;
+        while (true)
+        {
+            FileAttributes attributes;
+            if (TryAttributes(existing, out attributes))
+            {
+                string final = Final(existing);
+                if (final == null)
+                {
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 || HasLinkAbove(existing)) { return null; }
+                    final = existing;
+                }
+                while (tail.Count > 0) { final = Path.Combine(final, tail.Pop()); }
+                return final;
+            }
+            string parent = Path.GetDirectoryName(existing);
+            if (string.IsNullOrEmpty(parent)) { return full; }
+            tail.Push(Path.GetFileName(existing));
+            existing = parent;
+        }
+    }
+}
+'@
+}
+
+# The spellings of a path to compare: the one given (made absolute) and, when it is another, the real one. Empty for a blank path.
+function Get-PathSpellings([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return @() }
+    Initialize-RealPath
+    $full = [IO.Path]::GetFullPath($Path)
+    if ([IO.Path]::GetPathRoot($full) -ne $full) { $full = $full.TrimEnd('\', '/') }
+    $real = [PcmRealPath]::Resolve($full)
+    if ($null -ne $real -and $real -ine $full) { return @($full, $real) }
+    return @($full)
+}
+
+# Whether the path is the root or under it, in any spelling of either (a short name, a junction, a redirected Documents).
 function Test-InsideFolder([string]$Root, [string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Root) -or [string]::IsNullOrWhiteSpace($Path)) { return $false }
-    $parent = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
-    $child = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
-    return ($child -ieq $parent) -or $child.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)
+    foreach ($parent in @(Get-PathSpellings $Root)) {
+        foreach ($child in @(Get-PathSpellings $Path)) {
+            if (($child -ieq $parent) -or $child.StartsWith($parent.TrimEnd('\', '/') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        }
+    }
+    return $false
+}
+
+# False when a part of the path is a link that cannot be followed: where it leads is not known, so it is refused (never guessed).
+function Test-PathResolvable([string]$Path) {
+    Initialize-RealPath
+    return ($null -ne [PcmRealPath]::Resolve($Path))
 }
 
 # Where the GUI puts the record events of the run with this marks file: next to it, <marks name>.record.jsonl (MeasureRecording.EventsPathFor).
@@ -2820,6 +2948,7 @@ function Invoke-Main {
         if (Test-Path -LiteralPath $summaryPath) { throw "the output folder already holds a summary.json; use a new folder: $Output" }
         if ($Mode -eq 'record') {
             # The recordings go under <Output>: the GUI refuses a folder inside the user's own folders, so say it here before anything is made or started.
+            if (-not (Test-PathResolvable $Output)) { throw ('-Output goes through a link that cannot be followed, so where the recordings would go is not known: ' + $Output) }
             foreach ($root in (Get-UserDataFolders)) {
                 if (Test-InsideFolder $root $Output) { throw ('-Output must be outside the user''s own folders in record mode (' + $root + '): the recordings are written under it') }
             }

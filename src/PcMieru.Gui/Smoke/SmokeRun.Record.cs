@@ -27,6 +27,47 @@ internal static partial class SmokeRun
                 Check($"record: {name} has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));
                 var cuts = tab.Summary.UnreadableCuts().Take(4).ToList();
                 Check($"record: no cell of the summary in {name} is cut short without a tooltip that holds it ({look})", cuts.Count == 0, string.Join(" | ", cuts));
+                var listCuts = new List<string>();
+                for (var row = 0; row < tab.Runs.Count; row++)
+                {
+                    for (var column = 0; column < 3; column++)
+                    {
+                        if (tab.List.IsCut(row, column))
+                        {
+                            listCuts.Add($"{row}:{column} [{tab.ListText(row, column)}]");
+                        }
+                    }
+                }
+
+                Check($"record: no cell of the list in {name} is cut ({look})", listCuts.Count == 0, string.Join(" | ", listCuts.Take(4)));
+
+                // With a run open the summary is what the person came for: it has most of the height under the tabs (the bar can move it, a window that is low
+                // keeps a row of the list and the summary's minimum, so the share is measured on the list the page gave it).
+                if (tab.SelectedRunId is not null)
+                {
+                    var divided = tab.Body.ClientSize.Height - tab.Splitter.Height;
+                    var share = divided <= 0 ? 0 : tab.DetailPanel.Height * 100 / divided;
+                    Check($"record: with a run open the summary has at least 60 % of the height in {name} ({look})", divided > 0 && tab.DetailPanel.Height * 100 >= divided * 60, $"{tab.DetailPanel.Height} of {divided} = {share} %, list {tab.List.Height} ({tab.List.RowsThatFit(tab.List.Height)} rows)");
+                }
+
+                // The readings are the table's job: with a run open, several of them are whole on the first screen of the table, and no header is cut.
+                if (tab.SelectedRunId is not null && tab.Summary.RowCount > 0 && tab.Summary.TopRow == 0)
+                {
+                    var readings = tab.Summary.Rows.Count(static r => r.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
+                    var wholeReadings = tab.Summary.ReadingsWholeAtTop();
+                    Check($"record: the summary in {name} shows several readings whole without scrolling ({look})", wholeReadings >= Math.Min(4, readings), $"{wholeReadings} of {readings} readings whole in {tab.Summary.RowsThatFit(tab.Summary.Height)} lines ({tab.Summary.Height} px, line {tab.Summary.MeasuredRowHeight} px, columns {string.Join("/", tab.Summary.Columns.Cast<ColumnHeader>().Select(static c => c.Width))} of {tab.Summary.ClientSize.Width} px, headers need {string.Join("/", Enumerable.Range(0, tab.Summary.Columns.Count).Select(tab.Summary.HeaderNeed))})");
+                    var headers = new List<string>();
+                    for (var column = 0; column < tab.Summary.Columns.Count; column++)
+                    {
+                        if (tab.Summary.Columns[column].Width < tab.Summary.HeaderNeed(column))
+                        {
+                            headers.Add($"{column} [{tab.Summary.Columns[column].Text}] needs {tab.Summary.HeaderNeed(column)} has {tab.Summary.Columns[column].Width}");
+                        }
+                    }
+
+                    Check($"record: every header of the summary in {name} is whole ({look})", headers.Count == 0, string.Join(" | ", headers));
+                }
+
                 var facts = string.Empty;
 
                 // A list with no run in it (the empty tab, the first recording not yet made) has no row to end on; its words are checked above.
@@ -79,7 +120,7 @@ internal static partial class SmokeRun
             Check("record: with nothing recording only start is on offer", tab.StartButton.Enabled && !tab.StopButton.Enabled && !tab.MarkButton.Enabled && !tab.CsvButton.Enabled && !tab.DeleteButton.Enabled, $"{tab.StartButton.Enabled}/{tab.StopButton.Enabled}/{tab.MarkButton.Enabled}/{tab.CsvButton.Enabled}/{tab.DeleteButton.Enabled}");
             Check("record: the tab says where recordings go", tab.FolderLabel.Text.Length > 0, tab.FolderLabel.Text);
             Check("record: the status bar says nothing about a recording that is not there", !form.RecordingIndicator.Visible, form.RecordingIndicator.Text);
-            await ShootRecord(page, tab, "empty", false).ConfigureAwait(true);
+            await ShootRecord(page, tab, "empty", true).ConfigureAwait(true);
 
             // ---- recording ----
             await tab.PressStart().ConfigureAwait(true);
@@ -96,6 +137,8 @@ internal static partial class SmokeRun
             tab.SelectRun(0);
             await Until(() => tab.DetailState == RecordDetailState.Running, 2000).ConfigureAwait(true);
             Check("record: the run that is recording is in the list as recording and cannot be deleted", tab.Runs.Count == 1 && tab.Runs[0].Status == RunStatus.Recording && !tab.DeleteButton.Enabled && !tab.CsvButton.Enabled, tab.DetailState + ", delete " + tab.DeleteButton.Enabled);
+            var clock = tab.ListText(0, 1);
+            Check("record: the length of the run that is recording is a clock that runs, not a dash and not about", System.Text.RegularExpressions.Regex.IsMatch(clock, @"^\d+:\d\d$") && System.Text.RegularExpressions.Regex.IsMatch(tab.DetailHead.Text, @"\d+:\d\d"), $"list [{clock}] details [{tab.DetailHead.Text}]");
             await ShootRecord(page, tab, "recording", true).ConfigureAwait(true);
 
             // ---- another tab, another page: the recording goes on and the status bar says so ----
@@ -127,6 +170,8 @@ internal static partial class SmokeRun
             await Until(() => hub.Phase == RecordingPhase.Stopping, 2000).ConfigureAwait(true);
             Check("record: while the recording is saved nothing can be pressed but the list", hub.Phase == RecordingPhase.Stopping && !tab.StartButton.Enabled && !tab.StopButton.Enabled && !tab.MarkButton.Enabled, $"{hub.Phase} {tab.StartButton.Enabled}/{tab.StopButton.Enabled}/{tab.MarkButton.Enabled}");
             Check("record: the state line and the status bar say it is being saved", tab.StateLabel.Text == Strings.Get("gui.rtab.state.stopping") && form.RecordingIndicator.Text == Strings.Get("gui.rtab.saving"), tab.StateLabel.Text + " / " + form.RecordingIndicator.Text);
+            var savingWords = Strings.Get("gui.rtab.status.stopping");
+            Check("record: while it is saved the row and the details of the run say it is being stopped and saved", tab.Runs.Count == 1 && tab.ListText(0, 2) == savingWords && tab.DetailHead.Text.Contains(savingWords, StringComparison.Ordinal), $"list [{tab.ListText(0, 2)}] details [{tab.DetailHead.Text}]");
             await ShootRecord(page, tab, "stopping", false).ConfigureAwait(true);
             kit.Backend.ReleaseStop();
             kit.Backend.HangStop = false;
@@ -145,14 +190,14 @@ internal static partial class SmokeRun
             tab.SelectRun(completedRow);
             await Until(() => tab.DetailState == RecordDetailState.Found && tab.DetailTask.IsCompleted && tab.Summary.RowCount > 0 && tab.SelectedRunId == FakeRunData.CompletedId, 3000).ConfigureAwait(true);
             var rows = tab.Summary.Rows;
-            Check("record: the finished run's summary has a reading that was not measured, and it is said so, never 0", rows.Any(static r => r.Kind == SummaryRowKind.NotMeasured) && rows.Where(static r => r.Kind == SummaryRowKind.NotMeasured).All(static r => r.Min != "0" && r.Avg != "0" && r.Max != "0"), string.Join(" | ", rows.Where(static r => r.Kind == SummaryRowKind.NotMeasured).Select(static r => r.Item + "=" + r.Min)));
+            Check("record: the finished run's summary has a reading that was not measured, and it is said so, never 0", rows.Any(static r => r.Kind == SummaryRowKind.NotMeasured) && rows.Where(static r => r.Kind == SummaryRowKind.NotMeasured).All(static r => r.Min != "0" && r.Avg != "0" && r.Max != "0" && r.Time.Length > 0), string.Join(" | ", rows.Where(static r => r.Kind == SummaryRowKind.NotMeasured).Select(static r => r.Item + "=" + r.Min + " / " + r.Time)));
             Check("record: the summary has a bench section and a load section and a warning", rows.Count(static r => r.Kind == SummaryRowKind.Section) == 2 && rows.Any(static r => r.Kind == SummaryRowKind.Warning), rows.Count(static r => r.Kind == SummaryRowKind.Section) + " sections");
             Check("record: the finished run can be opened as CSV and deleted", tab.CsvButton.Enabled && tab.DeleteButton.Enabled, $"{tab.CsvButton.Enabled}/{tab.DeleteButton.Enabled}");
             await ShootRecord(page, tab, "summary", true).ConfigureAwait(true);
             await ShootRecord(page, tab, "summary-sections", false, () =>
             {
                 // The readings come first; the shot starts at the group under them (why clocks were held back, what happened together, the sections).
-                ScrollToTop(tab.Summary, FirstRowOf(tab.Summary, SummaryRowKind.Heading, afterKind: SummaryRowKind.Metric));
+                ScrollToTop(tab.Summary, FirstRowOf(tab.Summary, SummaryRowKind.Heading, afterKind: SummaryRowKind.Record));
                 return Task.CompletedTask;
             }).ConfigureAwait(true);
 
@@ -206,7 +251,7 @@ internal static partial class SmokeRun
             return -1;
         }
 
-        /// <summary>The first line of this kind that comes after a line of another kind (the heading of the group under the readings); 0 when there is none.</summary>
+        /// <summary>The first line (of the lines drawn: a row that wraps takes several) of a row of this kind that comes after a row of another kind (the heading of the group under the readings); 0 when there is none.</summary>
         private static int FirstRowOf(RunSummaryGrid grid, SummaryRowKind kind, SummaryRowKind afterKind)
         {
             var seen = false;
@@ -218,7 +263,7 @@ internal static partial class SmokeRun
                 }
                 else if (seen && grid.Rows[i].Kind == kind)
                 {
-                    return i;
+                    return Math.Max(grid.FirstLineOf(i), 0);
                 }
             }
 

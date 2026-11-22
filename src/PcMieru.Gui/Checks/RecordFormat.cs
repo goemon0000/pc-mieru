@@ -78,6 +78,10 @@ internal static class RecordFormat
 
     public static string StatusWord(RunStatus status) => Strings.Get("gui.rtab.status." + RunCodes.Of(status));
 
+    /// <summary>"3 recordings", and "1 recording" for one (the English plural; the Japanese does not change).</summary>
+    public static string RecordingCount(int count) =>
+        Strings.Format(count == 1 ? "gui.rtab.footer.count.one" : "gui.rtab.footer.count", Fmt.Dict(("count", count.ToString(Inv))));
+
     /// <summary>
     /// What to say about how a run ended, in plain words, or an empty text when it ended the ordinary way (the user stopped it). A run that was
     /// found without an end says that no end was saved; an old record says what it is.

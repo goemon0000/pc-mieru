@@ -710,9 +710,57 @@ Check 'record: a path inside one of the user''s folders is found; a sibling, a p
     Assert-That (-not (Test-InsideFolder '' 'C:\a')) 'an empty root'
     Assert-That (-not (Test-InsideFolder 'C:\a' '')) 'an empty path'
     $roots = @(Get-UserDataFolders)
-    Assert-That ($roots.Count -eq 3) ('folders: ' + $roots.Count)
+    Assert-That ($roots.Count -eq 4) ('folders: ' + $roots.Count)
     Assert-That (@($roots | Where-Object { $_ -match 'PCMieru$' }).Count -eq 1) 'the PCMieru folder under LocalAppData is not listed'
     foreach ($r in $roots) { Assert-That (-not [string]::IsNullOrWhiteSpace($r)) 'an empty user folder' }
+    $profileDocuments = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Documents'
+    Assert-That ($roots -contains [Environment]::GetFolderPath('MyDocuments')) 'the Documents folder as Windows says it (redirected or not) is not listed'
+    Assert-That ($roots -contains $profileDocuments) 'the plain Documents of the profile is not listed'
+    Assert-That (Test-InsideFolder $profileDocuments (Join-Path $profileDocuments 'runs')) 'a folder under the plain Documents of the profile'
+}
+
+Check 'record: the same folder under another spelling is the same folder (short name, junction), and a link that leads nowhere is refused' {
+    $base = Join-Path $WorkDir 'guard'
+    $documents = Join-Path $base 'Documents'
+    $elsewhere = Join-Path $base 'Elsewhere'
+    New-Item -ItemType Directory -Path $documents -Force | Out-Null
+    New-Item -ItemType Directory -Path $elsewhere -Force | Out-Null
+    $intoDocuments = Join-Path $base 'scratch-link'
+    $intoElsewhere = Join-Path $base 'other-link'
+    $dangling = Join-Path $base 'dangling'
+    $gone = Join-Path $base 'gone'
+    New-Item -ItemType Directory -Path $gone -Force | Out-Null
+    foreach ($pair in @(@($intoDocuments, $documents), @($intoElsewhere, $elsewhere), @($dangling, $gone))) {
+        & cmd.exe /c ('mklink /J "' + $pair[0] + '" "' + $pair[1] + '"') | Out-Null
+        Assert-That ($LASTEXITCODE -eq 0) ('mklink failed for ' + $pair[0])
+    }
+    Remove-Item -LiteralPath $gone -Force
+    try {
+        # A junction into a user folder is that folder; one into a harmless place is not; a folder that does not exist yet follows the part that does.
+        Assert-That (Test-InsideFolder $documents $intoDocuments) 'the junction itself is inside the folder it leads to'
+        Assert-That (Test-InsideFolder $documents (Join-Path $intoDocuments 'runs')) 'under the junction'
+        Assert-That (Test-InsideFolder $documents (Join-Path $intoDocuments 'a\b\c')) 'under the junction, several levels that do not exist yet'
+        Assert-That (-not (Test-InsideFolder $documents (Join-Path $intoElsewhere 'runs'))) 'a junction into a harmless place'
+        Assert-That (Test-PathResolvable (Join-Path $intoElsewhere 'runs')) 'a good junction can be followed'
+        Assert-That (Test-PathResolvable (Join-Path $base 'new\deeper')) 'a plain folder that is not there yet'
+        # A link that leads nowhere: where it goes is not known.
+        Assert-That (-not (Test-PathResolvable $dangling)) 'a junction whose target is gone'
+        Assert-That (-not (Test-PathResolvable (Join-Path $dangling 'runs'))) 'under a junction whose target is gone'
+        # The 8.3 short spelling of a folder is the folder.
+        $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($documents).ShortPath
+        if ($short -ine $documents) {
+            Assert-That (Test-InsideFolder $documents (Join-Path $short 'runs')) 'the short spelling of the folder'
+            Assert-That (Test-InsideFolder $short (Join-Path $documents 'runs')) 'the short spelling of the root'
+        }
+        Assert-That (-not (Test-InsideFolder $documents $elsewhere)) 'a sibling is not inside'
+    }
+    finally {
+        foreach ($link in @($intoDocuments, $intoElsewhere, $dangling)) {
+            # Test-Path follows a link and says "no" for one that leads nowhere, so the delete is tried for every link (it removes only the link).
+            try { [IO.Directory]::Delete($link) } catch { }
+        }
+    }
+    Assert-That ((Test-Path -LiteralPath $documents) -and (Test-Path -LiteralPath $elsewhere)) 'removing the links removed what they led to'
 }
 
 Check 'record: the app start info has the --measure-record switches only with a plan, and the interval only when it was asked for' {

@@ -239,14 +239,14 @@ public static class RecordStrings
 
         // The GPU driver's clock-event reasons. They say a mark was set, not that anything is wrong.
         new(LimitPrefix + "gpu-idle", "GPU が空いている", "GPU idle"),
-        new(LimitPrefix + "applications-clocks-setting", "アプリケーションのクロック設定", "Applications clocks setting"),
-        new(LimitPrefix + "sw-power-cap", "ソフトウェアの電力上限", "Software power cap"),
-        new(LimitPrefix + "hw-slowdown", "ハードウェアによる減速", "Hardware slowdown"),
-        new(LimitPrefix + "sync-boost", "同期ブースト", "Sync boost"),
-        new(LimitPrefix + "sw-thermal-slowdown", "ソフトウェアの温度による減速", "Software thermal slowdown"),
-        new(LimitPrefix + "hw-thermal-slowdown", "ハードウェアの温度による減速", "Hardware thermal slowdown"),
-        new(LimitPrefix + "hw-power-brake-slowdown", "ハードウェアの電力ブレーキ", "Hardware power brake slowdown"),
-        new(LimitPrefix + "display-clock-setting", "ディスプレイのクロック設定", "Display clock setting"),
+        new(LimitPrefix + "applications-clocks-setting", "アプリのクロック設定による制限", "Limited by an application's clock setting"),
+        new(LimitPrefix + "sw-power-cap", "電力の上限による速度の制限", "Speed limited by the power limit"),
+        new(LimitPrefix + "hw-slowdown", "ハードウェア側の判断による速度の制限", "Speed limited by the hardware itself"),
+        new(LimitPrefix + "sync-boost", "複数の GPU でクロックをそろえる設定", "Clocks matched across several GPUs"),
+        new(LimitPrefix + "sw-thermal-slowdown", "温度による速度の制限", "Speed limited by temperature"),
+        new(LimitPrefix + "hw-thermal-slowdown", "ハードウェアが判断した温度による速度の制限", "Speed limited by temperature (decided by the hardware)"),
+        new(LimitPrefix + "hw-power-brake-slowdown", "電源側の電力ブレーキによる速度の制限", "Speed limited by the power brake"),
+        new(LimitPrefix + "display-clock-setting", "画面表示のためのクロック設定", "Clock set for the display"),
         new(LimitPrefix + RunLimitBits.UnknownName, "この版が名前を知らない理由", "Reasons this version has no name for"),
 
         // A temperature rise with a clock fall in the same window. Only "together"; never a cause.
