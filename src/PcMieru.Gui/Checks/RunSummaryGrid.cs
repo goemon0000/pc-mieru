@@ -73,8 +73,26 @@ internal static class RunSummaryRows
         var language = Strings.Current;
         var rows = new List<SummaryRow>();
 
-        // By reading.
-        rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.metrics")));
+        // A recording that stopped before its end (it was cut off, or it could not be saved) says first what is left of it, and for one that failed what to
+        // check: that is what a person looking at it came for, and it stays in the first lines at 200 %. A recording that ended well has that line after the readings.
+        var cutShort = info.Status is RunStatus.Interrupted or RunStatus.Failed;
+        var record = RecordRow(info, sum, cutShort);
+        if (cutShort)
+        {
+            rows.Add(record);
+            if (info.Status == RunStatus.Failed)
+            {
+                rows.Add(new SummaryRow(SummaryRowKind.Note, string.Empty, Time: Strings.Get("gui.rtab.sum.advice.failed"), Tone: CellTone.Warning));
+            }
+        }
+
+        // By reading. After a cut-short recording's own first lines the readings follow with no heading of their own: at 200 % the table has five lines, and
+        // the first lines and the readings both have to be whole in them (the heading was a line of that room).
+        if (!cutShort)
+        {
+            rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.metrics")));
+        }
+
         foreach (var metric in sum.Metrics)
         {
             rows.Add(MetricRow(metric, language));
@@ -87,8 +105,9 @@ internal static class RunSummaryRows
 
         if (!sum.Metrics.Any(static m => m.Key is "cpu.temp_c" or "core.cpu_temp_c"))
         {
-            // There is no CPU temperature in a recording of this version, and the table says so instead of leaving it out.
-            rows.Add(NeverMeasured(Strings.Get("gui.rtab.sum.cputemp"), Strings.Get("gui.chk.note.cpu.temperature_not_measured"), wholeNote: true));
+            // There is no CPU temperature in a recording of this version, and the table says so instead of leaving it out, in the words of the other rows that
+            // were not measured and on one line (the sentence of the Checks tabs wrapped to a second line at 200 %).
+            rows.Add(NeverMeasured(Strings.Get("gui.rtab.sum.cputemp"), Strings.Get("gui.rtab.sum.cputemp.why")));
         }
 
         // What the sustained value is: one short sentence, a row of the table right under the readings (it was a label under the table, which took a third of
@@ -102,24 +121,28 @@ internal static class RunSummaryRows
             }
         }
 
-        // This recording, after the readings (a person comes for the readings; what it is, is on the head above the table): one line (the length of the data that is left, for a run that ended some other way than the user's stop).
-        rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.record")));
-        var lengthLabel = Strings.Get(info.Status is RunStatus.Interrupted or RunStatus.Failed ? "gui.rtab.sum.fact.saved" : "gui.rec.sum.duration");
-        var length = sum.Freshness == SummaryFreshness.LegacyEstimated ? RecordFormat.ApproxLength((long)(sum.DurationSec * 1_000_000)) : RecordFormat.ExactLength(sum.DurationSec);
-        var record = string.Join(
-            "・",
-            Labelled(lengthLabel, length),
-            Labelled(Strings.Get("gui.rec.sum.rows"), Strings.Format("gui.rtab.sum.count.rows", Fmt.Dict(("count", RecordFormat.Whole(sum.Rows))))),
-            Labelled(Strings.Get("gui.rtab.sum.fact.end"), EndText(info)));
-        rows.Add(new SummaryRow(SummaryRowKind.Record, record));
+        // This recording, after the readings (a person comes for the readings; what it is, is on the head above the table): the line about the whole of it
+        // (a cut-short one has it at the top instead), and the facts that go with it. The heading is there only when something is under it.
+        var facts = new List<SummaryRow>();
+        if (!cutShort)
+        {
+            facts.Add(record);
+        }
+
         if (sum.DroppedTicks > 0)
         {
-            rows.Add(Fact(Strings.Get("gui.rec.sum.dropped"), Strings.Format("gui.rtab.sum.count.dropped", Fmt.Dict(("count", RecordFormat.Whole(sum.DroppedTicks)))), CellTone.Warning));
+            facts.Add(Fact(Strings.Get("gui.rec.sum.dropped"), Strings.Format("gui.rtab.sum.count.dropped", Fmt.Dict(("count", RecordFormat.Whole(sum.DroppedTicks)))), CellTone.Warning));
         }
 
         if (sum.Freshness == SummaryFreshness.LegacyEstimated)
         {
-            rows.Add(Fact(Strings.Get("gui.rtab.sum.fact.seconds"), Strings.Get("gui.rtab.legacy.tag"), CellTone.Warning));
+            facts.Add(Fact(Strings.Get("gui.rtab.sum.fact.seconds"), Strings.Get("gui.rtab.legacy.tag"), CellTone.Warning));
+        }
+
+        if (facts.Count > 0)
+        {
+            rows.Add(new SummaryRow(SummaryRowKind.Heading, Strings.Get("gui.rtab.sum.head.record")));
+            rows.AddRange(facts);
         }
 
         // Why clocks were held back.
@@ -190,7 +213,24 @@ internal static class RunSummaryRows
         return rows;
     }
 
-    private static string Labelled(string label, string value) => label + ": " + value;
+    private static string Labelled(string label, string value) =>
+        Strings.Format("gui.rtab.sum.labelled", Fmt.Dict(("label", label), ("value", value)));
+
+    /// <summary>
+    /// The line about the whole recording: how long it is (the data that is left, for one that was cut short), how many rows, how it ended. The rows have no
+    /// label of their own ("742 rows" says it), and the parts are set apart by a spaced dot.
+    /// </summary>
+    private static SummaryRow RecordRow(RunInfo info, RunSummary sum, bool cutShort)
+    {
+        var lengthLabel = Strings.Get(cutShort ? "gui.rtab.sum.fact.saved" : "gui.rec.sum.duration");
+        var length = sum.Freshness == SummaryFreshness.LegacyEstimated ? RecordFormat.ApproxLength((long)(sum.DurationSec * 1_000_000)) : RecordFormat.ExactLength(sum.DurationSec);
+        var text = string.Join(
+            Strings.Get("gui.rtab.sum.sep"),
+            Labelled(lengthLabel, length),
+            Strings.Format("gui.rtab.sum.count.rows", Fmt.Dict(("count", RecordFormat.Whole(sum.Rows)))),
+            Labelled(Strings.Get("gui.rtab.sum.fact.end"), EndText(info)));
+        return new SummaryRow(SummaryRowKind.Record, text);
+    }
 
     private static SummaryRow Fact(string label, string value, CellTone tone = CellTone.Normal) =>
         new(SummaryRowKind.Fact, label, Time: value, Tone: tone);
@@ -200,7 +240,7 @@ internal static class RunSummaryRows
     {
         var status = RecordFormat.StatusWord(info.Status);
         var why = RecordFormat.NoteText(info);
-        return why.Length == 0 || info.IsLegacy ? status : status + "・" + why;
+        return why.Length == 0 || info.IsLegacy ? status : status + Strings.Get("gui.rtab.sum.sep") + why;
     }
 
     private static SummaryRow MetricRow(RunMetricSummary metric, Language language)
@@ -227,11 +267,11 @@ internal static class RunSummaryRows
     /// A reading with no value at all. The four number cells hold the dash (never 0, and not the words four times over, which made every number column
     /// as wide as "not measured" and left the last column too narrow at 200 %); the last column says "Not measured" in words, and why when it is known.
     /// </summary>
-    private static SummaryRow NeverMeasured(string label, string why, bool wholeNote = false)
+    private static SummaryRow NeverMeasured(string label, string why)
     {
         var time = why.Length == 0
             ? Strings.Get("gui.rtab.sum.time.nothing")
-            : wholeNote ? why : Strings.Format("gui.rtab.sum.time.none", Fmt.Dict(("why", why)));
+            : Strings.Format("gui.rtab.sum.time.none", Fmt.Dict(("why", why)));
         return new SummaryRow(SummaryRowKind.NotMeasured, label, Fmt.Dash, Fmt.Dash, Fmt.Dash, Fmt.Dash, time, Tone: CellTone.Dim, Missing: true);
     }
 
@@ -425,24 +465,64 @@ internal sealed class RunSummaryGrid : GridView
                 continue;
             }
 
-            var last = FirstLineOf(row);
-            if (last < 0)
-            {
-                continue;
-            }
-
-            while (last + 1 < _lines.Count && _lines[last + 1].Row == row)
-            {
-                last++;
-            }
-
-            if (last < fit)
+            var last = LastLineOf(row);
+            if (last >= 0 && last < fit)
             {
                 count++;
             }
         }
 
         return count;
+    }
+
+    /// <summary>The last line of a row of the summary, or -1.</summary>
+    private int LastLineOf(int row)
+    {
+        var last = FirstLineOf(row);
+        if (last < 0)
+        {
+            return -1;
+        }
+
+        while (last + 1 < _lines.Count && _lines[last + 1].Row == row)
+        {
+            last++;
+        }
+
+        return last;
+    }
+
+    /// <summary>
+    /// How many rows come before the first heading or reading of the summary: what a cut-short recording says first (what is left of it, and what to check).
+    /// None for a recording that ended well, whose table starts with its readings.
+    /// </summary>
+    internal int LeadRowCount()
+    {
+        for (var row = 0; row < _rows.Count; row++)
+        {
+            if (_rows[row].Kind is SummaryRowKind.Heading or SummaryRowKind.Metric or SummaryRowKind.NotMeasured)
+            {
+                return row;
+            }
+        }
+
+        return _rows.Count;
+    }
+
+    /// <summary>True when every line of the rows that come first (see <see cref="LeadRowCount"/>) is among the lines the table shows from its top, with no scrolling. At 200 % the advice must be seen at once.</summary>
+    internal bool LeadWholeAtTop()
+    {
+        var fit = RowsThatFit(Height);
+        for (var row = 0; row < LeadRowCount(); row++)
+        {
+            var last = LastLineOf(row);
+            if (last < 0 || last >= fit)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>The cells of the table whose text the column cuts ("line:column text"): none must be, now that a sentence wraps. The smoke run asks this of every table it takes a picture of.</summary>
@@ -674,7 +754,7 @@ internal sealed class RunSummaryGrid : GridView
         return lines;
     }
 
-    private const string NoStart = "、。，．）」』】〕！？：；・ー…）,.:;!?)]%";
+    private const string NoStart = "、。，．）」』】〕！？：；・ー…）,.:;!?)]%·";
     private const string NoEnd = "（「『【〔([";
 
     /// <summary>The places a text may be broken at: after a space, and between two letters of a language that does not use spaces (not before a closing mark, not after an opening one).</summary>
@@ -686,7 +766,8 @@ internal sealed class RunSummaryGrid : GridView
         {
             var before = text[i - 1];
             var at = text[i];
-            var afterSpace = before == ' ' && at != ' ';
+            // A mark that may not start a line (a dot between two parts of a line, a percent sign) stays with the word before it, a space or not.
+            var afterSpace = before == ' ' && at != ' ' && NoStart.IndexOf(at, StringComparison.Ordinal) < 0;
             var betweenWide = (IsWide(before) || IsWide(at)) && before != ' ' && at != ' '
                 && NoStart.IndexOf(at, StringComparison.Ordinal) < 0 && NoEnd.IndexOf(before, StringComparison.Ordinal) < 0;
             var breakHere = afterSpace || betweenWide;

@@ -240,10 +240,10 @@ public static class RecordStrings
         // The GPU driver's clock-event reasons. They say a mark was set, not that anything is wrong.
         new(LimitPrefix + "gpu-idle", "GPU が空いている", "GPU idle"),
         new(LimitPrefix + "applications-clocks-setting", "アプリのクロック設定による制限", "Limited by an application's clock setting"),
-        new(LimitPrefix + "sw-power-cap", "電力の上限による速度の制限", "Speed limited by the power limit"),
+        new(LimitPrefix + "sw-power-cap", "電力による制限", "Power limit"),
         new(LimitPrefix + "hw-slowdown", "ハードウェア側の判断による速度の制限", "Speed limited by the hardware itself"),
         new(LimitPrefix + "sync-boost", "複数の GPU でクロックをそろえる設定", "Clocks matched across several GPUs"),
-        new(LimitPrefix + "sw-thermal-slowdown", "温度による速度の制限", "Speed limited by temperature"),
+        new(LimitPrefix + "sw-thermal-slowdown", "温度による制限", "Temperature limit"),
         new(LimitPrefix + "hw-thermal-slowdown", "ハードウェアが判断した温度による速度の制限", "Speed limited by temperature (decided by the hardware)"),
         new(LimitPrefix + "hw-power-brake-slowdown", "電源側の電力ブレーキによる速度の制限", "Speed limited by the power brake"),
         new(LimitPrefix + "display-clock-setting", "画面表示のためのクロック設定", "Clock set for the display"),

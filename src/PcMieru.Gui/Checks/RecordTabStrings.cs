@@ -116,9 +116,16 @@ internal static class RecordTabStrings
         new("gui.rtab.sum.head.co", "同時に起きたこと", "Things that happened together"),
         new("gui.rtab.sum.head.sections", "ベンチ・負荷の区間", "Bench and load sections"),
         new("gui.rtab.sum.head.warnings", "注意と補足", "Warnings and notes"),
-        new("gui.rtab.sum.fact.end", "終わり方", "How it ended"),
+        new("gui.rtab.sum.fact.end", "終わり方", "Ended"),
         new("gui.rtab.sum.fact.seconds", "秒数の数え方", "How seconds are counted"),
-        new("gui.rtab.sum.fact.saved", "残っているデータの長さ", "Length of the saved data"),
+        new("gui.rtab.sum.fact.saved", "残ったデータ", "Saved data"),
+
+        // The line about the whole recording is "label: value" parts joined by the separator (a space either side), and the rows part has no label of its own ("742 rows").
+        new("gui.rtab.sum.labelled", "{label}：{value}", "{label}: {value}"),
+        new("gui.rtab.sum.sep", " ・ ", " · "),
+
+        // For a recording that failed to save: what to check, at the top of its details (the state line says the same of the last recording, and says "below").
+        new("gui.rtab.sum.advice.failed", "保存先の空き容量と、書き込みできるフォルダーかを確かめてください。残ったデータは上に出ています。", "Check the free space of the save folder and that it can be written to. The data that was kept is shown above."),
         new("gui.rtab.sum.record", "この記録", "This recording"),
         new("gui.rtab.sum.count.rows", "{count} 行", "{count} rows"),
         new("gui.rtab.sum.count.dropped", "{count} 回", "{count} times"),
@@ -127,6 +134,7 @@ internal static class RecordTabStrings
         new("gui.rtab.sum.time.none", "測れず（{why}）", "Not measured ({why})"),
         new("gui.rtab.sum.time.nothing", "測れず", "Not measured"),
         new("gui.rtab.sum.cputemp", "CPU 温度", "CPU temperature"),
+        new("gui.rtab.sum.cputemp.why", "温度を読むドライバなし", "no sensor driver"),
         new("gui.rtab.sum.limit.device", "測れた {seen} 秒のうち", "Out of {seen} s measured"),
         new("gui.rtab.sum.limit.reason", "{s} 秒（負荷時 {l} 秒）", "{s} s ({l} s under load)"),
         new("gui.rtab.sum.limit.none", "印の立った時間はありませんでした", "No reason to hold the clock back was flagged"),

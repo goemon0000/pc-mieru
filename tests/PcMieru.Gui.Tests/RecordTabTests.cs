@@ -977,8 +977,8 @@ public class RecordTabTests(ITestOutputHelper output)
         {
             foreach (var (language, saved, length, sustained, name) in new[]
             {
-                (Language.En, "Length of the saved data", "Length: ", "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases.", "Speed limited by temperature"),
-                (Language.Ja, "残っているデータの長さ", "記録の長さ: ", "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "温度による速度の制限"),
+                (Language.En, "Saved data: ", "Length: ", "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases.", "Temperature limit"),
+                (Language.Ja, "残ったデータ：", "記録の長さ：", "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "温度による制限"),
             })
             {
                 using var rig = new TabRig(language, seed: true);
@@ -1260,9 +1260,24 @@ public class RecordTabTests(ITestOutputHelper output)
                     Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == id));
                     var rows = tab.Summary.Rows.ToList();
 
-                    // The first thing in the table is the readings; what the recording is comes after them, under a heading of its own.
-                    Assert.Equal(SummaryRowKind.Heading, rows[0].Kind);
-                    Assert.Equal(Strings.Get("gui.rtab.sum.head.metrics"), rows[0].Item);
+                    // The readings come first, after what a recording that was cut short says first (what is left of it, and for a failed one what to check:
+                    // one row, or two); what a recording that ended well is comes after the readings, under a heading of its own.
+                    var cutShort = id != FakeRunData.CompletedId;
+                    var lead = !cutShort ? 0 : id == FakeRunData.FailedId ? 2 : 1;
+                    // The heading "By reading" is only over a table that starts with its readings: under a cut-short recording's own lines the readings follow at once
+                    // (at 200 % the heading took a line that the readings needed).
+                    if (cutShort)
+                    {
+                        Assert.Equal(SummaryRowKind.Metric, rows[lead].Kind);
+                        Assert.DoesNotContain(rows, r => r.Kind == SummaryRowKind.Heading && r.Item == Strings.Get("gui.rtab.sum.head.metrics"));
+                    }
+                    else
+                    {
+                        Assert.Equal(SummaryRowKind.Heading, rows[lead].Kind);
+                        Assert.Equal(Strings.Get("gui.rtab.sum.head.metrics"), rows[lead].Item);
+                    }
+
+                    Assert.DoesNotContain(rows.Take(lead), static r => r.Kind is SummaryRowKind.Heading or SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
                     var lastReading = rows.FindLastIndex(static r => r.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
                     Assert.True(lastReading > 0, $"{language} {id}: no readings");
 
@@ -1276,9 +1291,181 @@ public class RecordTabTests(ITestOutputHelper output)
                     }
 
                     var headingAt = rows.FindIndex(r => r.Kind == SummaryRowKind.Heading && r.Item == record);
-                    Assert.True(headingAt > (hasMetric ? noteAt : lastReading), $"{language} {id}: the heading '{record}' is at {headingAt}");
-                    Assert.Equal(SummaryRowKind.Record, rows[headingAt + 1].Kind);
+                    if (cutShort)
+                    {
+                        // Its line is at the top, so the heading "This recording" is not there at all when nothing else is under it (a count of dropped samples, or an old record's note).
+                        Assert.True(headingAt < 0, $"{language} {id}: the heading '{record}' is at {headingAt} with nothing under it");
+                        Assert.Equal(SummaryRowKind.Record, rows[0].Kind);
+                        Assert.Single(rows, static r => r.Kind == SummaryRowKind.Record);
+                    }
+                    else
+                    {
+                        Assert.True(headingAt > (hasMetric ? noteAt : lastReading), $"{language} {id}: the heading '{record}' is at {headingAt}");
+                        Assert.Equal(SummaryRowKind.Record, rows[headingAt + 1].Kind);
+                    }
                 }
+            }
+        });
+    }
+
+    [Fact]
+    public void A_failed_record_says_what_to_check_at_the_top_of_its_details_above_the_readings_and_whole_at_200_percent()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, advice, saved, fragment) in new[]
+            {
+                (Language.En, "Check the free space of the save folder and that it can be written to. The data that was kept is shown above.", "Saved data: ", "free space"),
+                (Language.Ja, "保存先の空き容量と、書き込みできるフォルダーかを確かめてください。残ったデータは上に出ています。", "残ったデータ：", "空き容量"),
+            })
+            {
+                // The room of a 1920 x 1080 screen at 200 %.
+                using var rig = new TabRig(language, seed: true, shown: true, size: new Size(756, 493));
+                var tab = rig.Show(ui);
+                Assert.True(Ui.PumpUntil(() => tab.List.RowRect(0) is not null));
+
+                // No recording has just failed here (a past one is picked from the list): the state line has no advice, so the record itself has to.
+                Assert.DoesNotContain(fragment, tab.StateLabel.Text, StringComparison.Ordinal);
+                tab.SelectRun(RowOf(tab, FakeRunData.FailedId));
+                Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == FakeRunData.FailedId));
+                var grid = tab.Summary;
+                Ui.Settle(() => grid.LineCount + "/" + grid.Height + "/" + grid.Width);
+                var rows = grid.Rows.ToList();
+
+                // The first rows: what is left of it, what to check, and then the readings.
+                Assert.Equal(SummaryRowKind.Record, rows[0].Kind);
+                Assert.StartsWith(saved, rows[0].Item, StringComparison.Ordinal);
+                Assert.Equal(SummaryRowKind.Note, rows[1].Kind);
+                Assert.Equal(string.Empty, rows[1].Item);
+                Assert.Equal(advice, rows[1].Time);
+                Assert.Equal(CellTone.Warning, rows[1].Tone);
+                Assert.Equal(SummaryRowKind.Metric, rows[2].Kind);
+
+                // On the first screen with no scrolling: every line of the first two rows is among the lines that fit, whole, and every reading under them too
+                // (the table has five lines at 200 %: the two first rows, two readings with values, and the CPU temperature on a line of its own).
+                var fit = grid.RowsThatFit(grid.Height);
+                var readings = rows.Count(static r => r.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
+                var lastLead = Enumerable.Range(0, grid.LineCount).Where(line => grid.RowOfLine(line) <= 1).Max();
+                output.WriteLine($"{language}: lead rows end on line {lastLead + 1} of {fit} that fit ({grid.Height} px), {grid.ReadingsWholeAtTop()} of {readings} readings whole");
+                Assert.True(lastLead < fit, $"{language}: the advice ends on line {lastLead + 1} and only {fit} lines fit");
+                Assert.Equal(Stripped(advice), Drawn(grid, 1, 0));
+                Assert.True(grid.LeadWholeAtTop());
+                Assert.True(readings >= 3);
+                Assert.Equal(readings, grid.ReadingsWholeAtTop());
+
+                // The CPU temperature that is not measured says why in the words of the other rows that were not, short enough for one line (the Checks tabs' sentence is longer).
+                var cpuTemp = rows.Single(static r => r.Kind == SummaryRowKind.NotMeasured && r.Item == Strings.Get("gui.rtab.sum.cputemp"));
+                Assert.Equal(language == Language.En ? "Not measured (no sensor driver)" : "測れず（温度を読むドライバなし）", cpuTemp.Time);
+
+                // The other records have no advice: one that was cut off has its line first and no advice, and one that ended well keeps it where it was.
+                foreach (var id in new[] { FakeRunData.InterruptedId, FakeRunData.CompletedId })
+                {
+                    tab.SelectRun(RowOf(tab, id));
+                    Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == id));
+                    Assert.DoesNotContain(tab.Summary.Rows, row => row.Time == advice);
+                    Assert.Equal(id == FakeRunData.InterruptedId, tab.Summary.Rows[0].Kind == SummaryRowKind.Record);
+                    if (id == FakeRunData.InterruptedId)
+                    {
+                        // Its line is whole at the top too, and all its readings under it, in the same five lines.
+                        Ui.Settle(() => grid.LineCount + "/" + grid.Height + "/" + grid.Width);
+                        var count = grid.Rows.Count(static r => r.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
+                        Assert.True(grid.LeadWholeAtTop());
+                        Assert.Equal(count, grid.ReadingsWholeAtTop());
+                    }
+                }
+            }
+        });
+    }
+
+    [Fact]
+    public void The_line_about_a_recording_names_its_parts_with_no_unit_said_twice_and_a_dot_between_them()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, interrupted, failed, completed, rowsLabel) in new[]
+            {
+                // The reason a recording stopped (as the head line says it) comes after the way it ended, set apart by the same spaced dot.
+                (Language.En, "Saved data: 12 min 22 s · 742 rows · Ended: Interrupted · no end was saved", "Saved data: 45 s · 45 rows · Ended: Failed · Writing failed", "Length: ", "Rows"),
+                (Language.Ja, "残ったデータ：12 分 22 秒 ・ 742 行 ・ 終わり方：中断 ・ 終わりの記録が残っていません", "残ったデータ：45 秒 ・ 45 行 ・ 終わり方：失敗 ・ 書き込みに失敗した", "記録の長さ：", "行数"),
+            })
+            {
+                using var rig = new TabRig(language, seed: true);
+                var tab = rig.Show(ui);
+                foreach (var (id, expected) in new[] { (FakeRunData.InterruptedId, interrupted), (FakeRunData.FailedId, failed) })
+                {
+                    tab.SelectRun(RowOf(tab, id));
+                    Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == id));
+                    var line = RowsOf(tab.Summary, SummaryRowKind.Record).Single().Item;
+                    Assert.Equal(expected, line);
+                    Assert.DoesNotContain(rowsLabel, line, StringComparison.Ordinal);
+                }
+
+                // The recording that ended well says its length the same way, after the readings.
+                tab.SelectRun(RowOf(tab, FakeRunData.CompletedId));
+                Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == FakeRunData.CompletedId));
+                var done = RowsOf(tab.Summary, SummaryRowKind.Record).Single().Item;
+                Assert.StartsWith(completed, done, StringComparison.Ordinal);
+                Assert.Contains(language == Language.En ? " · " : " ・ ", done, StringComparison.Ordinal);
+            }
+        });
+    }
+
+    [Fact]
+    public void The_limit_labels_of_the_power_and_the_temperature_are_short_and_take_one_line_in_the_item_column()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, power, temperature) in new[] { (Language.En, "Power limit", "Temperature limit"), (Language.Ja, "電力による制限", "温度による制限") })
+            {
+                using var rig = new TabRig(language, seed: true, shown: true, size: new Size(756, 493));
+                var tab = rig.Show(ui);
+                Assert.True(Ui.PumpUntil(() => tab.List.RowRect(0) is not null));
+                Assert.Equal(power, Strings.Get(RecordStrings.LimitKey("sw-power-cap")));
+                Assert.Equal(temperature, Strings.Get(RecordStrings.LimitKey("sw-thermal-slowdown")));
+
+                tab.SelectRun(RowOf(tab, FakeRunData.CompletedId));
+                Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == FakeRunData.CompletedId));
+                var grid = tab.Summary;
+                Ui.Settle(() => grid.LineCount + "/" + grid.Width);
+                foreach (var label in new[] { power, temperature })
+                {
+                    var row = grid.Rows.ToList().FindIndex(r => r.Kind == SummaryRowKind.Detail && r.Item == label);
+                    Assert.True(row >= 0, $"{language}: no row says '{label}'");
+                    var lines = Enumerable.Range(0, grid.LineCount).Count(line => grid.RowOfLine(line) == row);
+                    Assert.True(lines == 1, $"{language}: '{label}' takes {lines} lines in an item column of {grid.Columns[0].Width} px");
+                }
+            }
+        });
+    }
+
+    [Fact]
+    public void A_text_broken_into_lines_never_starts_a_line_with_the_dot_that_sets_parts_apart_or_a_percent_sign()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, text) in new[]
+            {
+                (Language.En, "Saved data: 12 min 22 s · 742 rows · Ended: Interrupted · 50 %"),
+                (Language.Ja, "残ったデータ：12 分 22 秒 ・ 742 行 ・ 終わり方：中断 ・ 50 %"),
+            })
+            {
+                using var rig = new TabRig(language, seed: true, shown: true, size: new Size(756, 493));
+                var tab = rig.Show(ui);
+                var grid = tab.Summary;
+                var broken = 0;
+                for (var room = grid.Scaled(60); room <= grid.Scaled(700); room += 3)
+                {
+                    var pieces = grid.Wrap(text, room, bold: false);
+                    foreach (var piece in pieces.Skip(1))
+                    {
+                        Assert.False("·・%".Contains(piece[0], StringComparison.Ordinal), $"{language}: a line starts with '{piece[0]}' at {room} px: [{piece}]");
+                    }
+
+                    Assert.Equal(Stripped(text), Stripped(string.Concat(pieces)));
+                    broken += pieces.Count > 1 ? 1 : 0;
+                }
+
+                Assert.True(broken > 10, $"{language}: the text broke in only {broken} of the rooms tried");
             }
         });
     }

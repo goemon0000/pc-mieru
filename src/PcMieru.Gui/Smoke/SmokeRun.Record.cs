@@ -56,6 +56,8 @@ internal static partial class SmokeRun
                     var readings = tab.Summary.Rows.Count(static r => r.Kind is SummaryRowKind.Metric or SummaryRowKind.NotMeasured);
                     var wholeReadings = tab.Summary.ReadingsWholeAtTop();
                     Check($"record: the summary in {name} shows several readings whole without scrolling ({look})", wholeReadings >= Math.Min(4, readings), $"{wholeReadings} of {readings} readings whole in {tab.Summary.RowsThatFit(tab.Summary.Height)} lines ({tab.Summary.Height} px, line {tab.Summary.MeasuredRowHeight} px, columns {string.Join("/", tab.Summary.Columns.Cast<ColumnHeader>().Select(static c => c.Width))} of {tab.Summary.ClientSize.Width} px, headers need {string.Join("/", Enumerable.Range(0, tab.Summary.Columns.Count).Select(tab.Summary.HeaderNeed))})");
+                    // A run that was cut short says first what is left of it, and for a failed one what to check: that is above the readings and whole, with no scrolling, at any scale.
+                    Check($"record: what the summary in {name} says first is whole without scrolling ({look})", tab.Summary.LeadWholeAtTop(), $"{tab.Summary.LeadRowCount()} rows first, {tab.Summary.RowsThatFit(tab.Summary.Height)} lines fit in {tab.Summary.Height} px, {tab.Summary.LineCount} lines in all");
                     var headers = new List<string>();
                     for (var column = 0; column < tab.Summary.Columns.Count; column++)
                     {
