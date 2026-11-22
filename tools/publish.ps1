@@ -302,8 +302,16 @@ function Invoke-VerifyRun([string]$Folder) {
     $smokeArgs = @('--smoke', ('"' + $smoke + '"'))
     if ($SmokeFakes) { $smokeArgs += '--fakes' }
     $process = Start-Process -FilePath $gui -ArgumentList $smokeArgs -PassThru -Wait
+    # On a CI runner the report file is gone with the runner, so the failing checks are printed before throwing.
+    $report = $null
+    if (Test-Path -LiteralPath $smoke) {
+        $report = Get-Content -LiteralPath $smoke -Raw | ConvertFrom-Json
+        foreach ($check in @($report.checks)) {
+            if (-not $check.ok) { Write-Host ('smoke FAILED   : {0} - {1}' -f $check.name, $check.detail) }
+        }
+    }
     if ($process.ExitCode -ne 0) { throw "PCMieru.exe --smoke exited with $($process.ExitCode); see $smoke" }
-    $report = Get-Content -LiteralPath $smoke -Raw | ConvertFrom-Json
+    if ($null -eq $report) { throw "PCMieru.exe --smoke wrote no report at $smoke" }
     if (-not $report.ok) { throw "PCMieru.exe --smoke reported failures; see $smoke" }
     Write-Host ('PCMieru smoke  : ok, {0} checks, {1} dpi' -f @($report.checks).Count, $report.dpi)
     Remove-Item -LiteralPath $smoke -Force

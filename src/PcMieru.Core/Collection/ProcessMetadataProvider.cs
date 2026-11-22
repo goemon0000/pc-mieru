@@ -420,6 +420,13 @@ public sealed class ProcessMetadataProvider : IProcessDetailsProvider, IDisposab
     {
         try
         {
+            // A caller that arrives just after an earlier check of the same file finished (and left _signing) starts a new
+            // task; the answer is already remembered, so it is taken from there without a gate slot or a second check.
+            if (PeekVerified(path) is { } known)
+            {
+                return known;
+            }
+
             await _signatureGate.WaitAsync().ConfigureAwait(false);
             try
             {
