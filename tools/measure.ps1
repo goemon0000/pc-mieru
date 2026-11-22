@@ -81,6 +81,40 @@
              reads those keys even from a posted message. The GUI window itself opens in the foreground at the start, as any launch
              does. Private bytes and handles: the mean of the first 10 minutes, the mean of the last 10 minutes, and a least-squares
              slope per hour (the windows shrink to half the run if it is shorter than 20 minutes).
+    record   DESIGN-B section 11 step 8: what a recording costs. One unmeasured run first (no recording), then -Runs measured runs
+             (-Runs 1 is usual: a run is -LeadSeconds + -RecordSeconds + -AfterSeconds + 5 s long). The GUI is started with the
+             test-only recording switches, so it records ITSELF without a click:
+               PCMieru.exe --measure <marks.jsonl> --measure-record <folder> [--measure-record-lead <s>] [--measure-record-for <s>]
+                           [--measure-record-interval <ms>]
+             --measure-record is refused without --measure (one line on stderr, exit 1); the folder is the ONLY place the recording
+             writes (run-<id>.json/.csv); it must be a full path outside Documents, %LOCALAPPDATA%\PCMieru and %APPDATA% (the script
+             makes it under <Output>, one folder per run, so it is a scratch folder). A measured run still reads and writes no user
+             settings (gui.ini is never read or written, with or without the new switches). --measure-record-lead is the wait after the
+             window is shown (default 60), --measure-record-for the recording time before the stop (default 180), and
+             --measure-record-interval (500, 1000, 2000 or 5000; -UserIntervalMs here) is the USER's sampling interval of that run,
+             in memory only. The GUI writes what the script cannot read from outside to <marks name>.record.jsonl next to the marks
+             (one JSON object per line: begin, start, period, stop, stopped; the system time in 7 digits and a Z).
+             Windows (the first 30 s are startup and are left out, 2 s are left out on each side of the start and of the stop):
+             before (idle, the user's interval), recording, after (idle again). Each has the GUI alone, the SensorHost alone and the
+             total: private bytes, CPU % and ms/s, cycles. Read from the recording's own CSV (one row per second): per source (core,
+             gpu1..N) the fresh / repeat / missing rows and their rate, the periodMs the rows carry, the age of the data at the row,
+             frame-number jumps (frames the writer missed), the spacing of the rows, whether the CPU package power, AC and battery
+             columns are present or missing. The writer's backlog is not public: it is seen as dropped ticks (the run's own count), rows
+             against seconds, frame jumps, the longest row gap and how long the stop took (the writer draining). The period after the
+             stop: Core's period is read from the snapshots, one period line per snapshot. What a line carries is the gap Core MEASURED
+             since the snapshot before it, not the nominal period, so it jitters (999..1018 ms for a 1000 ms beat): each phase is read
+             as a distribution (min / median / mean / max), its median is put to the nearest of 500, 1000, 2000 and 5000 ms, and it
+             counts as holding that period when at least 90 % of the gaps are within 25 % of it. Core is under 1000 ms while recording
+             and back at the user's interval after the stop (judged on the second half of the after phase and on its last line, as
+             the first gaps after the stop may still be the recording's). Use -UserIntervalMs 2000 to see it come back: with the
+             default 1000 the two are the same and the script says so. The SensorHost's own period cannot be read from outside: it is
+             shown through the CSV's gpu periodMs while recording
+             and through the SensorHost's CPU and cycles before / recording / after. With -Fakes the recording is in memory and no CSV
+             is written (the script says so).
+             TODO (DESIGN-B section 10, the update side): the states "waiting for a check" and "a check is due" are NOT measured here.
+             They exist when the update side (src/PcMieru.Update, another worktree) is merged. Each needs its own scenario (the GUI
+             idle in that state for -Seconds: steady CPU, private bytes) and a test-only way to put the GUI into it without a network
+             call. Add them to this mode (or a -Mode update) then; until then the idle targets are judged for the recording states only.
 
   Targets (printed next to the results, not judged in code): private bytes < 100 MB, steady CPU mean < 0.3 % and < 10 ms/s, warm
   start < 1 s. -Zip prints the ZIP size next to v0.2.0's 51.6 MB.
@@ -100,7 +134,7 @@
 .PARAMETER Exe
   The published PCMieru.exe.
 .PARAMETER Mode
-  warm (default), cold, long or compare.
+  warm (default), cold, long, compare or record.
 .PARAMETER Output
   Output folder (made if needed; it must not hold a summary.json yet). Default: a folder under the temp folder.
 .PARAMETER Seconds
@@ -113,6 +147,16 @@
   Pass --fakes to the GUI (trials only; marked in the summary).
 .PARAMETER Zip
   A release ZIP: its size is printed next to v0.2.0's 51.6 MB and recorded.
+.PARAMETER RecordSeconds
+  record mode: how long the GUI records before it stops (default 180; 5 to 7200).
+.PARAMETER AfterSeconds
+  record mode: how long the run goes on after the stop (default 60; 10 to 3600).
+.PARAMETER LeadSeconds
+  record mode: how long after the window is shown the recording starts (default 60; 0 to 3600; the first 30 s are startup, so 40 or more
+  leaves a "before" window).
+.PARAMETER UserIntervalMs
+  record mode: the user's sampling interval of the measured run (500, 1000, 2000 or 5000; default 0 = leave the GUI's own 1000). A
+  recording samples every second, so 2000 is how the run shows Core's period going back after the stop.
 
 .EXAMPLE
   powershell -File tools\measure.ps1 -Exe C:\release\PCMieru.exe -Mode warm -Output C:\measure\warm -Zip C:\release\PCMieru-0.4.0-win-x64.zip
@@ -122,18 +166,25 @@
 
 .EXAMPLE
   powershell -File tools\measure.ps1 -Exe C:\release\PCMieru.exe -Mode long -LongHours 2 -Output C:\measure\long
+
+.EXAMPLE
+  powershell -File tools\measure.ps1 -Exe C:\release\PCMieru.exe -Mode record -Runs 1 -RecordSeconds 180 -AfterSeconds 60 -UserIntervalMs 2000 -Output C:\measure\record
 #>
 [CmdletBinding()]
 param(
     [string]$Exe = '',
-    [ValidateSet('warm', 'cold', 'long', 'compare')]
+    [ValidateSet('warm', 'cold', 'long', 'compare', 'record')]
     [string]$Mode = 'warm',
     [string]$Output = '',
     [int]$Seconds = 300,
     [int]$Runs = 3,
     [double]$LongHours = 2,
     [switch]$Fakes,
-    [string]$Zip = ''
+    [string]$Zip = '',
+    [int]$RecordSeconds = 180,
+    [int]$AfterSeconds = 60,
+    [int]$LeadSeconds = 60,
+    [int]$UserIntervalMs = 0
 )
 
 Set-StrictMode -Version Latest
@@ -159,6 +210,17 @@ $script:ParentIdProvider = $null
 $script:ProcessLister = $null
 # The title of the checks page in the GUI's navigation list (ja: U+70B9 U+691C; en: Checks). gui.nav.checks in CheckStrings.cs; a test pins both.
 $script:ChecksTitles = @('Checks', ([string][char]0x70B9 + [string][char]0x691C))
+# record mode: seconds left out of a window on each side of the start and of the stop (the start makes the files, the stop drains the writer),
+# and the seconds a run is kept after -LeadSeconds + -RecordSeconds + -AfterSeconds (the GUI's lead runs from its window being shown, and the
+# start and the stop take a moment). A recording samples every second (DESIGN-B section 2): Core's period under a recording lease.
+$script:RecordGuardSeconds = 2
+$script:RecordMarginSeconds = 5
+$script:RecordingPeriodMs = 1000
+# The periods the GUI can run at (the user's choices), how near one a measured gap must be to count as holding it (a quarter of it), and the share of a
+# phase's gaps that must be that near (Core's gap jitters; see Get-PeriodSummary).
+$script:NominalPeriodsMs = @(500, 1000, 2000, 5000)
+$script:PeriodToleranceFraction = 0.25
+$script:PeriodHoldShare = 0.9
 
 # ---- small helpers ----
 
@@ -1301,13 +1363,526 @@ function Get-Trend($Rows, [string]$Field, [double]$Scale, [double]$WindowSeconds
     }
 }
 
+# ---- record mode (-Mode record) ----
+
+# A property of an object, or $Default when it has none (strict mode throws on a missing property).
+function Get-Prop($Obj, [string]$Name, $Default = $null) {
+    if ($null -eq $Obj) { return $Default }
+    $p = $Obj.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $Default }
+    return $p.Value
+}
+
+function Read-SharedText([string]$Path) {
+    $fs = New-Object System.IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try { return (New-Object System.IO.StreamReader($fs, [Text.Encoding]::UTF8)).ReadToEnd() } finally { $fs.Dispose() }
+}
+
+function ConvertTo-UtcDate($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [DateTime]) { return $Value.ToUniversalTime() }
+    try { return [DateTime]::Parse([string]$Value, (Get-Inv), [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } catch { return $null }
+}
+
+# One line of a CSV. The recording quotes a cell with a comma or a quote in it (RFC 4180), so a plain split is not enough.
+function Split-CsvLine([string]$Line) {
+    $fields = New-Object System.Collections.ArrayList
+    $sb = New-Object System.Text.StringBuilder
+    $quoted = $false
+    for ($i = 0; $i -lt $Line.Length; $i++) {
+        $c = $Line[$i]
+        if ($quoted) {
+            if ($c -eq [char]34) {
+                if ($i + 1 -lt $Line.Length -and $Line[$i + 1] -eq [char]34) { [void]$sb.Append([char]34); $i++ }
+                else { $quoted = $false }
+            }
+            else { [void]$sb.Append($c) }
+        }
+        elseif ($c -eq [char]34) { $quoted = $true }
+        elseif ($c -eq [char]44) { [void]$fields.Add($sb.ToString()); [void]$sb.Clear() }
+        else { [void]$sb.Append($c) }
+    }
+    [void]$fields.Add($sb.ToString())
+    return , $fields.ToArray()
+}
+
+# The folders a measured run must never write into (the GUI refuses a --measure-record folder inside any of them; so does this script, before it starts anything).
+function Get-UserDataFolders {
+    return @(
+        [Environment]::GetFolderPath('MyDocuments')
+        (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PCMieru')
+        [Environment]::GetFolderPath('ApplicationData')
+    )
+}
+
+function Test-InsideFolder([string]$Root, [string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Root) -or [string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $parent = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $child = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    return ($child -ieq $parent) -or $child.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Where the GUI puts the record events of the run with this marks file: next to it, <marks name>.record.jsonl (MeasureRecording.EventsPathFor).
+function Get-RecordEventsPath([string]$MarkFile) {
+    $full = [IO.Path]::GetFullPath($MarkFile)
+    return (Join-Path ([IO.Path]::GetDirectoryName($full)) ([IO.Path]::GetFileNameWithoutExtension($full) + '.record.jsonl'))
+}
+
+# The events the GUI wrote: one JSON object per line. A line that is not an object with an "event" is counted and skipped.
+function Read-RecordEvents([string]$Path) {
+    $result = [ordered]@{ found = $false; events = (New-Object System.Collections.ArrayList); bad_lines = 0 }
+    if ([string]::IsNullOrEmpty($Path) -or -not (Test-Path -LiteralPath $Path)) { return $result }
+    $text = $null
+    try { $text = Read-SharedText $Path } catch { return $result }
+    $result.found = $true
+    foreach ($line in ($text -split "`n")) {
+        $line = $line.Trim()
+        if ($line.Length -eq 0) { continue }
+        try {
+            $o = $line | ConvertFrom-Json
+            if ($null -eq $o -or $null -eq $o.PSObject.Properties['event']) { $result.bad_lines = $result.bad_lines + 1; continue }
+            [void]$result.events.Add($o)
+        }
+        catch { $result.bad_lines = $result.bad_lines + 1 }
+    }
+    return $result
+}
+
+# begin / start / stop / stopped as seconds from the stopwatch zero, and what each said.
+function Get-RecordTimeline($Events, [DateTime]$ZeroUtc) {
+    $t = [ordered]@{
+        begin_s = $null; lead_seconds = $null; record_seconds = $null; user_interval_ms = $null
+        start_s = $null; start_ok = $null; start_ms = $null; start_problem = $null; run_id = $null
+        stop_s = $null; self_ended = $null
+        stopped_s = $null; stop_ms = $null; saved = $null; status = $null; stop_reason = $null
+        rows = $null; dropped_ticks = $null; duration_us = $null; csv = $null; json = $null; error = $null
+        errors = (New-Object System.Collections.ArrayList)
+    }
+    foreach ($e in @($Events)) {
+        $name = [string](Get-Prop $e 'event' '')
+        $utc = ConvertTo-UtcDate (Get-Prop $e 'utc')
+        $off = $null
+        if ($null -ne $utc) { $off = [math]::Round(($utc - $ZeroUtc).TotalSeconds, 3) }
+        if ($name -eq 'begin' -and $null -eq $t.begin_s) {
+            $t.begin_s = $off
+            $t.lead_seconds = Get-Prop $e 'leadSeconds'
+            $t.record_seconds = Get-Prop $e 'recordSeconds'
+            $t.user_interval_ms = Get-Prop $e 'userIntervalMs'
+        }
+        elseif ($name -eq 'start' -and $null -eq $t.start_s) {
+            $t.start_s = $off
+            $t.start_ok = [bool](Get-Prop $e 'ok' $false)
+            $t.start_ms = Get-Prop $e 'startMs'
+            if ($t.start_ok) { $t.run_id = Get-Prop $e 'runId' }
+            else { $t.start_problem = (([string](Get-Prop $e 'problem' '')) + ' ' + ([string](Get-Prop $e 'detail' ''))).Trim() }
+        }
+        elseif ($name -eq 'stop' -and $null -eq $t.stop_s) {
+            $t.stop_s = $off
+            $t.self_ended = Get-Prop $e 'selfEnded'
+        }
+        elseif ($name -eq 'stopped' -and $null -eq $t.stopped_s) {
+            $t.stopped_s = $off
+            $t.stop_ms = Get-Prop $e 'stopMs'
+            $t.saved = Get-Prop $e 'saved'
+            $t.status = Get-Prop $e 'status'
+            $t.stop_reason = Get-Prop $e 'stopReason'
+            $t.rows = Get-Prop $e 'rows'
+            $t.dropped_ticks = Get-Prop $e 'droppedTicks'
+            $t.duration_us = Get-Prop $e 'durationUs'
+            $t.csv = Get-Prop $e 'csv'
+            $t.json = Get-Prop $e 'json'
+            $t.error = Get-Prop $e 'error'
+        }
+        elseif ($name -eq 'error') { [void]$t.errors.Add([string](Get-Prop $e 'message' '')) }
+    }
+    if ($null -eq $t.csv -or [string]$t.csv -eq '') {
+        # The recording's own path from the start event (the stopped event may not have come).
+        foreach ($e in @($Events)) { if ([string](Get-Prop $e 'event' '') -eq 'start' -and [bool](Get-Prop $e 'ok' $false)) { $t.csv = Get-Prop $e 'csv' } }
+    }
+    return $t
+}
+
+# The sampling period Core reported on its snapshots, per phase of the recording (the GUI's period lines, one per snapshot).
+# What a line carries is the gap Core MEASURED since the snapshot before it (Snapshot.IntervalMs), not the nominal period: it jitters around the
+# period the loop runs at (999..1018 ms for a 1000 ms beat on this PC). So a phase is read as a distribution: its median is put to the nearest period the
+# GUI can run at (500, 1000, 2000, 5000 ms) and counted as holding it only when most gaps are within a quarter of that period. After the stop the
+# first gaps may still be the recording's, so "back at the user's interval" is judged on the second half of the phase and on its last line.
+function Get-NominalPeriod($Ms) {
+    if ($null -eq $Ms) { return $null }
+    $best = $null
+    foreach ($n in $script:NominalPeriodsMs) {
+        if ($null -eq $best -or [math]::Abs([double]$Ms - $n) -lt [math]::Abs([double]$Ms - $best)) { $best = $n }
+    }
+    return [int]$best
+}
+
+function Get-GapStats($Gaps) {
+    $v = @($Gaps | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
+    if ($v.Count -eq 0) { return $null }
+    $m = $v | Measure-Object -Minimum -Maximum -Average
+    $median = Get-Median $v
+    $class = Get-NominalPeriod $median
+    $near = @($v | Where-Object { [math]::Abs($_ - $class) -le ($script:PeriodToleranceFraction * $class) }).Count
+    $half = [int][math]::Floor($v.Count / 2)
+    $settled = Get-Median @($v[$half..($v.Count - 1)])
+    return [ordered]@{
+        min = [math]::Round($m.Minimum, 1)
+        median = [math]::Round($median, 1)
+        mean = [math]::Round($m.Average, 1)
+        max = [math]::Round($m.Maximum, 1)
+        nominal_ms = $class
+        share_near_nominal = [math]::Round($near / [double]$v.Count, 3)
+        settled_median = [math]::Round($settled, 1)
+        settled_nominal_ms = (Get-NominalPeriod $settled)
+        last = [int]$v[$v.Count - 1]
+        last_nominal_ms = (Get-NominalPeriod $v[$v.Count - 1])
+    }
+}
+
+function Get-PeriodSummary($Events, $UserIntervalMs) {
+    $phases = [ordered]@{}
+    foreach ($name in @('before', 'recording', 'stopping', 'after')) {
+        $phases[$name] = @{ lines = 0; gaps = (New-Object System.Collections.ArrayList); effective = @{}; snapshots = 0 }
+    }
+    foreach ($e in @($Events)) {
+        if ([string](Get-Prop $e 'event' '') -ne 'period') { continue }
+        $ph = [string](Get-Prop $e 'phase' '')
+        if (-not $phases.Contains($ph)) { continue }
+        $p = $phases[$ph]
+        $p.lines = $p.lines + 1
+        $core = Get-Prop $e 'coreIntervalMs'
+        if ($null -ne $core) { [void]$p.gaps.Add([double]$core) }
+        $eff = Get-Prop $e 'effectiveIntervalMs'
+        if ($null -ne $eff) { $p.effective[[string]$eff] = 1 }
+        $snap = Get-Prop $e 'snapshotsInPhase'
+        if ($null -ne $snap) { $p.snapshots = [int]$snap }
+        if ($null -eq $UserIntervalMs) { $UserIntervalMs = Get-Prop $e 'userIntervalMs' }
+    }
+    $out = [ordered]@{}
+    foreach ($name in $phases.Keys) {
+        $p = $phases[$name]
+        $g = Get-GapStats $p.gaps
+        $first = $null; $last = $null
+        if ($p.gaps.Count -gt 0) { $first = [int]$p.gaps[0]; $last = [int]$p.gaps[$p.gaps.Count - 1] }
+        $out[$name] = [ordered]@{
+            period_lines = $p.lines
+            core_gap_ms = $g
+            nominal_period_ms = $(if ($null -ne $g) { $g.nominal_ms } else { $null })
+            effective_interval_ms = @($p.effective.Keys | ForEach-Object { [int]$_ } | Sort-Object)
+            first_core_interval_ms = $first
+            last_core_interval_ms = $last
+            snapshots_at_last_line = $p.snapshots
+        }
+    }
+    $user = $null
+    if ($null -ne $UserIntervalMs) { $user = [int]$UserIntervalMs }
+    $rec = $out['recording']
+    $after = $out['after']
+    $duringOk = $null
+    if ($null -ne $rec.core_gap_ms) { $duringOk = ($rec.core_gap_ms.nominal_ms -eq $script:RecordingPeriodMs -and $rec.core_gap_ms.share_near_nominal -ge $script:PeriodHoldShare) }
+    $returns = $null
+    if ($null -ne $after.core_gap_ms -and $null -ne $user) { $returns = ($after.core_gap_ms.settled_nominal_ms -eq $user -and $after.core_gap_ms.last_nominal_ms -eq $user) }
+    $observable = ($null -ne $user -and $user -ne $script:RecordingPeriodMs)
+    $note = $null
+    if ($rec.period_lines -eq 0) { $note = 'no snapshot reached the window while recording: the period during the recording is missing' }
+    elseif ($after.period_lines -eq 0) { $note = 'no snapshot reached the window after the stop: the period after the stop is missing' }
+    elseif (-not $observable) { $note = ('the user interval ({0} ms) equals the recording period ({1} ms): a return to the user setting cannot be told from staying at the recording period; run with -UserIntervalMs 2000' -f $user, $script:RecordingPeriodMs) }
+    return [ordered]@{
+        user_interval_ms = $user
+        recording_period_ms = $script:RecordingPeriodMs
+        measured = 'Core reports the gap it measured between snapshots, which jitters around the period the loop runs at: each phase is judged on the median gap put to the nearest of 500/1000/2000/5000 ms'
+        during_recording_is_recording_period = $duringOk
+        after_stop_returns_to_user_interval = $returns
+        return_observable = $observable
+        note = $note
+        phases = $out
+    }
+}
+
+# The recording's own CSV, read from the outside: per source the fresh / repeat / missing rows, the period the rows carry, the frames the writer
+# skipped (a jump in the frame number of a fresh row), the age of the data at the row, the spacing of the rows, and what every value column held.
+function Get-RecordCsvStats([string]$Path) {
+    $inv = Get-Inv
+    $out = [ordered]@{
+        file = $(if ([string]::IsNullOrEmpty($Path)) { $null } else { Split-Path -Leaf $Path })
+        read = $false
+        note = $null
+        rows = 0
+        bad_rows = 0
+        row_gap_ms = $null
+        row_gaps_over_1500_ms = 0
+        sources = [ordered]@{}
+        values = [ordered]@{}
+    }
+    if ([string]::IsNullOrEmpty($Path) -or -not (Test-Path -LiteralPath $Path)) { $out.note = 'the recording CSV was not found'; return $out }
+    $text = $null
+    try { $text = Read-SharedText $Path } catch { $out.note = 'the recording CSV could not be read: ' + (Get-ShortError $_); return $out }
+    $lines = @($text -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Length -gt 0 })
+    if ($lines.Count -eq 0) { $out.note = 'the recording CSV is empty'; return $out }
+    $header = Split-CsvLine $lines[0]
+    if ($header.Count -lt 2 -or $header[0] -ne 'offsetUs' -or $header[1] -ne 'utc') { $out.note = 'the first line is not a recording header (offsetUs,utc,...)'; return $out }
+    $out.read = $true
+
+    $col = @{}
+    for ($i = 0; $i -lt $header.Count; $i++) { $col[$header[$i]] = $i }
+    $metaSuffixes = @('.frame', '.acquiredOffsetUs', '.periodMs', '.state', '.reason')
+    $sources = New-Object System.Collections.ArrayList
+    foreach ($h in $header) {
+        if (-not $h.EndsWith('.state')) { continue }
+        $name = $h.Substring(0, $h.Length - '.state'.Length)
+        $ix = @{}
+        foreach ($sfx in $metaSuffixes) { $ix[$sfx] = $(if ($col.ContainsKey($name + $sfx)) { [int]$col[$name + $sfx] } else { -1 }) }
+        [void]$sources.Add(@{ Name = $name; Ix = $ix; Fresh = 0; Repeat = 0; Missing = 0; Other = 0; Periods = @{}; Reasons = @{}; Jumps = 0L; JumpEvents = 0; MaxJump = 0L; Generations = 0; LastKey = $null; LastSeq = $null; AgeSum = 0.0; AgeN = 0; AgeMax = $null })
+    }
+    $valueCols = New-Object System.Collections.ArrayList
+    for ($i = 2; $i -lt $header.Count; $i++) {
+        $isMeta = $false
+        foreach ($sfx in $metaSuffixes) { if ($header[$i].EndsWith($sfx)) { $isMeta = $true } }
+        if (-not $isMeta) { [void]$valueCols.Add(@{ Name = $header[$i]; Index = $i; N = 0; Empty = 0; Num = 0; Min = $null; Max = $null; Sum = 0.0; Texts = @{} }) }
+    }
+
+    $prevOff = $null
+    $gapSum = 0.0; $gapN = 0; $gapMin = $null; $gapMax = $null
+    $frameRx = '^(c|g\d+)-(\d+)$'
+    for ($r = 1; $r -lt $lines.Count; $r++) {
+        $f = Split-CsvLine $lines[$r]
+        $off = 0L
+        if ($f.Count -ne $header.Count -or -not [long]::TryParse($f[0], [Globalization.NumberStyles]::AllowLeadingSign, $inv, [ref]$off)) { $out.bad_rows = $out.bad_rows + 1; continue }
+        $out.rows = $out.rows + 1
+        if ($null -ne $prevOff) {
+            $gap = ($off - $prevOff) / 1000.0
+            $gapSum += $gap; $gapN++
+            if ($null -eq $gapMin -or $gap -lt $gapMin) { $gapMin = $gap }
+            if ($null -eq $gapMax -or $gap -gt $gapMax) { $gapMax = $gap }
+            if ($gap -gt 1500) { $out.row_gaps_over_1500_ms = $out.row_gaps_over_1500_ms + 1 }
+        }
+        $prevOff = $off
+
+        foreach ($s in $sources) {
+            $ix = $s.Ix
+            $state = $(if ($ix['.state'] -ge 0) { [string]$f[$ix['.state']] } else { '' })
+            if ($state -eq 'fresh') { $s.Fresh = $s.Fresh + 1 }
+            elseif ($state -eq 'repeat') { $s.Repeat = $s.Repeat + 1 }
+            elseif ($state -eq 'missing') { $s.Missing = $s.Missing + 1 }
+            else { $s.Other = $s.Other + 1 }
+            if ($ix['.periodMs'] -ge 0) {
+                $pv = [string]$f[$ix['.periodMs']]
+                if ($pv.Length -gt 0) { $s.Periods[$pv] = 1 + $(if ($s.Periods.ContainsKey($pv)) { $s.Periods[$pv] } else { 0 }) }
+            }
+            if ($ix['.reason'] -ge 0) {
+                $rv = [string]$f[$ix['.reason']]
+                if ($rv.Length -gt 0) { $s.Reasons[$rv] = 1 + $(if ($s.Reasons.ContainsKey($rv)) { $s.Reasons[$rv] } else { 0 }) }
+            }
+            if (($state -eq 'fresh' -or $state -eq 'repeat') -and $ix['.frame'] -ge 0) {
+                $fv = [string]$f[$ix['.frame']]
+                if ($fv -match $frameRx) {
+                    $key = $Matches[1]; $seq = [long]$Matches[2]
+                    if ($null -ne $s.LastKey -and $s.LastKey -ne $key) { $s.Generations = $s.Generations + 1 }
+                    elseif ($null -ne $s.LastSeq -and $state -eq 'fresh' -and $seq -gt $s.LastSeq + 1) {
+                        $skipped = $seq - $s.LastSeq - 1
+                        $s.Jumps = $s.Jumps + $skipped; $s.JumpEvents = $s.JumpEvents + 1
+                        if ($skipped -gt $s.MaxJump) { $s.MaxJump = $skipped }
+                    }
+                    $s.LastKey = $key; $s.LastSeq = $seq
+                }
+            }
+            if ($state -eq 'fresh' -and $ix['.acquiredOffsetUs'] -ge 0) {
+                $acq = 0L
+                if ([long]::TryParse([string]$f[$ix['.acquiredOffsetUs']], [Globalization.NumberStyles]::AllowLeadingSign, $inv, [ref]$acq)) {
+                    $age = ($off - $acq) / 1000.0
+                    $s.AgeSum += $age; $s.AgeN++
+                    if ($null -eq $s.AgeMax -or $age -gt $s.AgeMax) { $s.AgeMax = $age }
+                }
+            }
+        }
+        foreach ($v in $valueCols) {
+            $cell = [string]$f[$v.Index]
+            if ($cell.Length -eq 0) { $v.Empty = $v.Empty + 1; continue }
+            $v.N = $v.N + 1
+            $d = 0.0
+            if ([double]::TryParse($cell, [Globalization.NumberStyles]::Float, $inv, [ref]$d)) {
+                $v.Num = $v.Num + 1; $v.Sum += $d
+                if ($null -eq $v.Min -or $d -lt $v.Min) { $v.Min = $d }
+                if ($null -eq $v.Max -or $d -gt $v.Max) { $v.Max = $d }
+            }
+            elseif ($v.Texts.Count -lt 6 -or $v.Texts.ContainsKey($cell)) { $v.Texts[$cell] = 1 + $(if ($v.Texts.ContainsKey($cell)) { $v.Texts[$cell] } else { 0 }) }
+        }
+    }
+
+    if ($gapN -gt 0) { $out.row_gap_ms = [ordered]@{ min = (Round-Or-Null $gapMin 1); mean = (Round-Or-Null ($gapSum / $gapN) 1); max = (Round-Or-Null $gapMax 1) } }
+    $total = [double][math]::Max(1, $out.rows)
+    foreach ($s in $sources) {
+        $periods = [ordered]@{}
+        foreach ($k in ($s.Periods.Keys | Sort-Object { [int]$_ })) { $periods[[string]$k] = $s.Periods[$k] }
+        $reasons = [ordered]@{}
+        foreach ($k in ($s.Reasons.Keys | Sort-Object)) { $reasons[[string]$k] = $s.Reasons[$k] }
+        $out.sources[$s.Name] = [ordered]@{
+            fresh = $s.Fresh; repeat = $s.Repeat; missing = $s.Missing; other = $s.Other
+            fresh_pct = (Round-Or-Null (100.0 * $s.Fresh / $total) 1)
+            repeat_pct = (Round-Or-Null (100.0 * $s.Repeat / $total) 1)
+            missing_pct = (Round-Or-Null (100.0 * $s.Missing / $total) 1)
+            period_ms = $periods
+            reasons = $reasons
+            frame_jumps = $s.Jumps
+            frame_jump_events = $s.JumpEvents
+            max_frame_jump = $s.MaxJump
+            generation_changes = $s.Generations
+            age_ms_mean = $(if ($s.AgeN -gt 0) { Round-Or-Null ($s.AgeSum / $s.AgeN) 1 } else { $null })
+            age_ms_max = (Round-Or-Null $s.AgeMax 1)
+        }
+    }
+    foreach ($v in $valueCols) {
+        $texts = [ordered]@{}
+        foreach ($k in ($v.Texts.Keys | Sort-Object)) { $texts[[string]$k] = $v.Texts[$k] }
+        $out.values[$v.Name] = [ordered]@{
+            rows_with_value = $v.N
+            rows_empty = $v.Empty
+            min = (Round-Or-Null $v.Min 3)
+            max = (Round-Or-Null $v.Max 3)
+            mean = $(if ($v.Num -gt 0) { Round-Or-Null ($v.Sum / $v.Num) 3 } else { $null })
+            texts = $texts
+        }
+    }
+    return $out
+}
+
+# One row for the SensorHost(s) alone in a tick: the sum of what the child series read (the same sum the total row makes, without the GUI).
+function New-ChildRow($Tick, [double]$T, [double]$Dt) {
+    $kids = @($Tick | Where-Object { $_.Role -eq 'child' })
+    if ($kids.Count -eq 0) { return $null }
+    $row = @{ T = $T; Role = 'child'; Name = 'children'; ProcId = $null; StartUtc = $null; Dt = $Dt; Cpu = $null; CpuDelta = $null; Cycles = $null; CyclesDelta = $null; CycDt = $null; Private = 0L; Ws = 0L; Handles = 0 }
+    foreach ($r in $kids) {
+        if ($null -ne $r.CpuDelta) { $row.CpuDelta = $(if ($null -eq $row.CpuDelta) { $r.CpuDelta } else { $row.CpuDelta + $r.CpuDelta }) }
+        if ($null -ne $r.CyclesDelta) {
+            $row.CyclesDelta = $(if ($null -eq $row.CyclesDelta) { $r.CyclesDelta } else { $row.CyclesDelta + $r.CyclesDelta })
+            $row.CycDt = $Dt
+        }
+        foreach ($f in @('Private', 'Ws', 'Handles')) {
+            if ($null -eq $row[$f] -or $null -eq $r[$f]) { $row[$f] = $null } else { $row[$f] = $row[$f] + $r[$f] }
+        }
+    }
+    foreach ($r in $kids) {
+        if ($null -ne $r.Dt -and $r.Dt -gt $row.Dt) { $row.Dt = $r.Dt }
+        if ($null -ne $row.CycDt -and $null -ne $r.CycDt -and $r.CycDt -gt $row.CycDt) { $row.CycDt = $r.CycDt }
+    }
+    return $row
+}
+
+# The windows of a record run, from the events' times (seconds from the stopwatch zero): before the start, while recording, after the stop. The
+# first 30 s are startup and are left out of "before"; RecordGuardSeconds are left out on each side of the start and the stop. A window that
+# cannot be formed (the recording never started, or never stopped) is empty with a note, never invented.
+function Get-RecordWindows($MainRows, $ChildRows, $TotalRows, $Timeline, [double]$Duration, [int]$Cpus, $Notes) {
+    $g = [double]$script:RecordGuardSeconds
+    $first = [double]$script:FirstWindowSeconds
+    $startS = $Timeline.start_s; $stopS = $Timeline.stop_s; $stoppedS = $Timeline.stopped_s
+    if ($null -ne $startS -and $Timeline.start_ok -ne $true) { $startS = $null }
+    $spans = [ordered]@{}
+    $spans['before'] = @($first, $(if ($null -ne $startS) { $startS - $g } else { $Duration }))
+    if ($null -eq $startS) { $spans['recording'] = @(0.0, 0.0); [void]$Notes.Add('the recording did not start: the recording and after windows are empty') }
+    elseif ($null -eq $stopS) { $spans['recording'] = @(($startS + $g), $Duration); [void]$Notes.Add('no stop event came: the recording window runs to the end of the run and the after window is empty') }
+    else { $spans['recording'] = @(($startS + $g), ($stopS - $g)) }
+    if ($null -eq $startS -or $null -eq $stoppedS) { $spans['after'] = @(0.0, 0.0) } else { $spans['after'] = @(($stoppedS + $g), $Duration) }
+    $win = [ordered]@{}
+    foreach ($k in $spans.Keys) {
+        $from = [double]$spans[$k][0]; $to = [double]$spans[$k][1]
+        if ($to - $from -lt 3 -and -not ($from -eq 0.0 -and $to -eq 0.0)) { [void]$Notes.Add(('the {0} window is {1} s long: its figures are not meaningful (-LeadSeconds 40 or more leaves a before window)' -f $k, (Fmt ([math]::Max(0.0, $to - $from)) '0.0'))) }
+        $win[$k] = [ordered]@{
+            main = (Get-WindowStats $MainRows $from $to $Cpus)
+            child = (Get-WindowStats $ChildRows $from $to $Cpus)
+            total = (Get-WindowStats $TotalRows $from $to $Cpus)
+        }
+    }
+    return $win
+}
+
+# Everything the record scenario adds to a run: the timeline, the periods, the CSV read from outside, the backlog evidence and the SensorHost period
+# evidence, plus the windows (returned under "windows"; the caller puts them where the other windows are). $Warnings gets one line per problem.
+function Get-RecordSection($Plan, [string]$EventsPath, [DateTime]$ZeroUtc, [double]$Duration, $MainRows, $ChildRows, $TotalRows, [int]$Cpus, $Warnings) {
+    $ev = Read-RecordEvents $EventsPath
+    $timeline = Get-RecordTimeline $ev.events $ZeroUtc
+    $periods = Get-PeriodSummary $ev.events $timeline.user_interval_ms
+    $notes = New-Object System.Collections.ArrayList
+    $windows = Get-RecordWindows $MainRows $ChildRows $TotalRows $timeline $Duration $Cpus $notes
+    foreach ($n in $notes) { [void]$Warnings.Add($n) }
+
+    if (-not $ev.found) { [void]$Warnings.Add('the record events file was not written: the GUI did not begin the recording (an old PCMieru.exe without --measure-record?)') }
+    elseif ($null -eq $timeline.start_s) { [void]$Warnings.Add('no start event: the GUI never tried to start the recording') }
+    elseif ($timeline.start_ok -ne $true) { [void]$Warnings.Add('the recording did not start: ' + $timeline.start_problem) }
+    elseif ($null -eq $timeline.stopped_s) { [void]$Warnings.Add('no stopped event: the recording was still running when the run ended (the window close stopped it)') }
+    foreach ($m in $timeline.errors) { [void]$Warnings.Add('the GUI reported an error in the record driver: ' + $m) }
+    if ($ev.bad_lines -gt 0) { [void]$Warnings.Add(('{0} line(s) of the record events file are not events' -f $ev.bad_lines)) }
+
+    $csvPath = $timeline.csv
+    if ([string]::IsNullOrEmpty([string]$csvPath) -and $null -ne $Plan) {
+        $found = @(Get-ChildItem -LiteralPath $Plan.Folder -Filter 'run-*.csv' -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($found.Count -gt 0) { $csvPath = $found[0].FullName }
+    }
+    $csv = Get-RecordCsvStats ([string]$csvPath)
+    if (-not $csv.read -and $timeline.start_ok -eq $true) {
+        $why = $(if ($script:FakesOn) { 'with -Fakes the recording is in memory and writes no CSV' } else { [string]$csv.note })
+        [void]$Warnings.Add('the recording CSV could not be analysed: ' + $why)
+    }
+
+    $jumps = 0L
+    foreach ($k in $csv.sources.Keys) { $jumps += [long]$csv.sources[$k].frame_jumps }
+    $expected = $null
+    if ($null -ne $timeline.duration_us) { $expected = [math]::Floor([double]$timeline.duration_us / 1.0e6) }
+    if ($null -ne $timeline.dropped_ticks -and [long]$timeline.dropped_ticks -gt 0) { [void]$Warnings.Add(('the recorder dropped {0} tick(s): the writer could not keep up' -f $timeline.dropped_ticks)) }
+    if ($jumps -gt 0) { [void]$Warnings.Add(('{0} frame(s) were skipped between rows of the recording CSV (frame-number jumps)' -f $jumps)) }
+    $backlog = [ordered]@{
+        note = 'the writer queue depth is not public; it is seen as dropped ticks (the run''s own count), rows against seconds, frame-number jumps, the longest gap between rows and how long the stop took (the writer draining)'
+        dropped_ticks = $timeline.dropped_ticks
+        rows_reported = $timeline.rows
+        rows_in_csv = $csv.rows
+        rows_expected_from_duration = $expected
+        frame_jumps_total = $jumps
+        longest_row_gap_ms = $(if ($null -ne $csv.row_gap_ms) { $csv.row_gap_ms.max } else { $null })
+        row_gaps_over_1500_ms = $csv.row_gaps_over_1500_ms
+        stop_ms = $timeline.stop_ms
+        start_ms = $timeline.start_ms
+    }
+
+    $gpuPeriods = [ordered]@{}
+    foreach ($k in $csv.sources.Keys) { if ($k -like 'gpu*') { $gpuPeriods[$k] = $csv.sources[$k].period_ms } }
+    $b = $windows['before'].child; $rw = $windows['recording'].child; $a = $windows['after'].child
+    $ratio = $null
+    if ($null -ne $rw.cycles_per_s_mean -and $null -ne $a.cycles_per_s_mean -and $rw.cycles_per_s_mean -gt 0) { $ratio = Round-Or-Null ($a.cycles_per_s_mean / $rw.cycles_per_s_mean) 3 }
+    $sensorHost = [ordered]@{
+        method = 'indirect (its period is not readable from outside): the periodMs the recording CSV carries for each GPU while recording, and the SensorHost''s own cycles and CPU in the three windows'
+        gpu_period_ms_while_recording = $gpuPeriods
+        child_cycles_per_s_before = $b.cycles_per_s_mean
+        child_cycles_per_s_recording = $rw.cycles_per_s_mean
+        child_cycles_per_s_after = $a.cycles_per_s_mean
+        child_cpu_ms_per_s_before = $b.cpu_ms_per_s_mean
+        child_cpu_ms_per_s_recording = $rw.cpu_ms_per_s_mean
+        child_cpu_ms_per_s_after = $a.cpu_ms_per_s_mean
+        cycles_after_over_recording = $ratio
+        note = $(if ($null -eq $ratio) { 'no SensorHost figures in one of the windows (a fake run, or no SensorHost): the period after the stop is not observable here' } else { 'a SensorHost back at the user interval does less per second than one at the recording period when the user interval is longer than 1000 ms' })
+    }
+
+    return [ordered]@{
+        plan = $(if ($null -ne $Plan) { [ordered]@{ folder = $Plan.Folder; lead_seconds = $Plan.Lead; record_seconds = $Plan.For; user_interval_ms = $Plan.Interval } } else { $null })
+        events_file = $(if ([string]::IsNullOrEmpty($EventsPath)) { $null } else { Split-Path -Leaf $EventsPath })
+        events_found = $ev.found
+        events_count = $ev.events.Count
+        guard_seconds = $script:RecordGuardSeconds
+        timeline = $timeline
+        periods = $periods
+        csv = $csv
+        backlog = $backlog
+        sensorhost_period = $sensorHost
+        windows = $windows
+    }
+}
+
 # ---- running the app ----
 
 # What the GUI wrote to stderr (it writes one line there and exits 1 when it cannot start a measurement run: a marker file that cannot be made).
 # Stderr is read in the background from the start, so a full pipe never blocks the GUI.
 $script:AppErrTask = $null
 
-function New-AppStartInfo([string]$MarkFile) {
+# $RecordPlan (record mode only): @{ Folder; Lead; For; Interval } becomes the test-only --measure-record switches (the exact form is in the help).
+function New-AppStartInfo([string]$MarkFile, $RecordPlan = $null) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $script:ExePath
     $psi.WorkingDirectory = Split-Path -Parent $script:ExePath
@@ -1315,12 +1890,16 @@ function New-AppStartInfo([string]$MarkFile) {
     $psi.RedirectStandardError = $true
     $arguments = '--measure "' + $MarkFile + '"'
     if ($script:FakesOn) { $arguments += ' --fakes' }
+    if ($null -ne $RecordPlan) {
+        $arguments += ' --measure-record "' + ([string]$RecordPlan.Folder).TrimEnd('\') + '" --measure-record-lead ' + [int]$RecordPlan.Lead + ' --measure-record-for ' + [int]$RecordPlan.For
+        if ([int]$RecordPlan.Interval -gt 0) { $arguments += ' --measure-record-interval ' + [int]$RecordPlan.Interval }
+    }
     $psi.Arguments = $arguments
     return $psi
 }
 
-function Start-App([string]$MarkFile) {
-    $proc = [System.Diagnostics.Process]::Start((New-AppStartInfo $MarkFile))
+function Start-App([string]$MarkFile, $RecordPlan = $null) {
+    $proc = [System.Diagnostics.Process]::Start((New-AppStartInfo $MarkFile $RecordPlan))
     $script:AppErrTask = $proc.StandardError.ReadToEndAsync()
     return $proc
 }
@@ -1545,11 +2124,14 @@ function Invoke-MeasuredRun {
         [double]$DurationSeconds,
         [int]$Cpus,
         [switch]$LongMode,
-        [switch]$Warmup
+        [switch]$Warmup,
+        [hashtable]$Record = $null
     )
 
     $inv = Get-Inv
     $isApp = ($Target -eq 'pcmieru')
+    # record mode: the GUI records itself (--measure-record); a warm-up never does.
+    if ($Warmup -or -not $isApp) { $Record = $null }
     $markFile = Join-Path $RunDir ($Label + '-marks.jsonl')
     $csvName = $Label + '.csv'
     $writer = $null
@@ -1561,6 +2143,8 @@ function Invoke-MeasuredRun {
 
     $mainRows = New-Object System.Collections.ArrayList
     $totalRows = New-Object System.Collections.ArrayList
+    $childRows = New-Object System.Collections.ArrayList
+    $zeroUtc = [DateTime]::UtcNow
     $events = New-Object System.Collections.ArrayList
     $warnings = New-Object System.Collections.ArrayList
     $children = New-Object System.Collections.ArrayList
@@ -1582,8 +2166,9 @@ function Invoke-MeasuredRun {
     if (-not $isApp) { $tmSettings = Read-TaskMgrSettings; $tmInfo = Get-TaskMgrInfo }
 
     $clock = [Diagnostics.Stopwatch]::StartNew()
+    $zeroUtc = [DateTime]::UtcNow   # the record events' system times become seconds from this zero
     try {
-        if ($isApp) { $proc = Start-App $markFile }
+        if ($isApp) { $proc = Start-App $markFile $Record }
         else {
             $tmStart = Start-TaskMgr
             $proc = $tmStart.Proc
@@ -1660,6 +2245,10 @@ function Invoke-MeasuredRun {
             foreach ($r in $tick) {
                 if ($null -ne $r.Dt -and $r.Dt -gt $total.Dt) { $total.Dt = $r.Dt }
                 if ($null -ne $total.CycDt -and $null -ne $r.CycDt -and $r.CycDt -gt $total.CycDt) { $total.CycDt = $r.CycDt }
+            }
+            if ($null -ne $Record) {
+                $childRow = New-ChildRow $tick $t $total.Dt
+                if ($null -ne $childRow) { [void]$childRows.Add($childRow) }
             }
             $prevTickT = $t
 
@@ -1799,11 +2388,24 @@ function Invoke-MeasuredRun {
     $run['child_series_count'] = $finished.Count
 
     $windows = [ordered]@{}
+    $recordSection = $null
     if ($LongMode) {
         $windows['all'] = [ordered]@{
             main = (Get-WindowStats $mainRows 0 $DurationSeconds $Cpus)
             total = (Get-WindowStats $totalRows 0 $DurationSeconds $Cpus)
         }
+    }
+    elseif ($null -ne $Record) {
+        # first_30s is the startup, as in warm; then before / recording / after from the record events (the GUI alone, the SensorHost alone, the total).
+        $first = [double]$script:FirstWindowSeconds
+        $windows['first_30s'] = [ordered]@{
+            main = (Get-WindowStats $mainRows 0 $first $Cpus)
+            total = (Get-WindowStats $totalRows 0 $first $Cpus)
+        }
+        $recordSection = Get-RecordSection $Record (Get-RecordEventsPath $markFile) $zeroUtc $DurationSeconds $mainRows $childRows $totalRows $Cpus $warnings
+        foreach ($k in $recordSection.windows.Keys) { $windows[$k] = $recordSection.windows[$k] }
+        $recordSection.Remove('windows')
+        $run['record'] = $recordSection
     }
     else {
         $first = [double]$script:FirstWindowSeconds
@@ -1868,9 +2470,10 @@ function Write-RunReport($Run, [string]$Mode) {
         if ($null -ne $s.note) { Write-Host ('  startup note: ' + $s.note) -ForegroundColor Yellow }
     }
     foreach ($w in $Run.windows.Keys) {
-        foreach ($who in @('main', 'total')) {
+        foreach ($who in @('main', 'child', 'total')) {
+            if (-not $Run.windows[$w].Contains($who)) { continue }
             $x = $Run.windows[$w][$who]
-            $label = $(if ($who -eq 'main') { 'GUI alone' } else { 'total    ' })
+            $label = $(if ($who -eq 'main') { 'GUI alone' } elseif ($who -eq 'child') { 'SensorHost' } else { 'total    ' })
             Write-Host ('  {0,-9} {1}: cpu mean {2} % ({3} ms/s) max {4} % ({5} ms/s); cycles mean {6} Mcycles/s ({7} GHz-equiv) max {8}; private mean {9} max {10} MB; ws mean {11} max {12} MB; handles mean {13} max {14}{15}' -f `
                 $w, $label, (Fmt $x.cpu_percent_mean '0.000'), (Fmt $x.cpu_ms_per_s_mean '0.0'), (Fmt $x.cpu_percent_max '0.000'), (Fmt $x.cpu_ms_per_s_max '0.0'),
                 (Fmt $(if ($null -ne $x.cycles_per_s_mean) { $x.cycles_per_s_mean / 1.0e6 } else { $null }) '0.0'), (Fmt $x.ghz_equivalent_mean '0.000'), (Fmt $(if ($null -ne $x.cycles_per_s_max) { $x.cycles_per_s_max / 1.0e6 } else { $null }) '0.0'),
@@ -1887,8 +2490,52 @@ function Write-RunReport($Run, [string]$Mode) {
             Write-Host ('  trend {0}: first {1} min mean {2}, last mean {3}, change {4}, slope {5} per hour' -f $k, (Fmt ($tr.window_seconds_used / 60.0) '0.0'), (Fmt $tr.first_window_mean '0.000'), (Fmt $tr.last_window_mean '0.000'), (Fmt $tr.change '0.000'), (Fmt $tr.slope_per_hour '0.000'))
         }
     }
+    if ($Run.Contains('record') -and $null -ne $Run['record']) { Write-RecordReport $Run['record'] }
     foreach ($m in $Run.missing) { Write-Host ('  missing: {0} {1}: {2}' -f $m.series, $m.counter, $m.reason) -ForegroundColor Yellow }
     foreach ($w in $Run.warnings) { Write-Host ('  warning: ' + $w) -ForegroundColor Yellow }
+}
+
+# The record scenario's part of the report (what the GUI said, what the CSV held, the period, the backlog evidence).
+function Write-RecordReport($Rec) {
+    $tl = $Rec.timeline
+    Write-Host ('  record   begin {0} s, start {1} s (took {2} ms, ok {3}), stop {4} s, stopped {5} s (the stop took {6} ms); status {7}, rows {8}, dropped ticks {9}' -f `
+        (Fmt $tl.begin_s '0.0'), (Fmt $tl.start_s '0.0'), (Fmt $tl.start_ms '0'), $(if ($null -ne $tl.start_ok) { $tl.start_ok } else { 'missing' }), (Fmt $tl.stop_s '0.0'), (Fmt $tl.stopped_s '0.0'), (Fmt $tl.stop_ms '0'),
+        $(if ($null -ne $tl.status) { $tl.status } else { 'missing' }), (Fmt $tl.rows '0'), (Fmt $tl.dropped_ticks '0'))
+    $p = $Rec.periods
+    foreach ($name in $p.phases.Keys) {
+        $x = $p.phases[$name]
+        if ($null -eq $x.core_gap_ms) { Write-Host ('  period   {0,-9}: no snapshot reached the window: missing' -f $name) }
+        else {
+            $g = $x.core_gap_ms
+            Write-Host ('  period   {0,-9}: Core measured gap ms min {1} median {2} mean {3} max {4} (last {5}); nearest nominal {6} ms, {7}% of the gaps within 25% of it; settled {8} ms; pump setting {9} ms (the user interval with slow mode applied, not the recording period); {10} period line(s)' -f $name, (Fmt $g.min '0.0'), (Fmt $g.median '0.0'), (Fmt $g.mean '0.0'), (Fmt $g.max '0.0'), (Fmt $g.last '0'), $g.nominal_ms, (Fmt ($g.share_near_nominal * 100) '0'), $g.settled_nominal_ms, $(if ($x.effective_interval_ms.Count -gt 0) { $x.effective_interval_ms -join '/' } else { 'missing' }), $x.period_lines)
+        }
+    }
+    Write-Host ('  period   user interval {0} ms; while recording at {1} ms: {2}; back at the user interval after the stop: {3}{4}' -f (Fmt $p.user_interval_ms '0'), $p.recording_period_ms, $(if ($null -ne $p.during_recording_is_recording_period) { $p.during_recording_is_recording_period } else { 'missing' }), $(if ($null -ne $p.after_stop_returns_to_user_interval) { $p.after_stop_returns_to_user_interval } else { 'missing' }), $(if ($null -ne $p.note) { ' (' + $p.note + ')' } else { '' }))
+    $c = $Rec.csv
+    if (-not $c.read) { Write-Host ('  csv      not analysed: {0}' -f $c.note) -ForegroundColor Yellow }
+    else {
+        $gap = $c.row_gap_ms
+        $gapMin = $null; $gapMean = $null; $gapMax = $null
+        if ($null -ne $gap) { $gapMin = $gap.min; $gapMean = $gap.mean; $gapMax = $gap.max }
+        Write-Host ('  csv      {0}: {1} rows ({2} bad); row gap ms min {3} mean {4} max {5}; gaps over 1500 ms: {6}' -f $c.file, $c.rows, $c.bad_rows, (Fmt $gapMin '0.0'), (Fmt $gapMean '0.0'), (Fmt $gapMax '0.0'), $c.row_gaps_over_1500_ms)
+        foreach ($name in $c.sources.Keys) {
+            $s = $c.sources[$name]
+            $per = (@($s.period_ms.Keys | ForEach-Object { '{0} ms x{1}' -f $_, $s.period_ms[$_] }) -join ', ')
+            $why = (@($s.reasons.Keys | ForEach-Object { '{0} x{1}' -f $_, $s.reasons[$_] }) -join ', ')
+            Write-Host ('  csv      {0,-5}: fresh {1} ({2} %), repeat {3} ({4} %), missing {5} ({6} %); period {7}; frame jumps {8} in {9} place(s); age ms mean {10} max {11}{12}' -f `
+                $name, $s.fresh, (Fmt $s.fresh_pct '0.0'), $s.repeat, (Fmt $s.repeat_pct '0.0'), $s.missing, (Fmt $s.missing_pct '0.0'), $(if ($per.Length -gt 0) { $per } else { 'missing' }), $s.frame_jumps, $s.frame_jump_events, (Fmt $s.age_ms_mean '0.0'), (Fmt $s.age_ms_max '0.0'), $(if ($why.Length -gt 0) { '; reasons: ' + $why } else { '' }))
+        }
+        foreach ($key in @('core.cpu_package_w', 'core.ac_connected', 'core.battery_pct', 'core.battery_state', 'gpu1.temp_c', 'gpu1.power_w')) {
+            if (-not $c.values.Contains($key)) { continue }
+            $v = $c.values[$key]
+            $texts = (@($v.texts.Keys | ForEach-Object { '{0} x{1}' -f $_, $v.texts[$_] }) -join ', ')
+            Write-Host ('  csv      {0}: {1} rows with a value, {2} empty{3}{4}' -f $key, $v.rows_with_value, $v.rows_empty, $(if ($null -ne $v.min) { ('; min {0} mean {1} max {2}' -f (Fmt $v.min '0.###'), (Fmt $v.mean '0.###'), (Fmt $v.max '0.###')) } else { '' }), $(if ($texts.Length -gt 0) { '; ' + $texts } else { '' }))
+        }
+    }
+    $b = $Rec.backlog
+    Write-Host ('  backlog  dropped ticks {0}; rows reported {1}, in the CSV {2}, expected from the duration {3}; frame jumps {4}; longest row gap {5} ms; the stop took {6} ms' -f (Fmt $b.dropped_ticks '0'), (Fmt $b.rows_reported '0'), $b.rows_in_csv, (Fmt $b.rows_expected_from_duration '0'), $b.frame_jumps_total, (Fmt $b.longest_row_gap_ms '0.0'), (Fmt $b.stop_ms '0'))
+    $h = $Rec.sensorhost_period
+    Write-Host ('  sensorhost  cycles/s before {0} recording {1} after {2} (after/recording {3}); cpu ms/s before {4} recording {5} after {6}' -f (Fmt $h.child_cycles_per_s_before '0'), (Fmt $h.child_cycles_per_s_recording '0'), (Fmt $h.child_cycles_per_s_after '0'), (Fmt $h.cycles_after_over_recording '0.###'), (Fmt $h.child_cpu_ms_per_s_before '0.0'), (Fmt $h.child_cpu_ms_per_s_recording '0.0'), (Fmt $h.child_cpu_ms_per_s_after '0.0'))
 }
 
 function Write-Targets {
@@ -1955,6 +2602,49 @@ function Add-Aggregate([System.Collections.IDictionary]$Summary, [string]$Target
     $Summary.aggregate[$Target] = $agg
 }
 
+# The record scenario's aggregate over its runs (the median and the spread of each figure): the GUI alone, the SensorHost alone and the total in
+# the three windows, plus the missing/repeat rate per source. A figure a run did not have is left out of its aggregate, never zero.
+function Add-RecordAggregate([System.Collections.IDictionary]$Summary, $RunList) {
+    $mine = @($RunList | Where-Object { $_.target -eq 'pcmieru' -and $_.Contains('record') -and $null -ne $_['record'] })
+    if ($mine.Count -eq 0) { return }
+    $agg = [ordered]@{ runs = $mine.Count }
+    foreach ($w in @('before', 'recording', 'after')) {
+        foreach ($who in @('main', 'child', 'total')) {
+            $stats = @($mine | ForEach-Object { $_.windows[$w][$who] } | Where-Object { $null -ne $_ })
+            if ($stats.Count -eq 0) { continue }
+            $agg[$w + '_' + $who] = [ordered]@{
+                cpu_percent_mean = (Get-Aggregate @($stats | ForEach-Object { $_.cpu_percent_mean }))
+                cpu_ms_per_s_mean = (Get-Aggregate @($stats | ForEach-Object { $_.cpu_ms_per_s_mean }))
+                cycles_per_s_mean = (Get-Aggregate @($stats | ForEach-Object { $_.cycles_per_s_mean }))
+                private_mb_mean = (Get-Aggregate @($stats | ForEach-Object { $_.private_mb_mean }))
+                private_mb_max = (Get-Aggregate @($stats | ForEach-Object { $_.private_mb_max }))
+                working_set_mb_mean = (Get-Aggregate @($stats | ForEach-Object { $_.working_set_mb_mean }))
+            }
+        }
+    }
+    $sources = [ordered]@{}
+    foreach ($r in $mine) {
+        $csv = $r['record'].csv
+        if ($null -eq $csv -or -not $csv.read) { continue }
+        foreach ($name in $csv.sources.Keys) {
+            if (-not $sources.Contains($name)) { $sources[$name] = @{ fresh = @(); repeat = @(); missing = @() } }
+            $sources[$name].fresh += , $csv.sources[$name].fresh_pct
+            $sources[$name].repeat += , $csv.sources[$name].repeat_pct
+            $sources[$name].missing += , $csv.sources[$name].missing_pct
+        }
+    }
+    $perSource = [ordered]@{}
+    foreach ($name in $sources.Keys) {
+        $perSource[$name] = [ordered]@{
+            fresh_pct = (Get-Aggregate @($sources[$name].fresh))
+            repeat_pct = (Get-Aggregate @($sources[$name].repeat))
+            missing_pct = (Get-Aggregate @($sources[$name].missing))
+        }
+    }
+    $agg['sources'] = $perSource
+    $Summary.aggregate['pcmieru_record'] = $agg
+}
+
 function Invoke-Main {
     $oldCulture = [Threading.Thread]::CurrentThread.CurrentCulture
     [Threading.Thread]::CurrentThread.CurrentCulture = (Get-Inv)
@@ -1964,6 +2654,12 @@ function Invoke-Main {
         if ($Seconds -lt 1) { throw '-Seconds must be 1 or more' }
         if ($Runs -lt 1) { throw '-Runs must be 1 or more' }
         if ($LongHours -le 0) { throw '-LongHours must be above 0' }
+        if ($Mode -eq 'record') {
+            if ($RecordSeconds -lt 5 -or $RecordSeconds -gt 7200) { throw '-RecordSeconds must be 5 to 7200' }
+            if ($AfterSeconds -lt 10 -or $AfterSeconds -gt 3600) { throw '-AfterSeconds must be 10 to 3600' }
+            if ($LeadSeconds -lt 0 -or $LeadSeconds -gt 3600) { throw '-LeadSeconds must be 0 to 3600' }
+            if (@(0, 500, 1000, 2000, 5000) -notcontains $UserIntervalMs) { throw '-UserIntervalMs must be 0 (the GUI''s own 1000), 500, 1000, 2000 or 5000' }
+        }
         $script:ExePath = (Resolve-Path -LiteralPath $Exe).Path
         $script:FakesOn = [bool]$Fakes
 
@@ -1971,6 +2667,12 @@ function Invoke-Main {
         $Output = [IO.Path]::GetFullPath($Output)
         $summaryPath = Join-Path $Output 'summary.json'
         if (Test-Path -LiteralPath $summaryPath) { throw "the output folder already holds a summary.json; use a new folder: $Output" }
+        if ($Mode -eq 'record') {
+            # The recordings go under <Output>: the GUI refuses a folder inside the user's own folders, so say it here before anything is made or started.
+            foreach ($root in (Get-UserDataFolders)) {
+                if (Test-InsideFolder $root $Output) { throw ('-Output must be outside the user''s own folders in record mode (' + $root + '): the recordings are written under it') }
+            }
+        }
         # Before anything is started: a folder that cannot be written is one line and nothing else (not a run that fails after the app is up).
         Assert-WritableFolder $Output
 
@@ -2015,6 +2717,23 @@ function Invoke-Main {
             aggregate = [ordered]@{}
         }
 
+        if ($Mode -eq 'record') {
+            $summary.parameters['record'] = [ordered]@{
+                lead_seconds = $LeadSeconds
+                record_seconds = $RecordSeconds
+                after_seconds = $AfterSeconds
+                user_interval_ms = $UserIntervalMs
+                user_interval_note = $(if ($UserIntervalMs -eq 0) { 'left at the GUI''s own 1000 ms: equal to the recording period, so a return of Core''s period cannot be told apart' } else { 'set in memory with --measure-record-interval (a measured run never saves settings)' })
+                guard_seconds = $script:RecordGuardSeconds
+                margin_seconds = $script:RecordMarginSeconds
+                run_seconds = ($LeadSeconds + $RecordSeconds + $AfterSeconds + $script:RecordMarginSeconds)
+                recording_period_ms = $script:RecordingPeriodMs
+                switches = '--measure <marks> --measure-record <folder> --measure-record-lead <s> --measure-record-for <s> [--measure-record-interval <ms>]'
+                todo = 'DESIGN-B section 10, the update side: the states "waiting for a check" and "a check is due" are not measured here (they need src/PcMieru.Update and a test-only way to put the GUI into them)'
+            }
+            if ($Fakes) { [void]$summary.warnings.Add('record mode with -Fakes: the recording is in memory and writes no CSV, so the per-source figures are missing') }
+        }
+
         if (-not [string]::IsNullOrEmpty($Zip)) {
             if (Test-Path -LiteralPath $Zip -PathType Leaf) {
                 $item = Get-Item -LiteralPath $Zip
@@ -2056,6 +2775,29 @@ function Invoke-Main {
             Add-RunWarnings $summary $run
             Write-RunReport $run $Mode
             Add-Aggregate $summary 'pcmieru' $summary.runs
+            Save-Summary $summary $summaryPath
+        }
+        elseif ($Mode -eq 'record') {
+            $summary.temperature = 'warm (after one unmeasured run, which does not record)'
+            $summary.warmup = (Invoke-MeasuredRun -Target pcmieru -Label 'record-warmup' -RunDir $Output -DurationSeconds 0 -Cpus $cpus -Warmup)
+            Add-RunWarnings $summary $summary.warmup
+            Write-Host ('warm-up run (not measured, not recording): {0}' -f $summary.warmup.ended)
+            $duration = [double]($LeadSeconds + $RecordSeconds + $AfterSeconds + $script:RecordMarginSeconds)
+            for ($i = 1; $i -le $Runs; $i++) {
+                [Threading.Thread]::Sleep(5000)
+                $label = 'record-r{0}-pcmieru' -f $i
+                # One recording folder per run, under <Output>: the only place the GUI writes the recording into.
+                $folder = Join-Path $Output ($label + '-recording')
+                Assert-WritableFolder $folder
+                $plan = @{ Folder = $folder; Lead = $LeadSeconds; For = $RecordSeconds; Interval = $UserIntervalMs }
+                Write-Host ('record run {0} of {1}: lead {2} s, record {3} s, after {4} s, user interval {5} ms ({6} s in all); recording folder {7}' -f $i, $Runs, $LeadSeconds, $RecordSeconds, $AfterSeconds, $(if ($UserIntervalMs -gt 0) { $UserIntervalMs } else { 'default' }), $duration, $folder)
+                $run = Invoke-MeasuredRun -Target pcmieru -Label $label -RunDir $Output -DurationSeconds $duration -Cpus $cpus -Record $plan
+                [void]$summary.runs.Add($run)
+                Add-RunWarnings $summary $run
+                Write-RunReport $run $Mode
+                Save-Summary $summary $summaryPath
+            }
+            Add-RecordAggregate $summary $summary.runs
             Save-Summary $summary $summaryPath
         }
         else {
