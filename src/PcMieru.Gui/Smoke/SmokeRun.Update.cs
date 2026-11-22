@@ -208,7 +208,8 @@ internal static partial class SmokeRun
         /// <summary>
         /// The window of the start gate (DESIGN-B 4) in each state that stops a start and has a window: busy, an interrupted update, a recovery that failed, a gate file that is not there and one
         /// that is refused (access denied). Each state is made for real (a small install folder under the temporary folder, the gate opened the way every start opens it), then shown without taking the
-        /// focus in every look. This run's own gate is not touched. At 200 percent only the two states of the screens that wrap longest (busy, an interrupted update) are taken.
+        /// focus in every look, at every scale the run is made at (all five states at 200 percent too). This run's own gate is not touched. The folder line under an interrupted update is also checked
+        /// for what it must be: broken only after backslashes, and every line of it inside the label.
         /// </summary>
         private async Task ShootStartGate()
         {
@@ -272,11 +273,6 @@ internal static partial class SmokeRun
                 };
                 foreach (var (name, outcome, exe) in states)
                 {
-                    if (dpiPercent > 0 && outcome is not (GateOutcome.Busy or GateOutcome.RecoveryPending))
-                    {
-                        continue;
-                    }
-
                     await ForEachLook(async look =>
                     {
                         var entry = InstallGate.EnterStartup(exe);
@@ -294,7 +290,14 @@ internal static partial class SmokeRun
                         }
 
                         var busyOne = outcome == GateOutcome.Busy;
-                        Check($"gate: the {name} window has a reason{(busyOne ? string.Empty : " and a hint")} in this language, no missing strings ({look})", window.ReasonText.Length > 0 && (busyOne ? window.HintText.Length == 0 : window.HintText.Length > 0) && !SmokeText.IsPlaceholder(window.ReasonText) && !SmokeText.IsPlaceholder(window.HintText) && SmokeText.Missing(window).Distinct().Take(5).Count() == 0, window.ReasonText + " | " + window.HintText);
+                        var folderOne = outcome is GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed;
+                        Check($"gate: the {name} window has one reason text{(folderOne ? " and the dim folder line" : string.Empty)} in this language, no missing strings ({look})", window.ReasonText.Length > 0 && (folderOne == window.HintText.Length > 0) && !SmokeText.IsPlaceholder(window.ReasonText) && !SmokeText.IsPlaceholder(window.HintText) && SmokeText.Missing(window).Distinct().Take(5).Count() == 0, window.ReasonText + " | " + window.HintText);
+                        Check($"gate: the {name} window names no file, no path and no tool in its reason ({look})", !window.ReasonText.Contains(GateFile.RecoverNoteName, StringComparison.Ordinal) && !window.ReasonText.Contains('\\', StringComparison.Ordinal), window.ReasonText);
+                        if (folderOne)
+                        {
+                            var folderText = Path.GetDirectoryName(entry.GatePath)!;
+                            Check($"gate: the {name} window's folder line is the folder, broken only after backslashes, every line inside the label ({look})", window.HintProblem() is null && window.HintText.Replace("\n", string.Empty, StringComparison.Ordinal) == Strings.Format("gui.gate.folder", Fmt.Dict(("path", folderText))), window.HintProblem() + " | " + window.HintText.Replace("\n", " / ", StringComparison.Ordinal));
+                        }
                         Check($"gate: the {name} window offers 「もう一度試す」 only when it is busy ({look})", window.RetryOffered == busyOne && window.RetryButton.Visible == busyOne, "retry " + window.RetryOffered);
                         var clipped = SmokeClip.Clipped(window).Distinct().Take(6).ToList();
                         Check($"gate: the {name} window has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));

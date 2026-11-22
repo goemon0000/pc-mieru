@@ -872,7 +872,8 @@ public sealed class UpdateUiTests
             .ToArray();
 
         Assert.Contains(shown, entry => entry.Key == "gui.update.refusal.assetmissing");
-        Assert.Contains(shown, entry => entry.Key == "gui.gate.missinggate.hint");
+        Assert.Contains(shown, entry => entry.Key == "gui.gate.missinggate");
+        Assert.Contains(shown, entry => entry.Key == "gui.gate.folder");
         var offenders = shown
             .Where(entry => entry.Ja.Contains("リリース", StringComparison.Ordinal) || entry.En.Contains("release", StringComparison.OrdinalIgnoreCase))
             .Select(entry => entry.Key)

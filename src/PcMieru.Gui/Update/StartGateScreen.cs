@@ -46,12 +46,16 @@ internal static class StartGateScreen
     }
 }
 
-/// <summary>The reason window of a start that was refused. Plain: one reason, what to do, 「もう一度試す」 (busy only) and 「閉じる」.</summary>
+/// <summary>
+/// The reason window of a start that was refused. Plain: one text (what is wrong, what to do), under an interrupted update one dim line that says which folder this is, 「もう一度試す」 (busy only)
+/// and 「閉じる」.
+/// </summary>
 internal sealed class StartGateWindow : Form
 {
     private readonly Func<GateEntry> _enter;
     private readonly Label _reason = new() { Name = "gateReason", AutoSize = true };
-    private readonly ToneLabel _hint = new() { Name = "gateHint", AutoSize = true };
+    // UseMnemonic off: the line can hold a folder path, and a folder called "R&D" must be shown with its &.
+    private readonly ToneLabel _hint = new() { Name = "gateHint", AutoSize = true, UseMnemonic = false };
     private readonly Button _retry = new() { Name = "gateRetry", AutoSize = true };
     private readonly Button _close = new() { Name = "gateClose", AutoSize = true };
     private readonly ThemeService _theme;
@@ -110,6 +114,8 @@ internal sealed class StartGateWindow : Form
         AcceptButton = _retry;
         CancelButton = _close;
         _retry.Click += (_, _) => RetryNow();
+        // The folder line is broken by hand at backslashes against the font and width it has now; when the window moves to a screen with another scale, the font and the width change, so it is broken again.
+        DpiChanged += (_, _) => BeginInvoke(Fill);
         Fill();
         _hint.SetTone(CellTone.Dim);
         _theme.Apply(this);
@@ -121,8 +127,35 @@ internal sealed class StartGateWindow : Form
     /// <summary>The reason as shown.</summary>
     internal string ReasonText => _reason.Text;
 
-    /// <summary>What the person can do, as shown.</summary>
+    /// <summary>The second, dim line as shown: the folder of an interrupted update (broken at backslashes), or what to do for a link in the folder. Empty when there is none.</summary>
     internal string HintText => _hint.Text;
+
+    /// <summary>The dim line itself (its font and its widest line are what the tests and the smoke run measure).</summary>
+    internal Label HintLabel => _hint;
+
+    /// <summary>
+    /// Null when the dim line is as it must be: each of its lines fits the width the label has now, and a line is broken only after a backslash (or after the words in front of the path).
+    /// Otherwise what is wrong, for a test or a smoke check.
+    /// </summary>
+    internal string? HintProblem()
+    {
+        var lines = _hint.Text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var width = TextRenderer.MeasureText(lines[i], _hint.Font).Width;
+            if (width > _hint.MaximumSize.Width)
+            {
+                return "line " + (i + 1) + " is " + width + " px wide, the label takes " + _hint.MaximumSize.Width + ": " + lines[i];
+            }
+
+            if (i < lines.Length - 1 && !lines[i].EndsWith('\\') && !lines[i].EndsWith(':'))
+            {
+                return "line " + (i + 1) + " ends inside a name: " + lines[i];
+            }
+        }
+
+        return null;
+    }
 
     internal Button RetryButton => _retry;
 
@@ -134,12 +167,15 @@ internal sealed class StartGateWindow : Form
 
     internal Button CloseButton => _close;
 
-    /// <summary>The localized reason of a refused entry (the file path of a recovery note filled in).</summary>
+    /// <summary>
+    /// The localized reason of a refused entry: one text that says what is wrong and what to do (a new folder from the downloaded ZIP file). No file path and no tool is promised in it: the recovery
+    /// tool and the note it reads (I\update\RECOVER.txt) come in step 4, and until then the one advice that works is a new folder.
+    /// </summary>
     internal static string ReasonFor(GateEntry entry) => entry.Outcome switch
     {
         GateOutcome.Busy => Strings.Get("gui.gate.busy"),
-        GateOutcome.RecoveryPending => Strings.Format("gui.gate.recoverypending", Note(entry)),
-        GateOutcome.RecoveryFailed => Strings.Format("gui.gate.recoveryfailed", Note(entry)),
+        GateOutcome.RecoveryPending => Strings.Get("gui.gate.recoverypending"),
+        GateOutcome.RecoveryFailed => Strings.Get("gui.gate.recoveryfailed"),
         GateOutcome.MissingGate => Strings.Get("gui.gate.missinggate"),
         GateOutcome.Denied => Strings.Get("gui.gate.denied"),
         GateOutcome.ReparseRefused => Strings.Get("gui.gate.reparserefused"),
@@ -147,21 +183,31 @@ internal sealed class StartGateWindow : Form
         _ => entry.Reason,
     };
 
-    // Busy has no second line: the reason already says what to do ("try again in a moment") and the button is right under it.
-    private static string HintFor(GateEntry entry) => entry.Outcome switch
+    // The second line is dim and short. An interrupted update says which folder it is (the person may have several copies); a link in the folder keeps its one sentence of advice. Every other
+    // state has all it has to say in the reason, and Busy has the button right under it.
+    private string HintFor(GateEntry entry) => entry.Outcome switch
     {
-        GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed => Strings.Get("gui.gate.recovery.hint"),
-        GateOutcome.MissingGate => Strings.Get("gui.gate.missinggate.hint"),
-        GateOutcome.Denied => Strings.Get("gui.gate.denied.hint"),
+        GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed => FolderLine(entry),
         GateOutcome.ReparseRefused => Strings.Get("gui.gate.reparserefused.hint"),
-        GateOutcome.Unreadable => Strings.Get("gui.gate.unreadable.hint"),
         _ => string.Empty,
     };
 
-    // STEP 4 (the install step): the file this names (I\update\RECOVER.txt) and the launch of recover.exe from here are made there; not yet. Until then no journal is ever
-    // written, so the two recovery outcomes cannot happen outside a test, and the window only says where the instructions will be.
-    private static IReadOnlyDictionary<string, string> Note(GateEntry entry) =>
-        new Dictionary<string, string>(StringComparer.Ordinal) { ["path"] = entry.RecoveryNotePath ?? string.Empty };
+    /// <summary>
+    /// 「このフォルダー: C:\...」 broken at backslashes to the width of the label (see <see cref="FolderLineWrap"/>). Empty when the folder is not known or a name in it is wider than a line: a path is
+    /// never broken inside a name, so such a path is left out instead.
+    /// </summary>
+    private string FolderLine(GateEntry entry)
+    {
+        var folder = Path.GetDirectoryName(entry.GatePath);
+        if (string.IsNullOrEmpty(folder))
+        {
+            return string.Empty;
+        }
+
+        var prefix = Strings.Format("gui.gate.folder", Fmt.Dict(("path", string.Empty)));
+        var room = _hint.MaximumSize.Width * 94 / 100; // a little short of the label's width: the real label measures with its own padding and, after a scale change, hinting
+        return FolderLineWrap.Wrap(prefix, folder, line => TextRenderer.MeasureText(line, _hint.Font).Width, room) ?? string.Empty;
+    }
 
     /// <summary>What 「もう一度試す」 does; the tests call it without a mouse. True (and the window closes) when the gate opened.</summary>
     internal bool RetryNow()
@@ -217,41 +263,32 @@ internal static class GateStrings
         new("gui.gate.title", "PCミエル", "PC Mieru"),
         new("gui.gate.retry", "もう一度試す", "Try again"),
 
+        // Every refusal is one text: what is wrong, then what to do. None of them promises the recovery tool or its note (step 4), and none suggests that the person deleted or moved something.
         new(
             "gui.gate.busy",
-            "ほかのプログラムが PCミエルのファイルを使っています（更新中など）。しばらくしてからもう一度試してください。",
-            "Another program is using PC Mieru's files right now (an update, for example). Try again in a moment."),
+            "PCミエルの更新などでファイルが使われています。しばらく待ってから、もう一度試してください。",
+            "PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again."),
 
         new(
             "gui.gate.recoverypending",
-            "前回の更新が最後まで終わっていないため、PCミエルを開けません。直し方は次のファイルに書いてあります: {path}",
-            "The last update did not finish, so PC Mieru cannot open. How to repair it is written in this file: {path}"),
+            "前回の更新が途中で止まったため、このフォルダーからは PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
+            "The last update did not finish, so PC Mieru cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
         new(
             "gui.gate.recoveryfailed",
-            "前回の更新を元に戻そうとしましたが、できませんでした。PCミエルを開けません。直し方は次のファイルに書いてあります: {path}",
-            "PC Mieru tried to undo the last update and could not, so it cannot open. How to repair it is written in this file: {path}"),
-        new(
-            "gui.gate.recovery.hint",
-            "分からないときは、配布の ZIP をもう一度展開した新しいフォルダーから開いてください。",
-            "If in doubt, unzip the downloaded ZIP file again into a new folder and open it from there."),
+            "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
+            "PC Mieru could not undo the last update, so it cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+        // The one dim line under an interrupted update: which folder this is. {path} is the last thing in it (the line is broken after the words and at backslashes, never inside a name).
+        new("gui.gate.folder", "このフォルダー: {path}", "This folder: {path}"),
 
         new(
             "gui.gate.missinggate",
-            "起動に必要なファイル PCMieru.gate.txt が、PCミエルのフォルダーに見つかりません。",
-            "The file PCMieru.gate.txt, which is needed to start, is not in the PC Mieru folder."),
-        new(
-            "gui.gate.missinggate.hint",
-            "削除や移動をしていないか確かめてください。配布の ZIP をもう一度展開すると直ります。",
-            "Check that it was not deleted or moved. Unzipping the downloaded ZIP file again repairs it."),
+            "起動に必要なファイルが見つからないため、PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
+            "PC Mieru cannot open because a required file is missing. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
 
         new(
             "gui.gate.denied",
-            "起動に必要なファイル PCMieru.gate.txt を、この Windows ユーザーでは開けません。",
-            "This Windows user cannot open PCMieru.gate.txt, which is needed to start."),
-        new(
-            "gui.gate.denied.hint",
-            "フォルダーの置き場所や、ファイルのアクセス権を確かめてください。",
-            "Check where the folder is and the access rights of the file."),
+            "必要なファイルを開けないため、PCミエルを起動できません。ダウンロードした ZIP をもう一度、自分の使える新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。",
+            "PC Mieru cannot open a required file. Unzip the downloaded ZIP file into a new folder you can use and open PC Mieru from there. If it still cannot open, contact the person who manages this PC."),
 
         new(
             "gui.gate.reparserefused",
@@ -259,17 +296,69 @@ internal static class GateStrings
             "There is a link to another place inside the PC Mieru folder, so for safety it does not open."),
         new(
             "gui.gate.reparserefused.hint",
-            "配布の ZIP をもう一度展開した、ふつうのフォルダーから開いてください。",
-            "Open it from an ordinary folder made by unzipping the downloaded ZIP file again."),
+            "ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
+            "Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
 
-        // The look at the gate file could not be made at all (a path too long for the system, a read error of the disk): not a missing file and not a refusal of access.
+        // The look at the gate file could not be made at all (a path too long for the system, a read error of the disk): not a missing file and not a refusal of access, so it says that first,
+        // then gives the advice of the access-denied text, with a short path as the thing to try.
         new(
             "gui.gate.unreadable",
-            "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。",
-            "The state of PCMieru.gate.txt, which is needed to start, could not be checked."),
-        new(
-            "gui.gate.unreadable.hint",
-            "フォルダーの場所（パスが長すぎないか）を確かめて、もう一度開いてください。直らないときは、配布の ZIP をもう一度展開した新しいフォルダーから開いてください。",
-            "Check where the folder is (a path that is too long, for example) and open it again. If that does not help, unzip the downloaded ZIP file again into a new folder and open it from there."),
+            "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。ダウンロードした ZIP をもう一度、パスの短い新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。",
+            "The state of PCMieru.gate.txt, which is needed to start, could not be checked. Unzip the downloaded ZIP file into a new folder with a short path and open PC Mieru from there. If it still cannot open, contact the person who manages this PC."),
     ];
+}
+
+/// <summary>
+/// Breaks a line that ends in a folder path so that the line is never broken inside a name. The label of the window breaks only at spaces and, for a word wider than the line, anywhere; a path has no
+/// spaces to break at, so it would be cut in the middle of a folder's name. Here the break goes after a backslash (or, when even the first name does not fit after the words in front, after those words).
+/// </summary>
+internal static class FolderLineWrap
+{
+    /// <summary>
+    /// <paramref name="prefix"/> + <paramref name="path"/> in lines no wider than <paramref name="room"/> (as <paramref name="width"/> measures them), joined with a line feed; the text unchanged when it fits.
+    /// Null when a name between two backslashes is wider than a line by itself: the caller leaves the path out rather than breaking a name.
+    /// </summary>
+    public static string? Wrap(string prefix, string path, Func<string, int> width, int room)
+    {
+        var lines = new List<string>();
+        var line = prefix;
+        foreach (var piece in Pieces(path))
+        {
+            if (width(line + piece) <= room)
+            {
+                line += piece;
+                continue;
+            }
+
+            if (width(piece) > room)
+            {
+                return null;
+            }
+
+            lines.Add(line.TrimEnd());
+            line = piece;
+        }
+
+        lines.Add(line);
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>"C:\Users\me" becomes "C:\", "Users\", "me": every piece but the last ends with the backslash it was cut after.</summary>
+    private static IEnumerable<string> Pieces(string path)
+    {
+        var start = 0;
+        for (var i = 0; i < path.Length; i++)
+        {
+            if (path[i] == '\\')
+            {
+                yield return path[start..(i + 1)];
+                start = i + 1;
+            }
+        }
+
+        if (start < path.Length)
+        {
+            yield return path[start..];
+        }
+    }
 }

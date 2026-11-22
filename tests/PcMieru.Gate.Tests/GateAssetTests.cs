@@ -57,6 +57,21 @@ public sealed class GateAssetTests
         Assert.DoesNotContain("リリース", GateFile.Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_sentence_a_console_program_writes_for_a_busy_gate_does_not_say_for_certain_that_an_update_is_running_and_none_blames_the_person()
+    {
+        Assert.Equal("PC Mieru's files are in use (an update being installed, for example); try again in a moment", InstallGate.ReasonOf(GateOutcome.Busy));
+        foreach (var outcome in Enum.GetValues<GateOutcome>())
+        {
+            var reason = InstallGate.ReasonOf(outcome);
+            Assert.False(reason.StartsWith("an update is being installed", StringComparison.Ordinal), reason);
+            foreach (var blame in new[] { "you ", "your ", "deleted", "moved" })
+            {
+                Assert.DoesNotContain(blame, reason, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("PCMieru.gate.txt", true)]
     [InlineData("pcmieru.GATE.txt", true)]

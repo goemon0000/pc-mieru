@@ -159,7 +159,7 @@ public sealed class StartGateScreenTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Everything))]
-    public void Every_refusal_has_a_reason_and_a_hint_in_both_languages_and_both_themes_and_only_a_busy_gate_offers_a_retry(GateOutcome outcome, Language language, bool dark)
+    public void Every_refusal_has_a_reason_in_both_languages_and_both_themes_and_only_a_busy_gate_offers_a_retry(GateOutcome outcome, Language language, bool dark)
     {
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(dark ? ThemeMode.Dark : ThemeMode.Light);
@@ -171,15 +171,10 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.False(SmokeText.IsPlaceholder(window.ReasonText), window.ReasonText);
         Assert.False(SmokeText.IsPlaceholder(window.HintText), window.HintText);
         Assert.False(string.IsNullOrWhiteSpace(window.ReasonText));
-        if (outcome == GateOutcome.Busy)
-        {
-            // The reason of a busy gate already says what to do (try again in a moment) and the button is right under it: no second line, and no empty label taking room.
-            Assert.Equal(string.Empty, window.HintText);
-        }
-        else
-        {
-            Assert.False(string.IsNullOrWhiteSpace(window.HintText));
-        }
+        // The reason is the whole text. The one dim line under it exists only for an interrupted update (which folder it is) and for a link in the folder (its one sentence of advice); it is not an
+        // empty label that takes room under any other state.
+        var hasDimLine = outcome is GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed or GateOutcome.ReparseRefused;
+        Assert.Equal(hasDimLine, window.HintText.Length > 0);
 
         Assert.Equal(Strings.Get("gui.gate.title"), window.Text);
         Assert.Equal(outcome == GateOutcome.Busy, window.RetryOffered);
@@ -193,10 +188,158 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.Equal(theme.Palette.Window, window.BackColor);
         Assert.Equal(theme.Palette.Text, window.ForeColor);
 
+        // No text of a window names a file or a path, and none promises the recovery tool or its note (they come in step 4).
+        Assert.DoesNotContain(GateFile.RecoverNoteName, window.ReasonText, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\", window.ReasonText, StringComparison.Ordinal);
+        Assert.Null(window.HintProblem());
         if (outcome is GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed)
         {
-            Assert.EndsWith(Path.Combine("update", GateFile.RecoverNoteName), window.ReasonText, StringComparison.Ordinal);
+            // The one dim line says which folder this is: the words, then the folder of the gate that was looked at (the final path), broken only at backslashes.
+            var folder = Path.GetDirectoryName(entry.GatePath)!;
+            Assert.Equal(Strings.Format("gui.gate.folder", Fmt.Dict(("path", folder))), window.HintText.Replace("\n", string.Empty, StringComparison.Ordinal));
+            Assert.StartsWith(language == Language.Ja ? "このフォルダー:" : "This folder:", window.HintText, StringComparison.Ordinal);
         }
+    }
+
+    // The words of every refusal, as the coordinator's usability review fixed them (it is the text of a person who is stuck: one text, what is wrong, what to do).
+    public static TheoryData<GateOutcome, Language, string> TheWords() => new()
+    {
+        { GateOutcome.RecoveryPending, Language.Ja, "前回の更新が途中で止まったため、このフォルダーからは PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.RecoveryPending, Language.En, "The last update did not finish, so PC Mieru cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+        { GateOutcome.RecoveryFailed, Language.Ja, "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.RecoveryFailed, Language.En, "PC Mieru could not undo the last update, so it cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+        { GateOutcome.MissingGate, Language.Ja, "起動に必要なファイルが見つからないため、PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.MissingGate, Language.En, "PC Mieru cannot open because a required file is missing. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+        { GateOutcome.Denied, Language.Ja, "必要なファイルを開けないため、PCミエルを起動できません。ダウンロードした ZIP をもう一度、自分の使える新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
+        { GateOutcome.Denied, Language.En, "PC Mieru cannot open a required file. Unzip the downloaded ZIP file into a new folder you can use and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
+        { GateOutcome.Busy, Language.Ja, "PCミエルの更新などでファイルが使われています。しばらく待ってから、もう一度試してください。" },
+        { GateOutcome.Busy, Language.En, "PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again." },
+        { GateOutcome.Unreadable, Language.Ja, "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。ダウンロードした ZIP をもう一度、パスの短い新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
+        { GateOutcome.Unreadable, Language.En, "The state of PCMieru.gate.txt, which is needed to start, could not be checked. Unzip the downloaded ZIP file into a new folder with a short path and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
+    };
+
+    [Theory]
+    [MemberData(nameof(TheWords))]
+    public void The_window_says_exactly_the_words_that_were_fixed_for_each_refusal(GateOutcome outcome, Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Light);
+
+        using var window = new StartGateWindow(theme, Refused(outcome), () => throw new InvalidOperationException("no retry here"));
+
+        Assert.Equal(expected, window.ReasonText);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public void A_missing_gate_does_not_say_that_the_person_deleted_or_moved_anything_and_the_unreadable_text_is_not_the_denied_text(Language language)
+    {
+        using var _ = Harness.Locale(language);
+        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed" })
+        {
+            var text = Strings.Get(key, language);
+            foreach (var blame in language == Language.Ja ? new[] { "削除", "移動", "消し", "動かし" } : new[] { "deleted", "moved", "you deleted", "your fault" })
+            {
+                Assert.DoesNotContain(blame, text, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        Assert.NotEqual(Strings.Get("gui.gate.denied", language), Strings.Get("gui.gate.unreadable", language));
+        // The unreadable text keeps its own first sentence (the file could not be checked), then gives the advice of the denied text: a new folder, then the person who manages this PC.
+        var unreadable = Strings.Get("gui.gate.unreadable", language);
+        Assert.Contains(language == Language.Ja ? "確かめられませんでした。" : "could not be checked.", unreadable, StringComparison.Ordinal);
+        Assert.Contains(language == Language.Ja ? "PC の管理者に相談してください。" : "contact the person who manages this PC.", unreadable, StringComparison.Ordinal);
+    }
+
+    // ---- the folder line of an interrupted update ----
+
+    private static int Ten(string text) => text.Length * 10;
+
+    [Fact]
+    public void A_folder_line_that_fits_stays_one_line_and_is_the_text_unchanged()
+    {
+        var wrapped = FolderLineWrap.Wrap("This folder: ", @"C:\Apps\PC Mieru", Ten, room: 300);
+
+        Assert.Equal(@"This folder: C:\Apps\PC Mieru", wrapped);
+    }
+
+    [Fact]
+    public void A_long_folder_is_broken_only_after_a_backslash_every_line_fits_and_nothing_is_lost()
+    {
+        const string prefix = "This folder: ";
+        const string path = @"C:\Users\Administrator\AppData\Local\Temp\claude\c--Users-Administrator\scratchpad\tmpB3fix\pcmieru-smoke-gate-abcd1234\pending";
+
+        var wrapped = FolderLineWrap.Wrap(prefix, path, Ten, room: 300);
+
+        Assert.NotNull(wrapped);
+        var lines = wrapped.Split('\n');
+        Assert.True(lines.Length > 1);
+        Assert.All(lines, line => Assert.True(Ten(line) <= 300, line));
+        Assert.All(lines.Take(lines.Length - 1), line => Assert.EndsWith("\\", line, StringComparison.Ordinal));
+        Assert.StartsWith(prefix, lines[0], StringComparison.Ordinal);
+        Assert.Equal(prefix + path, string.Concat(lines));
+    }
+
+    [Fact]
+    public void The_words_in_front_of_the_path_stay_alone_on_their_line_when_not_even_the_first_name_fits_after_them()
+    {
+        var wrapped = FolderLineWrap.Wrap("This folder: ", @"Programs-and-more\app", Ten, room: 250);
+
+        Assert.Equal("This folder:\nPrograms-and-more\\app", wrapped);
+    }
+
+    [Fact]
+    public void A_name_that_is_wider_than_a_line_by_itself_leaves_the_path_out_instead_of_being_cut_in_the_middle()
+    {
+        var wrapped = FolderLineWrap.Wrap("This folder: ", @"C:\Users\an-extremely-long-folder-name-that-never-fits\app", Ten, room: 300);
+
+        Assert.Null(wrapped);
+    }
+
+    [Fact]
+    public void A_network_folder_and_a_folder_with_spaces_are_broken_the_same_way()
+    {
+        var wrapped = FolderLineWrap.Wrap("このフォルダー: ", @"\\server\share\My Apps\PC Mieru 2\bin", Ten, room: 260);
+
+        Assert.NotNull(wrapped);
+        Assert.Equal(@"このフォルダー: \\server\share\My Apps\PC Mieru 2\bin", wrapped.Replace("\n", string.Empty, StringComparison.Ordinal));
+        Assert.All(wrapped.Split('\n').Take(wrapped.Split('\n').Length - 1), line => Assert.True(line.EndsWith('\\') || line.EndsWith(':'), line));
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public void The_real_window_breaks_a_deep_folder_after_backslashes_and_every_line_fits_the_label(Language language)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var exe = Install(Path.Combine("a-folder-with-a-long-name", "and-another-one-below-it", "then-a-third-one-for-good-measure", "and-a-fourth-so-it-cannot-fit", "pending-install"));
+        Directory.CreateDirectory(Update(exe));
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
+        var entry = InstallGate.EnterStartup(exe);
+        Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
+
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+
+        Assert.True(window.HintText.Split('\n').Length >= 2, window.HintText);
+        Assert.Null(window.HintProblem());
+        Assert.Equal(Strings.Format("gui.gate.folder", Fmt.Dict(("path", Path.GetDirectoryName(entry.GatePath)!))), window.HintText.Replace("\n", string.Empty, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_folder_line_does_not_take_an_ampersand_in_a_folder_name_for_a_shortcut_key()
+    {
+        using var _ = Harness.Locale();
+        using var theme = new ThemeService(ThemeMode.Light);
+        var exe = Install("R&D tools");
+        Directory.CreateDirectory(Update(exe));
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
+
+        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => throw new InvalidOperationException("no retry here"));
+
+        Assert.False(window.HintLabel.UseMnemonic);
+        Assert.Contains("R&D tools", window.HintText.Replace("\n", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -218,8 +361,8 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.Null(window.Opened);
         Assert.Equal(Strings.Get("gui.gate.busy"), window.ReasonText);
         Assert.True(window.RetryOffered);
-        // Not only an update holds the gate (any program that has it exclusively does), so the words do not say it is one.
-        Assert.Equal("Another program is using PC Mieru's files right now (an update, for example). Try again in a moment.", window.ReasonText);
+        // Not only an update holds the gate (any program that has it exclusively does), so the words say "perhaps", not that an update is running.
+        Assert.Equal("PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again.", window.ReasonText);
 
         holder.Dispose();
         Assert.True(window.RetryNow());
@@ -252,9 +395,9 @@ public sealed class StartGateScreenTests : IDisposable
     }
 
     [Theory]
-    [InlineData(Language.Ja, "ほかのプログラムが PCミエルのファイルを使っています（更新中など）。しばらくしてからもう一度試してください。")]
-    [InlineData(Language.En, "Another program is using PC Mieru's files right now (an update, for example). Try again in a moment.")]
-    public void The_busy_window_says_that_another_program_is_using_the_files_not_that_an_update_is_running_and_keeps_its_button(Language language, string expected)
+    [InlineData(Language.Ja, "PCミエルの更新などでファイルが使われています。しばらく待ってから、もう一度試してください。")]
+    [InlineData(Language.En, "PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again.")]
+    public void The_busy_window_says_that_the_files_are_in_use_perhaps_because_of_an_update_and_keeps_its_button(Language language, string expected)
     {
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(ThemeMode.Light);
@@ -269,7 +412,7 @@ public sealed class StartGateScreenTests : IDisposable
     [Theory]
     [InlineData(Language.Ja, "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。")]
     [InlineData(Language.En, "The state of PCMieru.gate.txt, which is needed to start, could not be checked.")]
-    public void A_gate_file_that_could_not_be_looked_at_has_its_own_words_it_is_not_the_access_denied_text(Language language, string expected)
+    public void A_gate_file_that_could_not_be_looked_at_starts_with_its_own_sentence_it_is_not_the_access_denied_text(Language language, string firstSentence)
     {
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(ThemeMode.Light);
@@ -278,7 +421,7 @@ public sealed class StartGateScreenTests : IDisposable
         using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
 
         Assert.Equal(GateOutcome.Unreadable, entry.Outcome);
-        Assert.Equal(expected, window.ReasonText);
+        Assert.StartsWith(firstSentence, window.ReasonText, StringComparison.Ordinal);
         Assert.NotEqual(Strings.Get("gui.gate.denied"), window.ReasonText);
         Assert.False(window.RetryOffered);
     }

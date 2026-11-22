@@ -142,7 +142,7 @@ public static class InstallGate
     public static string ReasonOf(GateOutcome outcome) => outcome switch
     {
         GateOutcome.Open => "the start gate is open",
-        GateOutcome.Busy => "an update is being installed (or the start gate is held exclusively), try again in a moment",
+        GateOutcome.Busy => "PC Mieru's files are in use (an update being installed, for example); try again in a moment",
         GateOutcome.RecoveryPending => "an interrupted update has to be recovered before PC Mieru can start",
         GateOutcome.RecoveryFailed => "recovering an interrupted update failed, PC Mieru cannot start until it is repaired",
         GateOutcome.MissingGate => "PCMieru.gate.txt is missing from the install folder, unzip the downloaded ZIP file again",
