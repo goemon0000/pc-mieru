@@ -51,9 +51,9 @@ jobs:
   # the zip: a file the manifest does not list, a name the rules refuse, a hash that differs or a zip that is built
   # differently from what the client reads fails here, not on the tag.
   #
-  # -PartialFloor asks the validator for BundleFloor.ForThisBuild: the floor without the three files that the later
-  # steps of DESIGN-B 11 have not built yet (BundleFloor.NotYetBuilt: Swap.exe, gate.txt, Update.dll). release.yml does
-  # not pass it, so a tag fails until those files exist. When BundleFloor.NotYetBuilt is empty (steps 3/4) remove
+  # -PartialFloor asks the validator for BundleFloor.ForThisBuild: the floor without the file that the later
+  # steps of DESIGN-B 11 have not built yet (BundleFloor.NotYetBuilt: Swap.exe only; the gate file and Update.dll ship since step 3). release.yml does
+  # not pass it, so a tag fails until that file exists. When BundleFloor.NotYetBuilt is empty (step 4) remove
   # -PartialFloor from both publish steps below: the full floor is then what every run asks for.
   #
   # The publish runs twice, once in each PowerShell, into its own output folder: the release is made by pwsh (7.x), but

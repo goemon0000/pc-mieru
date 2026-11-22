@@ -358,7 +358,7 @@ public sealed class FeedReviewFixTests : IDisposable
             UpdateRefusal.FeedUnreadable, UpdateRefusal.BodyTooLarge,
             UpdateRefusal.RedirectHostNotAllowed, UpdateRefusal.RedirectDowngrade, UpdateRefusal.RedirectTooMany, UpdateRefusal.RedirectCredentials, UpdateRefusal.RedirectMissingLocation,
             UpdateRefusal.HttpError, UpdateRefusal.NetworkFailure,
-            UpdateRefusal.StateUnavailable, UpdateRefusal.AnotherCheckRunning, UpdateRefusal.OwnVersionUnknown,
+            UpdateRefusal.StateUnavailable, UpdateRefusal.AnotherCheckRunning, UpdateRefusal.OwnVersionUnknown, UpdateRefusal.GateMissing,
         ];
         UpdateRefusal[] byTheReleasesRules =
         [

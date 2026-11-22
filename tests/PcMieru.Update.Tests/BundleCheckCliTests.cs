@@ -128,7 +128,7 @@ public sealed class BundleCheckCliTests : IDisposable
     }
 
     [Fact]
-    public void The_full_floor_passes_a_bundle_that_has_the_three_files_of_the_later_steps()
+    public void The_full_floor_passes_a_bundle_that_has_the_file_of_the_later_step()
     {
         var bundle = new TestBundle();
         foreach (var name in BundleFloor.NotYetBuilt)

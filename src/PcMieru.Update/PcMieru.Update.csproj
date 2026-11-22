@@ -9,6 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The gate file's fixed name and bytes (src/PcMieru.Wire/Gate): the bundle validator checks its hash, and the install id is taken from it. Wire has no reference to anything else. -->
+    <ProjectReference Include="..\PcMieru.Wire\PcMieru.Wire.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Update.Tests" />
   </ItemGroup>
 

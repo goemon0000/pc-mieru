@@ -62,7 +62,7 @@ public sealed partial class RealMachineTests
         Assert.True(BundleManifest.TryParse(manifestBytes, out var outer, out var verdict), verdict.ToString());
         Assert.Equal(version, outer.Version);
 
-        // What the publish of this step can already offer: the floor without the three files of the later steps.
+        // What the publish of this step can already offer: the floor without the swapper of step 4.
         using (var stream = OpenRead(zipPath))
         {
             var result = BundleZip.Validate(stream, version, outer, Limits.Default, BundleFloor.ForThisBuild);

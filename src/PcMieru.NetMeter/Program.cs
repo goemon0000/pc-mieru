@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using PcMieru.NetMeter;
 using PcMieru.Wire;
+using PcMieru.Wire.Gate;
 
 return MeterMain.Run(args);
 
@@ -24,6 +25,15 @@ namespace PcMieru.NetMeter
             }
 
             NativeSearch.Pin();
+
+            // The start gate (DESIGN-B 4): after the library search is fixed, before the arguments, the pipe and the ETW session. Not open = MeterExit.Internal and nothing else happens: no pipe,
+            // no session. (No console here, so no message: the front end only sees that the process ended.) Held until the meter ends. With the gate fine, a start without arguments is still
+            // InvalidArguments (2), which tools/publish.ps1 -Verify checks.
+            using var gate = InstallGate.EnterStartup();
+            if (!gate.IsOpen)
+            {
+                return MeterExit.Internal;
+            }
 
             if (!NetMeterArguments.TryParse(args, out var arguments, out _) || arguments is null)
             {

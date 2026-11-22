@@ -16,7 +16,7 @@ internal static class UpdateComposition
     /// <param name="settings">Holds the mode.</param>
     /// <param name="versionText">The version of this program as the build writes it ("0.4.0"). Not three plain numbers: no check is made (<see cref="UpdateRefusal.OwnVersionUnknown"/>).</param>
     /// <param name="localFolder">L, the per-user data folder (<c>%LOCALAPPDATA%\PCMieru</c>). The state goes to <c>L\update\&lt;id&gt;</c>.</param>
-    /// <param name="programFile">PCMieru.exe. The install id is taken from this file (<see cref="InstallId.StateFolder"/>).</param>
+    /// <param name="programFile">PCMieru.exe. The install id is taken from the gate file beside it (<see cref="InstallId.StateFolder"/>); no gate file, no check (<see cref="UpdateRefusal.GateMissing"/>).</param>
     public static UpdateWiring Create(bool fakes, GuiSettings settings, string versionText, string localFolder, string programFile, IUpdateTimers? timers = null)
     {
         timers ??= new WinFormsUpdateTimers();
@@ -36,10 +36,15 @@ internal static class UpdateComposition
         var service = new DeferredUpdateService(
             () => InstallId.StateFolder(localFolder, programFile) is { } folder
                 ? new UpdateService(new UpdateServiceOptions { Running = running, StateFolder = folder })
-                : new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "this program's file has no install id"),
+                : GateIsThere(programFile)
+                    ? new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "the gate file of this install has no id")
+                    : new UnavailableUpdateService(UpdateRefusal.GateMissing, "there is no gate file beside this program"),
             () => settings.UpdateMode);
         return new UpdateWiring(new UpdateController(service, settings, timers, () => PlacementOf(programFile), running), null);
     }
+
+    /// <summary>The gate file is beside the program (it can still fail to open, which is a state problem and not a missing file).</summary>
+    private static bool GateIsThere(string programFile) => InstallId.GateFileOf(programFile) is { } gate && File.Exists(gate);
 
     private static Placement PlacementOf(string programFile)
     {

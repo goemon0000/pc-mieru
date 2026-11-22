@@ -269,6 +269,12 @@ public sealed class InstallIdTests : IDisposable
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, name);
         File.WriteAllText(path, text);
+        if (name == "PCMieru.exe")
+        {
+            // An install has its gate file beside the program (step 3): the id and so the state folder are the gate file's.
+            File.WriteAllBytes(Path.Combine(dir, PcMieru.Wire.Gate.GateFile.FileName), PcMieru.Wire.Gate.GateFile.Bytes());
+        }
+
         return path;
     }
 
@@ -291,7 +297,37 @@ public sealed class InstallIdTests : IDisposable
         Assert.Equal(InstallId.OfFile(path), InstallId.OfFile(path));
         Assert.Equal(InstallId.OfFile(path), InstallId.OfFile(around));
         Assert.Equal(InstallId.OfFile(path), InstallId.OfFile(upper));
-        Assert.Equal(InstallId.OfFile(path), InstallId.OfInstall(path));
+        Assert.Equal(InstallId.OfFile(Path.Combine(_temp.Sub("a"), PcMieru.Wire.Gate.GateFile.FileName)), InstallId.OfInstall(path));
+    }
+
+    [Fact]
+    public void The_id_of_an_install_is_the_id_of_its_gate_file_and_not_of_the_program()
+    {
+        var program = File1("a", "PCMieru.exe");
+        var gate = Path.Combine(_temp.Sub("a"), PcMieru.Wire.Gate.GateFile.FileName);
+
+        Assert.Equal(InstallId.GateFileOf(program), gate);
+        Assert.Equal(InstallId.OfFile(gate), InstallId.OfInstall(program));
+        Assert.NotEqual(InstallId.OfFile(program), InstallId.OfInstall(program));
+
+        // An update replaces the program; the id (and the state folder under it) does not move.
+        var before = InstallId.OfInstall(program);
+        File.Delete(program);
+        File.WriteAllText(program, "the next version");
+        Assert.Equal(before, InstallId.OfInstall(program));
+    }
+
+    [Fact]
+    public void A_folder_without_the_gate_file_has_no_id_and_no_state_folder_there_is_no_fallback_to_the_program()
+    {
+        var program = File1("a", "PCMieru.exe");
+        File.Delete(Path.Combine(_temp.Sub("a"), PcMieru.Wire.Gate.GateFile.FileName));
+
+        Assert.NotNull(InstallId.OfFile(program)); // the exe itself is there and has a file id ...
+        Assert.Null(InstallId.OfInstall(program)); // ... and still it is not an id of the install
+        Assert.Null(InstallId.StateFolder(_temp.Sub("local"), program));
+        Assert.Null(InstallId.GateFileOf(""));
+        Assert.Null(InstallId.GateFileOf("PCMieru.exe"));
     }
 
     [Fact]

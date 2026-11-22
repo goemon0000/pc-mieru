@@ -51,6 +51,9 @@ internal sealed class TestBundle
             }
         }
 
+        // The gate file is the one file whose bytes are fixed (DESIGN-B 4): the validator checks its exact hash (BundleFault.GateFileChanged).
+        Files[BundleFormat.GateFileName] = PcMieru.Wire.Gate.GateFile.Bytes();
+
         Files["System.Runtime.dll"] = Encoding.ASCII.GetBytes(new string('r', 3000));
         Files["createdump.exe"] = Encoding.ASCII.GetBytes("createdump");
         Files["NOTICE.txt"] = Encoding.ASCII.GetBytes("notice");

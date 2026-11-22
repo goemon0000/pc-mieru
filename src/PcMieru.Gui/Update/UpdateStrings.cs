@@ -116,6 +116,7 @@ internal static class UpdateStrings
         new("gui.update.refusal.stateunavailable", "確認の記録をこのPCに書き込めません", "The record of checks cannot be written on this PC"),
         new("gui.update.refusal.anothercheckrunning", "ほかの確認が動いています", "Another check is running"),
         new("gui.update.refusal.ownversionunknown", "このアプリの版を読み取れません", "This app's own version cannot be read"),
+        new("gui.update.refusal.gatemissing", "PCミエルのフォルダーに PCMieru.gate.txt（起動用のファイル）がありません", "PCMieru.gate.txt (the start file) is not in the PC Mieru folder"),
 
         new("gui.update.refusal.draftrelease", "公開前の下書きの版です", "The release is only a draft"),
         new("gui.update.refusal.prereleaserelease", "試験的に公開された版（プレリリース）です", "The release is marked as a pre-release"),

@@ -156,6 +156,9 @@ public enum BundleFault
 
     /// <summary>The bundle could not be read (I/O error while reading an entry or the folder).</summary>
     ReadFailed,
+
+    /// <summary>The gate file is in the bundle and the manifests agree about it, but its bytes are not the text fixed in the client (<c>GateFile.Sha256Hex</c>, DESIGN-B 4).</summary>
+    GateFileChanged,
 }
 
 /// <summary>The answer of a pure check (a name, a manifest): ok, or the rule that held and a short text.</summary>

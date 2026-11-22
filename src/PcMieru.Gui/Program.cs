@@ -54,6 +54,15 @@ internal static class Program
 
         Strings.Current = settings.Language;
 
+        // The start gate (DESIGN-B 4): the first thing the app does once it knows the language and the theme, before the measure marker, the services, any window, the sampling and the
+        // update timer. Not open = a window with the reason (or, unattended, one line on stderr and exit 1); nothing else of the app was started. Held until Main returns.
+        using var theme = new ThemeService(settings.Theme);
+        using var gate = StartGateScreen.Enter(theme, unattended: options.SmokeOutput is not null || options.MeasureOutput is not null, Console.Error);
+        if (gate is null)
+        {
+            return 1;
+        }
+
         // --measure (test-only): the marker file is made before any window exists, so a path that cannot be written is said at once.
         MeasureMarks? marks = null;
         if (options.MeasureOutput is { } markerFile)
@@ -66,7 +75,6 @@ internal static class Program
 
         using var services = PcMieruServices.Create(options.CoreOptions);
         using var pump = new SnapshotPump(services, settings.IntervalMs);
-        using var theme = new ThemeService(settings.Theme);
         var context = new GuiContext(services, pump, theme, settings, measure: marks);
         using var form = new MainForm(context);
 

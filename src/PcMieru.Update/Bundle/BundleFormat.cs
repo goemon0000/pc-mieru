@@ -15,8 +15,8 @@ public static class BundleFormat
     /// <summary>The manifest inside the folder. It lists every file but itself.</summary>
     public const string InnerManifestName = "PCMieru.bundle.json";
 
-    /// <summary>The gate file (DESIGN-B 4). Not produced by this step.</summary>
-    public const string GateFileName = "PCMieru.gate.txt";
+    /// <summary>The gate file (DESIGN-B 4): fixed bytes, the same in every release (<c>PcMieru.Wire.Gate.GateFile</c> holds the text and its hash). Written by tools/publish.ps1 from assets/PCMieru.gate.txt.</summary>
+    public const string GateFileName = PcMieru.Wire.Gate.GateFile.FileName;
 
     /// <summary>"PCMieru-X.Y.Z-win-x64": the top folder of the zip and of a manual unzip.</summary>
     public static string RootFolder(string version) => $"PCMieru-{version}-{Rid}";

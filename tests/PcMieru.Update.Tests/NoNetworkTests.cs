@@ -105,12 +105,31 @@ public partial class NoNetworkTests
     }
 
     [Fact]
-    public void The_update_project_references_no_package_and_no_other_project()
+    public void The_update_project_references_no_package_and_no_project_but_the_wire_project_and_the_wire_reaches_nothing()
     {
         var text = File.ReadAllText(Path.Combine(RepoRoot(), "src", "PcMieru.Update", "PcMieru.Update.csproj"));
         Assert.DoesNotContain("<PackageReference", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("<ProjectReference", text, StringComparison.Ordinal);
         Assert.DoesNotContain("<FrameworkReference", text, StringComparison.Ordinal);
+
+        // The one project it may reference is the Wire: the gate file's fixed name and bytes live there (DESIGN-B 4), and the Wire is a leaf. What it means here: nothing that can reach the
+        // network comes in through that reference (no package, no project of its own, no System.Net in its code).
+        var references = System.Text.RegularExpressions.Regex.Matches(text, @"<ProjectReference\s+Include=""([^""]+)""").Select(m => m.Groups[1].Value.Replace('\\', '/')).ToArray();
+        Assert.Equal(["../PcMieru.Wire/PcMieru.Wire.csproj"], references);
+
+        var wire = Path.Combine(RepoRoot(), "src", "PcMieru.Wire");
+        var wireProject = File.ReadAllText(Path.Combine(wire, "PcMieru.Wire.csproj"));
+        Assert.DoesNotContain("<PackageReference", wireProject, StringComparison.Ordinal);
+        Assert.DoesNotContain("<ProjectReference", wireProject, StringComparison.Ordinal);
+        var sources = Directory.GetFiles(wire, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.True(sources.Length > 5, "the Wire sources were not found");
+        foreach (var source in sources)
+        {
+            var code = File.ReadAllText(source);
+            Assert.DoesNotContain("System.Net", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("HttpClient", code, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

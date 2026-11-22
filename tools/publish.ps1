@@ -8,6 +8,8 @@
      (SHA256); if it is not, the script stops. Nothing is overwritten silently.
   3. Publishes the Helper and the network meter (PCMieru.NetMeter.exe) with NativeAOT and checks each exe itself:
      DependentLoadFlags must contain LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) and the static imports must be system DLLs only.
+     Then writes the start gate file PCMieru.gate.txt (a byte for byte copy of assets\PCMieru.gate.txt; every exe refuses to start without it, and
+     the validator checks its exact SHA-256, which is fixed in src/PcMieru.Wire/Gate/GateFile.cs).
   4. Writes the inner manifest PCMieru.bundle.json into the folder: format, version, rid, a new buildId (a GUID, per publish),
      gateProtocol and every file of the folder (path with '/', bytes, sha256) except itself.
   5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, PCMieru.exe --smoke, and the
@@ -20,10 +22,10 @@
   7. With -Verify, the validator judges the zip against the outer manifest and SHA256.txt. With -SkipZip there is no zip:
      the folder is judged against its own inner manifest. (CI no longer uses -SkipZip: it makes the zip in pwsh and in 5.1.)
 
-  The three files of the later steps (PCMieru.Swap.exe, PCMieru.gate.txt, PcMieru.Update.dll) are not built yet. The validator is
+  The one file of the later steps that is not built yet is PCMieru.Swap.exe (step 4; the gate file and PcMieru.Update.dll ship since step 3). The validator is
   always asked for the FULL floor (--floor full) unless -PartialFloor is given, which asks for the floor of this build
-  (BundleFloor.ForThisBuild). CI passes -PartialFloor; a release does not, so a tag fails until the three
-  files exist. Remove -PartialFloor from ci.yml when BundleFloor.NotYetBuilt is empty.
+  (BundleFloor.ForThisBuild). CI passes -PartialFloor; a release does not, so a tag fails until that
+  file exists. Remove -PartialFloor from ci.yml when BundleFloor.NotYetBuilt is empty.
 
   A published folder may hold no Hidden or System file (the zip would carry it and the validator would refuse the name or the
   attributes on the client); the script lists with -Force and stops on one.
@@ -500,7 +502,8 @@ foreach ($path in @($work, $folder, $zip, $outerManifest, $hashList)) {
 }
 New-Item -ItemType Directory -Force -Path $work, $folder | Out-Null
 
-$common = @('-c', 'Release', '-r', $Runtime, "-p:Version=$Version", '-p:DebugType=none', '-p:DebugSymbols=false', '--nologo')
+# GateNextToExe=false: the dev copy of the gate file next to a build (build/GateNextToExe.targets) is not wanted here; this script writes the gate itself, below.
+$common = @('-c', 'Release', '-r', $Runtime, "-p:Version=$Version", '-p:DebugType=none', '-p:DebugSymbols=false', '-p:GateNextToExe=false', '--nologo')
 
 $apps = @(
     @{ Name = 'Gui'; Project = 'src\PcMieru.Gui\PcMieru.Gui.csproj' },
@@ -534,9 +537,13 @@ foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $folder $extra) }
 }
 
+# The start gate file: the bytes of assets\PCMieru.gate.txt, copied as they are (no text conversion). The validator checks the exact SHA-256 (BundleFault.GateFileChanged),
+# so an asset that was changed by mistake stops the -Verify run; without -Verify the unit test of the asset (tests/PcMieru.Gate.Tests) is what stops it.
+Copy-Item -LiteralPath (Join-Path $root 'assets\PCMieru.gate.txt') -Destination (Join-Path $folder 'PCMieru.gate.txt')
+
 # System.Management.dll and System.CodeDom.dll are the Checks' dependencies (WMI for the hardware checks). A publish that drops
 # them would start fine and fail on the first check, so a release folder without them is not a release.
-$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll', 'System.Management.dll', 'System.CodeDom.dll')
+$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll', 'PCMieru.gate.txt', 'PcMieru.Update.dll', 'System.Management.dll', 'System.CodeDom.dll')
 foreach ($file in $expected) {
     if (-not (Test-Path -LiteralPath (Join-Path $folder $file))) { throw "missing from the release folder: $file" }
 }

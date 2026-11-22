@@ -7,6 +7,14 @@ using PcMieru.SensorHost;
 // call can hang and must never freeze the app. Protocol: one SensorFrame JSON line on stdout every two seconds (the first one as soon as the
 // libraries are open), diagnostics on stderr, exit when stdin closes (the app is gone) or after one frame with --once.
 // Runs as the normal user. Reads only; nothing here changes a GPU setting.
+// The start gate (DESIGN-B 4): before the stdin watch and before any vendor library is touched. Not open = one fixed line on stderr, exit 3, no frame (the app waits and restarts it).
+using var gate = PcMieru.Wire.Gate.InstallGate.EnterStartup();
+if (!gate.IsOpen)
+{
+    Console.Error.WriteLine("sensorhost " + gate.Reason);
+    return 3;
+}
+
 const int DefaultIntervalMs = 2000;
 
 var once = args.Contains("--once", StringComparer.Ordinal);

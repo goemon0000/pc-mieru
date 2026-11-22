@@ -121,7 +121,7 @@ public partial class WorkflowPolicyTests
     // ------------------------------------------------------------------------------------------------------------------------- release.yml
 
     [Fact]
-    public void Release_publishes_against_the_full_floor_a_tag_of_this_build_fails_until_the_three_files_exist()
+    public void Release_publishes_against_the_full_floor_a_tag_of_this_build_fails_until_the_swapper_exists()
     {
         var yaml = Read(".github", "workflows", "release.yml");
         var steps = PublishSteps(yaml);
@@ -194,7 +194,7 @@ public partial class WorkflowPolicyTests
         var at = source.IndexOf("public static IReadOnlyList<string> NotYetBuilt", StringComparison.Ordinal);
         Assert.True(at > 0);
         var before = source[Math.Max(0, at - 600)..at];
-        Assert.Contains("steps 3/4 empty this list; then remove -PartialFloor from ci.yml", before, StringComparison.Ordinal);
+        Assert.Contains("step 4 empties this list; then remove -PartialFloor from ci.yml", before, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------- helpers

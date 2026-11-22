@@ -505,13 +505,19 @@ public sealed class UpdateControllerTests
     {
         private readonly Ui.TempRoot _root = new();
 
-        public RealRig(string? mode = null, string versionText = "0.4.0", bool withIni = false)
+        public RealRig(string? mode = null, string versionText = "0.4.0", bool withIni = false, bool withGate = true)
         {
             Local = Path.Combine(_root.Path, "L");
             var appFolder = Path.Combine(_root.Path, "app");
             Directory.CreateDirectory(appFolder);
             Program = Path.Combine(appFolder, "PCMieru.exe");
             File.WriteAllText(Program, "not a program");
+            if (withGate)
+            {
+                // An install has its gate file beside the exe (step 3): the install id, and so the state folder, are the gate file's.
+                File.WriteAllBytes(Path.Combine(appFolder, PcMieru.Wire.Gate.GateFile.FileName), PcMieru.Wire.Gate.GateFile.Bytes());
+            }
+
             IniPath = withIni ? Path.Combine(Local, "gui.ini") : null;
             Settings = UpdateKit.Impatient(UpdateKit.Settings(IniPath, mode));
             Timers = new ManualTimers();
@@ -589,6 +595,26 @@ public sealed class UpdateControllerTests
         Assert.False(answer.Fetched);
         Assert.Equal(before, Traffic());
         Assert.False(rig.LocalFolderExists);
+    }
+
+    [Fact]
+    public async Task A_folder_without_the_gate_file_gives_a_refusal_with_its_reason_and_no_request_and_no_state_folder()
+    {
+        var before = Traffic();
+        using var rig = new RealRig("notify", withGate: false);
+
+        rig.Controller.Start();
+        var answer = await rig.Controller.CheckNowAsync();
+
+        Assert.NotNull(answer);
+        Assert.Equal(UpdateCheckKind.Refused, answer.Kind);
+        Assert.Equal(UpdateRefusal.GateMissing, answer.Refusal);
+        Assert.False(answer.Fetched);
+        Assert.Equal(before, Traffic());
+        Assert.False(rig.LocalFolderExists); // there is no fallback to the exe's id: nothing is made
+
+        using var _ = Harness.Locale(Language.En);
+        Assert.Equal("PCMieru.gate.txt (the start file) is not in the PC Mieru folder", Strings.Get("gui.update.refusal.gatemissing"));
     }
 
     [Fact]

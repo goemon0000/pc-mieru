@@ -95,6 +95,9 @@ public enum UpdateRefusal
 
     /// <summary>The GUI could not read its own version (not "X.Y.Z"), so it cannot tell what is newer and does not check.</summary>
     OwnVersionUnknown,
+
+    /// <summary>The gate file (PCMieru.gate.txt) is not beside the program, so this install has no id and no state folder (DESIGN-B 4: the id is the gate file's; there is no fallback to the exe).</summary>
+    GateMissing,
 }
 
 /// <summary>
@@ -111,7 +114,7 @@ public static class UpdateRefusals
         UpdateRefusal.RedirectHostNotAllowed or UpdateRefusal.RedirectDowngrade or UpdateRefusal.RedirectTooMany or
         UpdateRefusal.RedirectCredentials or UpdateRefusal.RedirectMissingLocation or
         UpdateRefusal.HttpError or UpdateRefusal.NetworkFailure or
-        UpdateRefusal.StateUnavailable or UpdateRefusal.AnotherCheckRunning or UpdateRefusal.OwnVersionUnknown;
+        UpdateRefusal.StateUnavailable or UpdateRefusal.AnotherCheckRunning or UpdateRefusal.OwnVersionUnknown or UpdateRefusal.GateMissing;
 
     /// <summary>The release was read and one of its rules did not hold (a draft, a pre-release, a wrong tag or page, a blocked tag, a missing or wrong file, a hash that differs, a bad manifest). None is not a reason.</summary>
     public static bool JudgedARelease(UpdateRefusal reason) => reason != UpdateRefusal.None && !IsOperational(reason);

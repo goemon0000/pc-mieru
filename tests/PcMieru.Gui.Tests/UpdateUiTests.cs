@@ -108,7 +108,7 @@ public sealed class UpdateUiTests
         private int _probes;
 
         /// <param name="activate">True (the default): the page is the one on show, as the main window makes it (<c>OnActivated</c>), and its first probe has ended. False: the page is built and hidden.</param>
-        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En, TimeProvider? clock = null, bool activate = true)
+        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En, TimeProvider? clock = null, bool activate = true, Func<Placement>? probe = null)
         {
             // The test thread stands in for the UI thread: what a check or a probe hands back is queued here and runs when the test pumps (Finish, WaitUntil). Without this,
             // xunit's own context would run the continuations (and so the page's handlers) on a pool thread, as no window of the app ever does.
@@ -117,7 +117,7 @@ public sealed class UpdateUiTests
             Services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
             Pump = new SnapshotPump(Services);
             Settings = UpdateKit.Impatient(UpdateKit.Settings(iniPath, mode));
-            Controller = new UpdateController(service ?? Fake, Settings, Timers, Probe, UpdateKit.Running, clock);
+            Controller = new UpdateController(service ?? Fake, Settings, Timers, probe ?? Probe, UpdateKit.Running, clock);
             Context = new GuiContext(Services, Pump, _theme, Settings, updates: Controller);
             Context.StatusMessage += Messages.Add;
             Page = new SettingsPage(Context);
@@ -977,6 +977,72 @@ public sealed class UpdateUiTests
         rig.Page.ApplyLanguage();
         Assert.StartsWith("書き込めないため、お知らせだけになります（", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
         Assert.EndsWith(Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant()) + "）", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+    }
+
+    /// <summary>Takes the right to create files and folders from the current user on a folder (a read-only manual unzip, as far as this process can tell); give the rights back on dispose.</summary>
+    private sealed class DeniedWrite : IDisposable
+    {
+        private readonly DirectoryInfo _folder;
+        private readonly System.Security.AccessControl.FileSystemAccessRule _rule;
+
+        public DeniedWrite(string folder)
+        {
+            _folder = new DirectoryInfo(folder);
+            _rule = new System.Security.AccessControl.FileSystemAccessRule(
+                System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+                System.Security.AccessControl.FileSystemRights.CreateFiles | System.Security.AccessControl.FileSystemRights.CreateDirectories,
+                System.Security.AccessControl.AccessControlType.Deny);
+            var security = _folder.GetAccessControl();
+            security.AddAccessRule(_rule);
+            _folder.SetAccessControl(security);
+        }
+
+        public void Dispose()
+        {
+            var security = _folder.GetAccessControl();
+            security.RemoveAccessRule(_rule);
+            _folder.SetAccessControl(security);
+        }
+    }
+
+    [Fact]
+    public void A_read_only_manual_unzip_still_has_its_gate_and_the_page_says_updates_are_only_announced_with_the_reason()
+    {
+        using var root = new Ui.TempRoot();
+        var folder = Path.Combine(root.Path, "unzip");
+        Directory.CreateDirectory(folder);
+        var exe = Path.Combine(folder, "PCMieru.exe");
+        File.WriteAllText(exe, "not a program");
+        var gate = Path.Combine(folder, PcMieru.Wire.Gate.GateFile.FileName);
+        File.WriteAllBytes(gate, PcMieru.Wire.Gate.GateFile.Bytes());
+        File.SetAttributes(exe, FileAttributes.ReadOnly);
+        File.SetAttributes(gate, FileAttributes.ReadOnly);
+        try
+        {
+            using var denied = new DeniedWrite(folder);
+
+            // The gate needs reading only: a folder nobody can write to starts normally ...
+            using (var entry = PcMieru.Wire.Gate.InstallGate.EnterStartup(exe))
+            {
+                Assert.True(entry.IsOpen, entry.Detail);
+            }
+
+            // ... and the page says why nothing will be put in place here, and still lets the person look for a new version.
+            Assert.Equal(PlacementKind.ReadOnly, InstallPlacement.Check(folder).Kind);
+            using var rig = new PageRig("notify", probe: () => InstallPlacement.Check(folder));
+            rig.Controller.Start();
+            rig.Activate();
+
+            var reason = Strings.Get("gui.update.placement.readonly");
+            Assert.Equal("Cannot write here, so updates can only be announced (" + reason + ")", rig.Page.UpdatePlacementText);
+            Assert.Equal(CellTone.Warning, rig.Page.UpdatePlacementTone);
+            Assert.True(rig.Page.UpdateCheckNowButton.Enabled);
+        }
+        finally
+        {
+            File.SetAttributes(exe, FileAttributes.Normal);
+            File.SetAttributes(gate, FileAttributes.Normal);
+        }
     }
 
     [Fact]

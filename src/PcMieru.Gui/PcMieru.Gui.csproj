@@ -43,4 +43,7 @@
 
   <Import Project="..\..\build\SensorHostNextToApp.targets" />
 
+  <!-- Dev builds: the start gate file beside the exe (see build/GateNextToExe.targets). -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
+
 </Project>

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Update.Bundle;
 
@@ -221,6 +222,12 @@ internal static class BundleChecker
             if (digest.Sha256 != expected.Sha256)
             {
                 return BundleResult.Refuse(BundleFault.HashMismatch, $"'{file.Name}': the SHA-256 is not the manifest's");
+            }
+
+            // The gate file is the one file whose bytes the client fixes (DESIGN-B 4): a bundle whose manifests agree with a gate file of other bytes is refused all the same.
+            if (file.Name.Equals(GateFile.FileName, StringComparison.OrdinalIgnoreCase) && digest.Sha256 != GateFile.Sha256Hex)
+            {
+                return BundleResult.Refuse(BundleFault.GateFileChanged, $"'{file.Name}': the SHA-256 is not the one fixed in this program");
             }
 
             total += digest.Bytes;

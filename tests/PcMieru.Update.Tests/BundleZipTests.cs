@@ -114,6 +114,35 @@ public class BundleZipTests
         Assert.Contains("PCMieru.Swap.exe", result.Detail);
     }
 
+    // ------------------------------------------------------------------------------------------------------------------------ the gate file (DESIGN-B 4)
+
+    [Fact]
+    public void A_changed_gate_file_is_refused_even_when_the_manifests_agree_with_it()
+    {
+        // The gate file's bytes are fixed in the client (GateFile.Sha256Hex): a bundle whose manifests list a different file is not a bundle of this client.
+        var bundle = new TestBundle();
+        bundle.Files[BundleFormat.GateFileName] = Encoding.UTF8.GetBytes(PcMieru.Wire.Gate.GateFile.Text + "x");
+        var result = Refused(bundle, bundle.Zip(), BundleFault.GateFileChanged);
+        Assert.Contains(BundleFormat.GateFileName, result.Detail);
+    }
+
+    [Fact]
+    public void A_gate_file_with_the_same_text_but_other_line_endings_is_refused()
+    {
+        var bundle = new TestBundle();
+        bundle.Files[BundleFormat.GateFileName] = Encoding.UTF8.GetBytes(PcMieru.Wire.Gate.GateFile.Text.Replace("\n", "\r\n"));
+        Refused(bundle, bundle.Zip(), BundleFault.GateFileChanged);
+    }
+
+    [Fact]
+    public void The_gate_file_with_its_fixed_bytes_passes()
+    {
+        var bundle = new TestBundle();
+        Assert.Equal(PcMieru.Wire.Gate.GateFile.Sha256Hex, TestBundle.Sha(bundle.Files[BundleFormat.GateFileName]));
+        var result = bundle.Validate(bundle.Zip());
+        Assert.True(result.Ok, result.ToString());
+    }
+
     [Fact]
     public void A_bundle_with_the_whole_full_floor_passes_the_default_floor()
     {

@@ -10,3 +10,5 @@
 *.manifest text eol=lf
 *.ico binary
 *.targets text eol=lf
+# The start gate file is exact bytes (LF, no conversion): its SHA-256 is fixed in src/PcMieru.Wire/Gate/GateFile.cs and checked in every bundle.
+PCMieru.gate.txt -text

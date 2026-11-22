@@ -22,11 +22,12 @@ public class BundleFloorTests
     }
 
     [Fact]
-    public void What_is_not_built_yet_is_three_names_and_all_of_them_are_on_the_full_floor()
+    public void What_is_not_built_yet_is_the_swapper_only_and_it_is_on_the_full_floor()
     {
-        Assert.Equal(
-            new[] { "PCMieru.Swap.exe", "PCMieru.gate.txt", "PcMieru.Update.dll" }.OrderBy(n => n, StringComparer.Ordinal),
-            BundleFloor.NotYetBuilt.OrderBy(n => n, StringComparer.Ordinal));
+        // Step 3 built the gate file and ships PcMieru.Update.dll; the swapper (step 4) is the one name left.
+        Assert.Equal(new[] { "PCMieru.Swap.exe" }, BundleFloor.NotYetBuilt.OrderBy(n => n, StringComparer.Ordinal));
+        Assert.Contains(BundleFormat.GateFileName, BundleFloor.ForThisBuild);
+        Assert.Contains("PcMieru.Update.dll", BundleFloor.ForThisBuild);
         foreach (var name in BundleFloor.NotYetBuilt)
         {
             Assert.Contains(name, BundleFloor.Full);
@@ -37,7 +38,7 @@ public class BundleFloorTests
     public void The_floor_for_this_build_is_the_full_floor_without_what_is_not_built_yet()
     {
         Assert.Equal(BundleFloor.Full.Count - BundleFloor.NotYetBuilt.Count, BundleFloor.ForThisBuild.Count);
-        Assert.Equal(14, BundleFloor.ForThisBuild.Count);
+        Assert.Equal(16, BundleFloor.ForThisBuild.Count);
         foreach (var name in BundleFloor.NotYetBuilt)
         {
             Assert.DoesNotContain(name, BundleFloor.ForThisBuild);
