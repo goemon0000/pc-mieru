@@ -22,7 +22,7 @@ internal static class UpdateStrings
         new("gui.update.mode.off", "切る", "Off"),
 
         // --- the first-run choice ---
-        new("gui.update.dialog.title", "更新の確認", "Checking for updates"),
+        new("gui.update.dialog.title", "更新の設定", "Update settings"),
         new(
             "gui.update.dialog.lead",
             "PCミエルの新しい版が出ていないか、GitHub に問い合わせてよいか選んでください。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。GitHub にはこのPCの IP アドレスが分かります。",
@@ -66,7 +66,7 @@ internal static class UpdateStrings
         new("gui.update.placement.elevated", "管理者として開いています", "running as administrator"),
         new("gui.update.placement.notfixeddrive", "固定ディスクではない場所にあります", "not on a fixed disk"),
         new("gui.update.candidate.label", "利用できる新しい版", "Available version"),
-        new("gui.update.candidate.none", "なし", "None"),
+        new("gui.update.candidate.none", "なし", "none"),
         new("gui.update.status.label", "状態", "Status"),
         new("gui.update.checknow", "今すぐ確認", "Check now"),
         new("gui.update.notes", "更新内容をブラウザーで開く", "Open the update notes in browser"),
@@ -79,6 +79,7 @@ internal static class UpdateStrings
         new("gui.update.reason.backoff", "{time} まで確認できません", "Checks resume {time}"),
         new("gui.update.reason.checking", "確認しているところです", "A check is running"),
         new("gui.update.reason.nocandidate", "新しい版が見つかっていないため、開くものがありません", "No newer version found, so there is nothing to open"),
+        new("gui.update.reason.refused", "この版は確かめられなかったため開けません", "This version could not be verified, so its notes cannot be opened."),
 
         // --- what the status line says ---
         new("gui.update.state.checking", "確認しています…", "Checking…"),
@@ -145,7 +146,7 @@ internal static class UpdateStrings
 }
 
 /// <summary>What the status line of the settings page says and in which tone. A pure function of what the controller knows, so a test needs no window.</summary>
-internal readonly record struct UpdateLine(string Text, CellTone Tone);
+internal readonly record struct UpdateLine(string Text, CellTone Tone, bool VersionRefused = false);
 
 /// <summary>The words of the update check that are built from data (a mode, a refusal, a placement, a time).</summary>
 internal static class UpdateText
@@ -292,8 +293,12 @@ internal static class UpdateText
         return checking ? Strings.Get("gui.update.reason.checking") : string.Empty;
     }
 
-    /// <summary>Why 「更新内容をブラウザーで開く」 is off: there is no newer version to open the notes of; empty when it is on.</summary>
-    public static string NotesReason(bool hasCandidate) => hasCandidate ? string.Empty : Strings.Get("gui.update.reason.nocandidate");
+    /// <summary>
+    /// Why 「更新内容をブラウザーで開く」 is off; empty when it is on. A check that judged a release and refused it (<see cref="UpdateLine.VersionRefused"/>) says so (the version was found, but it
+    /// could not be verified, so its notes are not offered); otherwise there is no newer version to open the notes of.
+    /// </summary>
+    public static string NotesReason(bool hasCandidate, bool versionRefused = false) =>
+        hasCandidate ? string.Empty : Strings.Get(versionRefused ? "gui.update.reason.refused" : "gui.update.reason.nocandidate");
 
     /// <summary>The newer version that an earlier check found and the state file still holds (what the candidate row and the notice show); null when there is none.</summary>
     private static AppVersion? EarlierCandidate(UpdateStatus status, AppVersion running) =>
@@ -312,7 +317,7 @@ internal static class UpdateText
             var line = version is { } v
                 ? Strings.Format("gui.update.state.refused", Fmt.Dict(("version", v.ToString()), ("reason", RefusalText(reason))))
                 : Strings.Format("gui.update.state.refusednoversion", because);
-            return new UpdateLine(line, CellTone.Warning);
+            return new UpdateLine(line, CellTone.Warning, VersionRefused: true);
         }
 
         // A check that did not finish: with an earlier answer on file the page still shows that version (candidate row, notes, notice), so the line says the information is the earlier one.

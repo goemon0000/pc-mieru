@@ -51,12 +51,13 @@ internal sealed class StartGateWindow : Form
 {
     private readonly Func<GateEntry> _enter;
     private readonly Label _reason = new() { Name = "gateReason", AutoSize = true };
-    private readonly Label _hint = new() { Name = "gateHint", AutoSize = true };
+    private readonly ToneLabel _hint = new() { Name = "gateHint", AutoSize = true };
     private readonly Button _retry = new() { Name = "gateRetry", AutoSize = true };
     private readonly Button _close = new() { Name = "gateClose", AutoSize = true };
     private readonly ThemeService _theme;
     private GateEntry _current;
     private bool _noActivate;
+    private int _basePad;
 
     public StartGateWindow(ThemeService theme, GateEntry refused, Func<GateEntry> enter)
     {
@@ -75,6 +76,7 @@ internal sealed class StartGateWindow : Form
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         var pad = LogicalToDeviceUnits(16);
+        _basePad = pad;
         var width = LogicalToDeviceUnits(520);
         var root = new TableLayoutPanel
         {
@@ -109,8 +111,8 @@ internal sealed class StartGateWindow : Form
         CancelButton = _close;
         _retry.Click += (_, _) => RetryNow();
         Fill();
+        _hint.SetTone(CellTone.Dim);
         _theme.Apply(this);
-        _hint.ForeColor = _theme.Palette.TextDim;
     }
 
     /// <summary>The entry of the retry that succeeded; null when the window ended with the gate still closed.</summary>
@@ -141,16 +143,18 @@ internal sealed class StartGateWindow : Form
         GateOutcome.MissingGate => Strings.Get("gui.gate.missinggate"),
         GateOutcome.Denied => Strings.Get("gui.gate.denied"),
         GateOutcome.ReparseRefused => Strings.Get("gui.gate.reparserefused"),
+        GateOutcome.Unreadable => Strings.Get("gui.gate.unreadable"),
         _ => entry.Reason,
     };
 
+    // Busy has no second line: the reason already says what to do ("try again in a moment") and the button is right under it.
     private static string HintFor(GateEntry entry) => entry.Outcome switch
     {
-        GateOutcome.Busy => Strings.Get("gui.gate.busy.hint"),
         GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed => Strings.Get("gui.gate.recovery.hint"),
         GateOutcome.MissingGate => Strings.Get("gui.gate.missinggate.hint"),
         GateOutcome.Denied => Strings.Get("gui.gate.denied.hint"),
         GateOutcome.ReparseRefused => Strings.Get("gui.gate.reparserefused.hint"),
+        GateOutcome.Unreadable => Strings.Get("gui.gate.unreadable.hint"),
         _ => string.Empty,
     };
 
@@ -197,6 +201,9 @@ internal sealed class StartGateWindow : Form
     {
         _reason.Text = ReasonFor(_current);
         _hint.Text = HintFor(_current);
+        // No empty line under a reason that has nothing to add: the label goes, and the reason takes the space the label's margin gave.
+        _hint.Visible = _hint.Text.Length > 0;
+        _reason.Margin = new Padding(0, 0, 0, _hint.Visible ? _basePad / 2 : _basePad);
         RetryOffered = _current.Outcome == GateOutcome.Busy;
         _retry.Visible = RetryOffered;
         AcceptButton = RetryOffered ? _retry : _close;
@@ -210,8 +217,10 @@ internal static class GateStrings
         new("gui.gate.title", "PCミエル", "PC Mieru"),
         new("gui.gate.retry", "もう一度試す", "Try again"),
 
-        new("gui.gate.busy", "PCミエルはいま更新の入れ替え中のため、開けません。", "PC Mieru is being updated right now, so it cannot open."),
-        new("gui.gate.busy.hint", "入れ替えが終わるまで、少し待ってからもう一度お試しください。", "Wait until the update is finished, then try again."),
+        new(
+            "gui.gate.busy",
+            "ほかのプログラムが PCミエルのファイルを使っています（更新中など）。しばらくしてからもう一度試してください。",
+            "Another program is using PC Mieru's files right now (an update, for example). Try again in a moment."),
 
         new(
             "gui.gate.recoverypending",
@@ -252,5 +261,15 @@ internal static class GateStrings
             "gui.gate.reparserefused.hint",
             "配布の ZIP をもう一度展開した、ふつうのフォルダーから開いてください。",
             "Open it from an ordinary folder made by unzipping the downloaded ZIP file again."),
+
+        // The look at the gate file could not be made at all (a path too long for the system, a read error of the disk): not a missing file and not a refusal of access.
+        new(
+            "gui.gate.unreadable",
+            "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。",
+            "The state of PCMieru.gate.txt, which is needed to start, could not be checked."),
+        new(
+            "gui.gate.unreadable.hint",
+            "フォルダーの場所（パスが長すぎないか）を確かめて、もう一度開いてください。直らないときは、配布の ZIP をもう一度展開した新しいフォルダーから開いてください。",
+            "Check where the folder is (a path that is too long, for example) and open it again. If that does not help, unzip the downloaded ZIP file again into a new folder and open it from there."),
     ];
 }

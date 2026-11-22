@@ -1,4 +1,7 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using PcMieru.Update.Feed;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui;
 
@@ -46,6 +49,8 @@ internal static partial class SmokeRun
                 fake.Placement = new Placement(PlacementKind.CanSwap, "sample");
                 context.Updates.ChooseMode(UpdateMode.Ask);
             }
+
+            await ShootStartGate().ConfigureAwait(true);
 
             var folderAfter = FolderStamp(updateFolder);
             Check("update: the walk wrote nothing under the data folder's update folder", !folderBefore.StartsWith(StampUnreadable, StringComparison.Ordinal) && !folderAfter.StartsWith(StampUnreadable, StringComparison.Ordinal) && folderAfter == folderBefore, folderBefore + " -> " + folderAfter);
@@ -117,7 +122,7 @@ internal static partial class SmokeRun
             settings.UpdateCheckNowButton.PerformClick();
             await Until(() => updates.Pending.IsCompleted && fake.Calls == 4, 4000).ConfigureAwait(true);
             var refusal = Strings.Format("gui.update.state.refused", Fmt.Dict(("version", found.ToString()), ("reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing))));
-            Check("update: a refused release says why, offers no notes, and the candidate and the notice go", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == refusal && settings.UpdateStatusTone == CellTone.Warning && !settings.UpdateNotesButton.Enabled && settings.UpdateNotesReasonText == Strings.Get("gui.update.reason.nocandidate") && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none") && context.UpdateNotice is null && noticeLabel is { Visible: false }, settings.UpdateStatusText);
+            Check("update: a refused release says why, offers no notes, and the candidate and the notice go", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == refusal && settings.UpdateStatusTone == CellTone.Warning && !settings.UpdateNotesButton.Enabled && settings.UpdateNotesReasonText == Strings.Get("gui.update.reason.refused") && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none") && context.UpdateNotice is null && noticeLabel is { Visible: false }, settings.UpdateStatusText);
             await ShootUpdateSettings(settings, "refusal").ConfigureAwait(true);
 
             // --- a wait that GitHub asked for, on an install that cannot be written to ---
@@ -198,6 +203,136 @@ internal static partial class SmokeRun
 
                 dialog.Close();
             }).ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// The window of the start gate (DESIGN-B 4) in each state that stops a start and has a window: busy, an interrupted update, a recovery that failed, a gate file that is not there and one
+        /// that is refused (access denied). Each state is made for real (a small install folder under the temporary folder, the gate opened the way every start opens it), then shown without taking the
+        /// focus in every look. This run's own gate is not touched. At 200 percent only the two states of the screens that wrap longest (busy, an interrupted update) are taken.
+        /// </summary>
+        private async Task ShootStartGate()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "pcmieru-smoke-gate-" + Guid.NewGuid().ToString("N")[..8]);
+            var cleanups = new List<Action>();
+            var work = Screen.FromControl(form).WorkingArea;
+            try
+            {
+                Directory.CreateDirectory(root);
+                string Install(string name, bool gate = true)
+                {
+                    var folder = Path.Combine(root, name);
+                    Directory.CreateDirectory(folder);
+                    File.WriteAllText(Path.Combine(folder, "PCMieru.exe"), "not a program");
+                    if (gate)
+                    {
+                        File.WriteAllBytes(Path.Combine(folder, GateFile.FileName), GateFile.Bytes());
+                    }
+
+                    return Path.Combine(folder, "PCMieru.exe");
+                }
+
+                void UpdateFile(string exe, string name)
+                {
+                    var update = Path.Combine(Path.GetDirectoryName(exe)!, GateFile.UpdateFolderName);
+                    Directory.CreateDirectory(update);
+                    File.WriteAllText(Path.Combine(update, name), name == GateFile.JournalName ? "{}" : string.Empty);
+                }
+
+                var busy = Install("busy");
+                var holder = InstallGate.EnterExclusive(busy);
+                cleanups.Add(holder.Dispose);
+                var pending = Install("pending");
+                UpdateFile(pending, GateFile.JournalName);
+                var failed = Install("failed");
+                UpdateFile(failed, GateFile.RecoveryFailedName);
+                var missing = Install("missing", gate: false);
+                var denied = Install("denied");
+                // Access denied: the read right of the gate file is taken from this user, in this run's own folder only, and given back before the folder is removed.
+                var deniedGate = new FileInfo(Path.Combine(Path.GetDirectoryName(denied)!, GateFile.FileName));
+                var user = WindowsIdentity.GetCurrent().User!;
+                var rule = new FileSystemAccessRule(user, FileSystemRights.ReadData, AccessControlType.Deny);
+                var security = deniedGate.GetAccessControl();
+                security.AddAccessRule(rule);
+                deniedGate.SetAccessControl(security);
+                cleanups.Add(() =>
+                {
+                    var back = deniedGate.GetAccessControl();
+                    back.RemoveAccessRule(rule);
+                    deniedGate.SetAccessControl(back);
+                });
+                Check("gate: the busy state is held by a swapper of its own for the walk", holder.IsOpen, holder.Detail);
+
+                var states = new (string Name, GateOutcome Outcome, string Exe)[]
+                {
+                    ("busy", GateOutcome.Busy, busy),
+                    ("recoverypending", GateOutcome.RecoveryPending, pending),
+                    ("recoveryfailed", GateOutcome.RecoveryFailed, failed),
+                    ("missinggate", GateOutcome.MissingGate, missing),
+                    ("denied", GateOutcome.Denied, denied),
+                };
+                foreach (var (name, outcome, exe) in states)
+                {
+                    if (dpiPercent > 0 && outcome is not (GateOutcome.Busy or GateOutcome.RecoveryPending))
+                    {
+                        continue;
+                    }
+
+                    await ForEachLook(async look =>
+                    {
+                        var entry = InstallGate.EnterStartup(exe);
+                        Check($"gate: the {name} state is the real outcome of the gate ({look})", entry.Outcome == outcome, entry.Outcome + ": " + entry.Detail);
+                        using var window = new StartGateWindow(context.Theme, entry, () => InstallGate.EnterStartup(exe));
+                        window.PreventActivation();
+                        window.StartPosition = FormStartPosition.Manual;
+                        window.Location = onScreen ? new Point(work.Left + 40, work.Top + 40) : new Point(-24000, -24000);
+                        window.TopMost = onScreen;
+                        window.Show();
+                        await Task.Delay(300).ConfigureAwait(true);
+                        if (dpiPercent > 0)
+                        {
+                            await EmulateDpiOf(window).ConfigureAwait(true);
+                        }
+
+                        var busyOne = outcome == GateOutcome.Busy;
+                        Check($"gate: the {name} window has a reason{(busyOne ? string.Empty : " and a hint")} in this language, no missing strings ({look})", window.ReasonText.Length > 0 && (busyOne ? window.HintText.Length == 0 : window.HintText.Length > 0) && !SmokeText.IsPlaceholder(window.ReasonText) && !SmokeText.IsPlaceholder(window.HintText) && SmokeText.Missing(window).Distinct().Take(5).Count() == 0, window.ReasonText + " | " + window.HintText);
+                        Check($"gate: the {name} window offers 「もう一度試す」 only when it is busy ({look})", window.RetryOffered == busyOne && window.RetryButton.Visible == busyOne, "retry " + window.RetryOffered);
+                        var clipped = SmokeClip.Clipped(window).Distinct().Take(6).ToList();
+                        Check($"gate: the {name} window has no cut-off text ({look})", clipped.Count == 0, string.Join(" | ", clipped));
+                        var off = SmokeTheme.Mismatches(window, context.Theme.Palette).Take(5).ToList();
+                        Check($"gate: the {name} window follows the theme ({look})", off.Count == 0 && window.BackColor == context.Theme.Palette.Window, string.Join(" | ", off));
+                        Check($"gate: the {name} window fits on the screen ({look})", window.Height <= work.Height && window.Width <= work.Width, window.Width + "x" + window.Height + " in " + work.Width + "x" + work.Height);
+                        if (shotsDirectory is not null)
+                        {
+                            _shots.Add(await Capture(shotsDirectory, $"{look}-gate-{name}{ScaleSuffix}.png", window).ConfigureAwait(true));
+                        }
+
+                        window.Close();
+                    }).ConfigureAwait(true);
+                }
+            }
+            finally
+            {
+                foreach (var cleanup in Enumerable.Reverse(cleanups))
+                {
+                    try
+                    {
+                        cleanup();
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                    {
+                        // the folder of this walk is removed next, and it is in the temporary folder: a cleanup that fails is not a failure of the screens
+                    }
+                }
+
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // a folder in the temporary folder that stays is not a failure of the screens
+                }
+            }
         }
     }
 }

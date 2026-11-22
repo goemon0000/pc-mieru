@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Core.Tests" />
+    <InternalsVisibleTo Include="PcMieru.Gate.Tests" />
   </ItemGroup>
 
 </Project>

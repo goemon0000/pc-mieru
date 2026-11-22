@@ -644,6 +644,9 @@ public sealed class UpdateUiTests
 
         Assert.Single(Dialogs.Log);
         Assert.StartsWith(Strings.Get("gui.update.dialog.title"), Dialogs.Log[0], StringComparison.Ordinal);
+        // The words of the title are the decided ones: it is the place where the setting is chosen, not a check being made.
+        Assert.StartsWith("Update settings", Dialogs.Log[0], StringComparison.Ordinal);
+        Assert.Equal("更新の設定", GuiStrings.All.Single(entry => entry.Key == "gui.update.dialog.title").Ja);
         Assert.Equal(UpdateMode.Ask, bare.Controller.Mode);
         Assert.Empty(bare.Timers.Made);
     }
@@ -717,7 +720,7 @@ public sealed class UpdateUiTests
         Assert.Equal(3, page.UpdateModeBox.SelectedIndex);
         Assert.Equal(AppInfo.Version, page.UpdateVersionText);
         Assert.Equal("Not checked yet", page.UpdateLastText);
-        Assert.Equal("None", page.UpdateCandidateText);
+        Assert.Equal("none", page.UpdateCandidateText);
         Assert.False(page.UpdateCheckNowButton.Enabled);
         Assert.False(page.UpdateNotesButton.Enabled);
         Assert.Null(page.NotesUrl);
@@ -807,8 +810,9 @@ public sealed class UpdateUiTests
             page.UpdateStatusText);
         Assert.Equal(CellTone.Warning, page.UpdateStatusTone);
         Assert.False(page.UpdateNotesButton.Enabled);
-        Assert.Equal("No newer version found, so there is nothing to open", page.UpdateNotesReasonText);
-        Assert.Equal("None", page.UpdateCandidateText);
+        // The line under the notes button says what happened to THIS version, not that there is none (a version was found; it could not be verified).
+        Assert.Equal("This version could not be verified, so its notes cannot be opened.", page.UpdateNotesReasonText);
+        Assert.Equal("none", page.UpdateCandidateText);
         Assert.Equal("Available version", page.UpdateCandidateLabelText);
 
         Strings.Current = Language.Ja;
@@ -820,7 +824,22 @@ public sealed class UpdateUiTests
         Assert.Equal(1, page.UpdateModeBox.SelectedIndex);
         Assert.Equal("今すぐ確認", page.UpdateCheckNowButton.Text);
         Assert.Equal("更新内容をブラウザーで開く", page.UpdateNotesButton.Text);
-        Assert.Equal("新しい版が見つかっていないため、開くものがありません", page.UpdateNotesReasonText);
+        Assert.Equal("この版は確かめられなかったため開けません", page.UpdateNotesReasonText);
+    }
+
+    [Fact]
+    public void A_check_that_did_not_finish_is_not_a_refusal_of_a_version_so_its_notes_button_says_there_is_nothing_to_open()
+    {
+        using var rig = new PageRig("notify");
+        rig.Controller.Start();
+        var page = rig.Page;
+        rig.Fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true);
+
+        page.UpdateCheckNowButton.PerformClick();
+        Finish(rig.Controller.Pending);
+
+        Assert.False(page.UpdateNotesButton.Enabled);
+        Assert.Equal("No newer version found, so there is nothing to open", page.UpdateNotesReasonText);
     }
 
     [Fact]
@@ -865,6 +884,11 @@ public sealed class UpdateUiTests
         {
             Assert.DoesNotContain("release", PcMieru.Wire.Gate.InstallGate.ReasonOf(outcome), StringComparison.OrdinalIgnoreCase);
         }
+
+        // The text of the gate FILE (what a person who opens PCMieru.gate.txt reads, in both languages) says the same: the ZIP file, never a release. It is frozen (the same bytes in every
+        // release), so a word that slipped in cannot be taken back by a later version.
+        Assert.DoesNotContain("release", PcMieru.Wire.Gate.GateFile.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("リリース", PcMieru.Wire.Gate.GateFile.Text, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -986,7 +1010,7 @@ public sealed class UpdateUiTests
         Assert.False(rig.Controller.Checking);
         Assert.Equal(Strings.Get("gui.update.state.off"), rig.Page.UpdateStatusText);
         Assert.False(rig.Page.UpdateCheckNowButton.Enabled);
-        Assert.Equal("None", rig.Page.UpdateCandidateText);
+        Assert.Equal("none", rig.Page.UpdateCandidateText);
     }
 
     [Fact]

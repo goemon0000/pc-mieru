@@ -138,10 +138,12 @@ public sealed class GateExeTests : IClassFixture<Boxes>
         using var situation = Situation.Apply(_boxes.Scratch, box.ExePath, GateOutcome.Busy);
         var ran = Child.Run(box.ExePath, args, _boxes.AppData);
 
+        // Exit 5 (Internal) is the proof that the meter stopped at the gate: with valid arguments it would have made its pipe and its ETW session and gone on to serve (and then ended with another
+        // code, or not ended at all). There is no "no pipe" line here on purpose: a named pipe belongs to the process that made it and is gone when that process ends, so looking for it after the exit
+        // (as an earlier version did) could never fail, and looking for it while the child lives is a race with a child that ends within milliseconds.
         Assert.Equal(NetMeterInternalExit, ran.ExitCode);
         Assert.Equal(string.Empty, ran.Out);
         Assert.Equal(string.Empty, ran.Err);
-        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(@"\\.\pipe\"), name => name.EndsWith(token, StringComparison.OrdinalIgnoreCase));
     }
 
     // ---- pcmi: stdout is the MCP channel ----

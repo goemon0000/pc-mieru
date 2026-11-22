@@ -88,6 +88,128 @@ public sealed class GatePathTests : IDisposable
         Assert.Equal(GateOutcome.Busy, InstallGate.EnterExclusive(exe).Outcome);
     }
 
+    // ---- I is the folder of the exe's FINAL path ----
+
+    [ShortNameFact]
+    public void The_8dot3_name_of_the_install_folder_gives_the_long_gate_path()
+    {
+        var exe = _scratch.Install("another long folder name for the short one");
+        var shortFolder = Probes.ShortPathOf(Path.GetDirectoryName(exe)!);
+        Assert.NotNull(shortFolder);
+        var viaShort = Path.Combine(shortFolder, "PCMieru.exe");
+        Assert.NotEqual(Path.GetDirectoryName(exe), shortFolder);
+
+        using var entry = InstallGate.EnterStartup(viaShort);
+
+        Assert.True(entry.IsOpen, entry.Detail);
+        Assert.Equal(Scratch.GateOf(exe), entry.GatePath);
+        Assert.DoesNotContain('~', entry.GatePath);
+    }
+
+    [Fact]
+    public void The_gate_path_is_in_the_folder_of_the_final_path_in_the_case_that_is_stored_and_not_the_one_that_was_spelled()
+    {
+        var exe = _scratch.Install("Mixed Case Folder");
+        var spelled = exe.ToLowerInvariant();
+        Assert.NotEqual(exe, spelled);
+
+        using var entry = InstallGate.EnterStartup(spelled);
+
+        Assert.True(entry.IsOpen, entry.Detail);
+        Assert.Equal(Scratch.GateOf(exe), entry.GatePath);
+        Assert.Equal("Mixed Case Folder", Path.GetFileName(Path.GetDirectoryName(entry.GatePath)));
+        Assert.Equal(Scratch.GateOf(exe), InstallGate.GatePathOf(exe.ToUpperInvariant()));
+    }
+
+    [Fact]
+    public void A_program_reached_through_a_junction_to_the_install_folder_reports_the_real_gate_not_the_alias()
+    {
+        var exe = _scratch.Install("real-folder");
+        var alias = Path.Combine(_scratch.Root, "alias-folder");
+        _scratch.Junction(alias, Path.GetDirectoryName(exe)!);
+        var viaAlias = Path.Combine(alias, "PCMieru.exe");
+
+        using var entry = InstallGate.EnterStartup(viaAlias);
+
+        Assert.True(entry.IsOpen, entry.Detail);
+        Assert.Equal(Scratch.GateOf(exe), entry.GatePath);
+        Assert.Equal(Path.GetDirectoryName(exe), InstallGate.InstallFolderOf(viaAlias));
+        Assert.Equal(Scratch.GateOf(exe), InstallGate.GatePathOf(viaAlias));
+    }
+
+    [SymlinkFact]
+    public void An_exe_that_is_a_symbolic_link_finds_the_gate_of_the_install_it_points_into()
+    {
+        var exe = _scratch.Install("real-for-symlink");
+        var elsewhere = _scratch.Sub("symlink-folder"); // no gate file here
+        var link = Path.Combine(elsewhere, "PCMieru.exe");
+        File.CreateSymbolicLink(link, exe);
+        _scratch.OnDispose(() => File.Delete(link));
+
+        using var holder = InstallGate.EnterStartup(link);
+
+        Assert.True(holder.IsOpen, "the gate beside the REAL exe, not beside the link: " + holder.Detail);
+        Assert.Equal(Scratch.GateOf(exe), holder.GatePath);
+        Assert.Equal(GateOutcome.Busy, InstallGate.EnterExclusive(exe).Outcome);
+    }
+
+    [Fact]
+    public void An_exe_that_is_a_hard_link_has_no_other_name_so_its_folder_is_the_one_it_was_opened_in()
+    {
+        var real = _scratch.Install("hardlink-real");
+        var other = _scratch.Sub("hardlink-other");
+        var linked = Path.Combine(other, "PCMieru.exe");
+        _scratch.Hardlink(linked, real);
+
+        // What the system gives as the "final path" of a file with two names is the name that was asked about.
+        var folder = InstallGate.InstallFolderOf(linked);
+        _output.WriteLine("final path folder of the hard-linked exe: " + folder);
+        Assert.Equal(other, folder);
+
+        // No gate beside the link: nothing is found in the other folder either (no guessing where the "real" one is).
+        using (var none = InstallGate.EnterStartup(linked))
+        {
+            Assert.Equal(GateOutcome.MissingGate, none.Outcome);
+            Assert.Equal(Scratch.GateOf(linked), none.GatePath);
+        }
+
+        // With its own gate file beside the link (a separate file: it has one name): that is its gate, and the real install is not in its way or the other way round.
+        File.WriteAllBytes(Scratch.GateOf(linked), GateFile.Bytes());
+        using var own = InstallGate.EnterStartup(linked);
+        Assert.True(own.IsOpen, own.Detail);
+        Assert.Equal(Scratch.GateOf(linked), own.GatePath);
+        using var swapper = InstallGate.EnterExclusive(real);
+        Assert.True(swapper.IsOpen, "the other install's gate does not hold this one: " + swapper.Detail);
+    }
+
+    [Fact]
+    public void A_very_long_install_folder_is_found_by_its_final_path_too()
+    {
+        // Longer than the 520 characters the first buffer holds: the second call, with the length the system asked for.
+        var name = string.Join('\\', new string('x', 200), new string('y', 200), new string('z', 200));
+        var exe = _scratch.Install(name);
+        Assert.True(exe.Length > 600);
+
+        using var entry = InstallGate.EnterStartup(exe);
+
+        Assert.True(entry.IsOpen, entry.Detail);
+        Assert.Equal(Scratch.GateOf(exe), entry.GatePath);
+        Assert.Equal(Path.GetDirectoryName(exe), InstallGate.InstallFolderOf(exe));
+    }
+
+    [Theory]
+    [InlineData(@"\\?\C:\app\PCMieru.exe", @"C:\app\PCMieru.exe")]
+    [InlineData(@"\\?\UNC\server\share\app\PCMieru.exe", @"\\server\share\app\PCMieru.exe")]
+    [InlineData(@"\\?\unc\server\share\app", @"\\server\share\app")]
+    [InlineData(@"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\app\PCMieru.exe", null)]
+    [InlineData(@"\\?\UNC\", null)]
+    [InlineData(@"\\.\pipe\something", null)]
+    [InlineData(@"C:\already\ordinary.exe", @"C:\already\ordinary.exe")]
+    public void A_final_path_name_is_turned_into_the_ordinary_path_a_program_uses(string finalPathName, string? expected)
+    {
+        Assert.Equal(expected, GateNative.DosPathOf(finalPathName));
+    }
+
     [Fact]
     public void A_path_that_is_not_fully_qualified_is_refused_it_is_never_completed_with_the_current_directory()
     {
@@ -224,6 +346,51 @@ public sealed class GatePathTests : IDisposable
         Assert.Equal(GateOutcome.ReparseRefused, entry.Outcome);
         // the target was not opened by the gate: it is free for anyone
         using var exclusive = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.None);
+    }
+
+    [Fact]
+    public void A_gate_file_with_a_second_name_a_hard_link_is_refused_whichever_of_its_names_is_opened()
+    {
+        var exe = _scratch.Install("hardlinked-gate");
+        var other = _scratch.Install("hardlinked-gate-other", gate: false);
+        var removeLink = _scratch.Hardlink(Scratch.GateOf(other), Scratch.GateOf(exe));
+
+        // Two installs cannot share one gate: the install id is the gate file's id, so both would get the same state folder.
+        using (var viaLink = InstallGate.EnterStartup(other))
+        {
+            Assert.Equal(GateOutcome.ReparseRefused, viaLink.Outcome);
+            Assert.False(viaLink.IsOpen);
+            Assert.Contains("hard link", viaLink.Detail, StringComparison.Ordinal);
+        }
+
+        using (var viaOriginal = InstallGate.EnterStartup(exe))
+        {
+            Assert.Equal(GateOutcome.ReparseRefused, viaOriginal.Outcome);
+        }
+
+        using (var swapper = InstallGate.EnterExclusive(exe))
+        {
+            Assert.Equal(GateOutcome.ReparseRefused, swapper.Outcome);
+        }
+
+        // The refused entries held nothing: a name of the file can be removed (a handle without Delete sharing would make this a sharing violation) ...
+        removeLink();
+
+        // ... and with one name left the gate is an ordinary gate again.
+        using var after = InstallGate.EnterStartup(exe);
+        Assert.Equal(GateOutcome.Open, after.Outcome);
+    }
+
+    [Fact]
+    public void A_path_that_is_too_long_for_the_system_is_unreadable_it_is_not_access_denied_and_not_a_missing_gate()
+    {
+        var exe = Path.Combine(_scratch.Root, new string('q', 33_000), "PCMieru.exe");
+
+        using var entry = InstallGate.EnterStartup(exe);
+
+        Assert.Equal(GateOutcome.Unreadable, entry.Outcome);
+        Assert.NotEqual(InstallGate.ReasonOf(GateOutcome.Denied), entry.Reason);
+        Assert.Equal(InstallGate.ReasonOf(GateOutcome.Unreadable), entry.Reason);
     }
 
     [Fact]

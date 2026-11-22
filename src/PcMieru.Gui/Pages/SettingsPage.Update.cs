@@ -234,7 +234,7 @@ internal sealed partial class SettingsPage
         var checkReason = UpdateText.CheckNowReason(updates.Mode, updates.Allowed, updates.Checking, updates.Last, status, now);
         _updateCheckNow.Enabled = checkReason.Length == 0;
         ShowReason(_updateCheckNowReason, checkReason);
-        var notesReason = UpdateText.NotesReason(_notesUrl is not null);
+        var notesReason = UpdateText.NotesReason(_notesUrl is not null, line.VersionRefused);
         _updateNotes.Enabled = notesReason.Length == 0;
         ShowReason(_updateNotesReason, notesReason);
     }

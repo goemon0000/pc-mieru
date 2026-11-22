@@ -17,17 +17,23 @@ public enum GateOutcome
     /// <summary>The gate was free but <c>I\update\journal.json</c> or <c>journal.json.tmp</c> is there, or one of them cannot be looked at: an update was left open and has to be recovered before anything runs.</summary>
     RecoveryPending,
 
-    /// <summary>As <see cref="RecoveryPending"/>, and <c>I\update\last-result.json</c> says an earlier recovery failed (<see cref="GateFile.RecoveryFailedToken"/>). Written by step 4; before it nothing produces this.</summary>
+    /// <summary>As <see cref="RecoveryPending"/>, and the sentinel file <c>I\update\recovery-failed</c> (<see cref="GateFile.RecoveryFailedName"/>) is there: an earlier recovery was tried and failed. Written by step 4; before it nothing produces this.</summary>
     RecoveryFailed,
 
     /// <summary>There is no <c>PCMieru.gate.txt</c> beside the exe (a file copied out of its folder, a gate that was deleted).</summary>
     MissingGate,
 
-    /// <summary>The file system refused the gate (access denied, or any I/O error that is neither "not found" nor a sharing violation).</summary>
+    /// <summary>The file system refused the gate: access denied. (Every other trouble with reading it is <see cref="Unreadable"/>.)</summary>
     Denied,
 
-    /// <summary>The gate file itself, <c>I\update</c> or a journal file is a reparse point (a symbolic link or a junction). A link to the install FOLDER is fine: it resolves to the same real file.</summary>
+    /// <summary>
+    /// A link is where a file of the install should be: the gate file, <c>I\update</c>, a journal file or the sentinel is a reparse point (a symbolic link or a junction), or the gate file has more than one
+    /// name (a hard link: a gate shared by two installs would give both the same install id). A link to the install FOLDER is fine: its final path is the real folder.
+    /// </summary>
     ReparseRefused,
+
+    /// <summary>The gate file could not be looked at or opened for a reason that is neither "not found", a sharing violation nor access denied: an I/O error, a path that is too long or not valid.</summary>
+    Unreadable,
 }
 
 /// <summary>
@@ -53,7 +59,10 @@ public sealed class GateEntry : IDisposable
     /// <summary>True for <see cref="GateOutcome.Open"/>.</summary>
     public bool IsOpen => Outcome == GateOutcome.Open;
 
-    /// <summary>The path the gate was looked for at (<c>&lt;folder of the exe&gt;\PCMieru.gate.txt</c>, as spelled by the caller). Not a normalised or resolved path.</summary>
+    /// <summary>
+    /// The path the gate was looked for at: <c>&lt;install folder&gt;\PCMieru.gate.txt</c>, the install folder being the folder of the exe's FINAL path (<see cref="InstallGate.InstallFolderOf"/>: links of the folders
+    /// followed, 8.3 names long, stored case). The path as the caller spelled it only when the final path could not be had.
+    /// </summary>
     public string GatePath { get; }
 
     /// <summary>One fixed English sentence for the outcome, no path in it: what a console program writes to stderr (<see cref="InstallGate.ReasonOf"/>).</summary>
@@ -73,23 +82,26 @@ public sealed class GateEntry : IDisposable
 }
 
 /// <summary>
-/// The start gate every exe of the app passes before it does its work (DESIGN-B 4). It opens <c>I\PCMieru.gate.txt</c> - I is the folder of the real exe, never the current directory
-/// and never <c>%LOCALAPPDATA%</c> - with <c>FileMode.Open</c>, <c>FileAccess.Read</c> and <c>FileShare.Read</c> (every ordinary program: they all coexist) or <c>FileShare.None</c> (the swapper: it
+/// The start gate every exe of the app passes before it does its work (DESIGN-B 4). It opens <c>I\PCMieru.gate.txt</c> - I is the folder of the exe's FINAL path (<see cref="InstallFolderOf"/>), never the
+/// current directory and never <c>%LOCALAPPDATA%</c> - with <c>FileMode.Open</c>, <c>FileAccess.Read</c> and <c>FileShare.Read</c> (every ordinary program: they all coexist) or <c>FileShare.None</c> (the swapper: it
 /// waits for all of them). Delete sharing is never given, and the handle is held until <see cref="GateEntry.Dispose"/>, so the file cannot be removed or replaced while any program of the install runs.
 ///
-/// Who is "the same install" is the file system's answer, not a path's: a junction, a case spelling or an 8.3 name of the install folder reaches the same file, so the same sharing rules.
-/// What is refused is a link where the files are: the gate itself, the <c>update</c> folder and the journal files being reparse points (a link could point the transaction anywhere).
+/// Who is "the same install" is the file system's answer, not a path's. An exe reached through a symbolic link, a junction, a case spelling or an 8.3 name finds the real install's gate, because I comes from
+/// the final path. A hard-linked exe has no other name to give: its final path is the name that was opened, so its gate is the one beside THAT name. What is refused is a link where the files are: the gate
+/// itself, the <c>update</c> folder, the journal files and the sentinel being reparse points (a link could point the transaction anywhere), and a gate file with more than one name (the install id is the gate
+/// file's id, so a gate hard-linked between two installs would give both the same state folder). The gate file's own attributes and link count are read from the open HANDLE, not from a path.
 ///
-/// After the shared open, and only then, it looks at <c>I\update\journal.json</c> and <c>journal.json.tmp</c> (an exclusive request does not: the swapper reads its own journal). A journal, a lone
-/// temporary, or a file that cannot be looked at, is <see cref="GateOutcome.RecoveryPending"/>. The look uses attribute reads that say "access denied" and "not found" apart (File.Exists would say "no" to both).
+/// After the shared open, and only then, it looks at <c>I\update</c> (an exclusive request does not: the swapper reads its own records): the sentinel <c>recovery-failed</c>, then <c>journal.json</c> and
+/// <c>journal.json.tmp</c>. A sentinel is <see cref="GateOutcome.RecoveryFailed"/>; a journal, a lone temporary, or a file that cannot be looked at, is <see cref="GateOutcome.RecoveryPending"/>. The look
+/// uses attribute reads that say "access denied" and "not found" apart (File.Exists would say "no" to both). Nothing is parsed and nothing has a size limit: presence is the message.
 ///
-/// BCL only (no P/Invoke, no JSON reader): the Helper and the network meter are NativeAOT and pin their library loads to System32.
+/// The BCL for everything but two questions about a handle (<see cref="GateNative"/>: final path and link count): no JSON reader, and the library loads of the NativeAOT exes stay pinned to System32.
 /// </summary>
 public static class InstallGate
 {
     /// <summary>
-    /// The gate of this process: the folder of <see cref="Environment.ProcessPath"/>. When the host is <c>dotnet.exe</c> (a managed dll started by hand or by <c>dotnet run</c>) there is no exe of the
-    /// app, so the folder of the app's own assembly is used (<see cref="AppContext.BaseDirectory"/>, still not the current directory). Shared.
+    /// The gate of this process: the folder of the final path of <see cref="Environment.ProcessPath"/>. When the host is <c>dotnet.exe</c> (a managed dll started by hand or by <c>dotnet run</c>) there is no exe
+    /// of the app, so the folder of the app's own assembly is used (<see cref="AppContext.BaseDirectory"/>, still not the current directory), also by its final path. Shared.
     /// </summary>
     public static GateEntry EnterStartup()
     {
@@ -100,20 +112,31 @@ public static class InstallGate
         }
 
         return IsDotnetHost(path)
-            ? Enter(AppContext.BaseDirectory, FileShare.Read)
+            ? Enter(GateNative.FinalPathOf(AppContext.BaseDirectory) ?? AppContext.BaseDirectory, FileShare.Read)
             : EnterStartup(path);
     }
 
     /// <summary>The gate of the install that <paramref name="executablePath"/> (a fully qualified path of an exe of the app) is in. Shared: what every program but the swapper uses.</summary>
-    public static GateEntry EnterStartup(string executablePath) => Enter(FolderOf(executablePath), FileShare.Read);
+    public static GateEntry EnterStartup(string executablePath) => Enter(InstallFolderOf(executablePath), FileShare.Read);
 
     /// <summary>
     /// For the swapper of step 4: the same gate taken exclusively (<c>FileShare.None</c>). <see cref="GateOutcome.Busy"/> while any program of the install holds it. It does not look at the journal.
     /// </summary>
-    public static GateEntry EnterExclusive(string executablePath) => Enter(FolderOf(executablePath), FileShare.None);
+    public static GateEntry EnterExclusive(string executablePath) => Enter(InstallFolderOf(executablePath), FileShare.None);
 
-    /// <summary>The path of the gate file of the install that <paramref name="executablePath"/> is in (a fully qualified path), by name only: nothing is opened.</summary>
-    public static string GatePathOf(string executablePath) => Path.Combine(FolderOf(executablePath), GateFile.FileName);
+    /// <summary>
+    /// The install folder I of an exe: the folder of the exe file's FINAL path (GetFinalPathNameByHandle on the file: symbolic links and junctions on the way followed, 8.3 names long, the case that is stored;
+    /// <c>\\?\</c> and <c>\\?\UNC\</c> taken off). An exe started through a symbolic link finds the real install; a hard-linked exe has only the name it was opened by, so that is its folder. When the file cannot
+    /// be opened for the question (it is not there, access denied) the folder of the path as given is returned. A fully qualified path is required; the file is only asked about (access 0, all sharing).
+    /// </summary>
+    public static string InstallFolderOf(string executablePath)
+    {
+        var spelled = FolderOf(executablePath);
+        return GateNative.FinalPathOf(executablePath) is { } final && Path.GetDirectoryName(final) is { Length: > 0 } folder ? folder : spelled;
+    }
+
+    /// <summary>The path of the gate file of the install that <paramref name="executablePath"/> is in (a fully qualified path): <see cref="InstallFolderOf"/> and the file name. The gate file is not opened.</summary>
+    public static string GatePathOf(string executablePath) => Path.Combine(InstallFolderOf(executablePath), GateFile.FileName);
 
     /// <summary>The one fixed English sentence of an outcome (what a console program writes to stderr; no path, no culture).</summary>
     public static string ReasonOf(GateOutcome outcome) => outcome switch
@@ -123,8 +146,9 @@ public static class InstallGate
         GateOutcome.RecoveryPending => "an interrupted update has to be recovered before PC Mieru can start",
         GateOutcome.RecoveryFailed => "recovering an interrupted update failed, PC Mieru cannot start until it is repaired",
         GateOutcome.MissingGate => "PCMieru.gate.txt is missing from the install folder, unzip the downloaded ZIP file again",
-        GateOutcome.Denied => "the start gate file cannot be read (access denied or an I/O error)",
-        GateOutcome.ReparseRefused => "the start gate or the update records are behind a link, which is not accepted",
+        GateOutcome.Denied => "the start gate file cannot be opened (access denied)",
+        GateOutcome.ReparseRefused => "a link (symbolic link, junction or hard link) is where the start gate or the update records should be, which is not accepted",
+        GateOutcome.Unreadable => "the start gate file cannot be read (an I/O error, or a path that is too long)",
         _ => "the start gate did not open",
     };
 
@@ -163,7 +187,7 @@ public static class InstallGate
             case Seen.AccessDenied:
                 return Refuse(GateOutcome.Denied, gate, "the gate file cannot be looked at: access denied");
             case Seen.Unreadable:
-                return Refuse(GateOutcome.Denied, gate, "the gate file cannot be looked at: " + problem);
+                return Refuse(GateOutcome.Unreadable, gate, "the gate file cannot be looked at: " + problem);
             case Seen.Link:
                 return Refuse(GateOutcome.ReparseRefused, gate, "the gate file is a link");
         }
@@ -183,7 +207,7 @@ public static class InstallGate
         {
             return Refuse(GateOutcome.MissingGate, gate, "the gate file is not there");
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException)
         {
             return Refuse(GateOutcome.Denied, gate, "the gate file cannot be opened: access denied");
         }
@@ -191,16 +215,30 @@ public static class InstallGate
         {
             return Refuse(GateOutcome.Busy, gate, "the gate file is held by another handle (sharing violation)");
         }
-        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException or SecurityException)
+        catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException)
         {
-            return Refuse(GateOutcome.Denied, gate, "the gate file cannot be opened: " + ex.GetType().Name);
+            return Refuse(GateOutcome.Unreadable, gate, "the gate file cannot be opened: " + ex.GetType().Name);
         }
 
-        // The handle was given without Delete sharing, so from here on the file cannot be replaced under it: this second look is not a race with the first.
-        if (Look(gate, out _, out _) == Seen.Link)
+        // The first look above was by PATH, before the open; the open is a separate step, so what the path pointed to may have changed in between. What is checked now is the HANDLE: the file that is
+        // really held. (The handle was given without Delete sharing, so this file cannot be removed or replaced under it from here on.) A reparse point that the open did not follow, or a second name,
+        // is refused: the install id is the gate file's id, and a gate that two installs hard-link would give both the same state folder.
+        if (!GateNative.TryInformationOf(handle, out var held))
         {
             handle.Dispose();
-            return Refuse(GateOutcome.ReparseRefused, gate, "the gate file is a link");
+            return Refuse(GateOutcome.Unreadable, gate, "the gate file cannot be asked about itself (GetFileInformationByHandle failed)");
+        }
+
+        if ((held.Attributes & (uint)FileAttributes.ReparsePoint) != 0)
+        {
+            handle.Dispose();
+            return Refuse(GateOutcome.ReparseRefused, gate, "the gate file is a reparse point");
+        }
+
+        if (held.NumberOfLinks > 1)
+        {
+            handle.Dispose();
+            return Refuse(GateOutcome.ReparseRefused, gate, "the gate file has " + held.NumberOfLinks.ToString(System.Globalization.CultureInfo.InvariantCulture) + " names (a hard link)");
         }
 
         if (share == FileShare.None)
@@ -208,7 +246,7 @@ public static class InstallGate
             return new GateEntry(GateOutcome.Open, gate, "open, exclusive", null, handle);
         }
 
-        // 3. The journal, with the gate already held shared (a swapper cannot start a transaction between this look and the work that follows).
+        // 3. The update records, with the gate already held shared (a swapper cannot start a transaction between this look and the work that follows).
         var update = Path.Combine(folder, GateFile.UpdateFolderName);
         switch (Look(update, out var updateAttributes, out problem))
         {
@@ -218,17 +256,36 @@ public static class InstallGate
                 handle.Dispose();
                 return Refuse(GateOutcome.ReparseRefused, gate, "the update folder is a link");
             case Seen.AccessDenied:
-                return Recovery(handle, gate, update, "the update folder cannot be looked at: access denied");
+                return Recovery(handle, gate, update, "the update folder cannot be looked at: access denied", failed: false);
             case Seen.Unreadable:
-                return Recovery(handle, gate, update, "the update folder cannot be looked at: " + problem);
+                return Recovery(handle, gate, update, "the update folder cannot be looked at: " + problem, failed: false);
         }
 
         if ((updateAttributes & FileAttributes.Directory) == 0)
         {
-            return Recovery(handle, gate, update, "update is a file, not a folder");
+            return Recovery(handle, gate, update, "update is a file, not a folder", failed: false);
         }
 
+        // The sentinel of a failed recovery comes first, and is only looked at (nothing in it is read). Present: failed. A link: refused. Cannot be looked at: undecidable, so "pending" (the start stops either
+        // way; whoever recovers, step 4, sees the sentinel itself). Not there: go on to the journal.
         string? pendingReason = null;
+        switch (Look(Path.Combine(update, GateFile.RecoveryFailedName), out _, out problem))
+        {
+            case Seen.Absent:
+                break;
+            case Seen.Link:
+                handle.Dispose();
+                return Refuse(GateOutcome.ReparseRefused, gate, GateFile.RecoveryFailedName + " is a link");
+            case Seen.Present:
+                return Recovery(handle, gate, update, GateFile.RecoveryFailedName + " is present", failed: true);
+            case Seen.AccessDenied:
+                pendingReason = GateFile.RecoveryFailedName + " cannot be looked at: access denied";
+                break;
+            default:
+                pendingReason = GateFile.RecoveryFailedName + " cannot be looked at: " + problem;
+                break;
+        }
+
         foreach (var name in new[] { GateFile.JournalName, GateFile.JournalTempName })
         {
             switch (Look(Path.Combine(update, name), out _, out problem))
@@ -252,44 +309,16 @@ public static class InstallGate
 
         return pendingReason is null
             ? new GateEntry(GateOutcome.Open, gate, "open", null, handle)
-            : Recovery(handle, gate, update, pendingReason);
+            : Recovery(handle, gate, update, pendingReason, failed: false);
     }
 
     private static GateEntry Refuse(GateOutcome outcome, string gate, string detail) => new(outcome, gate, detail, null, null);
 
-    /// <summary>Recovery pending or failed: the shared handle is closed first, so whoever recovers (step 4) can take the gate itself.</summary>
-    private static GateEntry Recovery(SafeFileHandle handle, string gate, string update, string detail)
+    /// <summary>Recovery pending or failed: the shared handle is closed first, so whoever recovers (step 4) can take the gate itself. Failed only when the sentinel was seen.</summary>
+    private static GateEntry Recovery(SafeFileHandle handle, string gate, string update, string detail, bool failed)
     {
         handle.Dispose();
-        var failed = ReadsRecoveryFailed(Path.Combine(update, GateFile.LastResultName));
-        return new GateEntry(
-            failed ? GateOutcome.RecoveryFailed : GateOutcome.RecoveryPending,
-            gate,
-            failed ? detail + "; last-result.json says the recovery failed" : detail,
-            Path.Combine(update, GateFile.RecoverNoteName),
-            null);
-    }
-
-    /// <summary>True when the first bytes of last-result.json carry <see cref="GateFile.RecoveryFailedToken"/>. Any trouble reading it is "no": the journal alone already stops the start.</summary>
-    private static bool ReadsRecoveryFailed(string path)
-    {
-        try
-        {
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.None);
-            var buffer = new byte[GateFile.MarkerReadBytes];
-            var count = 0;
-            int read;
-            while (count < buffer.Length && (read = file.Read(buffer, count, buffer.Length - count)) > 0)
-            {
-                count += read;
-            }
-
-            return System.Text.Encoding.UTF8.GetString(buffer, 0, count).Contains(GateFile.RecoveryFailedToken, StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
-        {
-            return false;
-        }
+        return new GateEntry(failed ? GateOutcome.RecoveryFailed : GateOutcome.RecoveryPending, gate, detail, Path.Combine(update, GateFile.RecoverNoteName), null);
     }
 
     /// <summary>

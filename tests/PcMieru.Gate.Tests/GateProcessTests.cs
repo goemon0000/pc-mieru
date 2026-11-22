@@ -155,6 +155,61 @@ public sealed class GateProcessTests : IClassFixture<Boxes>
         }
     }
 
+    [Fact]
+    public void A_program_started_through_a_junction_finds_the_gate_by_the_real_folder_and_says_so()
+    {
+        var box = _boxes.Get(Exe.Party);
+        var alias = Path.Combine(_boxes.Scratch.Root, "alias-" + Guid.NewGuid().ToString("N")[..6]);
+        var undo = _boxes.Scratch.Junction(alias, box.Folder);
+        try
+        {
+            // Environment.ProcessPath is the path the program was started by (the alias). The gate is looked for by the FINAL path of that file: the real folder.
+            var run = Child.Run(Path.Combine(alias, Repo.ExeNameOf(Exe.Party)), ["--gate-path"], _boxes.AppData);
+
+            Assert.Equal(0, run.ExitCode);
+            Assert.Equal("party gate " + box.GatePath + "\nparty ok\n", run.Out);
+        }
+        finally
+        {
+            undo();
+        }
+    }
+
+    [Fact]
+    public void A_program_started_through_a_hard_link_of_its_exe_finds_the_gate_beside_the_name_it_was_started_by()
+    {
+        var box = _boxes.Get(Exe.Party);
+        var folder = Path.Combine(_boxes.Scratch.Root, "hardlinked-" + Guid.NewGuid().ToString("N")[..6]);
+        Repo.CopyBuild(box.Folder, folder); // everything the exe needs beside it, and a gate file of its own (a separate file: one name)
+        var linked = Path.Combine(folder, Repo.ExeNameOf(Exe.Party));
+        File.Delete(linked);
+        var undo = _boxes.Scratch.Hardlink(linked, box.ExePath); // the exe: one file, two names
+        try
+        {
+            using var holder = Child.Start(linked, ["--gate-path", "--hold"], _boxes.AppData);
+            Assert.Equal("party gate " + Path.Combine(folder, GateFile.FileName), holder.ReadLine(TimeSpan.FromSeconds(60)));
+            Assert.Equal("party holding", holder.ReadLine(TimeSpan.FromSeconds(60)));
+
+            // The gate it holds is the one beside the link, so that install is kept out of the swapper's way and the other install is not.
+            using (var swapper = InstallGate.EnterExclusive(linked))
+            {
+                Assert.Equal(GateOutcome.Busy, swapper.Outcome);
+            }
+
+            using (var other = InstallGate.EnterExclusive(box.ExePath))
+            {
+                Assert.True(other.IsOpen, "the gate beside the other name of the exe is a different file: " + other.Detail);
+            }
+
+            holder.CloseInput();
+            Assert.Equal(0, holder.Wait().ExitCode);
+        }
+        finally
+        {
+            undo();
+        }
+    }
+
     // ---- a folder nobody may write into ----
 
     [Fact]

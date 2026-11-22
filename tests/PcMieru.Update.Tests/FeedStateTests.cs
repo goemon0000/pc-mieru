@@ -306,7 +306,11 @@ public sealed class InstallIdTests : IDisposable
         var program = File1("a", "PCMieru.exe");
         var gate = Path.Combine(_temp.Sub("a"), PcMieru.Wire.Gate.GateFile.FileName);
 
-        Assert.Equal(InstallId.GateFileOf(program), gate);
+        // The path is the FINAL path of the program's folder (long names, stored case): TEMP here may be spelled in 8.3, so the file is compared by what it is, not by its spelling.
+        var found = InstallId.GateFileOf(program);
+        Assert.NotNull(found);
+        Assert.Equal(PcMieru.Wire.Gate.GateFile.FileName, Path.GetFileName(found));
+        Assert.Equal(InstallId.OfFile(gate), InstallId.OfFile(found));
         Assert.Equal(InstallId.OfFile(gate), InstallId.OfInstall(program));
         Assert.NotEqual(InstallId.OfFile(program), InstallId.OfInstall(program));
 
@@ -315,6 +319,39 @@ public sealed class InstallIdTests : IDisposable
         File.Delete(program);
         File.WriteAllText(program, "the next version");
         Assert.Equal(before, InstallId.OfInstall(program));
+    }
+
+    [Fact]
+    public void A_program_reached_through_a_junction_has_the_gate_of_the_real_folder_the_same_one_the_start_gate_holds()
+    {
+        var program = File1("real-install", "PCMieru.exe");
+        var alias = _temp.Sub("alias-install");
+        MakeJunction(alias, _temp.Sub("real-install"));
+        try
+        {
+            var viaAlias = Path.Combine(alias, "PCMieru.exe");
+
+            var gate = InstallId.GateFileOf(viaAlias);
+
+            Assert.NotNull(gate);
+            Assert.Equal("real-install", Path.GetFileName(Path.GetDirectoryName(gate))); // the real folder, not "alias-install": I is the folder of the final path
+            Assert.Equal(PcMieru.Wire.Gate.InstallGate.GatePathOf(viaAlias), gate);
+            Assert.Equal(InstallId.OfInstall(program), InstallId.OfInstall(viaAlias));
+        }
+        finally
+        {
+            Directory.Delete(alias); // a junction: removes the link only
+        }
+    }
+
+    private static void MakeJunction(string link, string target)
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        info.Arguments = "/c mklink /J \"" + link + "\" \"" + target + "\""; // one string on purpose: cmd.exe does not read the escaping of ArgumentList
+        using var process = System.Diagnostics.Process.Start(info)!;
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, "mklink /J failed: " + output);
     }
 
     [Fact]

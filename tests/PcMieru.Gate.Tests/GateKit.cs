@@ -25,7 +25,10 @@ internal sealed class Scratch : IDisposable
 
     public Scratch()
     {
-        Root = Path.Combine(Path.GetTempPath(), "gate-" + Guid.NewGuid().ToString("N")[..10]);
+        // The long spelling of the temporary folder (TEMP is often the 8.3 one: C:\Users\ADMINI~1\...), found with the system's own long-name call and not with the code under test: the gate
+        // answers with the FINAL path of the exe (long names), and a test that spells its folders the same way can then ask "is it the folder I made" in one comparison.
+        var temp = Path.GetTempPath();
+        Root = Path.Combine(Probes.LongPathOf(temp) ?? temp, "gate-" + Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(Root);
     }
 
@@ -84,6 +87,24 @@ internal sealed class Scratch : IDisposable
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, "mklink /J failed: " + output);
         return OnDispose(() => Directory.Delete(link)); // a junction: removes the link only
+    }
+
+    /// <summary>
+    /// mklink /H: a hard link (a second name for a file of the same volume) needs no privilege. The link is the new name, the target the existing file. Removing the link removes that one name only.
+    /// Only ever made inside <see cref="Root"/>.
+    /// </summary>
+    public Action Hardlink(string link, string target)
+    {
+        Assert.StartsWith(Root, link, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(Root, target, StringComparison.OrdinalIgnoreCase);
+        var info = new ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        // One string on purpose (see Junction).
+        info.Arguments = "/c mklink /H \"" + link + "\" \"" + target + "\"";
+        using var process = Process.Start(info)!;
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, "mklink /H failed: " + output);
+        return OnDispose(() => File.Delete(link));
     }
 
     /// <summary>
@@ -459,7 +480,7 @@ internal static class Situation
             case GateOutcome.RecoveryFailed:
                 Directory.CreateDirectory(update);
                 File.WriteAllText(Path.Combine(update, GateFile.JournalName), "{}");
-                File.WriteAllText(Path.Combine(update, GateFile.LastResultName), "{ \"result\": " + GateFile.RecoveryFailedToken + " }");
+                File.WriteAllText(Path.Combine(update, GateFile.RecoveryFailedName), string.Empty); // the sentinel: its presence is the message
                 undo.Add(() => Directory.Delete(update, recursive: true));
                 break;
 
@@ -558,11 +579,22 @@ internal static class Probes
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetShortPathNameW(string longPath, StringBuilder shortPath, uint length);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathNameW(string shortPath, StringBuilder longPath, uint length);
+
     /// <summary>The 8.3 form of an existing path, or null when the system has none to give.</summary>
     public static string? ShortPathOf(string path)
     {
         var buffer = new StringBuilder(1024);
         var length = GetShortPathNameW(path, buffer, (uint)buffer.Capacity);
+        return length == 0 || length > buffer.Capacity ? null : buffer.ToString();
+    }
+
+    /// <summary>The long form of an existing path (8.3 names written out), with no trailing separator; null when the system has none to give. Independent of the code under test.</summary>
+    public static string? LongPathOf(string path)
+    {
+        var buffer = new StringBuilder(1024);
+        var length = GetLongPathNameW(path.TrimEnd(Path.DirectorySeparatorChar), buffer, (uint)buffer.Capacity);
         return length == 0 || length > buffer.Capacity ? null : buffer.ToString();
     }
 

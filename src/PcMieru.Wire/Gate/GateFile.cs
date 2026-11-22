@@ -26,23 +26,24 @@ public static class GateFile
     /// <summary>The temporary of a journal write. Alone (no <see cref="JournalName"/>) it means a write was cut off.</summary>
     public const string JournalTempName = "journal.json.tmp";
 
-    /// <summary>The last result of the swapper, in <c>I\update</c>. STEP 4 writes it; step 3 only reads it for the word <see cref="RecoveryFailedToken"/>.</summary>
+    /// <summary>
+    /// The last result of the swapper, in <c>I\update</c>. STEP 4 writes it as a record. The start gate does NOT read it any more (a record that is read for a word in its first bytes can be
+    /// made to say "failed" or "fine" by what else it contains): "the recovery failed" is the sentinel file <see cref="RecoveryFailedName"/>. The tests keep this name as a decoy.
+    /// </summary>
     public const string LastResultName = "last-result.json";
 
     /// <summary>
-    /// What marks "the recovery was tried and failed" in <see cref="LastResultName"/>: this JSON string value, quotes included. STEP 4 writes it when the roll back could not be finished
-    /// (DESIGN-B 5, RecoveryFailed). Step 3 reads at most <see cref="MarkerReadBytes"/> bytes of the file and looks for the token (a substring search: no JSON reader in the exes that are NativeAOT).
+    /// The sentinel that says "the recovery was tried and failed", in <c>I\update</c>: a file whose PRESENCE is the whole message (nothing in it is read, so there is no parser, no size limit and no word to
+    /// find). The start gate looks at it with the same attribute read as the journal (DESIGN-B 4). STEP 4 writes it when a recovery fails, and ONLY recover.exe's success removes it: a swapper
+    /// or an ordinary start never deletes it, so a failed recovery cannot be forgotten by a later update that happens to work.
     /// </summary>
-    public const string RecoveryFailedToken = "\"recoveryFailed\"";
-
-    /// <summary>How much of <see cref="LastResultName"/> is looked at.</summary>
-    public const int MarkerReadBytes = 4096;
+    public const string RecoveryFailedName = "recovery-failed";
 
     /// <summary>The recovery note of the install, in <c>I\update</c>. STEP 4 writes it (and puts the recovery executable next to it); step 3 only names where to look.</summary>
     public const string RecoverNoteName = "RECOVER.txt";
 
     /// <summary>The SHA-256 of <see cref="Bytes"/>, 64 lower-case hex digits. The validator (BundleChecker) and publish.ps1 compare against this.</summary>
-    public const string Sha256Hex = "916b1b2e49d7b371ea5fad78af244a053e206ef194ce303e23cd6c63eecc2791";
+    public const string Sha256Hex = "43f8f509e9f3f84d09acfffc48f1f04347ddb437c384fef0d43ac57ca2f94432";
 
     /// <summary>
     /// The text of the file: what it is and what not to do with it, in English and Japanese (a person who opens it should not have to guess), with no version and no date.
@@ -52,11 +53,11 @@ public static class GateFile
         "\n",
         "PC Mieru: start gate file. Please leave it where it is.",
         string.Empty,
-        "This file holds no settings and no personal data. Every PC Mieru program keeps it open while it runs, and an update waits until all of them have closed it. If you delete, move or edit it, PC Mieru will not start and cannot update itself. To repair it, unzip the release again.",
+        "This file holds no settings and no personal data. Every PC Mieru program keeps it open while it runs, and an update waits until all of them have closed it. If you delete, move or edit it, PC Mieru will not start and cannot update itself. To repair it, download PC Mieru's ZIP file again and unzip it into a new folder.",
         string.Empty,
         "PCミエルの起動の門のファイルです。そのままにしておいてください。",
         string.Empty,
-        "このファイルには設定も個人の情報も入っていません。PCミエルのプログラムは、動いている間このファイルを開いたままにし、更新はそのすべてが閉じるまで待ちます。削除・移動・編集するとPCミエルは起動せず、自分で更新もできなくなります。直すには、配布のZIPをもう一度展開してください。",
+        "このファイルには設定も個人の情報も入っていません。PCミエルのプログラムは、動いている間このファイルを開いたままにし、更新はそのすべてが閉じるまで待ちます。削除・移動・編集するとPCミエルは起動せず、自分で更新もできなくなります。直すには、PCミエルの ZIP をもう一度ダウンロードして、新しいフォルダーに展開してください。",
         string.Empty);
 
     /// <summary>The exact bytes of the file (a new array each time).</summary>

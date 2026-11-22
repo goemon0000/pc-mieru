@@ -103,7 +103,7 @@ public sealed class StartGateScreenTests : IDisposable
                 var exe = Install("failed");
                 Directory.CreateDirectory(Update(exe));
                 File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
-                File.WriteAllText(Path.Combine(Update(exe), GateFile.LastResultName), "{ \"result\": " + GateFile.RecoveryFailedToken + " }");
+                File.WriteAllText(Path.Combine(Update(exe), GateFile.RecoveryFailedName), string.Empty); // the sentinel: its presence is the whole message
                 return InstallGate.EnterStartup(exe);
             }
 
@@ -123,6 +123,13 @@ public sealed class StartGateScreenTests : IDisposable
                 var elsewhere = Path.Combine(_root.Path, "elsewhere");
                 Directory.CreateDirectory(elsewhere);
                 Junction(Update(exe), elsewhere);
+                return InstallGate.EnterStartup(exe);
+            }
+
+            case GateOutcome.Unreadable:
+            {
+                // A look that cannot be made at all: the gate path is longer than the system takes (neither "missing" nor "access denied").
+                var exe = Path.Combine(_root.Path, new string('q', 33000), "PCMieru.exe");
                 return InstallGate.EnterStartup(exe);
             }
 
@@ -164,7 +171,16 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.False(SmokeText.IsPlaceholder(window.ReasonText), window.ReasonText);
         Assert.False(SmokeText.IsPlaceholder(window.HintText), window.HintText);
         Assert.False(string.IsNullOrWhiteSpace(window.ReasonText));
-        Assert.False(string.IsNullOrWhiteSpace(window.HintText));
+        if (outcome == GateOutcome.Busy)
+        {
+            // The reason of a busy gate already says what to do (try again in a moment) and the button is right under it: no second line, and no empty label taking room.
+            Assert.Equal(string.Empty, window.HintText);
+        }
+        else
+        {
+            Assert.False(string.IsNullOrWhiteSpace(window.HintText));
+        }
+
         Assert.Equal(Strings.Get("gui.gate.title"), window.Text);
         Assert.Equal(outcome == GateOutcome.Busy, window.RetryOffered);
         Assert.Same(outcome == GateOutcome.Busy ? window.RetryButton : window.CloseButton, window.AcceptButton); // Enter does what the window offers
@@ -202,6 +218,8 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.Null(window.Opened);
         Assert.Equal(Strings.Get("gui.gate.busy"), window.ReasonText);
         Assert.True(window.RetryOffered);
+        // Not only an update holds the gate (any program that has it exclusively does), so the words do not say it is one.
+        Assert.Equal("Another program is using PC Mieru's files right now (an update, for example). Try again in a moment.", window.ReasonText);
 
         holder.Dispose();
         Assert.True(window.RetryNow());
@@ -233,6 +251,38 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.False(window.RetryOffered);
     }
 
+    [Theory]
+    [InlineData(Language.Ja, "ほかのプログラムが PCミエルのファイルを使っています（更新中など）。しばらくしてからもう一度試してください。")]
+    [InlineData(Language.En, "Another program is using PC Mieru's files right now (an update, for example). Try again in a moment.")]
+    public void The_busy_window_says_that_another_program_is_using_the_files_not_that_an_update_is_running_and_keeps_its_button(Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Light);
+
+        using var window = new StartGateWindow(theme, Refused(GateOutcome.Busy), () => throw new InvalidOperationException("no retry here"));
+
+        Assert.Equal(expected, window.ReasonText);
+        Assert.True(window.RetryOffered);
+        Assert.Equal(language == Language.Ja ? "もう一度試す" : "Try again", window.RetryButton.Text);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja, "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。")]
+    [InlineData(Language.En, "The state of PCMieru.gate.txt, which is needed to start, could not be checked.")]
+    public void A_gate_file_that_could_not_be_looked_at_has_its_own_words_it_is_not_the_access_denied_text(Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var entry = Refused(GateOutcome.Unreadable);
+
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+
+        Assert.Equal(GateOutcome.Unreadable, entry.Outcome);
+        Assert.Equal(expected, window.ReasonText);
+        Assert.NotEqual(Strings.Get("gui.gate.denied"), window.ReasonText);
+        Assert.False(window.RetryOffered);
+    }
+
     // ---- Enter: the three ways out ----
 
     [Fact]
@@ -257,6 +307,7 @@ public sealed class StartGateScreenTests : IDisposable
     [InlineData(GateOutcome.Busy)]
     [InlineData(GateOutcome.MissingGate)]
     [InlineData(GateOutcome.RecoveryPending)]
+    [InlineData(GateOutcome.Unreadable)]
     public void An_unattended_run_never_waits_on_a_window_the_reason_goes_to_stderr_and_there_is_no_entry(GateOutcome outcome)
     {
         using var _ = Harness.Locale();

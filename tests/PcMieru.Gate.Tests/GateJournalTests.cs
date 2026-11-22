@@ -1,5 +1,4 @@
 using System.Security.AccessControl;
-using System.Text;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gate.Tests;
@@ -120,56 +119,109 @@ public sealed class GateJournalTests : IDisposable
         Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
     }
 
+    // ---- the sentinel of a failed recovery: I\update\recovery-failed, presence is the whole message ----
+
     [Fact]
-    public void A_recovery_that_failed_before_is_told_apart_by_the_marker_in_last_result_json()
+    public void A_recovery_that_failed_before_is_told_apart_by_the_sentinel_file()
     {
         var exe = _scratch.Install();
         var update = Update(exe);
         File.WriteAllText(Path.Combine(update, GateFile.JournalName), "{}");
-        File.WriteAllText(Path.Combine(update, GateFile.LastResultName), "{ \"result\": " + GateFile.RecoveryFailedToken + ", \"at\": \"x\" }");
+        File.WriteAllText(Path.Combine(update, GateFile.RecoveryFailedName), string.Empty);
 
         using var entry = InstallGate.EnterStartup(exe);
 
         Assert.Equal(GateOutcome.RecoveryFailed, entry.Outcome);
+        Assert.False(entry.IsOpen);
         Assert.Equal(Path.Combine(update, GateFile.RecoverNoteName), entry.RecoveryNotePath);
         Assert.NotEqual(InstallGate.ReasonOf(GateOutcome.RecoveryPending), entry.Reason);
+        using var recovery = InstallGate.EnterExclusive(exe);
+        Assert.True(recovery.IsOpen, "the handle of the refused entry was closed: " + recovery.Detail);
     }
 
     [Fact]
-    public void A_last_result_without_the_marker_or_with_the_marker_far_beyond_what_is_read_is_only_pending()
+    public void The_sentinel_alone_without_a_journal_is_still_a_failed_recovery()
     {
         var exe = _scratch.Install();
-        var update = Update(exe);
-        File.WriteAllText(Path.Combine(update, GateFile.JournalName), "{}");
-        File.WriteAllText(Path.Combine(update, GateFile.LastResultName), "{ \"result\": \"ok\" }");
-        using (var entry = InstallGate.EnterStartup(exe))
-        {
-            Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
-        }
-
-        var far = new string(' ', GateFile.MarkerReadBytes + 100) + GateFile.RecoveryFailedToken;
-        File.WriteAllText(Path.Combine(update, GateFile.LastResultName), far, new UTF8Encoding(false));
-        using var beyond = InstallGate.EnterStartup(exe);
-        Assert.Equal(GateOutcome.RecoveryPending, beyond.Outcome);
-    }
-
-    [Fact]
-    public void A_last_result_alone_is_only_a_record_it_does_not_stop_the_start()
-    {
-        var exe = _scratch.Install();
-        File.WriteAllText(Path.Combine(Update(exe), GateFile.LastResultName), "{ \"result\": " + GateFile.RecoveryFailedToken + " }");
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.RecoveryFailedName), string.Empty);
 
         using var entry = InstallGate.EnterStartup(exe);
 
-        Assert.Equal(GateOutcome.Open, entry.Outcome); // the journal is what says "left open"; once it is gone the transaction is over
+        Assert.Equal(GateOutcome.RecoveryFailed, entry.Outcome); // what the sentinel says is not tied to the journal's being there: only recover.exe's success removes it
     }
 
     [Fact]
-    public void The_swapper_does_not_look_at_the_journal_it_reads_its_own()
+    public void The_sentinel_is_not_read_whatever_is_in_it_and_however_much()
+    {
+        var exe = _scratch.Install();
+        var sentinel = Path.Combine(Update(exe), GateFile.RecoveryFailedName);
+        File.WriteAllBytes(sentinel, new byte[3 * 1024 * 1024]); // a parser or a size limit would have an opinion about this; the gate has none
+
+        using var entry = InstallGate.EnterStartup(exe);
+
+        Assert.Equal(GateOutcome.RecoveryFailed, entry.Outcome);
+    }
+
+    [Fact]
+    public void A_last_result_that_says_recoveryFailed_is_only_a_record_it_is_not_the_sentinel()
+    {
+        var exe = _scratch.Install();
+        var update = Update(exe);
+        File.WriteAllText(Path.Combine(update, GateFile.LastResultName), "{ \"result\": \"recoveryFailed\", \"at\": \"x\" }");
+
+        // no journal, no sentinel: the transaction is over, whatever the record says
+        using (var alone = InstallGate.EnterStartup(exe))
+        {
+            Assert.Equal(GateOutcome.Open, alone.Outcome);
+        }
+
+        // a journal that is left: pending, and not "failed" (the word in the record is not what decides)
+        File.WriteAllText(Path.Combine(update, GateFile.JournalName), "{}");
+        using var withJournal = InstallGate.EnterStartup(exe);
+        Assert.Equal(GateOutcome.RecoveryPending, withJournal.Outcome);
+    }
+
+    [Fact]
+    public void A_sentinel_that_is_a_junction_is_refused()
+    {
+        var exe = _scratch.Install();
+        var elsewhere = _scratch.Sub("elsewhere");
+        _scratch.Junction(Path.Combine(Update(exe), GateFile.RecoveryFailedName), elsewhere);
+
+        using var entry = InstallGate.EnterStartup(exe);
+
+        Assert.Equal(GateOutcome.ReparseRefused, entry.Outcome);
+        Assert.Contains(GateFile.RecoveryFailedName, entry.Detail, StringComparison.Ordinal);
+        using var swapper = InstallGate.EnterExclusive(exe);
+        Assert.True(swapper.IsOpen, "a refused entry holds nothing: " + swapper.Detail);
+    }
+
+    [Fact]
+    public void A_sentinel_that_cannot_be_looked_at_is_not_taken_for_no_sentinel_it_is_pending()
+    {
+        var exe = _scratch.Install();
+        var update = Update(exe);
+        var sentinel = Path.Combine(update, GateFile.RecoveryFailedName);
+        File.WriteAllText(sentinel, string.Empty);
+        _scratch.Deny(sentinel, FileSystemRights.ReadAttributes);
+        _scratch.Deny(update, FileSystemRights.ListDirectory);
+        Assert.False(File.Exists(sentinel)); // exactly what a File.Exists based gate would have believed
+
+        using var entry = InstallGate.EnterStartup(exe);
+
+        // Undecidable: the start stops either way, and "pending" is what the gate can honestly say (it does not know that the recovery failed).
+        Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
+        Assert.Contains(GateFile.RecoveryFailedName, entry.Detail, StringComparison.Ordinal);
+        Assert.Contains("access denied", entry.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_swapper_does_not_look_at_the_journal_or_the_sentinel_it_reads_its_own()
     {
         var exe = _scratch.Install();
         File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
         File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalTempName), "{}");
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.RecoveryFailedName), string.Empty);
 
         using var swapper = InstallGate.EnterExclusive(exe);
 

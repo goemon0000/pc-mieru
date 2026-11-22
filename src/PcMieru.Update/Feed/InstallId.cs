@@ -14,12 +14,15 @@ namespace PcMieru.Update.Feed;
 /// </summary>
 public static class InstallId
 {
-    /// <summary>The path of the gate file of the install whose program file is <paramref name="programFile"/>: the same folder, <see cref="GateFile.FileName"/>. Null when the program file has no folder.</summary>
+    /// <summary>
+    /// The path of the gate file of the install whose program file is <paramref name="programFile"/>: the install folder (<see cref="InstallGate.InstallFolderOf"/>, the folder of the program's FINAL path, so
+    /// the same one the start gate opened) and <see cref="GateFile.FileName"/>. Null when the program file has no folder or is not a fully qualified path.
+    /// </summary>
     public static string? GateFileOf(string programFile)
     {
         try
         {
-            var folder = string.IsNullOrEmpty(programFile) ? null : Path.GetDirectoryName(programFile);
+            var folder = string.IsNullOrEmpty(programFile) || !Path.IsPathFullyQualified(programFile) ? null : InstallGate.InstallFolderOf(programFile);
             return string.IsNullOrEmpty(folder) ? null : Path.Combine(folder, GateFile.FileName);
         }
         catch (ArgumentException)

@@ -46,6 +46,17 @@ public sealed class GateAssetTests
         Assert.DoesNotMatch("[0-9]", text);
     }
 
+    [Fact]
+    public void The_last_sentence_of_each_language_says_what_to_do_to_repair_it_and_it_never_says_release()
+    {
+        // The text is frozen (the same bytes in every release): this is the wording that was decided, in the two languages.
+        Assert.Contains("To repair it, download PC Mieru's ZIP file again and unzip it into a new folder.\n", GateFile.Text, StringComparison.Ordinal);
+        Assert.Contains("直すには、PCミエルの ZIP をもう一度ダウンロードして、新しいフォルダーに展開してください。\n", GateFile.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("配布のZIP", GateFile.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("release", GateFile.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("リリース", GateFile.Text, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("PCMieru.gate.txt", true)]
     [InlineData("pcmieru.GATE.txt", true)]
