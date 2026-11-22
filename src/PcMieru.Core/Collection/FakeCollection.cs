@@ -181,7 +181,10 @@ public static class FakeSnapshots
                 Value.Ok(Math.Round(58 + (6 * Noise(16, tick)), 0), "fake:nvml"),
                 Value.Ok(Math.Round(160 + (30 * Noise(17, tick)), 0), "fake:nvml"),
                 Value.Unsupported<double>("fake:nvml", "this board reports no fan"),
-                Value.Ok(2400 + Math.Round(200 * Noise(18, tick), 0), "fake:nvml")),
+                Value.Ok(2400 + Math.Round(200 * Noise(18, tick), 0), "fake:nvml"))
+            {
+                LimitReasons = Value.Ok(0UL, "fake:nvml"),
+            },
         };
 
         return new Snapshot(
@@ -190,7 +193,10 @@ public static class FakeSnapshots
             takenAtUtc.AddMilliseconds(-intervalMs),
             intervalMs,
             new SystemInfo(
-                new CpuInfo(logical, total, perLogical, Value.Ok(4500.0 + Math.Round(400 * Noise(19, tick), 0), "fake:ntquery-power")),
+                new CpuInfo(logical, total, perLogical, Value.Ok(4500.0 + Math.Round(400 * Noise(19, tick), 0), "fake:ntquery-power"))
+                {
+                    PackagePowerWatts = Value.Ok(Math.Round(70 + (30 * Noise(20, tick)), 1), "fake:pdh-energy-meter"),
+                },
                 memory,
                 disks,
                 nics,
@@ -198,7 +204,14 @@ public static class FakeSnapshots
                 93_784 + tick,
                 Value.Ok(disks.Length, Src),
                 Value.Ok(nics.Length, Src),
-                Value.Ok(gpus.Length, Src)),
+                Value.Ok(gpus.Length, Src))
+            {
+                // A desktop: on AC, no battery.
+                Power = new PowerInfo(
+                    Value.Ok(true, "fake:GetSystemPowerStatus"),
+                    Value.Unsupported<int>("fake:GetSystemPowerStatus", "no battery in this PC"),
+                    Value.Unsupported<string>("fake:GetSystemPowerStatus", "no battery in this PC")),
+            },
             list);
     }
 

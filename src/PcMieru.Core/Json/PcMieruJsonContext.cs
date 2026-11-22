@@ -24,6 +24,7 @@ namespace PcMieru.Core;
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(long))]
+[JsonSerializable(typeof(ulong))]
 [JsonSerializable(typeof(double))]
 [JsonSerializable(typeof(bool))]
 [JsonSerializable(typeof(U128))]

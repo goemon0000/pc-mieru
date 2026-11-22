@@ -83,6 +83,12 @@ public sealed record GpuSensorExtras(
 {
     /// <summary>The slowdown temperature the vendor API reports (NVML). NotCollected from a SensorHost that predates the field.</summary>
     public Value<double> TemperatureLimitC { get; init; } = Value.NotCollected<double>("none");
+
+    /// <summary>
+    /// The NVML clocks-event reasons as the driver's bit mask (0 = nothing holds the clocks back). Unsupported when the driver or the
+    /// GPU does not report them; NotCollected from a SensorHost that predates the field. Never worked out from temperature or power.
+    /// </summary>
+    public Value<ulong> ClocksEventReasons { get; init; } = Value.NotCollected<ulong>("none");
 }
 
 public sealed record StoragePartition(int Number, long StartBytes, long LengthBytes, string Type, string Style);

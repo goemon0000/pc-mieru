@@ -154,6 +154,9 @@ internal sealed record GpuReading(
     string? ProcessDetail,
     Value<int> State)
 {
+    /// <summary>When the PDH collection behind the values finished (Stopwatch ticks); 0 when this reading holds no counter values.</summary>
+    public long AcquiredTicks { get; init; }
+
     public static GpuReading Off(IReadOnlyList<GpuInfo> gpus) =>
         new(gpus, new Dictionary<uint, double>(), false, GpuSampler.OffDetail, GpuSampler.ListState(gpus, ValueStatus.NotCollected, GpuSampler.OffDetail));
 }
@@ -242,7 +245,10 @@ internal sealed class GpuSampler : IDisposable
 
         _lastGpus = _primedGpus = Describe(_adapters, _aggregator, primed: true, null, ValueStatus.NotCollected);
         var note = _aggregator.Unrecognized > 0 ? $"{_aggregator.Unrecognized} GPU instance(s) in an unknown name format were ignored" : null;
-        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource));
+        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource))
+        {
+            AcquiredTicks = _lastCollect,
+        };
     }
 
     public void Dispose() => CloseQuery();
@@ -485,7 +491,10 @@ internal sealed class GpuSampler : IDisposable
 /// <summary>Adds the vendor-API sensors (temperature, power, fan, clock) onto GPU infos by adapter id, falling back to the name.</summary>
 internal static class GpuSensorMerge
 {
-    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors)
+    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors) => Apply(gpus, sensors, null);
+
+    /// <param name="origin">Which SensorHost frame (and when, and at which period) <paramref name="sensors"/> is from. Every merged adapter keeps it as <see cref="GpuInfo.VendorOrigin"/>, so the recorder can tell where each vendor value came from after the merge.</param>
+    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors, SourceOrigin? origin)
     {
         if (gpus.Count == 0)
         {
@@ -502,15 +511,34 @@ internal static class GpuSensorMerge
                 var status = sensors.IsOk ? ValueStatus.Error : sensors.Status;
                 var detail = sensors.IsOk ? "the sensor client returned no data" : sensors.Detail;
                 Value<double> same() => Value.Missing<double>(status, sensors.Source, detail);
-                result[i] = gpu with { TemperatureC = same(), PowerWatts = same(), FanPercent = same(), ClockMhz = same(), TemperatureLimitC = same() };
+                result[i] = gpu with
+                {
+                    TemperatureC = same(),
+                    PowerWatts = same(),
+                    FanPercent = same(),
+                    ClockMhz = same(),
+                    TemperatureLimitC = same(),
+                    LimitReasons = Value.Missing<ulong>(status, sensors.Source, detail),
+                    VendorOrigin = origin,
+                };
                 continue;
             }
 
             var match = Find(sensors.Data, gpu);
             if (match is null)
             {
-                Value<double> none() => Value.Unsupported<double>(sensors.Source, "no sensor reading for this adapter");
-                result[i] = gpu with { TemperatureC = none(), PowerWatts = none(), FanPercent = none(), ClockMhz = none(), TemperatureLimitC = none() };
+                const string why = "no sensor reading for this adapter";
+                Value<double> none() => Value.Unsupported<double>(sensors.Source, why);
+                result[i] = gpu with
+                {
+                    TemperatureC = none(),
+                    PowerWatts = none(),
+                    FanPercent = none(),
+                    ClockMhz = none(),
+                    TemperatureLimitC = none(),
+                    LimitReasons = Value.Unsupported<ulong>(sensors.Source, why),
+                    VendorOrigin = origin,
+                };
                 continue;
             }
 
@@ -521,6 +549,8 @@ internal static class GpuSensorMerge
                 FanPercent = match.FanPercent,
                 ClockMhz = match.ClockMhz,
                 TemperatureLimitC = match.Extras?.TemperatureLimitC ?? Value.NotCollected<double>("none"),
+                LimitReasons = match.Extras?.ClocksEventReasons ?? Value.NotCollected<ulong>("none"),
+                VendorOrigin = origin,
             };
         }
 

@@ -147,7 +147,8 @@ internal sealed class SnapshotPump : IDisposable
 
     /// <summary>
     /// Asks for a sample now (after an action, F5) and returns once it has been delivered, on the caller's UI context.
-    /// Paused, the loop takes nothing, so one sample is taken here instead (nobody else is sampling then). Before
+    /// Paused, the loop takes nothing, so one sample is taken here instead (nobody else is sampling then), unless a recording keeps the loop
+    /// sampling: then nothing is taken here (a second sampler would disturb the recording) and the window stays paused. Before
     /// <see cref="Start"/> there is nothing to refresh.
     /// </summary>
     public async Task TickAsync()
@@ -159,7 +160,13 @@ internal sealed class SnapshotPump : IDisposable
 
         if (_settings.Paused)
         {
-            await SampleWhilePausedAsync().ConfigureAwait(true);
+            // While a recording is running the loop keeps sampling (1 s, for the recorder) even though the window is paused. A second sample
+            // taken here would shorten the loop's deltas and put an off-beat row into the recording, so a paused window just stays as it is.
+            if (!_loop.IsRecording)
+            {
+                await SampleWhilePausedAsync().ConfigureAwait(true);
+            }
+
             return;
         }
 
