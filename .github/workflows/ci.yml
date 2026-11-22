@@ -47,6 +47,9 @@ jobs:
   # The release script is the only thing that produces the shipped folder, so it runs here too (without the zip).
   # This catches a merge conflict between published files, a Helper that links something it should not, or a folder
   # whose exes do not start, on the pull request instead of on the tag.
+  # -Verify also builds tools/BundleCheck and runs the real bundle validator (the client's code) on the folder in
+  # -SkipZip mode, judged against its own inner manifest PCMieru.bundle.json: a file the manifest does not list, a name
+  # the rules refuse or a hash that differs fails here. (The zip itself is judged on the release run.)
   publish:
     runs-on: windows-latest
     timeout-minutes: 30

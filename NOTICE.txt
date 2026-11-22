@@ -136,6 +136,19 @@ goemon0000/parts-life and the owner's pl-sensors helper
       src/PartsLife.Check/PartsLife.Check.csproj
   src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
       the same post-link check, copied for the network meter
+  src/PcMieru.Update/Feed/AppVersion.cs
+      the X.Y.Z version number, its parse and its ordering, from the owner's
+      pl-cloud src/PartsLife.Update/AppVersion.cs
+  src/PcMieru.Update/Feed/Sha256List.cs
+      the SHA256.txt reader (name match to the letter, a name with two values
+      is not used), from the owner's pl-cloud src/PartsLife.Update/Sha256List.cs
+  tests/PcMieru.Update.Tests/VersionAndHashListTests.cs
+      the cases of the two tests above, from the owner's pl-cloud
+      tests/PartsLife.Update.Tests/RulesTests.cs
+  tests/PcMieru.Update.Tests/TestBundle.cs
+      the idea of a release made in memory with knobs to break it (the code is
+      new), from FakeRelease.Zip in the owner's pl-cloud
+      tests/PartsLife.Update.Tests/UpdaterTests.cs
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART

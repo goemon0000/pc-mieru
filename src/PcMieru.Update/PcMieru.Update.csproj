@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The distribution contract of the auto update (docs/unify/DESIGN-B.md 3): the version type, the pcm-bundle/1 manifest, the name rules and the bundle validator.
+       Step 1 only: no network code, no file replacement. No reference to Gui, Cli or Core, so tools/BundleCheck can load it on its own. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>PcMieru.Update</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PcMieru.Update.Tests" />
+  </ItemGroup>
+
+</Project>

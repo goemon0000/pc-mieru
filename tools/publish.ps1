@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the PC Mieru release folder, zip and SHA256.txt.
+  Builds the PC Mieru release folder, zip, outer manifest and SHA256.txt (the pcm-bundle/1 release).
 
 .DESCRIPTION
   1. Publishes Gui, Cli and SensorHost one by one (self-contained, ReadyToRun) into separate work folders.
@@ -8,14 +8,25 @@
      (SHA256); if it is not, the script stops. Nothing is overwritten silently.
   3. Publishes the Helper and the network meter (PCMieru.NetMeter.exe) with NativeAOT and checks each exe itself:
      DependentLoadFlags must contain LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) and the static imports must be system DLLs only.
-  4. Zips the folder and writes SHA256.txt next to it.
+  4. Writes the inner manifest PCMieru.bundle.json into the folder: format, version, rid, a new buildId (a GUID, per publish),
+     gateProtocol and every file of the folder (path with '/', bytes, sha256) except itself.
   5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, PCMieru.exe --smoke, and the
      network meter started with no arguments (it must start and refuse with exit code 2; it opens nothing).
+     The REAL bundle validator (tools/BundleCheck, the code the client will use) judges the folder before and after that run,
+     so running the folder must not leave a stray file in it.
+  6. Zips the folder entry by entry (names with '/', ordinal order; never CreateFromDirectory, which names the entries with
+     backslashes under Windows PowerShell 5.1), writes the outer manifest PCMieru-X.Y.Z-win-x64.manifest.json (every file
+     including the inner manifest) and SHA256.txt (two lines: the zip and the outer manifest) next to it.
+  7. With -Verify, the validator judges the zip against the outer manifest and SHA256.txt. With -SkipZip there is no zip:
+     the folder is judged against its own inner manifest.
+
+  The three files of the later steps (PCMieru.Swap.exe, PCMieru.gate.txt, PcMieru.Update.dll) are not built yet, so the
+  validator is asked for the floor of this build (BundleFloor.ForThisBuild), not the full one.
 
   Works in Windows PowerShell 5.1 and pwsh. ASCII only on purpose (5.1 reads BOM-less files as ANSI).
 
 .EXAMPLE
-  powershell -File tools\publish.ps1 -Version 0.4.0 -Verify
+  powershell -File tools\publish.ps1 -Version 0.5.0 -Verify
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +47,12 @@ $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrEmpty($Output)) { $Output = Join-Path $root 'dist' }
 $Output = [IO.Path]::GetFullPath($Output)
 
-if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "Version must look like 1.2.3 (got '$Version')" }
+# pcm-bundle/1 versions are plain X.Y.Z (no suffix, no leading zero) and the only runtime is win-x64: the manifests say so, and a
+# bundle the client would refuse is not worth building.
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw "Version must look like 1.2.3, with no suffix and no leading zero (got '$Version')" }
+if ($Runtime -ne 'win-x64') { throw "pcm-bundle/1 is win-x64 only (got '$Runtime')" }
+
+$InnerManifestName = 'PCMieru.bundle.json'
 
 # Imports a NativeAOT helper exe (the Helper, the network meter) may have. Everything in here is resolved from System32 once
 # DependentLoadFlags has 0x800. Extend it when one of them really needs another system DLL, and say why in the commit.
@@ -225,6 +241,136 @@ function Publish-AotExe([string]$Label, [string]$Project, [string]$ExeName, [int
 
 function Get-Sha256([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 
+# ---- the bundle (pcm-bundle/1): manifests, zip, validator -------------------------------------------------------------------
+
+# UTF-8 without a byte order mark, whatever the PowerShell (5.1's Set-Content and Out-File would write ANSI or a BOM).
+function Write-Utf8File([string]$Path, [string]$Text) {
+    [IO.File]::WriteAllBytes($Path, (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text))
+}
+
+# The files below $Folder: relative path with '/', length and SHA-256 (lower-case hex). A list, in no particular order.
+function Get-FolderEntries([string]$Folder) {
+    $base = (Resolve-Path -LiteralPath $Folder).Path.TrimEnd('\')
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File) {
+        $relative = $file.FullName.Substring($base.Length + 1).Replace('\', '/')
+        $list.Add([pscustomobject]@{ Path = $relative; Bytes = [long]$file.Length; Sha256 = (Get-Sha256 $file.FullName); Full = $file.FullName })
+    }
+    return ,$list
+}
+
+# One JSON string. The names of a bundle are plain ASCII (the validator refuses the rest), but this is correct for any text.
+function ConvertTo-JsonText([string]$Text) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append([char]34)
+    foreach ($c in $Text.ToCharArray()) {
+        $code = [int]$c
+        if ($code -eq 34) { [void]$sb.Append('\"') }
+        elseif ($code -eq 92) { [void]$sb.Append('\\') }
+        elseif ($code -lt 32) { [void]$sb.Append('\u' + $code.ToString('x4')) }
+        else { [void]$sb.Append($c) }
+    }
+    [void]$sb.Append([char]34)
+    return $sb.ToString()
+}
+
+# The entries sorted by ordinal comparison of the path (the order of the C# writer, PcMieru.Update BundleManifest.ToUtf8Bytes).
+function Get-SortedEntries($Entries) {
+    $byPath = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    foreach ($e in $Entries) { $byPath.Add($e.Path, $e) }
+    [string[]]$paths = @($byPath.Keys)
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $sorted = New-Object System.Collections.Generic.List[object]
+    foreach ($p in $paths) { $sorted.Add($byPath[$p]) }
+    return ,$sorted
+}
+
+# The text of a pcm-bundle/1 manifest, byte for byte what BundleManifest.ToUtf8Bytes makes (tests/PcMieru.Update.Tests compares them):
+# fixed key order, LF line ends, one line per file, files in ordinal order of the path, a final LF.
+function New-BundleManifestText([string]$ManifestVersion, [string]$ManifestBuildId, $Entries) {
+    $nl = [string][char]10
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    $sorted = Get-SortedEntries $Entries
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('{' + $nl)
+    [void]$sb.Append('  "format": "pcm-bundle/1",' + $nl)
+    [void]$sb.Append('  "version": ' + (ConvertTo-JsonText $ManifestVersion) + ',' + $nl)
+    [void]$sb.Append('  "rid": "win-x64",' + $nl)
+    [void]$sb.Append('  "buildId": ' + (ConvertTo-JsonText $ManifestBuildId) + ',' + $nl)
+    [void]$sb.Append('  "gateProtocol": 1,' + $nl)
+    if ($sorted.Count -eq 0) {
+        [void]$sb.Append('  "files": []' + $nl)
+    } else {
+        [void]$sb.Append('  "files": [' + $nl)
+        for ($i = 0; $i -lt $sorted.Count; $i++) {
+            $e = $sorted[$i]
+            $comma = ''
+            if ($i + 1 -lt $sorted.Count) { $comma = ',' }
+            [void]$sb.Append('    { "path": ' + (ConvertTo-JsonText $e.Path) + ', "bytes": ' + $e.Bytes.ToString($invariant) + ', "sha256": ' + (ConvertTo-JsonText $e.Sha256) + ' }' + $comma + $nl)
+        }
+        [void]$sb.Append('  ]' + $nl)
+    }
+    [void]$sb.Append('}' + $nl)
+    return $sb.ToString()
+}
+
+# Zips the files one entry at a time: ZipArchive.CreateEntry keeps the name as given, so the names are "PCMieru-X.Y.Z-win-x64/dir/name"
+# with '/'. ZipFile.CreateFromDirectory is NOT used: under Windows PowerShell 5.1 (.NET Framework) it names the entries with backslashes,
+# which is how the v0.2.0 zip came out and why the client refuses a name with a backslash. Entries go in ordinal order; no directory
+# entries. Each file is hashed while it is written and must be what was listed: a file that changed after the manifest was made stops the build.
+# Returns nothing; throws (and removes the half-written zip) on any difference.
+function New-BundleZip([string]$ZipPath, [string]$RootName, $Entries) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $sorted = Get-SortedEntries $Entries
+    $fileStream = $null
+    $archive = $null
+    $failed = $true
+    try {
+        $fileStream = New-Object System.IO.FileStream($ZipPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+        $archive = New-Object System.IO.Compression.ZipArchive($fileStream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+        $buffer = New-Object byte[] 81920
+        foreach ($e in $sorted) {
+            $entry = $archive.CreateEntry($RootName + '/' + $e.Path, [System.IO.Compression.CompressionLevel]::Optimal)
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $in = [System.IO.File]::OpenRead($e.Full)
+            $out = $entry.Open()
+            try {
+                $total = [long]0
+                while (($n = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    [void]$sha.TransformBlock($buffer, 0, $n, $null, 0)
+                    $out.Write($buffer, 0, $n)
+                    $total += $n
+                }
+                [void]$sha.TransformFinalBlock($buffer, 0, 0)
+                $hex = ([BitConverter]::ToString($sha.Hash)).Replace('-', '').ToLowerInvariant()
+            } finally {
+                $out.Dispose()
+                $in.Dispose()
+                $sha.Dispose()
+            }
+            if ($total -ne $e.Bytes -or $hex -ne $e.Sha256) { throw "$($e.Path) changed after it was listed in the manifest ($total bytes read, $($e.Bytes) listed)" }
+        }
+        $archive.Dispose()
+        $archive = $null
+        $fileStream.Dispose()
+        $fileStream = $null
+        $failed = $false
+    } finally {
+        if ($null -ne $archive) { $archive.Dispose() }
+        if ($null -ne $fileStream) { $fileStream.Dispose() }
+        if ($failed -and (Test-Path -LiteralPath $ZipPath)) { Remove-Item -LiteralPath $ZipPath -Force }
+    }
+}
+
+# Runs tools/BundleCheck (built into $bundleCheck by the -Verify step) and stops the script when it refuses. Its own line
+# ("OK: N files, M bytes" or "FAIL <Fault>: <detail>") is printed by the tool.
+function Invoke-BundleCheck([string[]]$CheckArgs) {
+    Write-Host ('BundleCheck ' + ($CheckArgs -join ' '))
+    & $bundleCheck @CheckArgs
+    if ($LASTEXITCODE -ne 0) { throw "BundleCheck refused the bundle (exit code $LASTEXITCODE): $($CheckArgs[0])" }
+}
+
 function Merge-Folders([string[]]$Sources, [string]$Destination, [string[]]$FirstWins) {
     $seen = @{}
     $conflicts = New-Object System.Collections.Generic.List[string]
@@ -323,9 +469,11 @@ $name = "PCMieru-$Version-$Runtime"
 $work = Join-Path $Output 'work'
 $folder = Join-Path $Output $name
 $zip = Join-Path $Output ($name + '.zip')
+$outerManifest = Join-Path $Output ($name + '.manifest.json')
+$hashList = Join-Path $Output 'SHA256.txt'
 
 Write-Step "Clean $Output"
-foreach ($path in @($work, $folder, $zip, (Join-Path $Output 'SHA256.txt'))) {
+foreach ($path in @($work, $folder, $zip, $outerManifest, $hashList)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
 New-Item -ItemType Directory -Force -Path $work, $folder | Out-Null
@@ -375,9 +523,31 @@ foreach ($stray in @('PCMieru.NetMeter.dll', 'PCMieru.NetMeter.runtimeconfig.jso
     if (Test-Path -LiteralPath (Join-Path $folder $stray)) { throw "the network meter ships as one NativeAOT exe, but $stray is in the release folder (a managed build leaked in)" }
 }
 
+# The inner manifest: every file of the folder but itself. buildId is new at every publish and lives in the manifests only.
+Write-Step 'Inner manifest'
+$buildId = [guid]::NewGuid().ToString('D')
+$innerEntries = Get-FolderEntries $folder
+$innerPath = Join-Path $folder $InnerManifestName
+Write-Utf8File $innerPath (New-BundleManifestText $Version $buildId $innerEntries)
+Write-Host ('{0}: {1} files listed, buildId {2}' -f $InnerManifestName, $innerEntries.Count, $buildId)
+
 if ($Verify) {
+    # The validator is the code of src/PcMieru.Update (name rules, floor, hashes, limits): publish asks the code the client will use.
+    Write-Step 'Build the bundle validator (tools/BundleCheck)'
+    $checkDir = Join-Path $work 'BundleCheck'
+    Invoke-Dotnet @('build', (Join-Path $root 'tools\BundleCheck\BundleCheck.csproj'), '-c', 'Release', '-o', $checkDir, '--nologo')
+    $bundleCheck = Join-Path $checkDir 'BundleCheck.exe'
+    if (-not (Test-Path -LiteralPath $bundleCheck)) { throw 'BundleCheck.exe was not produced' }
+
+    Write-Step 'Validate the folder'
+    Invoke-BundleCheck @('folder', $folder, $Version)
+
     Write-Step 'Run the published folder'
     Invoke-VerifyRun $folder
+
+    # Running the folder (smoke, the MCP handshake) must not leave anything behind in it: a stray file would be zipped.
+    Write-Step 'Validate the folder again (it must be as it was)'
+    Invoke-BundleCheck @('folder', $folder, $Version)
 }
 
 $files = @(Get-ChildItem -LiteralPath $folder -Recurse -File)
@@ -388,12 +558,33 @@ Write-Host ('files  : {0}' -f $files.Count)
 Write-Host ('size   : {0:N1} MB' -f ($bytes / 1MB))
 
 if (-not $SkipZip) {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($folder, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+    Write-Step 'Zip, outer manifest and SHA256.txt'
+    # What goes into the zip: the listed files and the inner manifest itself. Nothing else may be in the folder.
+    $innerSelf = [pscustomobject]@{ Path = $InnerManifestName; Bytes = [long](Get-Item -LiteralPath $innerPath).Length; Sha256 = (Get-Sha256 $innerPath); Full = $innerPath }
+    $zipEntries = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $innerEntries) { $zipEntries.Add($e) }
+    $zipEntries.Add($innerSelf)
+    if (@(Get-ChildItem -LiteralPath $folder -Recurse -File).Count -ne $zipEntries.Count) { throw 'the release folder has files that the inner manifest does not list' }
+
+    New-BundleZip $zip $name $zipEntries
+    Write-Utf8File $outerManifest (New-BundleManifestText $Version $buildId $zipEntries)
+
+    # SHA256.txt: two lines (the zip, then the outer manifest), "<hash>  <name>", LF, ASCII. The same bytes under 5.1 and pwsh,
+    # and `sha256sum -c` reads it as it is.
+    $nl = [string][char]10
     $zipHash = Get-Sha256 $zip
-    ('{0}  {1}' -f $zipHash, (Split-Path -Leaf $zip)) | Set-Content -LiteralPath (Join-Path $Output 'SHA256.txt') -Encoding ASCII
-    Write-Host ('zip    : {0} ({1:N1} MB)' -f $zip, ((Get-Item -LiteralPath $zip).Length / 1MB))
+    $manifestHash = Get-Sha256 $outerManifest
+    Write-Utf8File $hashList (('{0}  {1}' -f $zipHash, (Split-Path -Leaf $zip)) + $nl + ('{0}  {1}' -f $manifestHash, (Split-Path -Leaf $outerManifest)) + $nl)
+    Write-Host ('zip    : {0} ({1:N1} MB, {2} entries)' -f $zip, ((Get-Item -LiteralPath $zip).Length / 1MB), $zipEntries.Count)
     Write-Host ('sha256 : {0}' -f $zipHash)
+    Write-Host ('manifest: {0}' -f $outerManifest)
+    Write-Host ('sha256 : {0}' -f $manifestHash)
+
+    if ($Verify) {
+        Write-Step 'Validate the folder against the outer manifest, then the zip'
+        Invoke-BundleCheck @('folder', $folder, $Version, '--outer', $outerManifest)
+        Invoke-BundleCheck @('zip', $zip, $outerManifest, $Version, '--sha256', $hashList)
+    }
 }
 
 Remove-Item -LiteralPath $work -Recurse -Force
