@@ -181,10 +181,11 @@ public class SnapshotPumpTests
     }
 
     [Fact]
-    public void While_paused_and_recording_a_refresh_takes_no_sample_here_and_the_window_stays_as_it_was()
+    public void While_paused_and_recording_a_refresh_shows_exactly_one_new_snapshot_and_takes_none_on_the_window_thread()
     {
-        // A recording keeps the loop sampling (1 s) under the user's pause. A second sample taken by the window's refresh would shorten the
-        // loop's deltas and put an off-beat row into the recording, so a paused window just stays as it is.
+        // A recording keeps the loop sampling (1 s) under the user's pause. F5 on the paused window must still show something: the pump asks
+        // the loop to show the NEXT sample of its own beat (a second sample taken here would put an off-beat row into the recording), and it
+        // shows that one and no more.
         var source = new ThreadTrackingSource();
         using var loop = new SamplerLoop(source, new SamplerSettings());
         using var pump = new SnapshotPump(loop, source, 500);
@@ -193,18 +194,20 @@ public class SnapshotPumpTests
         using var lease = loop.AcquireRecordingLease();
         Assert.True(Pumping(() => source.Calls >= 1), "the loop did not sample for the recording under the pause");
         Assert.True(loop.IsRecording);
+        Assert.Empty(pump.History); // paused: the window got nothing so far
 
         var tick = pump.TickAsync();
 
-        Assert.True(tick.IsCompleted, "a refresh of a paused window waited for something");
+        Assert.True(Pumping(() => tick.IsCompleted), "the refresh of a paused, recording window did not come back");
         Finish(tick);
         Assert.False(source.WasCalledOn(Environment.CurrentManagedThreadId), "the refresh sampled on the window's thread");
+        Assert.NotNull(pump.Latest);
+        Assert.Single(pump.History);
         Assert.True(pump.Paused);
-        Assert.False(pump.Running);
-        Pumping(() => false, 300); // a window that showed paused-and-recording samples would have shown one within this
-        Assert.Empty(loop.History);
-        Assert.Empty(pump.History);
-        Assert.Null(pump.Latest);
+        var calls = source.Calls;
+        Assert.True(Pumping(() => source.Calls >= calls + 2), "the recording stopped sampling"); // more recording samples arrive...
+        Assert.Single(pump.History); // ...and the paused window shows none of them
+        Assert.Single(loop.History);
     }
 
     [Fact]

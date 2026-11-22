@@ -12,14 +12,20 @@ namespace PcMieru.Core;
 /// </summary>
 public interface IRecordingSamples
 {
-    /// <summary>Takes one recording lease. Disposing the result more than once returns one count only. Thread-safe.</summary>
+    /// <summary>
+    /// Takes one recording lease. Disposing the result more than once returns one count only. Thread-safe.
+    /// A lease taken BEFORE the loop is started yields nothing until <c>SamplerLoop.Start()</c> runs: the lease only asks for one-second sampling, it
+    /// does not start a loop. Throws <see cref="ObjectDisposedException"/> once the loop is disposed (and leaves no subscription behind).
+    /// </summary>
     IDisposable AcquireRecordingLease();
 
     /// <summary>
     /// A sample was taken while a lease is held. The handler gets an immutable DTO and runs on a dispatcher thread of its own, never on
-    /// the sampling loop: a slow handler cannot delay the next sample. It should still only enqueue the sample for its writer: the
-    /// dispatcher is one thread and keeps at most <see cref="SamplerLoop.RecordingQueueLength"/> samples; past that the OLDEST waiting
-    /// sample is dropped and the gap shows as a jump in <see cref="RecordingSample.Core"/>'s frame sequence.
+    /// the sampling loop: a slow handler cannot delay the next sample. It must still never block: it should only enqueue the sample for its
+    /// writer. The dispatcher is ONE thread and keeps at most <see cref="SamplerLoop.RecordingQueueLength"/> (64) samples; a handler that blocks
+    /// lets the queue fill, and past that the OLDEST waiting sample is dropped (drop-oldest). A drop shows as a jump in
+    /// <see cref="RecordingSample.Core"/>'s frame sequence, and so does a tick that failed (its number is used up all the same): a writer reads a
+    /// jump as "samples are missing here", never as consecutive ones.
     /// </summary>
     event Action<RecordingSample> RecordingSampled;
 }

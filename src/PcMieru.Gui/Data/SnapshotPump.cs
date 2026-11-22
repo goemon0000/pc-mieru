@@ -148,7 +148,8 @@ internal sealed class SnapshotPump : IDisposable
     /// <summary>
     /// Asks for a sample now (after an action, F5) and returns once it has been delivered, on the caller's UI context.
     /// Paused, the loop takes nothing, so one sample is taken here instead (nobody else is sampling then), unless a recording keeps the loop
-    /// sampling: then nothing is taken here (a second sampler would disturb the recording) and the window stays paused. Before
+    /// sampling: then nothing is taken here (a second sampler would put an off-beat row into the recording) and the loop is asked to show its
+    /// NEXT sample to the window, which is delivered here; the window stays paused and the samples after it are not shown. Before
     /// <see cref="Start"/> there is nothing to refresh.
     /// </summary>
     public async Task TickAsync()
@@ -160,13 +161,7 @@ internal sealed class SnapshotPump : IDisposable
 
         if (_settings.Paused)
         {
-            // While a recording is running the loop keeps sampling (1 s, for the recorder) even though the window is paused. A second sample
-            // taken here would shorten the loop's deltas and put an off-beat row into the recording, so a paused window just stays as it is.
-            if (!_loop.IsRecording)
-            {
-                await SampleWhilePausedAsync().ConfigureAwait(true);
-            }
-
+            await RefreshWhilePausedAsync().ConfigureAwait(true);
             return;
         }
 
@@ -210,11 +205,55 @@ internal sealed class SnapshotPump : IDisposable
         _cancel.Dispose();
     }
 
-    private async Task SampleWhilePausedAsync()
+    /// <summary>
+    /// F5 on a paused window. While a recording keeps the loop sampling (1 s, for the recorder) the loop is asked to show its next sample here and
+    /// that one is awaited: a second sample taken on this thread would shorten the loop's deltas and put an off-beat row into the recording.
+    /// With no recording nobody samples, so the one sample is taken here, under the loop's own gate (a lease taken at this moment makes the loop wait
+    /// for it, and a lease already held makes this ask the loop instead). The two are decided by the loop, never by a flag read here.
+    /// </summary>
+    private async Task RefreshWhilePausedAsync()
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _waiters.Add(waiter);
+            try
+            {
+                if (_loop.TryRequestShowWhilePaused())
+                {
+                    await waiter.Task.WaitAsync(TickTimeout, _cancel.Token).ConfigureAwait(true);
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+            {
+                return; // the recording ended before its next sample, or the sampler is stuck: the window just stays as it is
+            }
+            finally
+            {
+                _ = _waiters.Remove(waiter);
+            }
+
+            if (await SampleWhilePausedAsync().ConfigureAwait(true))
+            {
+                return;
+            }
+
+            // A lease was taken between the two questions: the loop is sampling now, ask it.
+        }
+    }
+
+    /// <summary>One sample here for a paused window nobody else samples for. False when a recording lease turned up first (nothing was sampled).</summary>
+    private async Task<bool> SampleWhilePausedAsync()
     {
         try
         {
-            Deliver(await _source.SampleAsync(_cancel.Token).ConfigureAwait(true));
+            if (await _loop.TrySampleWhilePausedAsync(_cancel.Token).ConfigureAwait(true) is not { } snapshot)
+            {
+                return false;
+            }
+
+            Deliver(snapshot);
         }
         catch (OperationCanceledException)
         {
@@ -223,6 +262,8 @@ internal sealed class SnapshotPump : IDisposable
         {
             Failed?.Invoke(ex);
         }
+
+        return true;
     }
 
     // Pool thread. Only the newest snapshot waits for the UI thread.

@@ -26,7 +26,9 @@ internal sealed class GpuSensorCache
     private const int SlowPeriodMs = 2000;
 
     private readonly Func<ISensorClient?> _resolve;
+    private readonly Func<long> _timestamp;
     private readonly object _lock = new();
+    private IFramedSensorClient? _framed;
     private GpuSensorView _last = Initial();
     private long _lastOkAt;
     private long _requestedAt;
@@ -34,11 +36,24 @@ internal sealed class GpuSensorCache
     private long _unframedSequence;
     private Task? _pending;
 
-    public GpuSensorCache(Func<ISensorClient?> resolve) => _resolve = resolve ?? throw new ArgumentNullException(nameof(resolve));
+    public GpuSensorCache(Func<ISensorClient?> resolve)
+        : this(resolve, Stopwatch.GetTimestamp)
+    {
+    }
+
+    /// <param name="timestamp">The clock the refresh timing and the age of a reading are read from (Stopwatch ticks). A test supplies its own so the age is not a matter of waiting.</param>
+    internal GpuSensorCache(Func<ISensorClient?> resolve, Func<long> timestamp)
+    {
+        _resolve = resolve ?? throw new ArgumentNullException(nameof(resolve));
+        _timestamp = timestamp ?? throw new ArgumentNullException(nameof(timestamp));
+    }
 
     /// <summary>How long after the last request the next refresh is due: two seconds, or just under one while the client is asked for one-second frames.</summary>
     internal static TimeSpan RefreshIntervalFor(int requestedPeriodMs) =>
         requestedPeriodMs <= SensorCadence.FastMs ? FastRefreshEvery - FastSlack : RefreshEvery;
+
+    /// <summary>The period (ms) the client was last asked for: what a gap stamped outside this cache (a GPU stage that timed out) says the period was.</summary>
+    internal int RequestedPeriodMs => Volatile.Read(ref _requestedPeriodMs);
 
     /// <summary>The newest reading, and a refresh when one is due. Never blocks.</summary>
     public Value<IReadOnlyList<GpuSensorReading>> Current() => CurrentView().Gpus;
@@ -48,7 +63,7 @@ internal sealed class GpuSensorCache
     {
         lock (_lock)
         {
-            var now = Stopwatch.GetTimestamp();
+            var now = _timestamp();
             var every = RefreshIntervalFor(_requestedPeriodMs);
             var due = _requestedAt == 0 || Stopwatch.GetElapsedTime(_requestedAt, now) >= every;
             if (due && (_pending is null || _pending.IsCompleted))
@@ -59,9 +74,12 @@ internal sealed class GpuSensorCache
 
             if (_last.Gpus.IsOk && _lastOkAt != 0 && Stopwatch.GetElapsedTime(_lastOkAt, now) > MaxAge)
             {
+                // Too old: the child is gone or slow. If the client knows it stopped the child after a failure and is bringing up a new one, the gap
+                // is a host restart; otherwise it is a read that did not come.
+                var gap = _framed?.IsHostRestarting == true ? SourceGap.HostRestart : SourceGap.ReadFailed;
                 return new GpuSensorView(
                     Value.NotCollected<IReadOnlyList<GpuSensorReading>>(Source, "the last sensor reading is too old to show as current"),
-                    SourceOrigin.Missing(SourceGap.ReadFailed, _requestedPeriodMs));
+                    SourceOrigin.Missing(gap, _requestedPeriodMs));
             }
 
             return _last;
@@ -86,6 +104,7 @@ internal sealed class GpuSensorCache
     private async Task RefreshAsync()
     {
         GpuSensorView view;
+        IFramedSensorClient? seen = null;
         var period = SlowPeriodMs;
         try
         {
@@ -99,6 +118,7 @@ internal sealed class GpuSensorCache
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
                 if (client is IFramedSensorClient framed)
                 {
+                    seen = framed;
                     view = await framed.ReadGpuFramedAsync(cts.Token).ConfigureAwait(false);
                     period = framed.RequestedPeriodMs;
                 }
@@ -126,10 +146,11 @@ internal sealed class GpuSensorCache
         lock (_lock)
         {
             _last = view;
+            _framed = seen;
             _requestedPeriodMs = period;
             if (view.Gpus.IsOk)
             {
-                _lastOkAt = Stopwatch.GetTimestamp();
+                _lastOkAt = _timestamp();
             }
         }
     }

@@ -254,8 +254,8 @@ internal sealed class GpuSampler : IDisposable
     public void Dispose() => CloseQuery();
 
     /// <summary>
-    /// One GpuInfo per adapter DXGI lists (minus software adapters) plus any adapter that only PDH knows and that has engine
-    /// activity. Pure so it can be tested with a hand-filled aggregator.
+    /// One GpuInfo per physical adapter DXGI lists (minus software adapters, virtual copies of a card, and a LUID listed twice) plus any adapter
+    /// that only PDH knows and that has engine activity. Pure so it can be tested with a hand-filled aggregator.
     /// </summary>
     internal static IReadOnlyList<GpuInfo> Describe(
         IReadOnlyList<GpuAdapter> adapters,
@@ -268,7 +268,9 @@ internal sealed class GpuSampler : IDisposable
         var seen = new HashSet<ulong>();
         foreach (var adapter in adapters)
         {
-            if (adapter.IsSoftware)
+            // A LUID is one adapter: a second entry under it (and a virtual copy of the card) would be a second row for the same card, with the same
+            // sensor reading printed on both, in every sample of a recording from the very first.
+            if (adapter.IsSoftware || adapter.IsAlias || seen.Contains(adapter.Luid))
             {
                 continue;
             }
@@ -416,6 +418,16 @@ internal sealed class GpuSampler : IDisposable
             ClockMhz = Value.Missing<double>(status, "SensorHost", detail),
         }).ToArray();
 
+    /// <summary>
+    /// <see cref="Failed"/> for a GPU stage that did not answer in time. The vendor values of that tick are stamped as a failed read (with the period that was
+    /// asked for and no frame), not left unstamped: an unstamped GPU is read as "SensorHost never started", which is only true before the first frame.
+    /// </summary>
+    internal static IReadOnlyList<GpuInfo> TimedOut(IReadOnlyList<GpuInfo> known, ValueStatus status, string detail, int periodMs)
+    {
+        var origin = SourceOrigin.Missing(SourceGap.ReadFailed, periodMs);
+        return Failed(known, status, detail).Select(g => g with { VendorOrigin = origin }).ToArray();
+    }
+
     private bool EnsureQuery()
     {
         if (_query is not null)
@@ -488,7 +500,10 @@ internal sealed class GpuSampler : IDisposable
     }
 }
 
-/// <summary>Adds the vendor-API sensors (temperature, power, fan, clock) onto GPU infos by adapter id, falling back to the name.</summary>
+/// <summary>
+/// Adds the vendor-API sensors (temperature, power, fan, clock) onto GPU infos by adapter id, falling back to the name for an adapter that no reading names by id.
+/// One-to-one: a reading belongs to one adapter, so two adapters of one model never both get the reading of one card.
+/// </summary>
 internal static class GpuSensorMerge
 {
     public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors) => Apply(gpus, sensors, null);
@@ -501,11 +516,12 @@ internal static class GpuSensorMerge
             return gpus;
         }
 
+        var matches = sensors.IsOk && sensors.Data is not null ? MatchAll(sensors.Data, gpus) : null;
         var result = new GpuInfo[gpus.Count];
         for (var i = 0; i < gpus.Count; i++)
         {
             var gpu = gpus[i];
-            if (!sensors.IsOk || sensors.Data is null)
+            if (matches is null)
             {
                 // The sensor client's own answer (Unsupported, Timeout, ...) is what the user should read.
                 var status = sensors.IsOk ? ValueStatus.Error : sensors.Status;
@@ -524,7 +540,7 @@ internal static class GpuSensorMerge
                 continue;
             }
 
-            var match = Find(sensors.Data, gpu);
+            var match = matches[i];
             if (match is null)
             {
                 const string why = "no sensor reading for this adapter";
@@ -557,24 +573,45 @@ internal static class GpuSensorMerge
         return result;
     }
 
-    private static GpuSensorReading? Find(IReadOnlyList<GpuSensorReading> readings, GpuInfo gpu)
+    /// <summary>
+    /// Which reading belongs to which adapter, each reading to at most one. By id first (the LUID is what the reading was made for); then, only for an
+    /// adapter no reading named by id, by name among the readings still free. An adapter left with nothing says "no sensor reading".
+    /// </summary>
+    internal static GpuSensorReading?[] MatchAll(IReadOnlyList<GpuSensorReading> readings, IReadOnlyList<GpuInfo> gpus)
     {
-        foreach (var r in readings)
+        var match = new GpuSensorReading?[gpus.Count];
+        var used = new bool[readings.Count];
+        for (var i = 0; i < gpus.Count; i++)
         {
-            if (string.Equals(r.Id, gpu.Id, StringComparison.OrdinalIgnoreCase))
+            for (var j = 0; j < readings.Count; j++)
             {
-                return r;
+                if (!used[j] && string.Equals(readings[j].Id, gpus[i].Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    match[i] = readings[j];
+                    used[j] = true;
+                    break;
+                }
             }
         }
 
-        foreach (var r in readings)
+        for (var i = 0; i < gpus.Count; i++)
         {
-            if (string.Equals(r.Name.Trim(), gpu.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+            if (match[i] is not null)
             {
-                return r;
+                continue;
+            }
+
+            for (var j = 0; j < readings.Count; j++)
+            {
+                if (!used[j] && string.Equals(readings[j].Name.Trim(), gpus[i].Name.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    match[i] = readings[j];
+                    used[j] = true;
+                    break;
+                }
             }
         }
 
-        return null;
+        return match;
     }
 }

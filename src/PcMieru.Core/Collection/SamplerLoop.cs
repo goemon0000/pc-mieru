@@ -109,11 +109,14 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
     private readonly HistoryRing<Snapshot> _history = new(HistoryLength);
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _wake = new(0, 1);
+
+    /// <summary>One sample of the source at a time: the loop's, or the paused window's one-shot (<see cref="TrySampleWhilePausedAsync"/>). Uncontended it is one wait and one release per sample.</summary>
+    private readonly SemaphoreSlim _sampleGate = new(1, 1);
     private readonly object _leaseGate = new();
     private Task? _task;
     private Snapshot? _latest;
     private int _started;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     // Recording lease state. _leases, _gpuLease, _sensorLease, _queue and _dispatcher change under _leaseGate; the loop reads _recording and _queue.
     private int _leases;
@@ -128,6 +131,7 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
     // Loop state: a refresh request is "sample now" while nobody records, and "show the next sample" while someone does.
     private int _sampleNow;
     private int _publishNext;
+    private int _showPausedNext;
     private long _lastDisplayed;
 
     /// <param name="sensorCadence">
@@ -148,6 +152,10 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
         ArgumentOutOfRangeException.ThrowIfLessThan(queueLength, 1);
         _recordingPeriod = recordingPeriod;
         _queueLength = queueLength;
+        if (source is IBeatAware beatAware)
+        {
+            beatAware.UseBeat(() => EffectivePeriod); // the first sample's nominal interval is this loop's beat, the recording period under a lease
+        }
     }
 
     /// <summary>A sample was taken (runs on a thread-pool thread; an exception in a handler is swallowed so one listener cannot stop the loop).</summary>
@@ -240,26 +248,109 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
         Wake();
     }
 
+    /// <summary>
+    /// The refresh of a PAUSED window while a recording keeps the loop sampling: asks the loop to show its NEXT sample to the window even though
+    /// the user has paused (the loop's beat is the recording's, so no extra row is taken). The caller then waits for <see cref="Sampled"/>.
+    /// False when no lease is held: nothing is sampling, so the caller takes its own one-shot sample (<see cref="TrySampleWhilePausedAsync"/>).
+    /// Exactly one sample is shown per request; the pause itself is not changed, so the samples after it are not shown.
+    /// </summary>
+    public bool TryRequestShowWhilePaused()
+    {
+        lock (_leaseGate)
+        {
+            if (_leases == 0 || _disposed)
+            {
+                return false;
+            }
+
+            Volatile.Write(ref _showPausedNext, 1);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// One sample for a paused window that nobody else is sampling for. Takes the same gate the loop samples under, so a recording lease that is
+    /// taken at this very moment makes the loop wait for this sample instead of running alongside it; and if a lease is held by the time the gate is
+    /// won, nothing is sampled and the result is null (the caller then asks the loop through <see cref="TryRequestShowWhilePaused"/>).
+    /// </summary>
+    public async Task<Snapshot?> TrySampleWhilePausedAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _sampleGate.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+
+        try
+        {
+            return IsRecording ? null : await _source.SampleAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseSampleGate();
+        }
+    }
+
+    private void ReleaseSampleGate()
+    {
+        try
+        {
+            _ = _sampleGate.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     /// <inheritdoc />
     public IDisposable AcquireRecordingLease()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        IDisposable? gpuToGiveBack = null;
+        IDisposable? sensorToGiveBack = null;
+        var disposedMeanwhile = false;
         lock (_leaseGate)
         {
-            if (_leases == 0)
+            // Checked again under the gate: Dispose sets the flag first and then clears what it finds under this gate, so a lease taken after
+            // that clearing would never be given back.
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_leases == 0 && !EnterRecordingLocked())
             {
-                EnterRecordingLocked();
+                disposedMeanwhile = true;
+                gpuToGiveBack = _gpuLease;
+                sensorToGiveBack = _sensorLease;
+                _gpuLease = null;
+                _sensorLease = null;
             }
 
-            _leases++;
+            if (!disposedMeanwhile)
+            {
+                _leases++;
+            }
+        }
+
+        if (disposedMeanwhile)
+        {
+            // The loop was disposed while the first lease was being taken (a handler, a SensorHost launch): give back what was taken.
+            sensorToGiveBack?.Dispose();
+            gpuToGiveBack?.Dispose();
+            throw new ObjectDisposedException(nameof(SamplerLoop));
         }
 
         Wake(); // a paused loop starts sampling, a long wait is cut to the recording beat
         return new RecordingLease(this);
     }
 
-    /// <summary>Called with the gate held, for the first lease: one GPU subscription, one SensorHost one-second lease, the dispatcher.</summary>
-    private void EnterRecordingLocked()
+    /// <summary>
+    /// Called with the gate held, for the first lease: one GPU subscription, one SensorHost one-second lease, the dispatcher. False when the loop was
+    /// disposed meanwhile (Dispose runs on whatever thread, and so can a handler of the cadence): whatever was taken is left in
+    /// <see cref="_gpuLease"/> and <see cref="_sensorLease"/> for the caller to give back, and nothing was started.
+    /// </summary>
+    private bool EnterRecordingLocked()
     {
         _gpuLease = _control.SubscribeGpu();
         try
@@ -268,9 +359,14 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
         }
         catch
         {
-            _gpuLease.Dispose();
+            _gpuLease?.Dispose();
             _gpuLease = null;
             throw;
+        }
+
+        if (_disposed)
+        {
+            return false;
         }
 
         if (_queue is null)
@@ -287,6 +383,7 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
 
         Volatile.Write(ref _publishNext, 1); // the window gets the first recorded sample at once, as it does after a start
         Volatile.Write(ref _recording, 1);
+        return true;
     }
 
     private void ReleaseRecordingLease()
@@ -302,6 +399,7 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
 
             // The last one: the loop goes back to the user's settings as they are NOW (nothing was copied at acquire time).
             Volatile.Write(ref _recording, 0);
+            Volatile.Write(ref _showPausedNext, 0);
             gpu = _gpuLease;
             sensor = _sensorLease;
             _gpuLease = null;
@@ -381,6 +479,7 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
         {
             _leases = 0;
             Volatile.Write(ref _recording, 0);
+            Volatile.Write(ref _showPausedNext, 0);
             gpu = _gpuLease;
             sensor = _sensorLease;
             _gpuLease = null;
@@ -393,6 +492,7 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
 
         _stop.Dispose();
         _wake.Dispose();
+        _sampleGate.Dispose();
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -479,14 +579,30 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
         Snapshot snapshot;
         try
         {
-            snapshot = await _source.SampleAsync(ct).ConfigureAwait(false);
+            // The one-shot of a paused window (TrySampleWhilePausedAsync) samples under this gate too: never two samples of the source at once.
+            await _sampleGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                snapshot = await _source.SampleAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                ReleaseSampleGate();
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
+        catch (ObjectDisposedException) when (_disposed)
+        {
+            return; // the loop is being disposed; it is cancelled and leaves at the top of RunAsync
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // A failed tick takes its sequence number too: the recording then shows a jump where the sample is missing, instead of two
+            // neighbours that look consecutive.
+            SkipRecordingSequence();
             Raise(Failed, ex);
             return;
         }
@@ -511,6 +627,12 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
     /// <summary>While recording the loop runs faster than the window wants (and while the user has paused it runs at all): the window gets a sample at its own cadence only.</summary>
     private bool ShowToWindow(long now)
     {
+        // F5 on a paused window (TryRequestShowWhilePaused): this one sample is shown whatever the pause says, and only this one.
+        if (Interlocked.Exchange(ref _showPausedNext, 0) != 0)
+        {
+            return true;
+        }
+
         if (_control.Paused)
         {
             return false;
@@ -536,6 +658,15 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
 
         var sample = RecordingSampleBuilder.Build(snapshot, ++_recordingSequence, (int)_recordingPeriod.TotalMilliseconds);
         _ = queue.Writer.TryWrite(sample);
+    }
+
+    /// <summary>A recording tick produced no sample: its number is used up all the same (only the loop's thread writes the counter).</summary>
+    private void SkipRecordingSequence()
+    {
+        if (Volatile.Read(ref _recording) != 0 && Volatile.Read(ref _queue) is not null)
+        {
+            _recordingSequence++;
+        }
     }
 
     private async Task DispatchAsync(ChannelReader<RecordingSample> reader)

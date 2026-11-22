@@ -358,6 +358,8 @@ public sealed class GpuSensorCacheProvenanceTests
             set => Volatile.Write(ref _requested, value);
         }
 
+        public bool IsHostRestarting { get; set; }
+
         public Task<Value<IReadOnlyList<GpuSensorReading>>> ReadGpuAsync(CancellationToken ct = default) => Task.FromResult(view().Gpus);
 
         public Task<GpuSensorView> ReadGpuFramedAsync(CancellationToken ct = default)
@@ -440,6 +442,24 @@ public sealed class GpuSensorCacheProvenanceTests
         Assert.Equal(ValueStatus.Timeout, view.Gpus.Status);
         Assert.Null(view.Origin.Frame);
         Assert.Equal(gap, view.Origin.Gap);
+    }
+
+    [Theory]
+    [InlineData(true, SourceGap.HostRestart)]
+    [InlineData(false, SourceGap.ReadFailed)]
+    public async Task A_reading_that_is_too_old_is_a_host_restart_when_the_client_knows_it_is_restarting_and_a_failed_read_otherwise(bool restarting, SourceGap expected)
+    {
+        var clock = new[] { Stopwatch.GetTimestamp() };
+        using var client = new FramedFake(() => Ok(new SourceOrigin(new FrameId(3, 7), 1, 1000))) { IsHostRestarting = restarting };
+        var cache = new GpuSensorCache(() => client, () => Volatile.Read(ref clock[0]));
+        Assert.True((await SettledAsync(cache)).Gpus.IsOk);
+
+        Volatile.Write(ref clock[0], clock[0] + (11 * Stopwatch.Frequency)); // past MaxAge (ten seconds) on the cache's own clock
+        var stale = cache.CurrentView(); // the refresh this starts cannot publish before this call has returned
+
+        Assert.False(stale.Gpus.IsOk);
+        Assert.Null(stale.Origin.Frame);
+        Assert.Equal(expected, stale.Origin.Gap);
     }
 
     [Fact]
@@ -760,6 +780,21 @@ public sealed class RecordingSampleBuilderTests
         var vendor = Assert.Single(s.Gpus).Vendor;
         Assert.Null(vendor.Frame);
         Assert.Equal(SourceGap.NotStarted, vendor.Gap);
+    }
+
+    [Fact]
+    public void A_GPU_stage_that_timed_out_is_stamped_as_a_failed_read_with_the_period_and_no_frame()
+    {
+        var known = new[] { Gpu("luid_a", new SourceOrigin(new FrameId(2, 9), 8_000_000, 1000)) };
+
+        var timedOut = GpuSampler.TimedOut(known, ValueStatus.Timeout, "GPU counters: the stage did not finish in time", 1000);
+        var s = RecordingSampleBuilder.Build(Snap(timedOut, null), 1, 1000);
+
+        var gpu = Assert.Single(s.Gpus);
+        Assert.Equal(ValueStatus.Timeout, gpu.TemperatureC.Status);
+        Assert.Null(gpu.Vendor.Frame); // the frame the last good tick had is not claimed for this one
+        Assert.Equal(SourceGap.ReadFailed, gpu.Vendor.Gap); // not NotStarted: the stage did start, it did not answer
+        Assert.Equal(1000, gpu.Vendor.PeriodMs);
     }
 
     [Fact]

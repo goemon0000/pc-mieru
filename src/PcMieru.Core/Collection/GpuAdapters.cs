@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using PcMieru.Core.Hardware.Native;
 
 namespace PcMieru.Core.Collection;
 
@@ -7,6 +8,12 @@ namespace PcMieru.Core.Collection;
 internal sealed record GpuAdapter(ulong Luid, string Name, long DedicatedBytes, uint VendorId, bool IsSoftware)
 {
     public string Id => GpuCounterName.AdapterId(Luid);
+
+    /// <summary>
+    /// A virtual copy of a card that another DXGI entry already stands for (a virtual display driver lists the card again under a LUID of its own, with no PCI
+    /// address). It is not a GPU anyone looks at: <see cref="GpuSampler.Describe"/> leaves it out.
+    /// </summary>
+    public bool IsAlias { get; init; }
 }
 
 /// <summary>
@@ -83,6 +90,44 @@ internal static unsafe partial class GpuAdapters
             {
                 Release(factory);
             }
+        }
+
+        return MarkAliases(result, static a => Dxgi.QueryKmt((uint)a.Luid, (int)(a.Luid >> 32)) is { } kmt ? kmt.HasPciAddress : null);
+    }
+
+    /// <summary>
+    /// Marks the adapters that are only a virtual copy of another one: of the adapters with no PCI address, one whose dedicated memory is the same as an adapter that
+    /// has one, and whose name is the same (or empty), is an alias. Two cards of one model that are both plugged in both have an address, so neither is marked.
+    /// The same rule the configuration check uses for the graphics cards (PcMieru.Checks), kept as its own copy for the same reason: what the recorder lists must not
+    /// change when a screen elsewhere changes its mind.
+    /// </summary>
+    /// <param name="hasPciAddress">True or false from the kernel driver; null when it could not be read. Unknown is never taken for "no address": an adapter that cannot be asked is not called an alias.</param>
+    internal static List<GpuAdapter> MarkAliases(IReadOnlyList<GpuAdapter> adapters, Func<GpuAdapter, bool?> hasPciAddress)
+    {
+        var address = new bool?[adapters.Count];
+        for (var i = 0; i < adapters.Count; i++)
+        {
+            address[i] = hasPciAddress(adapters[i]);
+        }
+
+        var result = new List<GpuAdapter>(adapters.Count);
+        for (var i = 0; i < adapters.Count; i++)
+        {
+            var a = adapters[i];
+            var alias = false;
+            if (address[i] == false)
+            {
+                for (var j = 0; j < adapters.Count && !alias; j++)
+                {
+                    var b = adapters[j];
+                    alias = j != i
+                        && address[j] == true
+                        && b.DedicatedBytes == a.DedicatedBytes
+                        && (a.Name.Length == 0 || string.Equals(a.Name, b.Name, StringComparison.Ordinal));
+                }
+            }
+
+            result.Add(alias ? a with { IsAlias = true } : a);
         }
 
         return result;

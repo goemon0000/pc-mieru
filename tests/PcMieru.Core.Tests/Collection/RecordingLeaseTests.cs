@@ -539,4 +539,184 @@ public sealed class RecordingLeaseTests
         control.Minimized = true;
         Assert.Equal(TimeSpan.FromMilliseconds(400), loop.EffectivePeriod);
     }
+
+    [Fact]
+    public async Task A_tick_that_fails_while_recording_still_takes_its_sequence_number_so_the_gap_shows()
+    {
+        var source = new ScriptedSource { Fail = n => n == 3 ? new InvalidOperationException("one bad tick") : null };
+        var control = new TestControl { Interval = TimeSpan.FromSeconds(30) };
+        using var loop = NewLoop(source, control, periodMs: 10);
+        var failures = 0;
+        loop.Failed += _ => Interlocked.Increment(ref failures);
+        var recorder = new Recorder();
+        loop.RecordingSampled += recorder.Add;
+        using var lease = loop.AcquireRecordingLease();
+
+        loop.Start();
+        Assert.True(await UntilAsync(() => recorder.Count >= 5), "the loop did not carry on after the failed tick");
+
+        Assert.Equal(1, Volatile.Read(ref failures));
+        var sequence = recorder.Items.Select(s => s.Core.Frame!.Value.Sequence).ToArray();
+        // 1, 2, (the failed third tick), 4, 5: the recorder sees the failed tick as a jump of two, never as an unbroken run.
+        Assert.Contains(2L, sequence.Zip(sequence.Skip(1), (a, b) => b - a));
+    }
+
+    [Fact]
+    public void A_lease_taken_after_the_loop_was_disposed_throws_and_takes_nothing()
+    {
+        var control = new TestControl();
+        var cadence = new CountingCadence();
+        var loop = NewLoop(new ScriptedSource(), control, cadence);
+        loop.Dispose();
+
+        _ = Assert.Throws<ObjectDisposedException>(loop.AcquireRecordingLease);
+
+        Assert.Equal(0, control.GpuSubscriptions);
+        Assert.Equal(0, cadence.Acquired);
+        Assert.Equal(0, loop.LeaseCount);
+    }
+
+    private sealed class DisposingCadence(CountingCadence inner, Action onAcquire) : ISensorCadence
+    {
+        public IDisposable AcquireOneSecondLease()
+        {
+            var lease = inner.AcquireOneSecondLease();
+            onAcquire(); // the loop is disposed by someone else while the first lease is being taken
+            return lease;
+        }
+    }
+
+    [Fact]
+    public void A_loop_disposed_while_the_first_lease_is_being_taken_is_left_with_no_subscription_and_no_SensorHost_lease()
+    {
+        var control = new TestControl();
+        var inner = new CountingCadence();
+        SamplerLoop? loop = null;
+        loop = new SamplerLoop(new ScriptedSource(), control, () => new DisposingCadence(inner, () => loop!.Dispose()), FastBeat, SamplerLoop.RecordingQueueLength);
+
+        _ = Assert.Throws<ObjectDisposedException>(loop.AcquireRecordingLease);
+
+        Assert.Equal(0, inner.Active); // not kept at one second for a loop that is gone
+        Assert.Equal(0, control.ActiveGpuSubscriptions);
+        Assert.False(loop.IsRecording);
+        Assert.Equal(0, loop.LeaseCount);
+    }
+
+    [Fact]
+    public void Showing_a_paused_window_is_refused_without_a_lease_and_accepted_with_one()
+    {
+        var control = new TestControl { Paused = true };
+        using var loop = NewLoop(new ScriptedSource(), control);
+
+        Assert.False(loop.TryRequestShowWhilePaused());
+
+        using var lease = loop.AcquireRecordingLease();
+        Assert.True(loop.TryRequestShowWhilePaused());
+    }
+
+    [Fact]
+    public async Task A_paused_window_with_a_lease_shows_exactly_one_new_sample_when_it_asks()
+    {
+        var source = new ScriptedSource();
+        var control = new TestControl { Paused = true };
+        using var loop = NewLoop(source, control, periodMs: 10);
+        var shown = 0;
+        loop.Sampled += _ => Interlocked.Increment(ref shown);
+        var recorder = new Recorder();
+        loop.RecordingSampled += recorder.Add;
+        loop.Start();
+        using var lease = loop.AcquireRecordingLease();
+        Assert.True(await UntilAsync(() => recorder.Count >= 3));
+        Assert.Equal(0, Volatile.Read(ref shown)); // paused: nothing for the window
+
+        Assert.True(loop.TryRequestShowWhilePaused()); // F5 on the paused window
+
+        Assert.True(await UntilAsync(() => Volatile.Read(ref shown) >= 1), "the paused window got nothing after F5");
+        var after = recorder.Count;
+        Assert.True(await UntilAsync(() => recorder.Count >= after + 6)); // the recording goes on...
+        Assert.Equal(1, Volatile.Read(ref shown)); // ...and the window got that one sample and no more
+        Assert.Single(loop.History);
+        Assert.True(control.Paused);
+    }
+
+    [Fact]
+    public async Task A_paused_one_shot_samples_without_a_lease_and_hands_the_window_to_the_loop_with_one()
+    {
+        var source = new ScriptedSource();
+        var control = new TestControl { Paused = true };
+        using var loop = NewLoop(source, control, periodMs: 10);
+
+        var alone = await loop.TrySampleWhilePausedAsync(CancellationToken.None);
+
+        Assert.NotNull(alone);
+        Assert.Equal(1, source.Calls);
+
+        using var lease = loop.AcquireRecordingLease();
+        var recording = await loop.TrySampleWhilePausedAsync(CancellationToken.None);
+
+        Assert.Null(recording); // the loop is sampling for the recording: a second sampler here would put an off-beat row into it
+        Assert.Equal(1, source.Calls);
+    }
+
+    [Fact]
+    public async Task A_paused_one_shot_and_the_loop_never_sample_the_source_at_the_same_time()
+    {
+        // The race: the window reads "not recording", a recording starts, and the window's one-shot runs next to the loop's own sampling.
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new ScriptedSource { Hold = hold };
+        var control = new TestControl { Paused = true };
+        using var loop = NewLoop(source, control, periodMs: 10);
+        var oneShot = loop.TrySampleWhilePausedAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(await UntilAsync(() => source.Held == 1), "the one-shot did not reach the source");
+
+            using var lease = loop.AcquireRecordingLease(); // the recording starts while the one-shot is inside the source; held to the end, or the paused loop stops sampling
+            loop.Start();
+
+            var overlapped = await UntilAsync(() => source.Held >= 2, 1_000);
+            _ = hold.TrySetResult();
+            Assert.False(overlapped, "the loop sampled the source while the window's one-shot was still inside it");
+
+            _ = await oneShot;
+            Assert.True(await UntilAsync(() => source.Calls >= 4), "the loop did not carry on after the one-shot");
+            Assert.Equal(1, source.PeakConcurrency);
+        }
+        finally
+        {
+            _ = hold.TrySetResult(); // a failed assert above must not leave the one-shot blocked
+        }
+    }
+
+    private sealed class BeatSource : ISnapshotSource, IBeatAware
+    {
+        public Func<TimeSpan>? Beat { get; private set; }
+
+        public void UseBeat(Func<TimeSpan> beat) => Beat = beat;
+
+        public void ResetBaseline()
+        {
+        }
+
+        public Task<Snapshot> SampleAsync(CancellationToken ct = default) => Task.FromResult(FakeSnapshots.Create(DateTime.UtcNow, tick: 1, intervalMs: 1));
+
+        public void Dispose()
+        {
+        }
+    }
+
+    [Fact]
+    public void A_source_that_states_a_nominal_interval_is_told_the_loops_beat_which_is_the_recording_period_under_a_lease()
+    {
+        var control = new TestControl { Interval = TimeSpan.FromSeconds(30) };
+        var source = new BeatSource();
+        using var loop = new SamplerLoop(source, control, null, FastBeat, SamplerLoop.RecordingQueueLength);
+
+        Assert.NotNull(source.Beat);
+        Assert.Equal(TimeSpan.FromSeconds(30), source.Beat());
+
+        using var lease = loop.AcquireRecordingLease();
+
+        Assert.Equal(FastBeat, source.Beat());
+    }
 }

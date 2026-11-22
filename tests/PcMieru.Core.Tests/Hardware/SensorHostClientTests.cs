@@ -11,6 +11,7 @@ internal sealed class FakeSensorProcess : ISensorProcess
     private readonly Channel<string?> _lines = Channel.CreateUnbounded<string?>();
     private readonly List<int> _periods = [];
     private int _killed;
+    private int _killEntered;
     private int _inputClosed;
     private int _disposed;
 
@@ -30,6 +31,12 @@ internal sealed class FakeSensorProcess : ISensorProcess
     public int CloseInputCount => Volatile.Read(ref _inputClosed);
 
     public bool IsDisposed => Volatile.Read(ref _disposed) > 0;
+
+    /// <summary>When set, <see cref="Kill"/> blocks until the gate is opened (a kill that takes its time).</summary>
+    public ManualResetEventSlim? KillGate { get; set; }
+
+    /// <summary>True once <see cref="Kill"/> has been called (it may still be blocked on <see cref="KillGate"/>).</summary>
+    public bool KillEntered => Volatile.Read(ref _killEntered) != 0;
 
     public void Push(string line) => _lines.Writer.TryWrite(line);
 
@@ -74,6 +81,8 @@ internal sealed class FakeSensorProcess : ISensorProcess
 
     public void Kill()
     {
+        Volatile.Write(ref _killEntered, 1);
+        KillGate?.Wait();
         Interlocked.Increment(ref _killed);
         HasExited = true;
         if (KillEndsOutput)
@@ -90,6 +99,7 @@ internal sealed class FakeSensorProcessFactory : ISensorProcessFactory
     private readonly List<FakeSensorProcess> _started = [];
     private readonly List<(int IntervalMs, long Generation)> _launches = [];
     private readonly Queue<Exception> _failures = new();
+    private int _startEntered;
 
     public IReadOnlyList<FakeSensorProcess> Started
     {
@@ -103,6 +113,12 @@ internal sealed class FakeSensorProcessFactory : ISensorProcessFactory
     }
 
     public int StartAttempts { get; private set; }
+
+    /// <summary>When set, <see cref="Start"/> blocks until the gate is opened (a launch that takes its time).</summary>
+    public ManualResetEventSlim? StartGate { get; set; }
+
+    /// <summary>True once <see cref="Start"/> has been called (it may still be blocked on <see cref="StartGate"/>).</summary>
+    public bool StartEntered => Volatile.Read(ref _startEntered) != 0;
 
     public FakeSensorProcess Last => Started[^1];
 
@@ -128,6 +144,8 @@ internal sealed class FakeSensorProcessFactory : ISensorProcessFactory
             _launches.Add((intervalMs, generation));
         }
 
+        Volatile.Write(ref _startEntered, 1);
+        StartGate?.Wait();
         if (_failures.TryDequeue(out var ex))
         {
             throw ex;
@@ -644,6 +662,101 @@ public class SensorHostClientTests : IDisposable
 
         Assert.Equal(2, _factory.Launches.Count);
         Assert.Equal((2000, 2L), _factory.Launches[1]);
+    }
+
+    [Fact]
+    public async Task AcquiringALeaseNeverWaitsForAChildThatIsBeingLaunched()
+    {
+        // A lease is taken on the UI thread (the recording starts on a click): it must not wait behind a launch that is still inside Start.
+        using var gate = new ManualResetEventSlim(false);
+        _factory.StartGate = gate;
+        var client = NewClient();
+        var read = Task.Run(() => client.ReadGpuAsync()); // the launch happens on this thread, under the client's lock
+        try
+        {
+            await WaitUntil(() => _factory.StartEntered, "the launch to be inside Start");
+
+            var acquire = Task.Run(client.AcquireOneSecondLease);
+            var finished = await Task.WhenAny(acquire, Task.Delay(5_000)) == acquire;
+            Assert.True(finished, "taking a lease waited for a SensorHost launch that had not finished");
+            using var lease = await acquire; // held to the end of the test: the launch must find it taken when it ends
+
+            gate.Set();
+            await WaitUntil(() => _factory.Started.Count == 1, "the launch to finish");
+            var process = _factory.Last;
+            await WaitUntil(() => process.Periods.Count == 1, "the new child to be asked for one second");
+            Assert.Equal([1000], process.Periods); // it was started at two seconds before the lease; the launch noticed the lease and asked again
+            process.Push(SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a")));
+            _ = await read;
+        }
+        finally
+        {
+            gate.Set(); // a failed assert above must not leave the launch blocked
+        }
+    }
+
+    [Fact]
+    public async Task TakingAndGivingBackALeaseNeverWaitsForAChildThatIsBeingKilled()
+    {
+        var client = NewClient();
+        await FirstFrame(client);
+        var process = _factory.Last;
+        using var gate = new ManualResetEventSlim(false);
+        process.KillGate = gate;
+        Advance(6.5); // the host has gone silent: the watchdog kills it, under the client's lock
+        var tick = Task.Run(client.Tick);
+        try
+        {
+            await WaitUntil(() => process.KillEntered, "the kill to start");
+
+            var acquire = Task.Run(client.AcquireOneSecondLease);
+            Assert.True(await Task.WhenAny(acquire, Task.Delay(5_000)) == acquire, "taking a lease waited for a kill that had not finished");
+            var lease = await acquire;
+            var release = Task.Run(lease.Dispose);
+            Assert.True(await Task.WhenAny(release, Task.Delay(5_000)) == release, "giving a lease back waited for a kill that had not finished");
+            await release;
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        await tick;
+        Assert.Equal(2000, ((IFramedSensorClient)client).RequestedPeriodMs);
+    }
+
+    [Fact]
+    public async Task AHostThatWasStoppedAfterAFailureIsRestartingUntilAFrameArrives()
+    {
+        var client = NewClient();
+        var framed = (IFramedSensorClient)client;
+        Assert.False(framed.IsHostRestarting);
+        await FirstFrame(client);
+        Assert.False(framed.IsHostRestarting);
+
+        Advance(6.5);
+        client.Tick(); // silent for six seconds: killed after a failure
+        Assert.True(framed.IsHostRestarting);
+
+        Advance(1.1);
+        client.Tick(); // started again; no frame yet
+        Assert.True(framed.IsHostRestarting);
+
+        _factory.Last.Push(SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a")));
+        await WaitUntil(() => !framed.IsHostRestarting, "the first frame of the new host");
+    }
+
+    [Fact]
+    public async Task AHostStoppedBecauseNobodyAskedIsNotRestarting()
+    {
+        var client = NewClient(idleStopAfter: TimeSpan.FromSeconds(5));
+        await FirstFrame(client);
+
+        Advance(5.5);
+        client.Tick(); // idle: stopped on purpose, not a failure
+
+        Assert.True(_factory.Last.IsDisposed);
+        Assert.False(((IFramedSensorClient)client).IsHostRestarting);
     }
 
     [Fact]

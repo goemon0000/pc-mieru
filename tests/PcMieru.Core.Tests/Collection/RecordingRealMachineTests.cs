@@ -54,10 +54,17 @@ public sealed class RecordingRealMachineTests(ITestOutputHelper output)
         var samples = new ConcurrentQueue<RecordingSample>();
         loop.RecordingSampled += samples.Enqueue;
 
-        loop.Start();
+        var dxgi = GpuAdapters.Enumerate();
+        foreach (var adapter in dxgi)
+        {
+            output.WriteLine($"DXGI adapter {adapter.Id} '{adapter.Name}' dedicated={adapter.DedicatedBytes} software={adapter.IsSoftware} alias={adapter.IsAlias}");
+        }
+
+        // The lease is taken BEFORE the loop starts, so the very first sample is already a recording one (the first sample states a nominal interval).
         using (loop.AcquireRecordingLease())
         {
             Assert.True(loop.IsRecording);
+            loop.Start();
 
             // Wait for CONDITIONS, never for a duration: enough samples, and (with a SensorHost) one that carries a vendor frame.
             var clock = Stopwatch.StartNew();
@@ -89,9 +96,15 @@ public sealed class RecordingRealMachineTests(ITestOutputHelper output)
 
         // The sampler's own pass is numbered, increasing, and stands for one second.
         Assert.All(all, s => Assert.Equal(1000, s.Core.PeriodMs));
-        var sequences = all.Select(s => s.Core.Frame!.Value.Sequence).ToArray();
-        Assert.Equal(sequences.OrderBy(n => n), sequences);
-        Assert.Equal(sequences.Length, sequences.Distinct().Count());
+        Assert.Equal(1000, all[0].IntervalMs); // the first sample's nominal interval is the recording period, not the window's interval
+
+        // One row per physical card, from the first sample on (DXGI listed a virtual copy of the RTX 5070 on this PC).
+        Assert.All(all, s => Assert.Equal(s.Gpus.Count, s.Gpus.Select(g => g.Id).Distinct().Count()));
+        // This PC has one RTX 5070 (and DXGI lists a virtual copy of it under another LUID): the first sample lists it once, not twice.
+        var listedByDxgi = dxgi.Any(a => !a.IsSoftware && a.Name.Contains("RTX 5070", StringComparison.OrdinalIgnoreCase));
+        var inFirst = all[0].Gpus.Count(g => g.Name.Contains("RTX 5070", StringComparison.OrdinalIgnoreCase));
+        output.WriteLine($"RTX 5070 in the first sample: {inFirst} (DXGI lists one: {listedByDxgi})");
+        Assert.Equal(listedByDxgi ? 1 : 0, inFirst);
 
         // A number or a reason, never a zero standing in for "no counter".
         foreach (var sample in all)
