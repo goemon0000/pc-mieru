@@ -90,6 +90,8 @@ internal class GridView : ListView, IThemed
 {
     private const int WmContextMenu = 0x007B;
     private const int WmPaint = 0x000F;
+    private const int WmWindowPosChanging = 0x0046;
+    private const int SwpNoSize = 0x0001;
 
     private readonly ImageList _rowHeight = new();
     private readonly ToolTip _tip = new() { ShowAlways = true };
@@ -533,6 +535,11 @@ internal class GridView : ListView, IThemed
             var at = row >= 0 ? GetItemRect(row).Location : Point.Empty;
             menu.Show(this, new Point(at.X + Scaled(24), at.Y + RowHeight));
             return;
+        }
+
+        if (m.Msg == WmWindowPosChanging && ScrollsBackWhenWhole)
+        {
+            BeforeResize(m.LParam);
         }
 
         base.WndProc(ref m);
@@ -1054,6 +1061,57 @@ internal class GridView : ListView, IThemed
         }
     }
 
+    /// <summary>The index of the first row on show: 0 for a list that is not scrolled (and for one that has no window or no rows yet).</summary>
+    internal int TopRow => IsHandleCreated && VirtualListSize > 0 ? Math.Max((int)SendMessage(Handle, ListTopIndexMessage, IntPtr.Zero, IntPtr.Zero), 0) : 0;
+
+    /// <summary>Puts a scrolled list back at its first row (a list with no window or no rows is already there).</summary>
+    internal void ScrollToFirstRow()
+    {
+        if (IsHandleCreated && VirtualListSize > 0 && TopRow > 0)
+        {
+            EnsureVisible(0);
+        }
+    }
+
+    /// <summary>
+    /// Sets the number of rows of a list that asks to go back to its first row (<see cref="ScrollsBackWhenWhole"/>): when the new count fits in
+    /// the window it goes back to its first row first, while the row it was scrolled to is still there. The native list keeps its place when
+    /// the count shrinks, and then shows its first row far below the header with nothing to bring it back.
+    /// </summary>
+    internal void SetRowCount(int count)
+    {
+        if (ScrollsBackWhenWhole && count <= RowsThatFit(Height))
+        {
+            ScrollToFirstRow();
+        }
+
+        VirtualListSize = count;
+    }
+
+    /// <summary>
+    /// For a list that is made taller than its rows: it goes back to its first row before it grows. The native list keeps the place it was
+    /// scrolled to when it grows until every row fits, and then shows its first row far below the header with nothing to bring it back.
+    /// Off unless a page asks for it (the lists of the recording tab do).
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal bool ScrollsBackWhenWhole { get; set; }
+
+    private void BeforeResize(IntPtr windowPos)
+    {
+        // WINDOWPOS: two handles, then x, y, cx, cy and the flags.
+        var flags = System.Runtime.InteropServices.Marshal.ReadInt32(windowPos, (2 * IntPtr.Size) + 16);
+        if ((flags & SwpNoSize) != 0 || !IsHandleCreated)
+        {
+            return;
+        }
+
+        var height = System.Runtime.InteropServices.Marshal.ReadInt32(windowPos, (2 * IntPtr.Size) + 12);
+        if (height > 0 && RowsThatFit(height) >= VirtualListSize)
+        {
+            ScrollToFirstRow();
+        }
+    }
+
     /// <summary>
     /// What is wrong with the rows as the native list lays them out now, for a list that is meant to end on a whole row under its header; null
     /// when they are whole. The first row must start where the header's own window ends (a gap above it is how a list that has lost its place
@@ -1070,23 +1128,27 @@ internal class GridView : ListView, IThemed
 
         var header = HeaderWindowHeight();
         var fit = RowsThatFit(Height);
-        var shown = Math.Min(VirtualListSize, fit);
-        if (header <= 0 || shown <= 0 || RowRect(0) is not { } first || RowRect(shown - 1) is not { } last)
+
+        // A list scrolled to show a row further down starts at its top row, not at the first one (a list that holds more rows than it has room for).
+        var top = Math.Min(TopRow, VirtualListSize - 1);
+        var left = VirtualListSize - top;
+        var shown = Math.Min(left, fit);
+        if (header <= 0 || shown <= 0 || RowRect(top) is not { } first || RowRect(top + shown - 1) is not { } last)
         {
             facts = $"header {header} px, {shown} rows on show";
             return "the list gives no rectangle for its header or its rows";
         }
 
         var client = ClientSize.Height;
-        var next = shown < VirtualListSize ? RowRect(shown) : null;
-        facts = $"header {header} px, first row at {first.Top} px, row {first.Height} px, {shown} of {VirtualListSize} rows on show, last row ends at {last.Bottom} px of {client} px" + (next is { } n ? $", next row at {n.Top} px" : string.Empty);
+        var next = shown < left ? RowRect(top + shown) : null;
+        facts = $"header {header} px, first row on show ({top}) at {first.Top} px, row {first.Height} px, {shown} of {left} rows on show, last row ends at {last.Bottom} px of {client} px" + (next is { } n ? $", next row at {n.Top} px" : string.Empty);
         if (Math.Abs(first.Top - header) > 3)
         {
             return $"the first row starts at {first.Top} px where the header ends at {header} px";
         }
 
         // A list with fewer rows than it has room for ends where its rows end; a full one ends at the bottom.
-        if (last.Bottom > client + 1 || (VirtualListSize >= fit && last.Bottom < client - 3))
+        if (last.Bottom > client + 1 || (left >= fit && last.Bottom < client - 3))
         {
             return $"the last row on show ends at {last.Bottom} px in a client area {client} px high";
         }

@@ -490,6 +490,7 @@ internal static partial class SmokeRun
 
             await ChecksRun().ConfigureAwait(true);
             await FakeChecksRun().ConfigureAwait(true);
+            await RecordRun().ConfigureAwait(true);
             await Pcb1Run().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
         }
@@ -506,11 +507,18 @@ internal static partial class SmokeRun
                 return;
             }
 
-            string[] order = ["system", "load", "storage", "history"];
-            Check("checks: the tabs are system, load, storage and history, in that order", checksPage.TabIds.SequenceEqual(order), string.Join(",", checksPage.TabIds));
+            string[] order = ["system", "load", "storage", "record", "history"];
+            Check("checks: the tabs are system, load, storage, recording and history, in that order", checksPage.TabIds.SequenceEqual(order), string.Join(",", checksPage.TabIds));
             Check("checks: opening the page starts no check", !context.Checks.IsBusy && context.Checks.State == CheckRunState.NotRun, context.Checks.State.ToString());
+            Check("checks: opening the page made no recorder and no store of recordings", !context.Recording.BackendCreated && !context.Recording.StoreCreated && !context.Recording.IsActive, $"recorder {context.Recording.BackendCreated}, store {context.Recording.StoreCreated}");
             foreach (var id in order)
             {
+                if (id == "record" && !context.Services.Options.ForceFakes)
+                {
+                    // The recording tab reads the folder of recordings when it is shown: a plain smoke run never shows it (RecordRun checks that nothing was made).
+                    continue;
+                }
+
                 checksPage.SelectTab(id);
                 await Until(() => checksPage.IsReady, 4000).ConfigureAwait(true);
                 await Task.Delay(150).ConfigureAwait(true);

@@ -5,7 +5,7 @@ using PcMieru.Checks;
 namespace PcMieru.Gui.Tests;
 
 /// <summary>
-/// The checks page (DESIGN-A §7): where it sits in the navigation, its four tabs, what each tab draws for each state of the one run the
+/// The checks page (DESIGN-A §7): where it sits in the navigation, its tabs, what each tab draws for each state of the one run the
 /// window owns, the history in each of its states, and that looking at any of it touches no disk. The tests are synchronous bodies inside
 /// <see cref="Ui.Run"/> (the queue context stands in for the UI thread), build the page in a window that has a handle only where a list needs
 /// one and is never shown, use scripted runners and temporary folders, and assert on what ends up on screen, never on how long anything took.
@@ -152,21 +152,21 @@ public class ChecksPageTests
     }
 
     [Fact]
-    public void The_tabs_are_system_load_storage_history_in_that_order_with_their_names_in_both_languages()
+    public void The_tabs_are_system_load_storage_recording_history_in_that_order_with_their_names_in_both_languages()
     {
         Ui.Run(_ =>
         {
             using var rig = new PageRig(new RunnerQueue().Controller());
 
-            Assert.Equal(new[] { "system", "load", "storage", "history" }, rig.Page.TabIds);
+            Assert.Equal(new[] { "system", "load", "storage", "record", "history" }, rig.Page.TabIds);
             Assert.Equal("system", rig.Page.CurrentId);
             Assert.True(rig.Page.ButtonOf("system").Checked);
-            Assert.All(new[] { "load", "storage", "history" }, id => Assert.False(rig.Page.ButtonOf(id).Checked));
-            Assert.Equal(new[] { "System", "Load", "Storage", "History" }, rig.Page.TabIds.Select(id => rig.Page.ButtonOf(id).Text));
+            Assert.All(new[] { "load", "storage", "record", "history" }, id => Assert.False(rig.Page.ButtonOf(id).Checked));
+            Assert.Equal(new[] { "System", "Load", "Storage", "Recording", "History" }, rig.Page.TabIds.Select(id => rig.Page.ButtonOf(id).Text));
 
             Strings.Current = Language.Ja;
             rig.Page.ApplyLanguage();
-            Assert.Equal(new[] { "システム", "負荷", "記憶媒体", "履歴" }, rig.Page.TabIds.Select(id => rig.Page.ButtonOf(id).Text));
+            Assert.Equal(new[] { "システム", "負荷", "記憶媒体", "テストの記録", "履歴" }, rig.Page.TabIds.Select(id => rig.Page.ButtonOf(id).Text));
         });
     }
 
@@ -179,11 +179,12 @@ public class ChecksPageTests
             .Where(static line => line.StartsWith("_tabs.Add(new TabEntry(", StringComparison.Ordinal))
             .ToArray();
 
-        Assert.Equal(4, lines.Length);
+        Assert.Equal(5, lines.Length);
         Assert.Contains("\"system\"", lines[0], StringComparison.Ordinal);
         Assert.Contains("\"load\"", lines[1], StringComparison.Ordinal);
         Assert.Contains("\"storage\"", lines[2], StringComparison.Ordinal);
-        Assert.Contains("\"history\"", lines[3], StringComparison.Ordinal);
+        Assert.Contains("\"record\"", lines[3], StringComparison.Ordinal);
+        Assert.Contains("\"history\"", lines[4], StringComparison.Ordinal);
     }
 
     [Fact]

@@ -17,6 +17,14 @@ internal static class ShellActions
     public static void ShowProperties(string path) =>
         Start(new ProcessStartInfo(path) { Verb = "properties", UseShellExecute = true });
 
+    /// <summary>Opens a file with the program Windows has for it (the recording tab's CSV). Only the path is passed on.</summary>
+    public static void OpenFile(string path) =>
+        Start(new ProcessStartInfo(path) { UseShellExecute = true });
+
+    /// <summary>Opens a folder in Explorer (where the recordings are kept).</summary>
+    public static void OpenFolder(string path) =>
+        Start(new ProcessStartInfo("explorer.exe") { Arguments = "\"" + path + "\"", UseShellExecute = true });
+
     /// <summary>Search in the default browser. Only the process name is passed on, nothing else about this PC.</summary>
     public static void SearchWeb(string processName) =>
         Start(new ProcessStartInfo("https://www.bing.com/search?q=" + Uri.EscapeDataString(processName)) { UseShellExecute = true });

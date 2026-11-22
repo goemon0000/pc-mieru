@@ -9,7 +9,8 @@ internal sealed class GuiContext
     /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
     /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
     /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null)
+    /// <param name="recording">The window's recording (the recording tab and the status bar). Null: the real one, or the fake one with <c>--fakes</c>; nothing of it is built until a recording starts or the tab is shown (see <see cref="RecordingHub"/>). A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null, RecordingHub? recording = null)
     {
         Measure = measure;
         Services = services;
@@ -26,6 +27,13 @@ internal sealed class GuiContext
 
         Checks = checks ?? CheckComposition.Create(services);
         BuildCode = buildCode ?? CheckComposition.CreateBuildCode(services);
+        if (recording is null && services.Options.ForceFakes)
+        {
+            RecordingFake = new FakeRecordingKit();
+            recording = RecordingComposition.Create(services, kit: RecordingFake);
+        }
+
+        Recording = recording ?? RecordingComposition.Create(services);
     }
 
     public PcMieruServices Services { get; }
@@ -43,6 +51,12 @@ internal sealed class GuiContext
 
     /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
     public CheckController Checks { get; }
+
+    /// <summary>The recording of this window: started, marked and stopped from the recording tab, shown in the status bar, stopped (bounded) when the window closes. Owned here, not by the tab.</summary>
+    public RecordingHub Recording { get; }
+
+    /// <summary>With <c>--fakes</c> and no hub given: the in-memory recorder and store the smoke run seeds. Null otherwise.</summary>
+    internal FakeRecordingKit? RecordingFake { get; }
 
     public SnapshotPump Pump { get; }
 

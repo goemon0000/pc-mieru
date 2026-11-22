@@ -32,6 +32,9 @@ public sealed class RunStore : IRunStore
         _legacyRoot = string.IsNullOrWhiteSpace(legacyRoot) ? null : legacyRoot;
     }
 
+    /// <summary>The folder new recordings go to (<c>Documents\PCMieru\runs</c>), as a path only: nothing is read or created. For the window to show where recordings are kept.</summary>
+    public static string DefaultRunsFolder() => RunFiles.DefaultRoot();
+
     public Task<RunList> ListAsync(CancellationToken ct) => Task.Run(() => List(ct), CancellationToken.None);
 
     public Task<RunDetail?> ReadAsync(Guid runId, CancellationToken ct) => Task.Run(() => Read(runId, ct), CancellationToken.None);
