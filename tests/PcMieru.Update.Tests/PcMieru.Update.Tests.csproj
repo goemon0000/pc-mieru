@@ -21,6 +21,8 @@
     <ProjectReference Include="..\..\src\PcMieru.Update\PcMieru.Update.csproj" />
     <!-- The command line of the validator (tools/publish.ps1 -Verify runs it): its options are tested in-process. -->
     <ProjectReference Include="..\..\tools\BundleCheck\BundleCheck.csproj" />
+    <!-- The child process of the kill tests (TxKillTests): only BUILT here, never loaded; the tests start its exe from its own build folder. -->
+    <ProjectReference Include="..\PcMieru.TxChild\PcMieru.TxChild.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

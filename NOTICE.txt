@@ -160,6 +160,28 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Update/Feed/UpdateState.cs
       the state file and its safe write, from the owner's pl-cloud
       src/PartsLife.Update/UpdateState.cs
+  src/PcMieru.Update/Transaction/TxFault.cs
+  src/PcMieru.Update/Transaction/TxIo.cs
+      the file-operation seam that fails at a chosen place, so that every
+      failure road can be tried (the code is new: named steps, three edges and a
+      power cut that unwinds), from FileOps and FaultyOps in the owner's
+      pl-cloud src/PartsLife.Update/Swapper.cs and
+      tests/PartsLife.Update.Tests/FaultTests.cs
+  src/PcMieru.Update/Transaction/TxEngine.Rollback.cs
+  src/PcMieru.Update/Transaction/TxJournal.cs
+      the recovery rules (the code is new, on the journal): the attempt is
+      counted in the record BEFORE the work, an automatic retry stops after a
+      fixed number, a version is blamed only when it was really launched, and a
+      give-up keeps the backup and the record, from SwapRecovery.cs and
+      SwapBoot.cs in the owner's pl-cloud src/PartsLife.Update
+  tests/PcMieru.Update.Tests/TxSwapTests.cs
+  tests/PcMieru.Update.Tests/TxRecoveryTests.cs
+  tests/PcMieru.Update.Tests/TxFaultMatrixTests.cs
+      the cases (a staged file that was tampered with, a failure half-way, a
+      leftover of the last time, a record that cannot be written, a rollback
+      that must not loop, a give-up that keeps the backup) rebuilt for the
+      transaction, from SwapperTests, FaultTests and RecoveryTests in the
+      owner's pl-cloud tests/PartsLife.Update.Tests; the rest are new
   tests/PcMieru.Update.Tests/VersionAndHashListTests.cs
       the cases of the two tests above, from the owner's pl-cloud
       tests/PartsLife.Update.Tests/RulesTests.cs

@@ -18,6 +18,7 @@
     <Project Path="tests/PcMieru.Gui.Tests/PcMieru.Gui.Tests.csproj" />
     <Project Path="tests/PcMieru.Gate.Tests/PcMieru.Gate.Tests.csproj" />
     <Project Path="tests/PcMieru.PartyStub/PcMieru.PartyStub.csproj" />
+    <Project Path="tests/PcMieru.TxChild/PcMieru.TxChild.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BundleCheck/BundleCheck.csproj" />

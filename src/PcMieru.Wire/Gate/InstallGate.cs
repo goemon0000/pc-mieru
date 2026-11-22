@@ -74,6 +74,41 @@ public sealed class GateEntry : IDisposable
     /// <summary><c>I\update\RECOVER.txt</c> for <see cref="GateOutcome.RecoveryPending"/> and <see cref="GateOutcome.RecoveryFailed"/>, else null. The note itself comes in step 4: until then the file does not exist.</summary>
     public string? RecoveryNotePath { get; }
 
+    /// <summary>
+    /// The bytes of the gate file, read through the handle that is held (null when nothing is held: any outcome but <see cref="GateOutcome.Open"/>, or after <see cref="Dispose"/>; also null when the file is
+    /// longer than <paramref name="maxBytes"/> - the gate is a few hundred fixed bytes). The swapper holds the gate EXCLUSIVELY (FileShare.None), so no second open of the same file by path can work: this is
+    /// how it checks that the gate is intact while it holds it. The handle was opened for reading, so nothing here can change the file, and the position is not used (a positioned read).
+    /// </summary>
+    public byte[]? ReadHeld(int maxBytes = 4096)
+    {
+        var handle = _handle;
+        if (handle is null || handle.IsClosed || handle.IsInvalid)
+        {
+            return null;
+        }
+
+        var length = RandomAccess.GetLength(handle);
+        if (length > maxBytes)
+        {
+            return null;
+        }
+
+        var bytes = new byte[length];
+        var done = 0;
+        while (done < bytes.Length)
+        {
+            var read = RandomAccess.Read(handle, bytes.AsSpan(done), done);
+            if (read == 0)
+            {
+                break;
+            }
+
+            done += read;
+        }
+
+        return done == bytes.Length ? bytes : null;
+    }
+
     /// <summary>Lets go of the gate file. Safe to call twice.</summary>
     public void Dispose()
     {
