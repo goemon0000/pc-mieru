@@ -21,12 +21,12 @@ public static class RecoverNote
             string.Empty,
             "[日本語]",
             $"PCミエルの更新（{what}）が、途中で止まったかもしれません。",
-            "recover.exe を使うと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。設定や記録はこのフォルダーの外にあるので、そのまま残ります。",
+            "recover.exe を使うと、PCミエルのファイルを、更新前または更新後の、そろった状態に戻します。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。設定や記録はこのフォルダーの外にあるので、そのまま残ります。",
             "次の順に進めてください。",
             "  1. PCミエルをすべて終了します。",
             "  2. このフォルダー（update）の recover.exe をダブルクリックします。黒い画面がしばらく出て、自動で閉じます。「管理者として実行」は使わないでください。",
-            "  3. PCミエルを、いつもどおり起動します。",
-            "うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開して、そちらを使ってください。設定や記録は、新しいフォルダーで開いても残っています。",
+            "  3. PCミエルを、いつもの方法（デスクトップやスタートメニューの PCミエル）で開きます。",
+            "うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開して、そちらを使ってください。PCミエルの ZIP は、ふつうは「ダウンロード」フォルダーにあります。見つからなければ、もう一度ダウンロードしてください。設定や記録は、新しいフォルダーで開いても残っています。",
             string.Empty,
             "[English]",
             $"An update of PC Mieru ({what}) may have stopped part-way.",
@@ -34,8 +34,8 @@ public static class RecoverNote
             "Please do this, in order:",
             "  1. Close PC Mieru completely.",
             "  2. In this folder (the \"update\" folder), double-click recover.exe. A black window stays open for a while and closes by itself. Do not use \"Run as administrator\".",
-            "  3. Start PC Mieru as usual.",
-            "If that does not work, unzip the ZIP file you downloaded into a new folder and use that copy. Your settings and records are still there when you open PC Mieru from a new folder.",
+            "  3. Open PC Mieru the usual way (from the desktop or the Start menu).",
+            "If that does not work, unzip the ZIP file you downloaded into a new folder and use that copy. The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again. Your settings and records are still there when you open PC Mieru from a new folder.",
             string.Empty);
     }
 

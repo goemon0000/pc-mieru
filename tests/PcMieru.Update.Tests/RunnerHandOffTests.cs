@@ -228,12 +228,19 @@ public sealed class RunnerHandOffTests
         var en = text[text.IndexOf("[English]", StringComparison.Ordinal)..];
 
         // What it does: one whole version, either one. What it never touches: a file it did not install. Where the person's own things are: outside this folder.
-        Assert.Contains("更新前か更新後のどちらかにそろえます", ja, StringComparison.Ordinal);
+        Assert.Contains("更新前または更新後の、そろった状態に戻します", ja, StringComparison.Ordinal);
+        Assert.DoesNotContain("更新前か更新後のどちらか", ja, StringComparison.Ordinal);
         Assert.Contains("写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。", ja, StringComparison.Ordinal);
         Assert.Contains("設定や記録はこのフォルダーの外にあるので", ja, StringComparison.Ordinal);
         Assert.Contains("one complete version, either the one from before the update or the new one", en, StringComparison.Ordinal);
         Assert.Contains("Files that PC Mieru did not install, such as photos and documents, are not changed.", en, StringComparison.Ordinal);
         Assert.Contains("kept outside this folder", en, StringComparison.Ordinal);
+
+        // The plain steps and where the ZIP is, the same words as the start gate window (StartGateScreenTests checks the two against each other).
+        Assert.Contains("いつもの方法（デスクトップやスタートメニューの PCミエル）で開きます", ja, StringComparison.Ordinal);
+        Assert.Contains("Open PC Mieru the usual way (from the desktop or the Start menu).", en, StringComparison.Ordinal);
+        Assert.Contains("PCミエルの ZIP は、ふつうは「ダウンロード」フォルダーにあります。見つからなければ、もう一度ダウンロードしてください。", ja, StringComparison.Ordinal);
+        Assert.Contains("The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again.", en, StringComparison.Ordinal);
 
         // A recovery runs with normal rights only (recover.exe refuses an elevated token): the note says not to ask for administrator rights, and still offers the new folder.
         Assert.Contains("「管理者として実行」は使わないでください", ja, StringComparison.Ordinal);

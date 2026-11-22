@@ -360,7 +360,7 @@ internal static class GateStrings
         // install. "If that works, PC Mieru opens by itself" because that is true only when the recovery ends well (a busy or a failed recovery does not start the app).
         new(
             "gui.gate.recoverypending.button",
-            "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。",
+            "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを、更新前または更新後の、そろった状態に戻します。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。",
             "The last update did not finish. Press \"Recover\" to put PC Mieru's files back into one complete version. If that works, PC Mieru opens by itself. Files that PC Mieru did not install, such as photos and documents, are not changed."),
         // The text of a recovery that failed keeps the new folder as the way on: the window comes back with the same button every time, and the person must not be left without another road.
         new(
@@ -371,18 +371,18 @@ internal static class GateStrings
         // folder (%LOCALAPPDATA%\PCMieru, Documents\PCMieru), so they are still there when PC Mieru is opened from a new folder.
         new(
             "gui.gate.recover.failed",
-            "回復を始められませんでした。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。設定や記録はこのフォルダーの外にあるので、新しいフォルダーで開いても残っています。",
-            "Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder."),
+            "回復を始められませんでした。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。PCミエルの ZIP は、ふつうは「ダウンロード」フォルダーにあります。見つからなければ、もう一度ダウンロードしてください。設定や記録はこのフォルダーの外にあるので、新しいフォルダーで開いても残っています。",
+            "Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder."),
         // This process runs with administrator rights: no button. A recovery (like an update) runs with normal rights only, so the person opens PC Mieru again the ordinary way. The same advice is in RECOVER.txt.
         new(
             "gui.gate.recover.elevated",
-            "前回の更新が途中で止まっています。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。いったん閉じて、「管理者として実行」を使わずに開き直し、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
-            "The last update did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close it, open PC Mieru again without \"Run as administrator\", and press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+            "前回の更新が途中で止まっています。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。この画面を閉じて、いつもの方法（デスクトップやスタートメニューの PCミエル）で開き直してください。右クリックの「管理者として実行」は使わないでください。開き直したら、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
+            "The last update did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close this window and open PC Mieru again the usual way (from the desktop or the Start menu). Do not use \"Run as administrator\". When it opens again, press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
         // The same for a recovery that did not finish (the outcome is RecoveryFailed): its own first sentence, the same advice. "Stopped halfway" is true of an update; of a failed recovery the true thing is that the recovery did not end.
         new(
             "gui.gate.recoveryfailed.elevated",
-            "前回の回復が終わっていません。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。いったん閉じて、「管理者として実行」を使わずに開き直し、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
-            "The last recovery did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close it, open PC Mieru again without \"Run as administrator\", and press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+            "前回の回復が終わっていません。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。この画面を閉じて、いつもの方法（デスクトップやスタートメニューの PCミエル）で開き直してください。右クリックの「管理者として実行」は使わないでください。開き直したら、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
+            "The last recovery did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close this window and open PC Mieru again the usual way (from the desktop or the Start menu). Do not use \"Run as administrator\". When it opens again, press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
         // The one dim line under an interrupted update: which folder this is. {path} is the last thing in it (the line is broken after the words and at backslashes, never inside a name).
         new("gui.gate.folder", "このフォルダー: {path}", "This folder: {path}"),
 

@@ -520,7 +520,7 @@ public sealed class StartGateScreenTests : IDisposable
 
     public static TheoryData<GateOutcome, Language, bool, string> TheWordsWithTheButton() => new()
     {
-        { GateOutcome.RecoveryPending, Language.Ja, false, "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。" },
+        { GateOutcome.RecoveryPending, Language.Ja, false, "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを、更新前または更新後の、そろった状態に戻します。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。" },
         { GateOutcome.RecoveryPending, Language.En, false, "The last update did not finish. Press \"Recover\" to put PC Mieru's files back into one complete version. If that works, PC Mieru opens by itself. Files that PC Mieru did not install, such as photos and documents, are not changed." },
         { GateOutcome.RecoveryFailed, Language.Ja, true, "前回の更新のあと、PCミエルのファイルを元の版にそろえられませんでした。「回復する」を押すと、もう一度試します。PCミエルが入れたもの以外のファイルは変わりません。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
         { GateOutcome.RecoveryFailed, Language.En, true, "After the last update, PC Mieru's files could not be put back into one version. Press \"Recover\" to try again. Files that PC Mieru did not install are not changed. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
@@ -632,7 +632,7 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.False(window.RecoverNow());
 
         // First what happened, then the new folder as the way on, then the one thing a person who is about to leave this folder wants to know: settings and records stay.
-        Assert.Equal("Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder.", window.ReasonText);
+        Assert.Equal("Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder.", window.ReasonText);
         Assert.False(window.RecoverOffered);
         Assert.False(window.RecoverButton.Visible);
         Assert.Same(window.CloseButton, window.AcceptButton);
@@ -665,6 +665,11 @@ public sealed class StartGateScreenTests : IDisposable
             ? (outcome == GateOutcome.RecoveryFailed ? "前回の回復が終わっていません。" : "前回の更新が途中で止まっています。")
             : (outcome == GateOutcome.RecoveryFailed ? "The last recovery did not finish." : "The last update did not finish.");
         Assert.StartsWith(firstSentence, window.ReasonText, StringComparison.Ordinal);
+        // The plain steps (second usability review): close this window, open it the usual way (desktop or Start menu), and never the right-click "Run as administrator". Then the button, then the new folder.
+        Assert.Contains(language == Language.Ja
+            ? "この画面を閉じて、いつもの方法（デスクトップやスタートメニューの PCミエル）で開き直してください。右クリックの「管理者として実行」は使わないでください。"
+            : "Close this window and open PC Mieru again the usual way (from the desktop or the Start menu). Do not use \"Run as administrator\".", window.ReasonText, StringComparison.Ordinal);
+        Assert.Contains(language == Language.Ja ? "「回復する」を押してください。" : "press \"Recover\".", window.ReasonText, StringComparison.Ordinal);
         Assert.NotEqual(Strings.Get("gui.gate.recover.elevated", language), Strings.Get("gui.gate.recoveryfailed.elevated", language));
         Assert.EndsWith(Strings.Get("gui.gate.recover.elevated", language)[(language == Language.Ja ? "前回の更新が途中で止まっています。" : "The last update did not finish.").Length..],
             Strings.Get("gui.gate.recoveryfailed.elevated", language), StringComparison.Ordinal);
@@ -691,6 +696,17 @@ public sealed class StartGateScreenTests : IDisposable
         var leavesAlone = language == Language.Ja ? "写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。" : "Files that PC Mieru did not install, such as photos and documents, are not changed.";
         Assert.Contains(leavesAlone, pending, StringComparison.Ordinal);
         Assert.Contains(leavesAlone, note, StringComparison.Ordinal);
+
+        var restores = language == Language.Ja ? "更新前または更新後の、そろった状態に戻します。" : "one complete version";
+        Assert.Contains(restores, pending, StringComparison.Ordinal);
+        Assert.Contains(restores, note, StringComparison.Ordinal);
+        var zipPlace = language == Language.Ja ? "PCミエルの ZIP は、ふつうは「ダウンロード」フォルダーにあります。見つからなければ、もう一度ダウンロードしてください。" : "The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again.";
+        Assert.Contains(zipPlace, Strings.Get("gui.gate.recover.failed", language), StringComparison.Ordinal);
+        Assert.Contains(zipPlace, note, StringComparison.Ordinal);
+        var usualWay = language == Language.Ja ? "いつもの方法（デスクトップやスタートメニューの PCミエル）で" : "the usual way (from the desktop or the Start menu)";
+        Assert.Contains(usualWay, Strings.Get("gui.gate.recover.elevated", language), StringComparison.Ordinal);
+        Assert.Contains(usualWay, Strings.Get("gui.gate.recoveryfailed.elevated", language), StringComparison.Ordinal);
+        Assert.Contains(usualWay, note, StringComparison.Ordinal);
 
         var elevated = Strings.Get("gui.gate.recover.elevated", language);
         var notAdmin = language == Language.Ja ? "「管理者として実行」" : "\"Run as administrator\"";
@@ -746,13 +762,19 @@ public sealed class StartGateScreenTests : IDisposable
         var startFailed = Strings.Get("gui.gate.recover.failed", language);
 
         // Recovery gives one whole version (either one) and leaves every file it did not install alone; it does not promise that PC Mieru opens (a busy or a failed recovery does not start it).
-        Assert.Contains(language == Language.Ja ? "更新前か更新後のどちらか" : "one complete version", pending, StringComparison.Ordinal);
+        Assert.Contains(language == Language.Ja ? "更新前または更新後の、そろった状態に戻します" : "one complete version", pending, StringComparison.Ordinal);
+        Assert.DoesNotContain("更新前か更新後のどちらか", pending, StringComparison.Ordinal); // the old wording: "either one" read as a choice the person makes
         Assert.Contains(language == Language.Ja ? "うまくいけば、そのまま PCミエルが開きます" : "If that works, PC Mieru opens by itself", pending, StringComparison.Ordinal);
         Assert.DoesNotContain(language == Language.Ja ? "片づけ" : "clear up", pending, StringComparison.Ordinal);
         foreach (var text in new[] { pending, failed })
         {
             Assert.Contains(language == Language.Ja ? "PCミエルが入れたもの以外のファイルは変わりません" : "Files that PC Mieru did not install", text, StringComparison.Ordinal);
         }
+
+        // Where the ZIP is, in plain words and with no address: usually the Downloads folder, and when it is not there, download it again.
+        Assert.Contains(language == Language.Ja ? "PCミエルの ZIP は、ふつうは「ダウンロード」フォルダーにあります。見つからなければ、もう一度ダウンロードしてください。" : "The PC Mieru ZIP is usually in your Downloads folder. If you cannot find it, download it again.", startFailed, StringComparison.Ordinal);
+        Assert.DoesNotContain("://", startFailed, StringComparison.Ordinal);
+        Assert.DoesNotContain("http", startFailed, StringComparison.OrdinalIgnoreCase);
 
         // The settings and the records are outside the install folder (%LOCALAPPDATA%\PCMieru and Documents\PCMieru); a new folder keeps them.
         Assert.Contains(language == Language.Ja ? "設定や記録はこのフォルダーの外にあるので、新しいフォルダーで開いても残っています" : "Your settings and records are kept outside this folder", startFailed, StringComparison.Ordinal);
