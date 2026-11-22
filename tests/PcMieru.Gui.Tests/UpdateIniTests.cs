@@ -169,6 +169,9 @@ public sealed class UpdateIniTests
 
         var a = GuiSettings.Load(ini);
         var b = GuiSettings.Load(ini);
+        // This test is about the two files' contents, not about how long a click may wait (M3: half a second in the app): on a busy machine, with the other tests running,
+        // 40 back-to-back saves of two writers can wait longer than that, so the patience is raised here (it failed once in a run of the tree before the round, at 2 s).
+        a.LockAttempts = b.LockAttempts = 500;
         var failures = 0;
 
         Task Writer(GuiSettings settings, string key) => Task.Run(() =>
@@ -276,6 +279,7 @@ public sealed class UpdateIniTests
     [Theory]
     [InlineData("--smoke", "s.json", "--fakes")]
     [InlineData("--measure", "m.jsonl", "--fakes")]
+    [InlineData("--fakes")]
     public void A_smoke_or_measure_run_does_not_read_the_owners_choice_and_never_writes_one(params string[] args)
     {
         using var root = new Ui.TempRoot();
@@ -292,5 +296,15 @@ public sealed class UpdateIniTests
         Assert.True(run.TrySave());
         Assert.Equal(bytes, File.ReadAllBytes(ini));
         Assert.Equal([ini], root.Entries());
+    }
+
+    [Fact]
+    public void A_run_on_fakes_does_not_start_the_update_check_that_would_show_the_dialog_and_the_start_says_step_5_must_be_excluded_too()
+    {
+        // Settings of a --fakes run are in memory (above); the window must not even ask for a choice in that run. The start is in Program.Main, which no test can call.
+        var source = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+
+        Assert.Matches(@"if \(options\.MeasureOutput is null && !options\.ForceFakes\)\s*\{\s*form\.Shown \+= \(_, _\) => form\.BeginInvoke\(form\.StartUpdates\);", source);
+        Assert.Contains("STEP 5", source);
     }
 }

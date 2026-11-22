@@ -283,7 +283,7 @@ public sealed class UpdateControllerTests
 
         var check = rig.Controller.CheckNowAsync();
         Assert.True(rig.Controller.Checking);
-        Assert.Equal(1, gate.Calls);
+        UpdateKit.WaitFor(() => gate.Calls == 1); // the service is asked from a worker thread
         Assert.False(gate.Seen.IsCancellationRequested);
 
         Assert.True(rig.Controller.ChooseMode(UpdateMode.Off));
@@ -302,6 +302,7 @@ public sealed class UpdateControllerTests
         var rig = new Rig("notify", service: gate);
         rig.Controller.Start();
         var check = rig.Controller.CheckNowAsync();
+        UpdateKit.WaitFor(() => gate.Calls == 1);
 
         Assert.True(rig.Controller.ChooseMode(UpdateMode.Off));
         gate.Release(rig.Fake.Candidate());
@@ -320,6 +321,7 @@ public sealed class UpdateControllerTests
         rig.Controller.Start();
 
         var first = rig.Controller.CheckNowAsync();
+        UpdateKit.WaitFor(() => gate.Calls == 1);
         Assert.Null(await rig.Controller.CheckNowAsync());
         Assert.Null(await rig.Controller.TickAsync());
         rig.Timers.Poll().Fire();
@@ -485,6 +487,7 @@ public sealed class UpdateControllerTests
         var rig = new Rig("notify", service: gate);
         rig.Controller.Start();
         var check = rig.Controller.CheckNowAsync();
+        UpdateKit.WaitFor(() => gate.Calls == 1);
 
         rig.Controller.Dispose();
 
@@ -630,6 +633,43 @@ public sealed class UpdateControllerTests
         _ = deferred.ReadStatus();
         Assert.Equal(1, made);
     }
+
+#if !BEFORE_TREE
+    [Theory]
+    [InlineData(UpdateMode.Ask)]
+    [InlineData(UpdateMode.Off)]
+    public void Reading_the_status_in_Ask_or_Off_does_not_make_the_deferred_service_and_in_Notify_it_does(UpdateMode mode)
+    {
+        var made = 0;
+        var current = mode;
+        var deferred = new DeferredUpdateService(
+            () =>
+            {
+                made++;
+                return new FakeUpdateService(UpdateKit.Running);
+            },
+            () => current);
+
+        // The settings page and the notice read the status all the time; with no choice, or "off", that must not make the service (a state folder, a lock, a file read).
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Equal(UpdateStatus.Empty, deferred.ReadStatus());
+        }
+
+        Assert.Equal(0, made);
+
+        // The owner chooses Notify: now the status is read from the real thing, which is made once.
+        current = UpdateMode.Notify;
+        _ = deferred.ReadStatus();
+        _ = deferred.ReadStatus();
+        Assert.Equal(1, made);
+
+        // Once it exists, it is read whatever the mode says now (what is on file is still true).
+        current = UpdateMode.Off;
+        _ = deferred.ReadStatus();
+        Assert.Equal(1, made);
+    }
+#endif
 
     [Fact]
     public async Task The_service_that_cannot_check_refuses_with_its_reason_in_Notify_and_says_not_allowed_otherwise()

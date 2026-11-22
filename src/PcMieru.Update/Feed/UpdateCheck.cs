@@ -97,6 +97,29 @@ public enum UpdateRefusal
     OwnVersionUnknown,
 }
 
+/// <summary>
+/// Which refusals JUDGED A RELEASE and which only say that the check did not get far enough to judge one (stage B step 2 review, S3). A candidate that an earlier
+/// check found stays on file through an <see cref="IsOperational"/> failure (the network was down, GitHub answered with an error, this PC could not read or write its
+/// state, another check was running): such a failure learned nothing about the release. It is replaced only by an outcome that did judge one: "nothing newer"
+/// after parsing, a candidate, or a refusal of the release's own rules (<see cref="JudgedARelease"/>). A test lists the enum, so a new reason must be put on one side.
+/// </summary>
+public static class UpdateRefusals
+{
+    /// <summary>The check did not judge a release: the answer did not come, was not readable, was cut off, was sent somewhere else, or this PC could not take part.</summary>
+    public static bool IsOperational(UpdateRefusal reason) => reason is
+        UpdateRefusal.FeedUnreadable or UpdateRefusal.BodyTooLarge or
+        UpdateRefusal.RedirectHostNotAllowed or UpdateRefusal.RedirectDowngrade or UpdateRefusal.RedirectTooMany or
+        UpdateRefusal.RedirectCredentials or UpdateRefusal.RedirectMissingLocation or
+        UpdateRefusal.HttpError or UpdateRefusal.NetworkFailure or
+        UpdateRefusal.StateUnavailable or UpdateRefusal.AnotherCheckRunning or UpdateRefusal.OwnVersionUnknown;
+
+    /// <summary>The release was read and one of its rules did not hold (a draft, a pre-release, a wrong tag or page, a blocked tag, a missing or wrong file, a hash that differs, a bad manifest). None is not a reason.</summary>
+    public static bool JudgedARelease(UpdateRefusal reason) => reason != UpdateRefusal.None && !IsOperational(reason);
+
+    /// <summary>The two reasons that say "the network did not answer": they are asked again after <see cref="UpdateSchedule.RetryAfterFailure"/>, not after a day.</summary>
+    public static bool IsTransient(UpdateRefusal reason) => reason is UpdateRefusal.NetworkFailure or UpdateRefusal.HttpError;
+}
+
 /// <summary>The five ways a check can end.</summary>
 public enum UpdateCheckKind
 {
@@ -141,6 +164,9 @@ public sealed class UpdateCheck
     /// <summary>Refused: which rule held.</summary>
     public UpdateRefusal Refusal { get; private init; }
 
+    /// <summary>Refused: the version of the release that was refused, when the check had read it far enough to know (not for a tag that is not a version).</summary>
+    public AppVersion? RefusedVersion { get; private init; }
+
     /// <summary>Refused: a short text for a log (never shown as the reason: the reason is the enum).</summary>
     public string Detail { get; private init; } = string.Empty;
 
@@ -169,8 +195,8 @@ public sealed class UpdateCheck
             Fetched = true,
         };
 
-    public static UpdateCheck Refuse(UpdateRefusal reason, string detail, bool fetched) =>
-        new(UpdateCheckKind.Refused) { Refusal = reason, Detail = detail, Fetched = fetched };
+    public static UpdateCheck Refuse(UpdateRefusal reason, string detail, bool fetched, AppVersion? version = null) =>
+        new(UpdateCheckKind.Refused) { Refusal = reason, Detail = detail, Fetched = fetched, RefusedVersion = version };
 
     public static UpdateCheck Wait(DateTimeOffset until, bool fetched) =>
         new(UpdateCheckKind.Waiting) { WaitUntil = until, Fetched = fetched };
@@ -193,7 +219,8 @@ public sealed record UpdateStatus(
     DateTimeOffset? BackoffUntilUtc,
     AppVersion? CandidateVersion,
     string? CandidatePageUrl,
-    UpdateRefusal LastRefusal)
+    UpdateRefusal LastRefusal,
+    AppVersion? RefusedVersion = null)
 {
     public static UpdateStatus Empty { get; } = new(null, null, null, null, UpdateRefusal.None);
 }

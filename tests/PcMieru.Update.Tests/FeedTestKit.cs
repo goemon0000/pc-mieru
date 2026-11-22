@@ -332,7 +332,11 @@ internal sealed class FeedRig : IDisposable
         TransportFactory = () =>
         {
             ClientsMade++;
+#if BEFORE_TREE
             return new UpdateHttp(Running.ToString(), Gh);
+#else
+            return new UpdateHttp(Running.ToString(), Gh, clock: Clock); // a Retry-After given as a date is read against the same clock as the rest
+#endif
         },
     });
 

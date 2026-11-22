@@ -3,7 +3,7 @@ using PcMieru.Update.Feed;
 namespace PcMieru.Gui;
 
 /// <summary>
-/// The first-run choice of the update check (DESIGN-B 4): 「自動」「知らせるだけ」「切る」, with 「知らせるだけ」 selected. 「自動」 says in its own line that versions that are not signed
+/// The first-run choice of the update check (DESIGN-B 4): 「自動」「知らせるだけ（おすすめ）」「切る」, with 「知らせるだけ」 selected. 「自動」 says in its own line that versions that are not signed
 /// are also installed without asking. 「決定」 saves the choice first (<see cref="UpdateController.ChooseMode"/>) and only then does the timer start; when the choice cannot be saved the
 /// dialog says so and stays open, and nothing is checked. Closing the window without 「決定」 is "not chosen yet": no check, and the dialog comes again at the next start.
 /// </summary>
@@ -64,7 +64,7 @@ internal sealed class UpdateChoiceDialog : Form
 
         _later.Text = Strings.Get("gui.update.dialog.later");
         _later.MaximumSize = new Size(width, 0);
-        _later.Margin = new Padding(0, 0, 0, pad / 2);
+        _later.Margin = new Padding(0, pad / 2, 0, pad / 2);
         root.Controls.Add(_later);
 
         _failed.Text = Strings.Get("gui.update.dialog.savefailed");
@@ -161,10 +161,11 @@ internal sealed class UpdateChoiceDialog : Form
     private void AddChoice(TableLayoutPanel root, RadioButton choice, Label line, UpdateMode mode, string lineKey, int width, int indent, int pad)
     {
         choice.Text = UpdateText.ModeName(mode);
-        choice.Margin = new Padding(0, 0, 0, 0);
+        // Room between the options: each choice and its line, then a full gap (the dialog is read at a glance, three options must not run together).
+        choice.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(2));
         line.Text = Strings.Get(lineKey);
         line.MaximumSize = new Size(width - indent, 0);
-        line.Margin = new Padding(indent, 0, 0, pad / 2);
+        line.Margin = new Padding(indent, 0, 0, pad + pad / 2);
         root.Controls.Add(choice);
         root.Controls.Add(line);
     }

@@ -41,8 +41,10 @@ internal sealed class GuiContext
         }
 
         Updates = updates;
-        // Quiet by design: the status bar says it once per version per run. No dialog, no balloon, nothing that takes the focus.
-        Updates.CandidateFound += (version, _) => Report("gui.update.notice", ("version", version.ToString()));
+        // Quiet by design: a line in the status bar that stays while a newer version is on file and goes when it is not (or when the mode no longer asks). No dialog, no
+        // balloon, nothing that takes the focus. It is kept as the VERSION and written in the language of the moment it is shown (see UpdateNotice), not as a text said once.
+        Updates.CandidateFound += (_, _) => RefreshNotice();
+        Updates.Changed += RefreshNotice;
         Updates.Failed += ex => Report("gui.status.failed", ("error", CheckFormat.ExceptionDetail(ex)));
     }
 
@@ -84,6 +86,30 @@ internal sealed class GuiContext
 
         ShellActions.OpenUrl(url);
         return true;
+    }
+
+    /// <summary>
+    /// The quiet line about a newer version, in the language the window shows now; null when there is none to say. It follows the CURRENT state (what
+    /// <see cref="UpdateController.Candidate"/> says): it stays through a failed check that learned nothing about the release, and goes when the candidate is
+    /// cleared by a check that did judge a release, or when the mode is Ask or Off.
+    /// </summary>
+    internal string? UpdateNotice => _noticeVersion is { } version ? Strings.Format("gui.update.notice", Fmt.Dict(("version", version.ToString()))) : null;
+
+    /// <summary>Raised when <see cref="UpdateNotice"/> appeared, went or names another version. (A language change is not one: the shell writes the notice again then.)</summary>
+    internal event Action? UpdateNoticeChanged;
+
+    private AppVersion? _noticeVersion;
+
+    private void RefreshNotice()
+    {
+        var wanted = Updates.Candidate()?.Version;
+        if (wanted == _noticeVersion)
+        {
+            return;
+        }
+
+        _noticeVersion = wanted;
+        UpdateNoticeChanged?.Invoke();
     }
 
     public SnapshotPump Pump { get; }

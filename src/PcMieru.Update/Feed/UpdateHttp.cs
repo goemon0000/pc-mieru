@@ -31,16 +31,19 @@ public sealed class UpdateHttp : IFeedTransport
     private readonly string _userAgent;
     private readonly TimeSpan _apiTimeout;
     private readonly TimeSpan _assetTimeout;
+    private readonly TimeProvider _clock;
 
     /// <param name="version">The running version ("0.5.0"): the User-Agent is "PCMieru/0.5.0".</param>
     /// <param name="handler">A handler of the caller's own (a test's fake); null makes <see cref="CreateDefaultHandler"/>. It is disposed with this object.</param>
-    public UpdateHttp(string version, HttpMessageHandler? handler = null, TimeSpan? apiTimeout = null, TimeSpan? assetTimeout = null)
+    /// <param name="clock">What "now" is for the date form of Retry-After (a date minus now). The service passes its own clock; a test passes a fixed one and asserts exactly.</param>
+    public UpdateHttp(string version, HttpMessageHandler? handler = null, TimeSpan? apiTimeout = null, TimeSpan? assetTimeout = null, TimeProvider? clock = null)
     {
         // The timeouts are per request, kept by this class (a linked token); the client's own timeout is off so that a body being read is not cut by it.
         _client = new HttpClient(handler ?? CreateDefaultHandler(), disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         _userAgent = "PCMieru/" + version;
         _apiTimeout = apiTimeout ?? ApiTimeout;
         _assetTimeout = assetTimeout ?? AssetTimeout;
+        _clock = clock ?? TimeProvider.System;
         FeedTraffic.CountClient();
     }
 
@@ -153,7 +156,7 @@ public sealed class UpdateHttp : IFeedTransport
 
                 if (UpdateSchedule.IsRateLimited(code))
                 {
-                    throw new RateLimitedException(RetryAfterOf(response), ResetOf(response));
+                    throw new RateLimitedException(RetryAfterOf(response, _clock.GetUtcNow()), ResetOf(response));
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -215,8 +218,8 @@ public sealed class UpdateHttp : IFeedTransport
         return buffer.ToArray();
     }
 
-    /// <summary>Retry-After as the library reads it: a delay, or a date minus now.</summary>
-    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    /// <summary>Retry-After as the library reads it: a delay, or a date minus <paramref name="now"/> (the clock of this object, so a test can say exactly).</summary>
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage response, DateTimeOffset now)
     {
         var after = response.Headers.RetryAfter;
         if (after is null)
@@ -229,7 +232,7 @@ public sealed class UpdateHttp : IFeedTransport
             return delta;
         }
 
-        return after.Date is { } date ? date - DateTimeOffset.UtcNow : null;
+        return after.Date is { } date ? date - now : null;
     }
 
     /// <summary>x-ratelimit-reset (Unix seconds), only when x-ratelimit-remaining says 0.</summary>

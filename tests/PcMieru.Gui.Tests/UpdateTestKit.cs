@@ -77,13 +77,14 @@ internal sealed class GatedUpdateService : IUpdateService
 
     public Task<UpdateCheck> CheckAsync(UpdateMode mode, bool manual, CancellationToken ct)
     {
-        Interlocked.Increment(ref _calls);
         Seen = ct;
         if (ObeyCancel)
         {
             ct.Register(() => _answer.TrySetCanceled(ct));
         }
 
+        // Last: a test that waits for Calls (the check runs on a worker thread) finds the token seen and the cancellation hooked when it gets to look.
+        Interlocked.Increment(ref _calls);
         return _answer.Task;
     }
 
@@ -131,4 +132,10 @@ internal static class UpdateKit
     }
 
     public static string Text(string path) => File.ReadAllText(path);
+
+    /// <summary>Waits (at most 10 s) for something a worker thread does; the check and the probe are not run on the thread that asks. Fails the test when it does not happen.</summary>
+    public static void WaitFor(Func<bool> condition)
+    {
+        Assert.True(SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(10)), "the worker thread did not get there in 10 s");
+    }
 }

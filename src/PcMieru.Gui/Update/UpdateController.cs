@@ -13,6 +13,11 @@ namespace PcMieru.Gui;
 ///
 /// What a running Notify costs while nothing is due: one 60 s timer (once) and one hourly timer; every hour a small local read of state.json by the
 /// service decides that it is not time yet. A check that is due (once per 24 h) makes one HTTP client, three small requests at most, and disposes it.
+///
+/// **The check never runs on the UI thread** (<see cref="RunAsync"/>): the service is started with Task.Run, so its lock, its state file, its HTTP handler and the
+/// proxy lookup all stay off it, and the result comes back on the UI thread. **A tick that finds nothing due says nothing**: <see cref="Changed"/> is raised only when
+/// a check really ran, was asked for by the owner or changed what the page shows. The write probe of the install folder (<see cref="RefreshPlacement"/>) is
+/// run by the page when it is activated, off the UI thread, and is remembered.
 /// </summary>
 internal sealed class UpdateController : IDisposable
 {
@@ -30,6 +35,8 @@ internal sealed class UpdateController : IDisposable
     private bool _started;
     private bool _blocked;
     private bool _disposed;
+    private Placement? _placementSeen;
+    private Task? _probing;
 
     /// <param name="service">What asks the feed. The real one, a fake of the smoke run, or one that only refuses (this PC cannot say who it is).</param>
     /// <param name="settings">Holds the mode. Its <see cref="GuiSettings.UpdateMode"/> is the only place the choice lives.</param>
@@ -44,6 +51,9 @@ internal sealed class UpdateController : IDisposable
         _placement = placement;
         _running = running;
         _clock = clock ?? TimeProvider.System;
+
+        // A save that took another window's choice from disk (M2) changes what runs here: timers on or off, as for a choice made in this window.
+        _settings.UpdateModeAdopted += OnModeAdopted;
     }
 
     /// <summary>The state of the check changed (started, finished, a mode was chosen). The settings page shows itself again.</summary>
@@ -89,12 +99,60 @@ internal sealed class UpdateController : IDisposable
         }
     }
 
-    /// <summary>Whether an update could be put in place here, looked at now (a probe of the folder, never remembered).</summary>
-    public Placement CurrentPlacement() => _placement();
+    /// <summary>
+    /// Whether an update could be put in place here, as the last probe saw it; null before the first probe ended. The probe writes a file, so it is not made on the UI
+    /// thread and not on every refresh: see <see cref="RefreshPlacement"/>.
+    /// </summary>
+    public Placement? PlacementSeen => _placementSeen;
+
+    /// <summary>
+    /// Probes the install folder (a small file is written and removed) on a worker thread, once at a time, and remembers what it saw; <see cref="Changed"/> is raised
+    /// when it is known. The settings page asks when it is activated and when the mode is changed; nothing else does. Returns the running probe if there is one.
+    /// </summary>
+    public Task RefreshPlacement()
+    {
+        if (_probing is { IsCompleted: false } running)
+        {
+            return running;
+        }
+
+        return _probing = ProbeAsync();
+    }
+
+    private async Task ProbeAsync()
+    {
+        Placement seen;
+        try
+        {
+            seen = await Task.Run(_placement).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            seen = new Placement(PlacementKind.ReadOnly, ex.GetType().Name);
+        }
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        var changed = _placementSeen is not { } before || before.Kind != seen.Kind || before.Detail != seen.Detail;
+        _placementSeen = seen;
+        if (changed)
+        {
+            Changed?.Invoke();
+        }
+    }
 
     /// <summary>The newest version this PC knows of that is newer than the running one: this run's answer, else the one in state.json. Null: none.</summary>
     public (AppVersion Version, string? PageUrl)? Candidate()
     {
+        // Where nothing may be asked (Ask, Off) nothing is offered either: the stored candidate is not read (and the service not even made, see DeferredUpdateService).
+        if (!Allowed)
+        {
+            return null;
+        }
+
         if (_last is { Kind: UpdateCheckKind.Candidate, Version: { } found } check && found > _running)
         {
             return (found, check.PageUrl);
@@ -153,6 +211,7 @@ internal sealed class UpdateController : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _settings.UpdateModeAdopted -= OnModeAdopted;
         StopTimers();
         CancelChecking();
     }
@@ -193,6 +252,18 @@ internal sealed class UpdateController : IDisposable
         current?.Cancel();
     }
 
+    private void OnModeAdopted(UpdateMode mode)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _blocked = false;
+        Apply();
+        Changed?.Invoke();
+    }
+
     private async Task<UpdateCheck?> RunAsync(bool manual)
     {
         if (!Allowed || _checking is not null)
@@ -203,12 +274,20 @@ internal sealed class UpdateController : IDisposable
         var mode = Mode;
         var source = new CancellationTokenSource();
         _checking = source;
-        Changed?.Invoke();
+
+        // The page says "checking" only for a check the owner asked for. A tick that finds nothing due must not make the page flash.
+        if (manual)
+        {
+            Changed?.Invoke();
+        }
+
         UpdateCheck? result = null;
         var cancelled = false;
         try
         {
-            result = await _service.CheckAsync(mode, manual, source.Token).ConfigureAwait(true);
+            // Off the UI thread: the lock, state.json, the handler and the proxy lookup of the service all run on a worker. ConfigureAwait(true): back on the UI thread
+            // (the caller's context) for what follows, which touches the controls.
+            result = await Task.Run(() => _service.CheckAsync(mode, manual, source.Token), source.Token).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
@@ -223,18 +302,24 @@ internal sealed class UpdateController : IDisposable
             }
 
             source.Dispose();
-            Changed?.Invoke();
         }
 
         // Off (or another choice) came while the check ran: what it found is not shown.
         if (cancelled || result is null || !Allowed || Mode != mode)
         {
+            if (manual)
+            {
+                Changed?.Invoke();
+            }
+
             return null;
         }
 
-        // "Not due yet" asked nobody and found nothing: it must not wipe what the last real check found.
-        if (result is not { Kind: UpdateCheckKind.NoCandidate, Fetched: false })
+        var shown = manual;
+        if (IsShown(result, manual))
         {
+            // A check that really asked GitHub always changes what is shown; an answer that asked nobody (a wait still in force) only when it differs from the last.
+            shown |= result.Fetched || !SameAnswer(_last, result);
             _last = result;
         }
 
@@ -243,9 +328,27 @@ internal sealed class UpdateController : IDisposable
             Announce(version, result.PageUrl);
         }
 
-        Changed?.Invoke();
+        if (shown)
+        {
+            Changed?.Invoke();
+        }
+
         return result;
     }
+
+    /// <summary>
+    /// Whether an answer replaces what the page shows. "Not due yet" asked nobody and found nothing: it must not wipe what the last real check found. "Another check is
+    /// running" from a TIMER is the same kind of nothing (the other one will say); asked for by the owner it is shown, as "waiting for the other check".
+    /// </summary>
+    private static bool IsShown(UpdateCheck result, bool manual) => result switch
+    {
+        { Kind: UpdateCheckKind.NoCandidate, Fetched: false } => false,
+        { Kind: UpdateCheckKind.Refused, Refusal: UpdateRefusal.AnotherCheckRunning } => manual,
+        _ => true,
+    };
+
+    private static bool SameAnswer(UpdateCheck? a, UpdateCheck b) =>
+        a is not null && a.Kind == b.Kind && a.Refusal == b.Refusal && a.WaitUntil == b.WaitUntil && a.Version == b.Version;
 
     /// <summary>The timer's tick: an exception must not leave the timer callback (it would end the window), it is said on the status bar.</summary>
     private async Task RunSafeAsync(bool manual)

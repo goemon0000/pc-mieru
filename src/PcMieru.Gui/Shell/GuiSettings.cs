@@ -42,6 +42,12 @@ internal sealed class GuiSettings
     private readonly Dictionary<string, string> _extra = new(StringComparer.Ordinal);
     private int _intervalMs = 1000;
 
+    /// <summary>
+    /// The word of an update.mode this build does not know (a newer build's "weekly", a typo): it reads as Ask, and an ordinary save writes it back unchanged,
+    /// so an older build saving a theme does not erase a newer build's choice. A choice made here replaces it. Null when the file had no such word.
+    /// </summary>
+    private string? _unknownModeWord;
+
     public GuiSettings(string? path = null) => _path = path;
 
     public Language Language { get; set; } = Strings.DefaultFromCulture();
@@ -74,10 +80,17 @@ internal sealed class GuiSettings
     /// </summary>
     public UpdateMode UpdateMode { get; private set; } = UpdateMode.Ask;
 
-    /// <summary>How often a save tries for the lock (a test lowers it); the wait between tries is <see cref="LockWaitMs"/>.</summary>
-    internal int LockAttempts { get; set; } = 100;
+    /// <summary>How often a save tries for the lock (a test lowers it); the wait between tries is <see cref="LockWaitMs"/>. 25 x 20 ms: about half a second, which a click on the screen can bear.</summary>
+    internal int LockAttempts { get; set; } = 25;
 
     internal int LockWaitMs { get; set; } = 20;
+
+    /// <summary>
+    /// An ordinary save found a different <c>update.mode</c> on disk than this object held (another window or run chose since) and took it over. The owner's
+    /// choice of the moment is the one on disk, so whoever acts on the mode (the update controller: timers on or off) must follow it. Not raised by a choice made
+    /// here (<see cref="TrySaveUpdateMode"/>): its caller already acts on that.
+    /// </summary>
+    internal event Action<UpdateMode>? UpdateModeAdopted;
 
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru", "gui.ini");
@@ -121,12 +134,13 @@ internal sealed class GuiSettings
     public void SetBool(string key, bool value) => SetValue(key, value ? "1" : "0");
 
     /// <summary>
-    /// The settings of this run. A normal start reads the user's file (and saves to it). A smoke run and a <c>--measure</c> run get the defaults in
-    /// memory: nothing is read from <paramref name="path"/>, and since the store has no file <see cref="Save"/> writes nothing, on close or ever.
-    /// A measurement therefore neither depends on what the owner chose nor changes it.
+    /// The settings of this run. A normal start reads the user's file (and saves to it). A smoke run, a <c>--measure</c> run and a run with <c>--fakes</c> (fake
+    /// data for a trial) get the defaults in memory: nothing is read from <paramref name="path"/>, and since the store has no file <see cref="Save"/> writes
+    /// nothing, on close or ever. A measurement or a trial therefore neither depends on what the owner chose nor changes it. (Step 5's verification-only start
+    /// of the installer must be listed here as well: it is not the owner's session.)
     /// </summary>
     internal static GuiSettings ForRun(GuiOptions options, string path) =>
-        options.SmokeOutput is null && options.MeasureOutput is null ? Load(path) : new GuiSettings();
+        options.SmokeOutput is null && options.MeasureOutput is null && !options.ForceFakes ? Load(path) : new GuiSettings();
 
     public static GuiSettings Load(string path)
     {
@@ -181,6 +195,7 @@ internal sealed class GuiSettings
                 break;
             case UpdateModes.IniKey:
                 UpdateMode = UpdateModes.FromIni(value);
+                _unknownModeWord = UpdateMode == UpdateMode.Ask && value.Trim() is { Length: > 0 } word && !word.Equals("ask", StringComparison.OrdinalIgnoreCase) ? word : null;
                 break;
             default:
                 if (!IsReserved(key))
@@ -192,9 +207,9 @@ internal sealed class GuiSettings
         }
     }
 
-    public string[] ToLines() => Compose(UpdateMode, _extra);
+    public string[] ToLines() => Compose(UpdateMode, _extra, _unknownModeWord);
 
-    private string[] Compose(UpdateMode mode, IReadOnlyDictionary<string, string> extra)
+    private string[] Compose(UpdateMode mode, IReadOnlyDictionary<string, string> extra, string? unknownModeWord)
     {
         var lines = new List<string>
         {
@@ -211,6 +226,11 @@ internal sealed class GuiSettings
         if (UpdateModes.ToIni(mode) is { } word)
         {
             lines.Add($"{UpdateModes.IniKey}={word}");
+        }
+        else if (mode == UpdateMode.Ask && unknownModeWord is not null)
+        {
+            // A word this build does not know reads as Ask and is kept as it was (M4): the file is not ours to tidy.
+            lines.Add($"{UpdateModes.IniKey}={unknownModeWord}");
         }
 
         foreach (var pair in extra.OrderBy(p => p.Key, StringComparer.Ordinal))
@@ -238,11 +258,25 @@ internal sealed class GuiSettings
 
     private bool SaveLocked(UpdateMode? choice)
     {
+        var before = UpdateMode;
+        var saved = SaveCore(choice);
+        if (saved && choice is null && UpdateMode != before)
+        {
+            // Raised after the lock is let go: the handler may save or start timers.
+            UpdateModeAdopted?.Invoke(UpdateMode);
+        }
+
+        return saved;
+    }
+
+    private bool SaveCore(UpdateMode? choice)
+    {
         if (_path is null)
         {
             if (choice is { } held)
             {
                 UpdateMode = held;
+                _unknownModeWord = null;
             }
 
             return true;
@@ -272,7 +306,7 @@ internal sealed class GuiSettings
             using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), 1024, leaveOpen: true);
-                foreach (var line in Compose(mode, extra))
+                foreach (var line in Compose(mode, extra, choice is null ? disk._unknownModeWord : null))
                 {
                     writer.WriteLine(line);
                 }
@@ -292,6 +326,7 @@ internal sealed class GuiSettings
 
             tmp = null;
             UpdateMode = mode;
+            _unknownModeWord = choice is null ? disk._unknownModeWord : null;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

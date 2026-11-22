@@ -25,6 +25,13 @@ internal sealed partial class SettingsPage : PageBase
     private readonly ToolTip _tips = new() { ShowAlways = true };
     private bool _filling;
 
+    /// <summary>
+    /// True from <see cref="OnActivated"/> to <see cref="OnDeactivated"/>: the page is the one on show. The update section is drawn only then (an hourly tick or a
+    /// language change while another page is open must not make this one do work nobody sees); activation draws it. An explicit flag, because a control that has no
+    /// parent yet (a page a test builds, the shell building all pages at start) reports Visible false although nothing is hidden.
+    /// </summary>
+    private bool _active;
+
     public SettingsPage(GuiContext context)
         : base(context, "settings", "gui.nav.settings")
     {
@@ -132,6 +139,8 @@ internal sealed partial class SettingsPage : PageBase
             }
         };
         context.NetworkUnitChanged += Sync;
+        // The theme box follows the theme however it was changed (this box, a command-line option, the Windows setting in "Follow Windows", the smoke run's looks).
+        context.Theme.Changed += OnThemeChanged;
         context.Pump.StateChanged += OnPumpState;
         ConnectUpdateSection();
         ApplyLanguage();
@@ -154,7 +163,16 @@ internal sealed partial class SettingsPage : PageBase
     internal CheckBox NetAutostartBox => _netAutostart;
 
     /// <summary>The controls are brought back in line with the live state every time the page opens (the theme or language may have been changed by a switch, a command-line option or the status bar).</summary>
-    public override void OnActivated() => Sync();
+    public override void OnActivated()
+    {
+        _active = true;
+        Sync();
+
+        // The write probe of the install folder: once per activation, off the UI thread, remembered (the page shows "checking" until it ends, then the answer).
+        _ = Context.Updates.RefreshPlacement();
+    }
+
+    public override void OnDeactivated() => _active = false;
 
     public override void ApplyLanguage()
     {
@@ -210,11 +228,28 @@ internal sealed partial class SettingsPage : PageBase
         {
             Context.Pump.StateChanged -= OnPumpState;
             Context.NetworkUnitChanged -= Sync;
+            Context.Theme.Changed -= OnThemeChanged;
             DisconnectUpdateSection();
             _tips.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private void OnThemeChanged()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired && IsHandleCreated)
+        {
+            BeginInvoke(Sync);
+            return;
+        }
+
+        Sync();
     }
 
     private void Sync()
@@ -302,7 +337,7 @@ internal static class SettingsStrings
         // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
         new(
             "gui.settings.privacy",
-            "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。ただし、更新の確認を「自動」か「知らせるだけ」にしたときは、新しい版が出ていないかを GitHub に問い合わせます。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。",
-            "This app sends the information it collects nowhere. A diagnostic report leaves the app only when you copy or save it. The one exception is the update check: when it is set to Automatic or Notify only, the app asks GitHub whether a new version is out. That question carries only the app name and its version, nothing about this PC and no measurements."),
+            "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。ただし、更新の確認を「自動」か「知らせるだけ」にしたときは、新しい版が出ていないかを GitHub に問い合わせます。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。問い合わせは 1 日に 1 回ほどで、GitHub にはこのPCの IP アドレスが分かります。新しい版があるときは、確かめるための小さなファイル（SHA256.txt とマニフェスト）も GitHub から受け取ります。",
+            "Nothing this app collects is sent anywhere. A diagnostic report leaves the app only when you copy or save it. The one exception is the update check: when it is set to Automatic or Notify only, the app asks GitHub whether a new version is out. It sends only the app name and version, nothing about this PC and no measurements. It asks about once a day, and GitHub sees this PC's IP address. When a newer version exists, two small files used to verify it (SHA256.txt and the manifest) are also fetched from GitHub."),
     ];
 }

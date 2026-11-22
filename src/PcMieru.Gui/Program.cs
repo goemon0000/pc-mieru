@@ -35,7 +35,7 @@ internal static class Program
             MessageBox.Show(e.Exception.Message, Strings.Get("core.app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         };
 
-        // A smoke run and a --measure run never read or write the user's settings file.
+        // A smoke run, a --measure run and a run with --fakes never read or write the user's settings file.
         var settings = GuiSettings.ForRun(options, GuiSettings.DefaultPath);
         if (options.Language is { } language)
         {
@@ -81,9 +81,12 @@ internal static class Program
             return SmokeRun.Run(form, context, output, options.ScreenshotDirectory, options.OnScreen, options.Dpi, startedAt, options.NetMeter);
         }
 
-        // The update check starts only in a real run, once the window is up: never in a smoke run (it drives the fake service itself) and never in a
-        // measurement. With the mode still "not chosen" the first-run choice comes first; nothing is asked of the network before 「決定」 saved it.
-        if (options.MeasureOutput is null)
+        // The update check starts only in a real run, once the window is up: never in a smoke run (it drives the fake service itself), never in a
+        // measurement and never under --fakes (fake data must not show the first-run choice nor store an answer; settings are in memory there, see GuiSettings.ForRun).
+        // With the mode still "not chosen" the first-run choice comes first; nothing is asked of the network before 「決定」 saved it.
+        // STEP 5 (the install step): its verification-only start, which looks at the real folder without installing, is a run like these and must be excluded
+        // right here too (and in GuiSettings.ForRun), or it would show the dialog and write the owner's gui.ini.
+        if (options.MeasureOutput is null && !options.ForceFakes)
         {
             form.Shown += (_, _) => form.BeginInvoke(form.StartUpdates);
         }

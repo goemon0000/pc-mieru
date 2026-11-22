@@ -385,7 +385,8 @@ public class MeasureTests
         var bytes = File.ReadAllBytes(ini);
         var written = File.GetLastWriteTimeUtc(ini);
 
-        var normal = GuiSettings.ForRun(Options("--fakes"), ini);
+        // (A plain --fakes run is not "normal" any more: it is in memory too, see UpdateIniTests. The normal start here is no option at all.)
+        var normal = GuiSettings.ForRun(Options(), ini);
         Assert.Equal(ThemeMode.Dark, normal.Theme); // the file is read in a normal start: what follows is not a vacuous result
 
         var measure = GuiSettings.ForRun(Options("--measure", "m.jsonl", "--fakes"), ini);
@@ -459,10 +460,10 @@ public class MeasureTests
             using var locale = Harness.Locale();
             using var settingsRoot = new Ui.TempRoot();
             var ini = Path.Combine(settingsRoot.Path, "gui.ini");
-            var options = Options("--fakes");
-            var settings = GuiSettings.ForRun(options, ini);
+            // The settings are those of a normal start (no option: the file is read and written); the data are fakes, so nothing of this PC is read.
+            var settings = GuiSettings.ForRun(Options(), ini);
             using var theme = new ThemeService(settings.Theme);
-            using var services = PcMieruServices.Create(options.CoreOptions);
+            using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
             using var pump = new SnapshotPump(services, settings.IntervalMs);
             var context = new GuiContext(services, pump, theme, settings);
             using var form = new MainForm(context);

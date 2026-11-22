@@ -26,7 +26,7 @@ public sealed record Placement(PlacementKind Kind, string Detail)
 
 /// <summary>
 /// The writability rule of DESIGN-B 5. The folder of the program (I) and its update folder (I\update, when there is one) are probed with the normal token: a file is
-/// created, flushed to disk, renamed and deleted. Success is not remembered: every call looks again. An elevated GUI and a drive that is not a fixed disk mean "notify
+/// created, flushed to disk, renamed and deleted. Success is not remembered here: every call looks again (the GUI's controller remembers it for a page). An elevated GUI and a drive that is not a fixed disk mean "notify
 /// only" whatever the probe says.
 /// </summary>
 public static class InstallPlacement
@@ -62,9 +62,40 @@ public static class InstallPlacement
         return new Placement(PlacementKind.CanSwap, "writable");
     }
 
-    /// <summary>Creates a file in the folder, flushes it, renames it and deletes it. Null on success, otherwise what went wrong.</summary>
+    /// <summary>A probe file that is older than this is a left-over of a crashed or killed probe, and is swept.</summary>
+    internal static readonly TimeSpan StaleProbeAge = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Deletes the <c>.pcm-probe-*</c> files an earlier probe left (a process killed between creating and deleting its file) that are older than <see cref="StaleProbeAge"/>.
+    /// A younger one may belong to a probe running right now in another window. Best effort: a file that cannot be deleted stays.
+    /// </summary>
+    internal static void SweepStale(string folder, DateTimeOffset now)
+    {
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, ".pcm-probe-*"))
+            {
+                try
+                {
+                    if (now - File.GetLastWriteTimeUtc(path) > StaleProbeAge)
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+        }
+    }
+
+    /// <summary>Creates a file in the folder, flushes it, renames it and deletes it. Null on success, otherwise what went wrong. Sweeps the stale files of earlier probes first.</summary>
     internal static string? Probe(string folder)
     {
+        SweepStale(folder, DateTimeOffset.UtcNow);
         var first = Path.Combine(folder, ".pcm-probe-" + Guid.NewGuid().ToString("N") + ".tmp");
         var second = first + ".moved";
         try

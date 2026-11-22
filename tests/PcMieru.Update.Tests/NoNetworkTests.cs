@@ -20,6 +20,7 @@ public partial class NoNetworkTests
 {
     private const string HttpFile = "src/PcMieru.Update/Feed/UpdateHttp.cs";
     private const string LoopbackFile = "src/PcMieru.Gui/Smoke/SmokeRun.NetMeter.cs";
+    private const string UpdateServiceFile = "src/PcMieru.Update/Feed/UpdateService.cs";
 
     [Fact]
     public void The_update_assembly_references_the_http_library_and_no_other_network_assembly()
@@ -48,6 +49,20 @@ public partial class NoNetworkTests
         Assert.True(hits.Count > 0, "the scan did not see UpdateHttp.cs at all");
         var elsewhere = hits.Where(h => h.File != HttpFile).Select(h => h.ToString()).ToArray();
         Assert.True(elsewhere.Length == 0, "the HTTP library is named outside " + HttpFile + ":\n" + string.Join("\n", elsewhere));
+    }
+
+    [Fact]
+    public void The_http_client_of_the_feed_is_made_in_exactly_one_place_the_update_service()
+    {
+        // M10: every client the app makes is counted and handed the service's clock (Retry-After). A second place that makes one would skip that. Tests make theirs through the
+        // service's TransportFactory or in tests/, which this scan does not read.
+        var hits = Scan(NewUpdateHttp());
+
+        Assert.True(hits.Count > 0, "the scan did not see the one place that makes the client");
+        var elsewhere = hits.Where(h => h.File != UpdateServiceFile).Select(h => h.ToString()).ToArray();
+        Assert.True(elsewhere.Length == 0, "an UpdateHttp is made outside " + UpdateServiceFile + ":\n" + string.Join("\n", elsewhere));
+        Assert.Matches(NewUpdateHttp(), WithoutComments("    using var t = new UpdateHttp(version);")); // the pattern does see a construction
+        Assert.DoesNotMatch(NewUpdateHttp(), WithoutComments("    // new UpdateHttp(version)"));
     }
 
     [Fact]
@@ -201,6 +216,9 @@ public partial class NoNetworkTests
     // The HTTP library: its types and its namespace. UpdateHttp, UpdateHttpException and IFeedTransport have none of these as a whole word.
     [GeneratedRegex(@"\b(HttpClient|HttpClientHandler|SocketsHttpHandler|HttpMessageHandler|DelegatingHandler|HttpRequestMessage|HttpResponseMessage|HttpRequestException|HttpMethod|HttpContent|System\.Net\.Http)\b")]
     private static partial Regex HttpWords();
+
+    [GeneratedRegex(@"\bnew\s+UpdateHttp\s*\(")]
+    private static partial Regex NewUpdateHttp();
 
     // Types that nothing in this repo may use, wherever it is.
     [GeneratedRegex(@"\b(WebRequest|HttpWebRequest|FtpWebRequest|WebClient|ServicePointManager|WebSocket|ClientWebSocket|HttpListener|System\.Net\.WebSockets|System\.Net\.Mail|SmtpClient)\b")]

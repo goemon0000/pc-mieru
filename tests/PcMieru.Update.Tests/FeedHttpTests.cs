@@ -171,6 +171,20 @@ public sealed class FeedHttpTests
     }
 
     [Fact]
+    public async Task An_upper_case_spelling_of_the_API_host_is_the_same_host_and_passes()
+    {
+        // M11: host names are compared in lower case (Uri makes them so), so this one is not a look-alike.
+        var calls = 0;
+        _gh.Respond(FakeRelease.Api, () => ++calls == 1
+            ? Moved("https://API.GITHUB.COM/repos/goemon0000/pc-mieru/releases/latest")
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
+        using var client = Client();
+
+        Assert.Equal("{}", await client.GetLatestReleaseJsonAsync(default));
+        Assert.Equal(2, _gh.Count);
+    }
+
+    [Fact]
     public async Task A_relative_redirect_of_the_API_is_resolved_against_it_and_only_its_own_address_passes()
     {
         var calls = 0;
@@ -198,6 +212,11 @@ public sealed class FeedHttpTests
     [InlineData("https://api.github.com:8443/repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectHostNotAllowed)]
     [InlineData("http://api.github.com/repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectDowngrade)]
     [InlineData("https://user:secret@api.github.com/repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectCredentials)]
+    // M11 (review round): spellings that look like the host and are not it.
+    [InlineData("https://api.github.com./repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectHostNotAllowed)] // a trailing dot is another name to the allow list
+    [InlineData("https://аpi.github.com/repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectHostNotAllowed)] // a Cyrillic "a"
+    [InlineData("https://xn--pi-ghb.github.com/repos/goemon0000/pc-mieru/releases/latest", UpdateRefusal.RedirectHostNotAllowed)] // the punycode of such a name
+    [InlineData("//evil.example/x", UpdateRefusal.RedirectHostNotAllowed)] // a protocol-relative address is a host of its own, not a path on the API
     public async Task The_API_may_not_be_sent_anywhere_but_to_its_own_address(string to, UpdateRefusal reason)
     {
         _gh.Redirect(FakeRelease.Api, to);
@@ -243,6 +262,12 @@ public sealed class FeedHttpTests
     [InlineData("http://github.com/goemon0000/pc-mieru/releases/download/v0.5.0/SHA256.txt", UpdateRefusal.RedirectDowngrade)]
     [InlineData("https://user:secret@release-assets.githubusercontent.com/x", UpdateRefusal.RedirectCredentials)]
     [InlineData("https://token@objects.githubusercontent.com/x", UpdateRefusal.RedirectCredentials)]
+    // M11 (review round): spellings that look like an allowed host and are not it.
+    [InlineData("https://release-assets.githubusercontent.com./x", UpdateRefusal.RedirectHostNotAllowed)] // a trailing dot
+    [InlineData("https://github.com./goemon0000/pc-mieru/releases/download/v0.5.0/SHA256.txt", UpdateRefusal.RedirectHostNotAllowed)]
+    [InlineData("https://release-assets.githubusercontent.cоm/x", UpdateRefusal.RedirectHostNotAllowed)] // a Cyrillic "o" in "com"
+    [InlineData("https://xn--elease-assets-d3a.githubusercontent.com/x", UpdateRefusal.RedirectHostNotAllowed)] // punycode of a look-alike label
+    [InlineData("//evil.example/x", UpdateRefusal.RedirectHostNotAllowed)] // a protocol-relative address
     public async Task An_asset_may_not_be_handed_to_any_other_address_and_the_other_address_is_never_asked(string to, UpdateRefusal reason)
     {
         _gh.Redirect(Sha, to);

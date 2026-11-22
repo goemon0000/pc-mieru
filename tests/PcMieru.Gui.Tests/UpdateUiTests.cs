@@ -32,6 +32,7 @@ public sealed class UpdateUiTests
         while (!task.IsCompleted && clock.ElapsedMilliseconds < 10_000)
         {
             Application.DoEvents();
+            (SynchronizationContext.Current as QueueContext)?.Pump();
             Thread.Sleep(2);
         }
 
@@ -43,6 +44,20 @@ public sealed class UpdateUiTests
     {
         Finish((Task)task);
         return task.GetAwaiter().GetResult();
+    }
+
+    /// <summary>Runs the message loop until the condition holds (a check now starts on a worker thread, so "the service was called" is a thing to wait for). The bound only ends a broken test.</summary>
+    private static void WaitUntil(Func<bool> condition)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition() && clock.ElapsedMilliseconds < 10_000)
+        {
+            Application.DoEvents();
+            (SynchronizationContext.Current as QueueContext)?.Pump();
+            Thread.Sleep(2);
+        }
+
+        Assert.True(condition(), "the condition did not come true");
     }
 
     private static IEnumerable<T> Descendants<T>(Control root)
@@ -87,17 +102,49 @@ public sealed class UpdateUiTests
     {
         private readonly IDisposable _locale;
         private readonly ThemeService _theme = new(ThemeMode.Light);
+        private readonly SynchronizationContext? _outerContext = SynchronizationContext.Current;
+        private readonly QueueContext _uiContext = new();
 
-        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En)
+        private int _probes;
+
+        /// <param name="activate">True (the default): the page is the one on show, as the main window makes it (<c>OnActivated</c>), and its first probe has ended. False: the page is built and hidden.</param>
+        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En, TimeProvider? clock = null, bool activate = true)
         {
+            // The test thread stands in for the UI thread: what a check or a probe hands back is queued here and runs when the test pumps (Finish, WaitUntil). Without this,
+            // xunit's own context would run the continuations (and so the page's handlers) on a pool thread, as no window of the app ever does.
+            SynchronizationContext.SetSynchronizationContext(_uiContext);
             _locale = Harness.Locale(language);
             Services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
             Pump = new SnapshotPump(Services);
             Settings = UpdateKit.Impatient(UpdateKit.Settings(iniPath, mode));
-            Controller = new UpdateController(service ?? Fake, Settings, Timers, () => Fake.Placement, UpdateKit.Running);
+            Controller = new UpdateController(service ?? Fake, Settings, Timers, Probe, UpdateKit.Running, clock);
             Context = new GuiContext(Services, Pump, _theme, Settings, updates: Controller);
             Context.StatusMessage += Messages.Add;
             Page = new SettingsPage(Context);
+            if (activate)
+            {
+                Activate();
+            }
+        }
+
+        /// <summary>How many times the write probe of the install folder ran, and on which thread the last one ran.</summary>
+        public int Probes => Volatile.Read(ref _probes);
+
+        public int ProbeThread { get; private set; }
+
+
+        private Placement Probe()
+        {
+            Interlocked.Increment(ref _probes);
+            ProbeThread = Environment.CurrentManagedThreadId;
+            return Fake.Placement;
+        }
+
+        /// <summary>The page becomes the one on show (what the main window does when it is opened) and the probe it starts ends.</summary>
+        public void Activate()
+        {
+            Page.OnActivated();
+            Finish(Controller.RefreshPlacement());
         }
 
         public ManualTimers Timers { get; } = new();
@@ -126,6 +173,7 @@ public sealed class UpdateUiTests
             Services.Dispose();
             _theme.Dispose();
             _locale.Dispose();
+            SynchronizationContext.SetSynchronizationContext(_outerContext);
         }
     }
 
@@ -176,7 +224,7 @@ public sealed class UpdateUiTests
         var line = Describe(UpdateMode.Notify, allowed: false);
 
         Assert.Equal(Strings.Get("gui.update.savefailed"), line.Text);
-        Assert.Equal(CellTone.Accent, line.Tone);
+        Assert.Equal(CellTone.Warning, line.Tone);
     }
 
     [Fact]
@@ -184,15 +232,15 @@ public sealed class UpdateUiTests
     {
         using var _ = Harness.Locale();
         var until = Now.AddHours(20);
-        var expected = Say("gui.update.state.waiting", "time", UpdateText.When(until));
+        var expected = Say("gui.update.state.waiting", "time", UpdateText.When(until, Now));
 
         var fromThisRun = Describe(UpdateMode.Notify, last: UpdateCheck.Wait(until, fetched: true));
         Assert.Equal(expected, fromThisRun.Text);
-        Assert.Equal(CellTone.Accent, fromThisRun.Tone);
+        Assert.Equal(CellTone.Dim, fromThisRun.Tone);
 
         var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { BackoffUntilUtc = until });
         Assert.Equal(expected, fromState.Text);
-        Assert.Equal(CellTone.Accent, fromState.Tone);
+        Assert.Equal(CellTone.Dim, fromState.Tone);
 
         // A wait outranks a refusal and a candidate that were found before it.
         var both = Describe(UpdateMode.Notify, last: UpdateCheck.Wait(until, fetched: true), status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.AssetMissing });
@@ -213,22 +261,98 @@ public sealed class UpdateUiTests
     }
 
     [Fact]
-    public void A_refusal_is_said_with_its_reason_from_this_run_and_from_state_json()
+    public void A_release_that_broke_its_own_rules_is_said_with_its_version_and_reason_from_this_run_and_from_state_json()
     {
         using var _ = Harness.Locale();
-        var expected = Say("gui.update.state.refused", "reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing));
+        var version = new AppVersion(0, 5, 0);
+        var expected = Strings.Format("gui.update.state.refused", Fmt.Dict(("version", "0.5.0"), ("reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing))));
 
-        var fromThisRun = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true));
+        var fromThisRun = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true, version));
         Assert.Equal(expected, fromThisRun.Text);
-        Assert.Equal(CellTone.Accent, fromThisRun.Tone);
-        Assert.Contains("required file is missing", fromThisRun.Text);
+        Assert.Equal(CellTone.Warning, fromThisRun.Tone);
+        Assert.Contains("A required file is missing from the release", fromThisRun.Text);
+        Assert.Contains("will not be used", fromThisRun.Text);
 
-        var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.AssetMissing });
+        var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.AssetMissing, RefusedVersion = version });
         Assert.Equal(expected, fromState.Text);
+
+        // No version known (the release was refused before its tag was believed): the sentence has no version in it.
+        var unknown = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true));
+        Assert.Equal(Say("gui.update.state.refusednoversion", "reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing)), unknown.Text);
+        Assert.DoesNotContain("{", unknown.Text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void A_candidate_newer_than_the_running_version_is_announced_in_the_accent_tone_and_one_that_is_not_newer_is_not()
+    public void A_check_that_did_not_finish_says_so_and_that_it_will_try_again_and_is_not_a_refusal_of_a_release()
+    {
+        using var _ = Harness.Locale();
+        var expected = Say("gui.update.state.failed", "reason", UpdateText.RefusalText(UpdateRefusal.NetworkFailure));
+
+        var fromThisRun = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true));
+        Assert.Equal(expected, fromThisRun.Text);
+        Assert.Equal(CellTone.Warning, fromThisRun.Tone);
+        Assert.Contains("will try again later", fromThisRun.Text);
+        Assert.DoesNotContain("will not be used", fromThisRun.Text);
+
+        var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.HttpError });
+        Assert.Equal(Say("gui.update.state.failed", "reason", UpdateText.RefusalText(UpdateRefusal.HttpError)), fromState.Text);
+    }
+
+    [Fact]
+    public void Another_check_running_is_said_as_waiting_for_it_never_as_a_refusal()
+    {
+        using var _ = Harness.Locale();
+
+        var line = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AnotherCheckRunning, "lock held", fetched: false));
+
+        Assert.Equal(Strings.Get("gui.update.state.otherrunning"), line.Text);
+        Assert.Equal(CellTone.Dim, line.Tone);
+        Assert.Contains("Waiting for another check", line.Text);
+        Assert.DoesNotContain("could not", line.Text);
+
+        // What state.json remembers of that is not said on a later start.
+        var stored = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.AnotherCheckRunning });
+        Assert.Equal(Strings.Get("gui.update.state.scheduled"), stored.Text);
+    }
+
+    [Fact]
+    public void No_status_line_is_in_the_link_tone_because_nothing_in_it_can_be_clicked()
+    {
+        using var _ = Harness.Locale();
+        var newer = Newer();
+        var lines = new[]
+        {
+            Describe(UpdateMode.Ask),
+            Describe(UpdateMode.Off),
+            Describe(UpdateMode.Notify, checking: true),
+            Describe(UpdateMode.Notify, allowed: false),
+            Describe(UpdateMode.Notify, last: UpdateCheck.Wait(Now.AddHours(5), fetched: true)),
+            Describe(UpdateMode.Notify, last: newer),
+            Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "x", fetched: true, newer.Version)),
+            Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "x", fetched: true)),
+            Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AnotherCheckRunning, "x", fetched: false)),
+            Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastCheckUtc = Now.AddHours(-1) }),
+            Describe(UpdateMode.Notify),
+        };
+
+        Assert.All(lines, line => Assert.NotEqual(CellTone.Accent, line.Tone));
+    }
+
+    [Theory]
+    [InlineData(Language.En, "Version 0.5.0 is available. Open the release notes in your browser to see what changed and how to get it.")]
+    [InlineData(Language.Ja, "新しい版 0.5.0 があります。更新内容と入手のしかたはブラウザーで開けます。")]
+    public void A_candidate_says_what_it_is_and_where_the_notes_are_without_sounding_like_a_link(Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+
+        var line = Describe(UpdateMode.Notify, last: Newer());
+
+        Assert.Equal(expected, line.Text);
+        Assert.Equal(CellTone.Normal, line.Tone);
+    }
+
+    [Fact]
+    public void A_candidate_newer_than_the_running_version_is_announced_in_the_normal_tone_and_one_that_is_not_newer_is_not()
     {
         using var _ = Harness.Locale();
         var newer = Newer();
@@ -236,7 +360,7 @@ public sealed class UpdateUiTests
 
         var fromThisRun = Describe(UpdateMode.Notify, last: newer);
         Assert.Equal(expected, fromThisRun.Text);
-        Assert.Equal(CellTone.Accent, fromThisRun.Tone);
+        Assert.Equal(CellTone.Normal, fromThisRun.Tone);
 
         var stored = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { CandidateVersion = newer.Version });
         Assert.Equal(expected, stored.Text);
@@ -255,13 +379,13 @@ public sealed class UpdateUiTests
 
         var recent = Now.AddHours(-2);
         var soon = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastCheckUtc = recent });
-        Assert.Equal(Say("gui.update.state.current", "time", UpdateText.When(recent + UpdateSchedule.Interval)), soon.Text);
+        Assert.Equal(Say("gui.update.state.current", "time", UpdateText.When(recent + UpdateSchedule.Interval, Now)), soon.Text);
         Assert.Equal(CellTone.Normal, soon.Tone);
 
         // Overdue (the PC was off): "after now", never a time in the past.
         var stale = Now.AddHours(-30);
         var overdue = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastCheckUtc = stale });
-        Assert.Equal(Say("gui.update.state.current", "time", UpdateText.When(Now)), overdue.Text);
+        Assert.Equal(Say("gui.update.state.current", "time", UpdateText.When(Now, Now)), overdue.Text);
     }
 
     [Fact]
@@ -278,8 +402,8 @@ public sealed class UpdateUiTests
     // ---- the first-run dialog ----
 
     [Theory]
-    [InlineData(Language.En, "Automatic", "Notify only", "Off", "not signed", "Confirm")]
-    [InlineData(Language.Ja, "自動", "知らせるだけ", "切る", "署名のない版", "決定")]
+    [InlineData(Language.En, "Automatic", "Notify only (recommended)", "Off", "without a digital signature", "Confirm")]
+    [InlineData(Language.Ja, "自動", "知らせるだけ（おすすめ）", "切る", "電子署名のない版", "決定")]
     public void The_first_run_dialog_has_three_choices_with_Notify_selected_and_says_unsigned_versions_are_installed_unattended(
         Language language, string automatic, string notify, string off, string unsigned, string ok)
     {
@@ -300,6 +424,74 @@ public sealed class UpdateUiTests
         Assert.Equal(ok, dialog.OkButton.Text);
         Assert.Same(dialog.OkButton, dialog.AcceptButton);
         Assert.Equal(string.Empty, dialog.FailureText);
+    }
+
+    [Theory]
+    [InlineData(
+        Language.Ja,
+        "新しい版を確認なしで入れ替えます。発行元を示す電子署名のない版も、確認なしで入れ替えます。",
+        "新しい版が出たらお知らせします。入れ替えは自動ではしません。",
+        "『決定』を押さずに閉じると、確認はせず、次の起動でもう一度お聞きします。")]
+    [InlineData(
+        Language.En,
+        "Installs new versions without asking, including versions without a digital signature showing who published them.",
+        "Tells you when a new version is out. It does not install it by itself.",
+        "If you close this window without choosing Confirm, nothing is checked and you will be asked again at the next start.")]
+    public void The_first_run_dialog_says_what_each_choice_does_and_what_closing_it_does_in_the_words_of_the_review(Language language, string automatic, string notify, string later)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var bare = new Bare();
+        using var dialog = new UpdateChoiceDialog(theme, bare.Controller);
+
+        var texts = Descendants<Label>(dialog).Select(label => label.Text).ToArray();
+        Assert.Contains(automatic, texts);
+        Assert.Contains(notify, texts);
+        Assert.Contains(later, texts);
+        Assert.Contains(Strings.Get("gui.update.dialog.off"), texts);
+
+        // The top text says what is sent and what GitHub sees, in less than it did (it was three sentences and a half).
+        var lead = Descendants<Label>(dialog).Single(label => label.Name == "updateLead").Text;
+        Assert.Contains("GitHub", lead);
+        Assert.InRange(lead.Length, 20, language == Language.Ja ? 110 : 190);
+    }
+
+    [Theory]
+    [InlineData(1.0f)]
+    [InlineData(1.5f)]
+    [InlineData(2.0f)]
+    public void The_first_run_dialog_grows_with_the_size_of_its_text_and_clips_nothing(float scale)
+    {
+        using var _ = Harness.Locale(Language.Ja);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var bare = new Bare();
+        using var dialog = new UpdateChoiceDialog(theme, bare.Controller);
+
+        // The text of the window at 150 % and 200 % (the same layout code runs when the screen is scaled and when the text is).
+        dialog.Font = new Font(dialog.Font.FontFamily, dialog.Font.Size * scale);
+        Assert.NotEqual(IntPtr.Zero, dialog.Handle);
+        dialog.PerformLayout();
+
+        var area = dialog.ClientRectangle;
+        foreach (var control in Descendants<Control>(dialog).Where(c => c is Label or RadioButton or Button))
+        {
+            if (!control.Visible)
+            {
+                continue;
+            }
+
+            var spot = dialog.RectangleToClient(control.Parent!.RectangleToScreen(control.Bounds));
+            Assert.True(area.Contains(spot), $"{control.Name} ({spot}) is outside the window ({area}) at {scale}");
+            if (control is Label label)
+            {
+                // A line of text is as high as the text needs at its width: nothing is cut off at the bottom.
+                var needed = label.GetPreferredSize(new Size(label.MaximumSize.Width > 0 ? label.MaximumSize.Width : label.Width, 0));
+                Assert.True(label.Height >= needed.Height, $"{control.Name} is {label.Height} high and needs {needed.Height} at {scale}");
+            }
+        }
+
+        // The window is as high as everything in it, with the OK button under the last line.
+        Assert.True(dialog.OkButton.Bottom <= dialog.ClientSize.Height || dialog.RectangleToClient(dialog.OkButton.Parent!.RectangleToScreen(dialog.OkButton.Bounds)).Bottom <= dialog.ClientSize.Height);
     }
 
     [Fact]
@@ -487,7 +679,7 @@ public sealed class UpdateUiTests
         using var rig = new PageRig();
         var page = rig.Page;
 
-        Assert.Equal(new[] { "Automatic", "Notify only", "Off", "Choose later (no checks)" }, page.UpdateModeBox.Items.Cast<string>().ToArray());
+        Assert.Equal(new[] { "Automatic", "Notify only (recommended)", "Off", "Choose later (no checks)" }, page.UpdateModeBox.Items.Cast<string>().ToArray());
         Assert.Equal(3, page.UpdateModeBox.SelectedIndex);
         Assert.Equal(AppInfo.Version, page.UpdateVersionText);
         Assert.Equal("Not checked yet", page.UpdateLastText);
@@ -497,7 +689,11 @@ public sealed class UpdateUiTests
         Assert.Null(page.NotesUrl);
         Assert.Equal(Strings.Get("gui.update.state.ask"), page.UpdateStatusText);
         Assert.Equal(CellTone.Dim, page.UpdateStatusTone);
-        Assert.Equal(string.Empty, page.UpdatePlacementNoteText);
+        Assert.Equal("Writable", page.UpdatePlacementText);
+
+        // Every button that is off says why, right beside it.
+        Assert.Equal("Choose a mode above to use this", page.UpdateCheckNowReasonText);
+        Assert.Equal("No newer version found, so there is nothing to open", page.UpdateNotesReasonText);
 
         // Opening the page made no timer, asked no service, built no HTTP client.
         Assert.Empty(rig.Timers.Made);
@@ -513,6 +709,7 @@ public sealed class UpdateUiTests
         var page = rig.Page;
         Assert.True(page.UpdateCheckNowButton.Enabled);
         Assert.Equal(3 - 2, page.UpdateModeBox.SelectedIndex); // Notify only is the second entry
+        Assert.Equal(string.Empty, page.UpdateCheckNowReasonText);
         rig.Fake.Answer = (_, _) => rig.Fake.Candidate(1);
 
         page.UpdateCheckNowButton.PerformClick();
@@ -522,11 +719,13 @@ public sealed class UpdateUiTests
         Assert.Equal("0.5.0", page.UpdateCandidateText);
         Assert.Equal(UpdateEndpoints.ReleasePageUrl("v0.5.0"), page.NotesUrl);
         Assert.True(page.UpdateNotesButton.Enabled);
+        Assert.Equal(string.Empty, page.UpdateNotesReasonText);
+        Assert.Equal("Open release notes in browser", page.UpdateNotesButton.Text);
         Assert.Equal(Say("gui.update.state.candidate", "version", "0.5.0"), page.UpdateStatusText);
-        Assert.Equal(CellTone.Accent, page.UpdateStatusTone);
+        Assert.Equal(CellTone.Normal, page.UpdateStatusTone);
         var checkedAt = rig.Controller.Status().LastCheckUtc;
         Assert.NotNull(checkedAt);
-        Assert.Equal(UpdateText.When(checkedAt.Value), page.UpdateLastText);
+        Assert.Equal(UpdateText.When(checkedAt.Value, rig.Controller.Now), page.UpdateLastText);
         Assert.True(page.UpdateCheckNowButton.Enabled); // free again
     }
 
@@ -542,6 +741,8 @@ public sealed class UpdateUiTests
         Assert.True(rig.Controller.Checking);
         Assert.Equal(Strings.Get("gui.update.state.checking"), page.UpdateStatusText);
         Assert.False(page.UpdateCheckNowButton.Enabled);
+        Assert.Equal("A check is running", page.UpdateCheckNowReasonText);
+        WaitUntil(() => gated.Calls == 1);
 
         // A second press while the first check runs asks nobody.
         page.UpdateCheckNowButton.PerformClick();
@@ -556,33 +757,38 @@ public sealed class UpdateUiTests
     }
 
     [Fact]
-    public void A_refusal_is_shown_with_its_reason_in_both_languages_and_offers_no_notes()
+    public void A_refusal_is_shown_with_its_version_and_reason_in_both_languages_and_offers_no_notes()
     {
         using var rig = new PageRig("notify");
         rig.Controller.Start();
         var page = rig.Page;
-        rig.Fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true);
+        var version = rig.Fake.Candidate(1).Version;
+        rig.Fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true, version);
 
         page.UpdateCheckNowButton.PerformClick();
         Finish(rig.Controller.Pending);
 
-        Assert.Equal(Say("gui.update.state.refused", "reason", "A required file is missing from the release"), page.UpdateStatusText);
-        Assert.Equal(CellTone.Accent, page.UpdateStatusTone);
+        Assert.Equal(
+            "Version 0.5.0 could not be verified, so it will not be used: A required file is missing from the release. Please wait for the next version.",
+            page.UpdateStatusText);
+        Assert.Equal(CellTone.Warning, page.UpdateStatusTone);
         Assert.False(page.UpdateNotesButton.Enabled);
+        Assert.Equal("No newer version found, so there is nothing to open", page.UpdateNotesReasonText);
         Assert.Equal("None", page.UpdateCandidateText);
 
         Strings.Current = Language.Ja;
         page.ApplyLanguage();
 
-        Assert.Equal(Strings.Format("gui.update.state.refused", new Dictionary<string, string> { ["reason"] = "必要なファイルが、リリースに足りません" }), page.UpdateStatusText);
-        Assert.Equal(new[] { "自動", "知らせるだけ", "切る", "あとで選ぶ（確認しません）" }, page.UpdateModeBox.Items.Cast<string>().ToArray());
+        Assert.Equal("新しい版 0.5.0 は、確かめられなかったので使いません: 必要なファイルが、リリースに足りません。次の版をお待ちください。", page.UpdateStatusText);
+        Assert.Equal(new[] { "自動", "知らせるだけ（おすすめ）", "切る", "あとで選ぶ（確認しません）" }, page.UpdateModeBox.Items.Cast<string>().ToArray());
         Assert.Equal(1, page.UpdateModeBox.SelectedIndex);
         Assert.Equal("今すぐ確認", page.UpdateCheckNowButton.Text);
-        Assert.Equal("更新内容を開く", page.UpdateNotesButton.Text);
+        Assert.Equal("更新内容をブラウザーで開く", page.UpdateNotesButton.Text);
+        Assert.Equal("新しい版が見つかっていないため、開くものがありません", page.UpdateNotesReasonText);
     }
 
     [Fact]
-    public void A_wait_is_shown_with_the_time_until_which_nothing_is_asked()
+    public void A_wait_is_shown_with_the_time_until_which_nothing_is_asked_and_Check_now_is_off_with_that_time_beside_it()
     {
         using var rig = new PageRig("notify");
         rig.Controller.Start();
@@ -593,9 +799,13 @@ public sealed class UpdateUiTests
         page.UpdateCheckNowButton.PerformClick();
         Finish(rig.Controller.Pending);
 
-        Assert.Equal(Say("gui.update.state.waiting", "time", UpdateText.When(until)), page.UpdateStatusText);
-        Assert.Equal(CellTone.Accent, page.UpdateStatusTone);
-        Assert.Contains(UpdateText.When(until), page.UpdateStatusText);
+        var time = UpdateText.When(until, rig.Controller.Now);
+        Assert.Equal(Say("gui.update.state.waiting", "time", time), page.UpdateStatusText);
+        Assert.Equal(CellTone.Dim, page.UpdateStatusTone);
+        Assert.Contains(time, page.UpdateStatusText);
+        Assert.False(page.UpdateCheckNowButton.Enabled);
+        Assert.Equal(Say("gui.update.reason.backoff", "time", time), page.UpdateCheckNowReasonText);
+        Assert.Equal("Available again from " + time, page.UpdateCheckNowReasonText);
     }
 
     [Fact]
@@ -693,6 +903,7 @@ public sealed class UpdateUiTests
         rig.Controller.Start();
         rig.Page.UpdateCheckNowButton.PerformClick();
         Assert.True(rig.Controller.Checking);
+        WaitUntil(() => gated.Calls == 1);
 
         rig.Page.UpdateModeBox.SelectedIndex = 2;
 
@@ -741,7 +952,8 @@ public sealed class UpdateUiTests
         Assert.Equal(0, rig.Timers.Live);
         Assert.False(rig.Page.UpdateCheckNowButton.Enabled);
         Assert.Equal(Strings.Get("gui.update.savefailed"), rig.Page.UpdateStatusText);
-        Assert.Equal(CellTone.Accent, rig.Page.UpdateStatusTone);
+        Assert.Equal(CellTone.Warning, rig.Page.UpdateStatusTone);
+        Assert.Equal("Not available: the setting could not be saved", rig.Page.UpdateCheckNowReasonText);
     }
 
     [Theory]
@@ -754,35 +966,52 @@ public sealed class UpdateUiTests
         rig.Controller.Start();
         rig.Fake.Placement = new Placement(kind, "test");
 
-        rig.Page.OnActivated();
+        rig.Activate();
 
-        Assert.Equal("This location cannot be written to, so updates are only announced", rig.Page.UpdatePlacementNoteText);
-        Assert.Equal(Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant()), rig.Page.UpdatePlacementText);
-        Assert.StartsWith("Notify only", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        var reason = Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant());
+        Assert.Equal("Cannot write here, so updates can only be announced (" + reason + ")", rig.Page.UpdatePlacementText);
+        Assert.Equal(CellTone.Warning, rig.Page.UpdatePlacementTone);
         Assert.True(rig.Page.UpdateCheckNowButton.Enabled); // a read-only folder still hears about new versions
 
         Strings.Current = Language.Ja;
         rig.Page.ApplyLanguage();
-        Assert.Equal("この配置には書き込めないため、更新を通知します", rig.Page.UpdatePlacementNoteText);
-        Assert.StartsWith("通知だけ", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        Assert.StartsWith("書き込めないため、お知らせだけになります（", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        Assert.EndsWith(Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant()) + "）", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void A_writable_install_says_writable_and_shows_no_note_and_the_probe_is_made_afresh_each_time()
+    public void A_writable_install_says_writable_and_the_probe_is_made_on_activation_and_on_a_mode_change_only_and_remembered()
     {
         using var rig = new PageRig("notify");
         Assert.Equal("Writable", rig.Page.UpdatePlacementText);
-        Assert.Equal(string.Empty, rig.Page.UpdatePlacementNoteText);
+        Assert.Equal(1, rig.Probes); // the activation in the rig's constructor
 
-        // Not remembered: the folder became read-only since the page was made.
+        // Remembered: the folder became read-only, but nothing asked again, so the page does not know yet.
         rig.Fake.Placement = new Placement(PlacementKind.ReadOnly, "test");
-        rig.Page.OnActivated();
-        Assert.NotEqual(string.Empty, rig.Page.UpdatePlacementNoteText);
+        Assert.Equal("Writable", rig.Page.UpdatePlacementText);
+        rig.Page.UpdateModeBox.SelectedIndex = 0; // another mode: the probe is made again
+        WaitUntil(() => rig.Probes == 2 && rig.Page.UpdatePlacementText.StartsWith("Cannot write here", StringComparison.Ordinal));
 
         rig.Fake.Placement = new Placement(PlacementKind.CanSwap, "test");
-        rig.Page.OnActivated();
-        Assert.Equal(string.Empty, rig.Page.UpdatePlacementNoteText);
+        rig.Page.OnDeactivated();
+        rig.Activate();
+        WaitUntil(() => rig.Probes == 3 && rig.Page.UpdatePlacementText == "Writable"); // the probe runs on a worker thread
+        Assert.Equal(3, rig.Probes);
         Assert.Equal("Writable", rig.Page.UpdatePlacementText);
+
+        // Refreshing the page for any other reason (a check, a tick) never probes.
+        rig.Page.UpdateCheckNowButton.PerformClick();
+        Finish(rig.Controller.Pending);
+        Assert.Equal(3, rig.Probes);
+    }
+
+    [Fact]
+    public void The_write_probe_runs_off_the_UI_thread()
+    {
+        using var rig = new PageRig("notify");
+
+        Assert.NotEqual(0, rig.ProbeThread);
+        Assert.NotEqual(Environment.CurrentManagedThreadId, rig.ProbeThread);
     }
 
     [Fact]
@@ -802,7 +1031,7 @@ public sealed class UpdateUiTests
     // ---- the quiet notice ----
 
     [Fact]
-    public void A_candidate_is_said_once_per_version_on_the_status_bar_and_never_in_a_dialog()
+    public void The_notice_follows_the_candidate_on_file_it_stays_through_a_failure_that_judged_no_release_and_goes_when_a_check_clears_it()
     {
         using var rig = new PageRig("notify");
         rig.Controller.Start();
@@ -811,18 +1040,38 @@ public sealed class UpdateUiTests
         Dialogs.AutoAnswer = false; // a dialog would be logged here (and never wait for a click)
         try
         {
+            Assert.Null(rig.Context.UpdateNotice);
+
             rig.Fake.Answer = (_, _) => rig.Fake.Candidate(1);
             Finish(rig.Controller.CheckNowAsync());
-            Assert.Equal([Say("gui.update.notice", "version", "0.5.0")], rig.Messages);
+            Assert.Equal(Say("gui.update.notice", "version", "0.5.0"), rig.Context.UpdateNotice);
 
-            Finish(rig.Controller.CheckNowAsync()); // the same version again: nothing more is said
-            Assert.Single(rig.Messages);
-
-            rig.Fake.Answer = (_, _) => rig.Fake.Candidate(2); // a newer one: said once more
+            // The network is down on the next check: nothing was learned about the release, so the notice stays.
+            rig.Fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "down", fetched: true);
             Finish(rig.Controller.CheckNowAsync());
-            Assert.Equal(2, rig.Messages.Count);
-            Assert.Contains("0.6.0", rig.Messages[1]);
+            Assert.Equal(Say("gui.update.notice", "version", "0.5.0"), rig.Context.UpdateNotice);
+
+            // A newer one: the notice names it.
+            rig.Fake.Answer = (_, _) => rig.Fake.Candidate(2);
+            Finish(rig.Controller.CheckNowAsync());
+            Assert.Equal(Say("gui.update.notice", "version", "0.6.0"), rig.Context.UpdateNotice);
+
+            // The feed now says nothing is newer: the candidate is cleared, so is the notice.
+            rig.Fake.Answer = (_, _) => UpdateCheck.NoCandidate(fetched: true);
+            Finish(rig.Controller.CheckNowAsync());
+            Assert.Null(rig.Context.UpdateNotice);
+
+            // A release that broke its own rules clears it as well.
+            rig.Fake.Answer = (_, _) => rig.Fake.Candidate(1);
+            Finish(rig.Controller.CheckNowAsync());
+            Assert.NotNull(rig.Context.UpdateNotice);
+            rig.Fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.DigestMismatch, "x", fetched: true, version: new AppVersion(0, 5, 0));
+            Finish(rig.Controller.CheckNowAsync());
+            Assert.Null(rig.Context.UpdateNotice);
+
+            // Never a dialog, never a flash on the status line.
             Assert.Empty(Dialogs.Log);
+            Assert.Empty(rig.Messages);
         }
         finally
         {
@@ -831,7 +1080,25 @@ public sealed class UpdateUiTests
     }
 
     [Fact]
-    public void A_candidate_that_an_earlier_run_left_is_said_at_the_start_with_no_request()
+    public void The_notice_goes_with_the_mode_when_the_owner_turns_the_check_off_or_back_to_ask()
+    {
+        using var rig = new PageRig("notify");
+        rig.Fake.SetStatus(UpdateStatus.Empty with { CandidateVersion = new AppVersion(0, 5, 0) });
+        rig.Controller.Start();
+        Assert.NotNull(rig.Context.UpdateNotice);
+
+        Assert.True(rig.Controller.ChooseMode(UpdateMode.Off));
+        Assert.Null(rig.Context.UpdateNotice);
+
+        Assert.True(rig.Controller.ChooseMode(UpdateMode.Notify));
+        Assert.NotNull(rig.Context.UpdateNotice); // the candidate is still on file, and the mode asks again
+
+        rig.Page.UpdateModeBox.SelectedIndex = 3; // Ask
+        Assert.Null(rig.Context.UpdateNotice);
+    }
+
+    [Fact]
+    public void A_candidate_that_an_earlier_run_left_is_on_the_status_bar_at_the_start_with_no_request()
     {
         var before = Traffic();
         using var rig = new PageRig("notify");
@@ -839,13 +1106,14 @@ public sealed class UpdateUiTests
 
         rig.Controller.Start();
 
-        Assert.Equal([Say("gui.update.notice", "version", "0.5.0")], rig.Messages);
+        Assert.Equal(Say("gui.update.notice", "version", "0.5.0"), rig.Context.UpdateNotice);
+        Assert.Empty(rig.Messages);
         Assert.Equal(0, rig.Fake.Calls);
         Assert.Equal(before, Traffic());
     }
 
     [Fact]
-    public void In_Ask_and_Off_a_stored_candidate_is_not_said()
+    public void In_Ask_and_Off_a_stored_candidate_has_no_notice()
     {
         foreach (var word in new string?[] { null, "off" })
         {
@@ -854,8 +1122,44 @@ public sealed class UpdateUiTests
 
             rig.Controller.Start();
 
+            Assert.Null(rig.Context.UpdateNotice);
             Assert.Empty(rig.Messages);
         }
+    }
+
+    [Theory]
+    [InlineData(Language.En, "Version 0.5.0 is available")]
+    [InlineData(Language.Ja, "新しい版 0.5.0 があります")]
+    public void The_notice_is_written_in_the_language_shown_not_the_one_of_the_moment_it_was_first_seen(Language language, string expectedStart)
+    {
+        Ui.Run(_ =>
+        {
+            using var locale = Harness.Locale(Language.En);
+            using var theme = new ThemeService(ThemeMode.Light);
+            using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = true });
+            using var pump = new SnapshotPump(services);
+            var fake = new FakeUpdateService(UpdateKit.Running);
+            fake.SetStatus(UpdateStatus.Empty with { CandidateVersion = new AppVersion(0, 5, 0) });
+            var settings = UpdateKit.Impatient(UpdateKit.Settings(mode: "notify"));
+            settings.Language = Language.En;
+            using var controller = new UpdateController(fake, settings, new ManualTimers(), () => fake.Placement, UpdateKit.Running);
+            var context = new GuiContext(services, pump, theme, settings, updates: controller);
+            using var form = new MainForm(context);
+            Assert.NotEqual(IntPtr.Zero, form.Handle);
+
+            // The notice is first seen with English on screen, then the window is switched to the other language: the label says it in that one.
+            controller.Start();
+            context.SetLanguage(language);
+
+            var label = Descendants<Label>(form).Single(l => l.Name == "updateNotice");
+            // (The form is built but never shown here, so Control.Visible is false for every child; the text is what the person would read: empty while hidden.)
+            Assert.NotEqual(string.Empty, label.Text);
+            Assert.StartsWith(expectedStart, label.Text, StringComparison.Ordinal);
+            if (language == Language.Ja)
+            {
+                Assert.DoesNotContain("is available", label.Text, StringComparison.Ordinal);
+            }
+        });
     }
 
     [Fact]
@@ -884,7 +1188,23 @@ public sealed class UpdateUiTests
     {
         using var _ = Harness.Locale(language);
 
-        Assert.Contains("GitHub", Strings.Get("gui.settings.privacy"));
+        var text = Strings.Get("gui.settings.privacy");
+        Assert.Contains("GitHub", text);
+        Assert.Contains("SHA256.txt", text);
+        Assert.Contains(language == Language.Ja ? "IP アドレス" : "IP address", text);
+        Assert.Contains(language == Language.Ja ? "1 日に 1 回ほど" : "about once a day", text);
+    }
+
+    [Fact]
+    public void The_english_privacy_text_reads_as_plain_english()
+    {
+        using var _ = Harness.Locale(Language.En);
+
+        var text = Strings.Get("gui.settings.privacy");
+        Assert.DoesNotContain("The question carries", text);
+        Assert.DoesNotContain("put in place", text);
+        Assert.DoesNotContain("sends the information it collects nowhere", text);
+        Assert.StartsWith("Nothing this app collects is sent anywhere.", text);
     }
 
     [Fact]

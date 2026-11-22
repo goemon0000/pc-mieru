@@ -6,6 +6,10 @@ namespace PcMieru.Gui;
 /// <summary>
 /// The words of the update check (DESIGN-B 3.1, 4): the first-run choice, the settings section, the status-bar notice and the reason of every refusal
 /// (one string per <see cref="UpdateRefusal"/>, kept in step with the enum by a test).
+///
+/// Stage B step 2 review: a reason is a phrase that goes after a colon in a sentence of its own ("確認できませんでした: {reason}。" for a check that did not finish,
+/// "新しい版 {version} は、確かめられなかったので使いません: {reason}。" for a release whose own rules did not hold, see <see cref="UpdateRefusals"/>), so it has no
+/// full stop and says what happened in the words of the person who runs the app, not the names of the checks.
 /// </summary>
 internal static class UpdateStrings
 {
@@ -14,23 +18,23 @@ internal static class UpdateStrings
         // --- the four modes (one key per UpdateMode member: a test keeps the two in step) ---
         new("gui.update.mode.ask", "あとで選ぶ（確認しません）", "Choose later (no checks)"),
         new("gui.update.mode.automatic", "自動", "Automatic"),
-        new("gui.update.mode.notify", "知らせるだけ", "Notify only"),
+        new("gui.update.mode.notify", "知らせるだけ（おすすめ）", "Notify only (recommended)"),
         new("gui.update.mode.off", "切る", "Off"),
 
         // --- the first-run choice ---
         new("gui.update.dialog.title", "更新の確認", "Checking for updates"),
         new(
             "gui.update.dialog.lead",
-            "PCミエルの新しい版が出ていないか、GitHub に問い合わせてよいか選んでください。問い合わせで送るのはアプリの名前と版だけです。このPCの情報や測定値は送りません。問い合わせると、GitHub にはこのPCのIPアドレスが分かります。",
-            "Choose whether PC Mieru may ask GitHub if a new version is out. The question carries only the app name and its version, nothing about this PC and no measurements. GitHub does see this PC's IP address when it is asked."),
+            "PCミエルの新しい版が出ていないか、GitHub に問い合わせてよいか選んでください。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。GitHub にはこのPCの IP アドレスが分かります。",
+            "Choose whether PC Mieru may ask GitHub if a new version is out. Only the app name and version are sent, nothing about this PC. GitHub sees this PC's IP address."),
         new(
             "gui.update.dialog.automatic",
-            "新しい版が見つかったら、確認なしで入れ替えます。署名のない版も、確認なしで入れ替えます。",
-            "When a new version is found it is put in place without asking. Versions that are not signed are also installed without asking."),
+            "新しい版を確認なしで入れ替えます。発行元を示す電子署名のない版も、確認なしで入れ替えます。",
+            "Installs new versions without asking, including versions without a digital signature showing who published them."),
         new(
             "gui.update.dialog.notify",
-            "新しい版があることを知らせます。入れ替えは、あなたが選ぶまでしません。",
-            "Tells you when a new version exists. Nothing is put in place until you choose to."),
+            "新しい版が出たらお知らせします。入れ替えは自動ではしません。",
+            "Tells you when a new version is out. It does not install it by itself."),
         new(
             "gui.update.dialog.off",
             "更新の確認をしません。GitHub には何も問い合わせません。",
@@ -38,8 +42,8 @@ internal static class UpdateStrings
         new("gui.update.dialog.ok", "決定", "Confirm"),
         new(
             "gui.update.dialog.later",
-            "何も選ばずに閉じると、確認はしません。次に開いたときにまた聞きます。設定の「更新」で、いつでも変えられます。",
-            "If you close this without choosing, nothing is checked, and you are asked again the next time the app opens. You can change it any time under Updates in Settings."),
+            "『決定』を押さずに閉じると、確認はせず、次の起動でもう一度お聞きします。",
+            "If you close this window without choosing Confirm, nothing is checked and you will be asked again at the next start."),
         new(
             "gui.update.dialog.savefailed",
             "選んだ内容を設定ファイルに保存できませんでした。保存できるまで、確認はしません。",
@@ -51,27 +55,47 @@ internal static class UpdateStrings
         new("gui.update.mode.label", "更新の確認", "Update check"),
         new("gui.update.lastcheck", "最後に確認した日時", "Last check"),
         new("gui.update.lastcheck.never", "まだ確認していません", "Not checked yet"),
-        new("gui.update.placement.label", "この配置", "This install"),
+        new("gui.update.placement.label", "入れ替え先", "Install folder"),
         new("gui.update.placement.canswap", "書き込めます", "Writable"),
-        new("gui.update.placement.readonly", "通知だけ（この場所には書き込めません）", "Notify only (this folder is not writable)"),
-        new("gui.update.placement.elevated", "通知だけ（管理者として開いています）", "Notify only (running as administrator)"),
-        new("gui.update.placement.notfixeddrive", "通知だけ（固定ディスクではない場所にあります）", "Notify only (not on a fixed disk)"),
-        new("gui.update.placement.note", "この配置には書き込めないため、更新を通知します", "This location cannot be written to, so updates are only announced"),
+        new("gui.update.placement.cannotwrite", "書き込めないため、お知らせだけになります（{reason}）", "Cannot write here, so updates can only be announced ({reason})"),
+        new("gui.update.placement.checking", "調べています…", "Checking…"),
+        new("gui.update.placement.readonly", "この場所には書き込めません", "this folder is not writable"),
+        new("gui.update.placement.elevated", "管理者として開いています", "running as administrator"),
+        new("gui.update.placement.notfixeddrive", "固定ディスクではない場所にあります", "not on a fixed disk"),
         new("gui.update.candidate.label", "見つかった新しい版", "Newer version"),
         new("gui.update.candidate.none", "なし", "None"),
         new("gui.update.status.label", "状態", "Status"),
         new("gui.update.checknow", "今すぐ確認", "Check now"),
-        new("gui.update.notes", "更新内容を開く", "Open the release notes"),
+        new("gui.update.notes", "更新内容をブラウザーで開く", "Open release notes in browser"),
         new("gui.update.checknow.tip", "いま GitHub に問い合わせます。「知らせるだけ」か「自動」のときだけ使えます", "Asks GitHub now. Available only when the check is set to Notify only or Automatic"),
         new("gui.update.notes.tip", "見つかった版のリリースのページを、ブラウザーで開きます", "Opens the release page of the version found in your browser"),
+
+        // --- why a button is off (the line under it) ---
+        new("gui.update.reason.choosemode", "上の「更新の確認」で選ぶと使えます", "Choose a mode above to use this"),
+        new("gui.update.reason.notsaved", "設定を保存できないため使えません", "Not available: the setting could not be saved"),
+        new("gui.update.reason.backoff", "{time} まで確認を控えています", "Available again from {time}"),
+        new("gui.update.reason.checking", "確認しているところです", "A check is running"),
+        new("gui.update.reason.nocandidate", "新しい版が見つかっていないため、開くものがありません", "No newer version found, so there is nothing to open"),
 
         // --- what the status line says ---
         new("gui.update.state.checking", "確認しています…", "Checking…"),
         new("gui.update.state.ask", "まだ選んでいないため、確認しません。上の「更新の確認」で選べます。", "Nothing is checked until you choose above."),
         new("gui.update.state.off", "更新の確認は切ってあります。", "The update check is off."),
-        new("gui.update.state.waiting", "GitHub から待つよう求められたため、{time} まで確認しません。", "GitHub asked to wait, so nothing is checked until {time}."),
-        new("gui.update.state.refused", "新しい版を受け付けませんでした: {reason}", "A newer version was not accepted: {reason}"),
-        new("gui.update.state.candidate", "新しい版 {version} があります。", "Version {version} is available."),
+        new("gui.update.state.waiting", "確認の回数が多いと GitHub に言われたため、{time} まで確認を控えます。", "GitHub asked us to check less often, so the next check waits until {time}."),
+        new("gui.update.state.otherrunning", "ほかの確認が終わるのを待っています。終わってからもう一度お試しください。", "Waiting for another check to finish. Please try again once it is done."),
+        new("gui.update.state.failed", "確認できませんでした: {reason}。あとでもう一度確かめます。", "The check did not finish: {reason}. It will try again later."),
+        new(
+            "gui.update.state.refused",
+            "新しい版 {version} は、確かめられなかったので使いません: {reason}。次の版をお待ちください。",
+            "Version {version} could not be verified, so it will not be used: {reason}. Please wait for the next version."),
+        new(
+            "gui.update.state.refusednoversion",
+            "新しい版は、確かめられなかったので使いません: {reason}。次の版をお待ちください。",
+            "A newer version could not be verified, so it will not be used: {reason}. Please wait for the next version."),
+        new(
+            "gui.update.state.candidate",
+            "新しい版 {version} があります。更新内容と入手のしかたはブラウザーで開けます。",
+            "Version {version} is available. Open the release notes in your browser to see what changed and how to get it."),
         new("gui.update.state.current", "最新の版です。次の確認は {time} 以降です。", "You have the newest version. The next check is after {time}."),
         new("gui.update.state.scheduled", "最初の確認は、起動の少しあとに行います。", "The first check is made a little after the app starts."),
         new("gui.update.savefailed", "更新の設定を保存できませんでした。確認はしません。", "The update setting could not be saved. Nothing is checked."),
@@ -79,34 +103,35 @@ internal static class UpdateStrings
         // --- the quiet notice on the status bar ---
         new("gui.update.notice", "新しい版 {version} があります。内容は設定の「更新」で開けます。", "Version {version} is available. Open its notes under Updates in Settings."),
 
-        // --- one reason per UpdateRefusal (except None) ---
+        // --- one reason per UpdateRefusal (except None). The first group (operational) goes after 「確認できませんでした:」, the second (a release's own rules) after 「確かめられなかったので使いません:」 ---
         new("gui.update.refusal.feedunreadable", "GitHub の答えを読み取れませんでした", "GitHub's answer could not be read"),
-        new("gui.update.refusal.draftrelease", "下書きの版は受け付けません", "A draft release is not accepted"),
-        new("gui.update.refusal.prereleaserelease", "先行公開（プレリリース）の版は受け付けません", "A pre-release is not accepted"),
-        new("gui.update.refusal.tagnotstable", "版の名前が X.Y.Z の形ではありません", "The version tag is not in the plain X.Y.Z form"),
-        new("gui.update.refusal.releasepagemismatch", "リリースのページが、公式の場所と合いません", "The release page does not match the official repository"),
-        new("gui.update.refusal.blockedtag", "このPCでうまく動かなかった版なので、もう勧めません", "This version failed on this PC, so it is not offered again"),
-        new("gui.update.refusal.assetmissing", "必要なファイルが、リリースに足りません", "A required file is missing from the release"),
-        new("gui.update.refusal.assetduplicate", "同じ名前のファイルが、リリースに 2 つ以上あります", "A required file appears more than once in the release"),
-        new("gui.update.refusal.assetnotready", "リリースのファイルが、まだ揃っていません", "A file of the release is not ready yet"),
-        new("gui.update.refusal.asseturlmismatch", "ファイルの置き場所が、公式の場所と合いません", "A file's address is not the official one"),
-        new("gui.update.refusal.assettoolarge", "ファイルが、決めた大きさを超えています", "A file is larger than allowed"),
-        new("gui.update.refusal.hashlistline", "ハッシュの一覧（SHA256.txt）に、必要な行が 1 つずつありません", "SHA256.txt does not have exactly one line for each required file"),
-        new("gui.update.refusal.digestmismatch", "ファイルのハッシュ値が、一覧と合いません", "A file's hash does not match the list"),
-        new("gui.update.refusal.manifesthashmismatch", "マニフェストが、ハッシュの一覧にあるものと違います", "The manifest is not the one the hash list names"),
-        new("gui.update.refusal.manifestinvalid", "マニフェストの形式が正しくありません", "The manifest is not valid"),
-        new("gui.update.refusal.manifestversionmismatch", "マニフェストの版が、リリースの版と違います", "The manifest is for another version than the release"),
-        new("gui.update.refusal.bodytoolarge", "受け取ったデータが、決めた大きさを超えています", "The data received is larger than allowed"),
-        new("gui.update.refusal.redirecthostnotallowed", "想定外の場所への転送があったため、止めました", "A redirect to an unexpected address was stopped"),
-        new("gui.update.refusal.redirectdowngrade", "暗号化されない通信への転送があったため、止めました", "A redirect to an unencrypted address was stopped"),
-        new("gui.update.refusal.redirecttoomany", "転送が多すぎるため、止めました", "Too many redirects, so it was stopped"),
-        new("gui.update.refusal.redirectcredentials", "ユーザー名やパスワード付きの転送があったため、止めました", "A redirect carrying a user name or password was stopped"),
-        new("gui.update.refusal.redirectmissinglocation", "転送先が示されていないため、止めました", "A redirect without a destination was stopped"),
+        new("gui.update.refusal.bodytoolarge", "GitHub から届いたデータが、想定より大きかったため受け取りを止めました", "The data from GitHub was larger than expected, so it was not accepted"),
+        new("gui.update.refusal.redirecthostnotallowed", "GitHub が想定外の場所へ案内したため、止めました", "GitHub pointed to an unexpected address, so the request was stopped"),
+        new("gui.update.refusal.redirectdowngrade", "暗号化されない通信へ案内されたため、止めました", "The request was sent to an unencrypted address, so it was stopped"),
+        new("gui.update.refusal.redirecttoomany", "案内が何度も続いたため、止めました", "The request was passed on too many times, so it was stopped"),
+        new("gui.update.refusal.redirectcredentials", "ユーザー名やパスワード付きの場所へ案内されたため、止めました", "The request was sent to an address with a user name or password, so it was stopped"),
+        new("gui.update.refusal.redirectmissinglocation", "案内先が示されなかったため、止めました", "No address to go to was given, so the request was stopped"),
         new("gui.update.refusal.httperror", "GitHub がエラーを返しました", "GitHub returned an error"),
         new("gui.update.refusal.networkfailure", "GitHub に接続できませんでした", "Could not connect to GitHub"),
-        new("gui.update.refusal.stateunavailable", "確認の記録を書き込めないため、確認できません", "The check cannot run because its record cannot be written"),
-        new("gui.update.refusal.anothercheckrunning", "別の確認が動いています", "Another check is running"),
-        new("gui.update.refusal.ownversionunknown", "このアプリの版が読み取れないため、確認しません", "This app's own version cannot be read, so nothing is checked"),
+        new("gui.update.refusal.stateunavailable", "確認の記録をこのPCに書き込めません", "The record of checks cannot be written on this PC"),
+        new("gui.update.refusal.anothercheckrunning", "ほかの確認が動いています", "Another check is running"),
+        new("gui.update.refusal.ownversionunknown", "このアプリの版を読み取れません", "This app's own version cannot be read"),
+
+        new("gui.update.refusal.draftrelease", "公開前の下書きの版です", "The release is only a draft"),
+        new("gui.update.refusal.prereleaserelease", "試験的に公開された版（プレリリース）です", "The release is marked as a pre-release"),
+        new("gui.update.refusal.tagnotstable", "版の名前が X.Y.Z の形ではありません", "The version name is not in the plain X.Y.Z form"),
+        new("gui.update.refusal.releasepagemismatch", "リリースのページが、PCミエルの公式のページと合いません", "The release page is not PC Mieru's official page for that version"),
+        new("gui.update.refusal.blockedtag", "この版は、このPCで以前うまく動かなかったので、もう勧めません", "This version did not work on this PC before, so it is not offered again"),
+        new("gui.update.refusal.assetmissing", "必要なファイルが、リリースに足りません", "A required file is missing from the release"),
+        new("gui.update.refusal.assetduplicate", "同じ名前のファイルが、リリースに 2 つ以上あります", "The release has the same file more than once"),
+        new("gui.update.refusal.assetnotready", "リリースのファイルが、まだ揃っていません", "The files of the release are not all there yet"),
+        new("gui.update.refusal.asseturlmismatch", "ファイルの置き場所が、公式の場所と合いません", "A file is not stored at the official address"),
+        new("gui.update.refusal.assettoolarge", "確かめるためのファイルが、決めた大きさを超えています", "A file used for verification is larger than allowed"),
+        new("gui.update.refusal.hashlistline", "照合用の一覧（SHA256.txt）に、必要な行が 1 つずつ揃っていません", "The checking list (SHA256.txt) does not have exactly one line for each required file"),
+        new("gui.update.refusal.digestmismatch", "ファイルの内容が、照合用の一覧と合いません", "A file does not match the checking list"),
+        new("gui.update.refusal.manifesthashmismatch", "ファイルの目録（マニフェスト）が、照合用の一覧にあるものと違います", "The file list (manifest) is not the one the checking list names"),
+        new("gui.update.refusal.manifestinvalid", "ファイルの目録（マニフェスト）の形式が正しくありません", "The file list (manifest) is not in a valid form"),
+        new("gui.update.refusal.manifestversionmismatch", "ファイルの目録（マニフェスト）の版が、リリースの版と違います", "The file list (manifest) is for another version than the release"),
     ];
 }
 
@@ -121,14 +146,53 @@ internal static class UpdateText
     public static string RefusalText(UpdateRefusal reason) =>
         reason == UpdateRefusal.None ? string.Empty : Strings.Get("gui.update.refusal." + reason.ToString().ToLowerInvariant());
 
-    public static string PlacementText(Placement placement) => Strings.Get("gui.update.placement." + placement.Kind.ToString().ToLowerInvariant());
+    /// <summary>The value of the "Install folder" row: "Writable", or that updates can only be announced here and why.</summary>
+    public static string PlacementText(Placement placement) => placement.CanSwap
+        ? Strings.Get("gui.update.placement.canswap")
+        : Strings.Format("gui.update.placement.cannotwrite", Fmt.Dict(("reason", Strings.Get("gui.update.placement." + placement.Kind.ToString().ToLowerInvariant()))));
 
-    /// <summary>A moment as the person's own settings write it (local time, the short date and time).</summary>
-    public static string When(DateTimeOffset moment) => moment.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+    /// <summary>
+    /// A moment as the person's own settings write it (local time): without the year when it is this year (<paramref name="now"/>), the short date and time otherwise.
+    /// The month-and-day and time patterns are the culture's own, so Japanese reads 「11月22日 14:30」 and English "November 22 2:30 PM".
+    /// </summary>
+    public static string When(DateTimeOffset moment, DateTimeOffset now)
+    {
+        var culture = CultureInfo.CurrentCulture;
+        var local = moment.ToLocalTime();
+        if (local.Year == now.ToLocalTime().Year)
+        {
+            return local.ToString(culture.DateTimeFormat.MonthDayPattern + " " + culture.DateTimeFormat.ShortTimePattern, culture);
+        }
+
+        return local.ToString("g", culture);
+    }
+
+    /// <summary>
+    /// The end of the wait that GitHub asked for, when one is in force at <paramref name="now"/>: the one this run was told, or the one the state file remembers (which
+    /// is not believed when it is further away than <see cref="UpdateSchedule.MaxBackoff"/>, as the schedule does not believe it).
+    /// </summary>
+    public static DateTimeOffset? BackoffEnd(UpdateCheck? last, UpdateStatus status, DateTimeOffset now)
+    {
+        DateTimeOffset? end = null;
+        if (last is { Kind: UpdateCheckKind.Waiting, WaitUntil: { } held } && held > now)
+        {
+            end = held;
+        }
+
+        if (status.BackoffUntilUtc is { } until && until > now && until - now <= UpdateSchedule.MaxBackoff && (end is null || until > end))
+        {
+            end = until;
+        }
+
+        return end;
+    }
 
     /// <summary>
     /// The one line that says where the check stands. <paramref name="allowed"/> is false when the mode would allow a check but this run does not
-    /// (a choice that could not be saved). Order: a check in progress, the mode (Ask, Off), a wait GitHub asked for, a refusal, a candidate, the last check.
+    /// (a choice that could not be saved). Order: a check in progress, the mode (Ask, Off), a wait GitHub asked for, the last answer (another check running,
+    /// a failure, a release that was refused), a candidate, the last check. A failure that judged no release leaves a remembered candidate on file (the candidate row
+    /// and the notice show it), but the line says the newest thing: that the check did not finish. No tone here is <see cref="CellTone.Accent"/>: it is link blue,
+    /// and nothing in this line can be clicked.
     /// </summary>
     public static UpdateLine Describe(UpdateMode mode, bool allowed, bool checking, UpdateCheck? last, UpdateStatus status, AppVersion running, DateTimeOffset now)
     {
@@ -149,22 +213,17 @@ internal static class UpdateText
 
         if (!allowed)
         {
-            return new UpdateLine(Strings.Get("gui.update.savefailed"), CellTone.Accent);
+            return new UpdateLine(Strings.Get("gui.update.savefailed"), CellTone.Warning);
         }
 
-        if (last is { Kind: UpdateCheckKind.Waiting, WaitUntil: { } held } && held > now)
+        if (BackoffEnd(last, status, now) is { } until)
         {
-            return new UpdateLine(Strings.Format("gui.update.state.waiting", Fmt.Dict(("time", When(held)))), CellTone.Accent);
-        }
-
-        if (status.BackoffUntilUtc is { } until && until > now)
-        {
-            return new UpdateLine(Strings.Format("gui.update.state.waiting", Fmt.Dict(("time", When(until)))), CellTone.Accent);
+            return new UpdateLine(Strings.Format("gui.update.state.waiting", Fmt.Dict(("time", When(until, now)))), CellTone.Dim);
         }
 
         if (last is { Kind: UpdateCheckKind.Refused })
         {
-            return Refused(last.Refusal);
+            return Refused(last.Refusal, last.RefusedVersion);
         }
 
         if (last is { Kind: UpdateCheckKind.Candidate, Version: { } found } && found > running)
@@ -172,28 +231,71 @@ internal static class UpdateText
             return Candidate(found);
         }
 
+        if (status.LastRefusal is not UpdateRefusal.None and not UpdateRefusal.AnotherCheckRunning)
+        {
+            return Refused(status.LastRefusal, status.RefusedVersion);
+        }
+
         if (status.CandidateVersion is { } stored && stored > running)
         {
             return Candidate(stored);
         }
 
-        if (status.LastRefusal != UpdateRefusal.None)
-        {
-            return Refused(status.LastRefusal);
-        }
-
         if (status.LastCheckUtc is { } checkedAt)
         {
             var next = checkedAt + UpdateSchedule.Interval;
-            return new UpdateLine(Strings.Format("gui.update.state.current", Fmt.Dict(("time", When(next > now ? next : now)))), CellTone.Normal);
+            return new UpdateLine(Strings.Format("gui.update.state.current", Fmt.Dict(("time", When(next > now ? next : now, now)))), CellTone.Normal);
         }
 
         return new UpdateLine(Strings.Get("gui.update.state.scheduled"), CellTone.Dim);
     }
 
-    private static UpdateLine Refused(UpdateRefusal reason) =>
-        new(Strings.Format("gui.update.state.refused", Fmt.Dict(("reason", RefusalText(reason)))), CellTone.Accent);
+    /// <summary>
+    /// Why 「今すぐ確認」 is off, as the short line under it; empty when it is on. Ask and Off: choose a mode; a choice that could not be saved; a wait GitHub asked for
+    /// (until when); a check already running.
+    /// </summary>
+    public static string CheckNowReason(UpdateMode mode, bool allowed, bool checking, UpdateCheck? last, UpdateStatus status, DateTimeOffset now)
+    {
+        if (mode is UpdateMode.Ask or UpdateMode.Off)
+        {
+            return Strings.Get("gui.update.reason.choosemode");
+        }
+
+        if (!allowed)
+        {
+            return Strings.Get("gui.update.reason.notsaved");
+        }
+
+        if (BackoffEnd(last, status, now) is { } until)
+        {
+            return Strings.Format("gui.update.reason.backoff", Fmt.Dict(("time", When(until, now))));
+        }
+
+        return checking ? Strings.Get("gui.update.reason.checking") : string.Empty;
+    }
+
+    /// <summary>Why 「更新内容をブラウザーで開く」 is off: there is no newer version to open the notes of; empty when it is on.</summary>
+    public static string NotesReason(bool hasCandidate) => hasCandidate ? string.Empty : Strings.Get("gui.update.reason.nocandidate");
+
+    private static UpdateLine Refused(UpdateRefusal reason, AppVersion? version)
+    {
+        if (reason == UpdateRefusal.AnotherCheckRunning)
+        {
+            return new UpdateLine(Strings.Get("gui.update.state.otherrunning"), CellTone.Dim);
+        }
+
+        var because = Fmt.Dict(("reason", RefusalText(reason)));
+        if (UpdateRefusals.JudgedARelease(reason))
+        {
+            var line = version is { } v
+                ? Strings.Format("gui.update.state.refused", Fmt.Dict(("version", v.ToString()), ("reason", RefusalText(reason))))
+                : Strings.Format("gui.update.state.refusednoversion", because);
+            return new UpdateLine(line, CellTone.Warning);
+        }
+
+        return new UpdateLine(Strings.Format("gui.update.state.failed", because), CellTone.Warning);
+    }
 
     private static UpdateLine Candidate(AppVersion version) =>
-        new(Strings.Format("gui.update.state.candidate", Fmt.Dict(("version", version.ToString()))), CellTone.Accent);
+        new(Strings.Format("gui.update.state.candidate", Fmt.Dict(("version", version.ToString()))), CellTone.Normal);
 }

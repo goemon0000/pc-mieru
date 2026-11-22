@@ -24,12 +24,16 @@ public sealed class UpdateState
     /// <summary>The name of the <see cref="UpdateRefusal"/> the last check ended with, or null.</summary>
     public string? LastRefusal { get; set; }
 
+    /// <summary>The version ("1.2.3") of the release that a rule of its own refused in the last check, when it was known; null otherwise.</summary>
+    public string? RefusedVersion { get; set; }
+
     internal UpdateStatus ToStatus()
     {
         AppVersion? candidate = AppVersion.TryParse(LatestVersion, out var v) && LatestVersion == v.ToString() ? v : null;
         var page = candidate is { } c && UpdateEndpoints.IsReleasePage(LatestPageUrl) && LatestPageUrl == UpdateEndpoints.ReleasePageUrl(c.Tag) ? LatestPageUrl : null;
         var refusal = Enum.TryParse<UpdateRefusal>(LastRefusal, ignoreCase: false, out var r) && Enum.IsDefined(r) ? r : UpdateRefusal.None;
-        return new UpdateStatus(LastCheckUtc, BackoffUntilUtc, candidate, page, refusal);
+        AppVersion? refused = AppVersion.TryParse(RefusedVersion, out var rv) && RefusedVersion == rv.ToString() ? rv : null;
+        return new UpdateStatus(LastCheckUtc, BackoffUntilUtc, candidate, page, refusal, refused);
     }
 }
 
@@ -89,6 +93,9 @@ public sealed class UpdateStateStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
+            // A state file that cannot be read (damaged, cut off, locked at this moment) reads as a fresh one: the app must run without it. The price is small and
+            // known: the last-check time and the remembered candidate are lost, so the next tick asks once more (one check, three small requests at most) and
+            // writes a good file again. It is one check, never a loop: the write before the request sets the time.
             return new UpdateState();
         }
     }
@@ -128,6 +135,25 @@ public sealed class UpdateStateStore
             }
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Takes check.lock, waiting up to <paramref name="wait"/> (polling every 50 ms) while somebody else holds it; zero is "do not wait". Used by a manual check,
+    /// which must not fail only because the check of a moment ago (cancelled by Off, say) has not let go yet; a scheduled tick does not wait.
+    /// </summary>
+    public async Task<(LockOutcome Outcome, IDisposable? Held)> TryLockAsync(TimeSpan wait, CancellationToken ct)
+    {
+        var started = Environment.TickCount64;
+        while (true)
+        {
+            var outcome = TryLock(out var held);
+            if (outcome != LockOutcome.Busy || Environment.TickCount64 - started >= wait.TotalMilliseconds)
+            {
+                return (outcome, held);
+            }
+
+            await Task.Delay(50, ct).ConfigureAwait(false);
         }
     }
 

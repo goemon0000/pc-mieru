@@ -67,8 +67,9 @@ internal static partial class SmokeRun
             // --- Ask: the first run. Nothing is checked, nothing is scheduled, the button that would ask is off. ---
             Check("update: a first run is in Ask", updates.Mode == UpdateMode.Ask && !updates.Allowed, updates.Mode.ToString());
             Check("update: Ask makes no timer and asks nobody", !updates.TimersRunning && fake.Calls == 0 && NoHttp(), "timers " + updates.TimersRunning + ", calls " + fake.Calls + ", " + HttpCounts());
-            Check("update: Ask shows its mode, the first-run line and a button that is off", settings.UpdateModeBox.Text == UpdateText.ModeName(UpdateMode.Ask) && settings.UpdateStatusText == Strings.Get("gui.update.state.ask") && !settings.UpdateCheckNowButton.Enabled && !settings.UpdateNotesButton.Enabled, settings.UpdateModeBox.Text + " / " + settings.UpdateStatusText);
-            Check("update: the settings show this version, no check yet and a writable install", settings.UpdateLastText == Strings.Get("gui.update.lastcheck.never") && settings.UpdatePlacementText == Strings.Get("gui.update.placement.canswap") && settings.UpdatePlacementNoteText.Length == 0 && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none"), settings.UpdateLastText + " / " + settings.UpdatePlacementText);
+            Check("update: Ask shows its mode, the first-run line and buttons that are off, each with its reason", settings.UpdateModeBox.Text == UpdateText.ModeName(UpdateMode.Ask) && settings.UpdateStatusText == Strings.Get("gui.update.state.ask") && !settings.UpdateCheckNowButton.Enabled && !settings.UpdateNotesButton.Enabled && settings.UpdateCheckNowReasonText == Strings.Get("gui.update.reason.choosemode") && settings.UpdateNotesReasonText == Strings.Get("gui.update.reason.nocandidate"), settings.UpdateModeBox.Text + " / " + settings.UpdateStatusText + " / " + settings.UpdateCheckNowReasonText + " / " + settings.UpdateNotesReasonText);
+            await Until(() => updates.PlacementSeen is not null, 4000).ConfigureAwait(true);
+            Check("update: the settings show this version, no check yet and a writable install (the probe ran once, off the UI thread)", settings.UpdateLastText == Strings.Get("gui.update.lastcheck.never") && settings.UpdatePlacementText == Strings.Get("gui.update.placement.canswap") && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none"), settings.UpdateLastText + " / " + settings.UpdatePlacementText);
             await ShootUpdateSettings(settings, "ask").ConfigureAwait(true);
 
             // --- the first-run dialog: only the smoke run shows it (the app's own start would only log it) ---
@@ -86,44 +87,56 @@ internal static partial class SmokeRun
 
             // --- Notify with a candidate ---
             await Open("settings").ConfigureAwait(true);
-            Check("update: Notify turns the check-now button on", settings.UpdateCheckNowButton.Enabled && settings.UpdateModeBox.Text == UpdateText.ModeName(UpdateMode.Notify) && fake.Calls == 0, settings.UpdateModeBox.Text);
+            Check("update: Notify turns the check-now button on and its reason line goes", settings.UpdateCheckNowButton.Enabled && settings.UpdateCheckNowReasonText.Length == 0 && settings.UpdateModeBox.Text == UpdateText.ModeName(UpdateMode.Notify) && fake.Calls == 0, settings.UpdateModeBox.Text);
             fake.Answer = (_, _) => candidate;
             var dialogsBefore = Dialogs.Log.Count;
             settings.UpdateCheckNowButton.PerformClick();
             await Until(() => updates.Pending.IsCompleted && fake.Calls == 1, 4000).ConfigureAwait(true);
             Check("update: 今すぐ確認 asks the (fake) feed once and finds the newer version", fake.Calls == 1 && updates.Last is { Kind: UpdateCheckKind.Candidate } && settings.UpdateCandidateText == found.ToString(), "calls " + fake.Calls + ", " + settings.UpdateCandidateText);
             var notice = Strings.Format("gui.update.notice", Fmt.Dict(("version", found.ToString())));
-            Check("update: the candidate is said once, quietly, on the status bar (no dialog)", notices.Count == 1 && notices[0] == notice && Dialogs.Log.Count == dialogsBefore, notices.Count + " notices, " + (Dialogs.Log.Count - dialogsBefore) + " dialogs");
-            Check("update: the candidate line, the status line and the notes button agree", settings.UpdateStatusText == Strings.Format("gui.update.state.candidate", Fmt.Dict(("version", found.ToString()))) && settings.UpdateStatusTone == CellTone.Accent && settings.UpdateNotesButton.Enabled && settings.NotesUrl == UpdateEndpoints.ReleasePageUrl(found.Tag), settings.UpdateStatusText + " / " + settings.NotesUrl);
+            var noticeLabel = form.Controls.Find("updateNotice", searchAllChildren: true).OfType<Label>().SingleOrDefault();
+            Check("update: the candidate is said quietly in a status bar line that stays (no dialog, no flash)", notices.Count == 0 && Dialogs.Log.Count == dialogsBefore && context.UpdateNotice == notice && noticeLabel is { Visible: true } && noticeLabel.Text == notice, notices.Count + " flashes, " + (Dialogs.Log.Count - dialogsBefore) + " dialogs, " + noticeLabel?.Text);
+            Check("update: the candidate line, the status line and the notes button agree (and the line is not link blue)", settings.UpdateStatusText == Strings.Format("gui.update.state.candidate", Fmt.Dict(("version", found.ToString()))) && settings.UpdateStatusTone == CellTone.Normal && settings.UpdateNotesButton.Enabled && settings.UpdateNotesReasonText.Length == 0 && settings.NotesUrl == UpdateEndpoints.ReleasePageUrl(found.Tag), settings.UpdateStatusText + " / " + settings.NotesUrl);
             settings.UpdateCheckNowButton.PerformClick();
             await Until(() => updates.Pending.IsCompleted && fake.Calls == 2, 4000).ConfigureAwait(true);
-            Check("update: the same version is not announced again in this run", fake.Calls == 2 && notices.Count == 1, "calls " + fake.Calls + ", " + notices.Count + " notices");
+            Check("update: the same version is not announced again in this run", fake.Calls == 2 && notices.Count == 0 && context.UpdateNotice == notice, "calls " + fake.Calls + ", " + notices.Count + " flashes");
             settings.UpdateNotesButton.PerformClick();
             Check("update: the notes button opens the release page of this project and nothing else", opened.Count == 1 && opened[0] == UpdateEndpoints.ReleasePageUrl(found.Tag) && UpdateEndpoints.IsReleasePage(opened[0]), string.Join(", ", opened));
             await ShootUpdateSettings(settings, "candidate").ConfigureAwait(true);
 
-            // --- a refusal: the reason is said in words ---
-            fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true);
+            // --- a check that did not finish (no network): it judged no release, so the candidate and the notice stay ---
+            fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true);
             settings.UpdateCheckNowButton.PerformClick();
             await Until(() => updates.Pending.IsCompleted && fake.Calls == 3, 4000).ConfigureAwait(true);
-            var refusal = Strings.Format("gui.update.state.refused", Fmt.Dict(("reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing))));
-            Check("update: a refused release says why and offers no notes", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == refusal && settings.UpdateStatusTone == CellTone.Accent && !settings.UpdateNotesButton.Enabled && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none"), settings.UpdateStatusText);
+            var failure = Strings.Format("gui.update.state.failed", Fmt.Dict(("reason", UpdateText.RefusalText(UpdateRefusal.NetworkFailure))));
+            Check("update: a failed check says so, keeps the candidate, its notes button and the notice", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == failure && settings.UpdateStatusTone == CellTone.Warning && settings.UpdateCandidateText == found.ToString() && settings.UpdateNotesButton.Enabled && context.UpdateNotice == notice && noticeLabel is { Visible: true }, settings.UpdateStatusText + " / " + settings.UpdateCandidateText);
+            await ShootUpdateSettings(settings, "failure").ConfigureAwait(true);
+
+            // --- a release whose own rules did not hold: the reason is said in words, the candidate and the notice go ---
+            fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true, found);
+            settings.UpdateCheckNowButton.PerformClick();
+            await Until(() => updates.Pending.IsCompleted && fake.Calls == 4, 4000).ConfigureAwait(true);
+            var refusal = Strings.Format("gui.update.state.refused", Fmt.Dict(("version", found.ToString()), ("reason", UpdateText.RefusalText(UpdateRefusal.AssetMissing))));
+            Check("update: a refused release says why, offers no notes, and the candidate and the notice go", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == refusal && settings.UpdateStatusTone == CellTone.Warning && !settings.UpdateNotesButton.Enabled && settings.UpdateNotesReasonText == Strings.Get("gui.update.reason.nocandidate") && settings.UpdateCandidateText == Strings.Get("gui.update.candidate.none") && context.UpdateNotice is null && noticeLabel is { Visible: false }, settings.UpdateStatusText);
             await ShootUpdateSettings(settings, "refusal").ConfigureAwait(true);
 
             // --- a wait that GitHub asked for, on an install that cannot be written to ---
             fake.Placement = new Placement(PlacementKind.ReadOnly, "sample");
+            await updates.RefreshPlacement().ConfigureAwait(true);
             fake.Answer = (_, _) => UpdateCheck.Wait(updates.Now.AddHours(24), fetched: true);
             settings.UpdateCheckNowButton.PerformClick();
-            await Until(() => updates.Pending.IsCompleted && fake.Calls == 4, 4000).ConfigureAwait(true);
-            Check("update: a wait is said with the time until which nothing is asked", updates.Last is { Kind: UpdateCheckKind.Waiting } && settings.UpdateStatusText.Contains(UpdateText.When(updates.Last.WaitUntil!.Value), StringComparison.Ordinal) && settings.UpdateStatusTone == CellTone.Accent, settings.UpdateStatusText);
-            Check("update: a folder that cannot be written to says it will only notify", settings.UpdatePlacementText == Strings.Get("gui.update.placement.readonly") && settings.UpdatePlacementNoteText == Strings.Get("gui.update.placement.note"), settings.UpdatePlacementText + " / " + settings.UpdatePlacementNoteText);
+            await Until(() => updates.Pending.IsCompleted && fake.Calls == 5, 4000).ConfigureAwait(true);
+            var until = updates.Last!.WaitUntil!.Value;
+            var untilText = UpdateText.When(until, updates.Now);
+            Check("update: a wait is said with the time until which nothing is asked, and the button is off with that time beside it", updates.Last is { Kind: UpdateCheckKind.Waiting } && settings.UpdateStatusText == Strings.Format("gui.update.state.waiting", Fmt.Dict(("time", untilText))) && settings.UpdateStatusTone == CellTone.Dim && !settings.UpdateCheckNowButton.Enabled && settings.UpdateCheckNowReasonText == Strings.Format("gui.update.reason.backoff", Fmt.Dict(("time", untilText))), settings.UpdateStatusText + " / " + settings.UpdateCheckNowReasonText);
+            Check("update: a folder that cannot be written to says it will only notify and why", settings.UpdatePlacementText == UpdateText.PlacementText(new Placement(PlacementKind.ReadOnly, "sample")) && settings.UpdatePlacementTone == CellTone.Warning, settings.UpdatePlacementText);
             await ShootUpdateSettings(settings, "backoff").ConfigureAwait(true);
 
             // --- Off: the button goes off, the feed is never asked again ---
             fake.Placement = new Placement(PlacementKind.CanSwap, "sample");
             settings.UpdateModeBox.SelectedIndex = settings.UpdateModeBox.FindStringExact(UpdateText.ModeName(UpdateMode.Off));
             var after = await updates.CheckNowAsync().ConfigureAwait(true);
-            Check("update: Off turns the button off, says so, and asks nobody", updates.Mode == UpdateMode.Off && !settings.UpdateCheckNowButton.Enabled && settings.UpdateStatusText == Strings.Get("gui.update.state.off") && after is null && fake.Calls == 4 && !updates.TimersRunning, updates.Mode + ", calls " + fake.Calls);
+            Check("update: Off turns the button off, says so with its reason, and asks nobody", updates.Mode == UpdateMode.Off && !settings.UpdateCheckNowButton.Enabled && settings.UpdateCheckNowReasonText == Strings.Get("gui.update.reason.choosemode") && settings.UpdateStatusText == Strings.Get("gui.update.state.off") && after is null && fake.Calls == 5 && !updates.TimersRunning && context.UpdateNotice is null, updates.Mode + ", calls " + fake.Calls);
             Check("update: the walk went through the window's own controller with no real request", NoHttp(), HttpCounts());
         }
 
@@ -134,13 +147,14 @@ internal static partial class SmokeRun
             {
                 page.ScrollToUpdateSection();
                 await Task.Delay(200).ConfigureAwait(true);
-                var texts = new[] { page.UpdateStatusText, page.UpdateCandidateText, page.UpdateLastText, page.UpdatePlacementText, page.UpdatePlacementNoteText, page.UpdateModeBox.Text, page.UpdateCheckNowButton.Text, page.UpdateNotesButton.Text };
+                var texts = new[] { page.UpdateStatusText, page.UpdateCandidateText, page.UpdateLastText, page.UpdatePlacementText, page.UpdateCheckNowReasonText, page.UpdateNotesReasonText, page.UpdateModeBox.Text, page.UpdateCheckNowButton.Text, page.UpdateNotesButton.Text, page.ThemeBox.Text };
                 var missing = SmokeText.Missing(page).Concat(SmokeText.Missing(form)).Distinct().Take(5).ToList();
                 Check($"update: the settings section has its texts, {state} ({look})", missing.Count == 0 && !texts.Any(SmokeText.IsPlaceholder), string.Join(" | ", missing));
                 var clipped = SmokeClip.Clipped(form).Distinct().Take(6).ToList();
                 Check($"update: the settings section has no cut-off text, {state} ({look})", clipped.Count == 0, string.Join(" | ", clipped));
                 var off = SmokeTheme.Mismatches(form, context.Theme.Palette).Take(5).ToList();
                 Check($"update: the settings section follows the theme, {state} ({look})", off.Count == 0, string.Join(" | ", off));
+                Check($"update: the theme box shows the theme of this look, {state} ({look})", page.ThemeBox.SelectedIndex == (int)context.Theme.Mode, page.ThemeBox.Text + " / " + context.Theme.Mode);
                 if (shotsDirectory is not null)
                 {
                     _shots.Add(await Capture(shotsDirectory, $"{look}-update-settings-{state}{ScaleSuffix}.png").ConfigureAwait(true));
@@ -170,7 +184,7 @@ internal static partial class SmokeRun
                 }
 
                 Check($"update: the first-run dialog preselects 知らせるだけ ({look})", dialog.NotifyChoice.Checked && !dialog.AutomaticChoice.Checked && !dialog.OffChoice.Checked && dialog.SelectedMode == UpdateMode.Notify, dialog.SelectedMode.ToString());
-                var unsigned = Strings.Current == Language.Ja ? "署名のない版" : "not signed";
+                var unsigned = Strings.Current == Language.Ja ? "電子署名のない版" : "without a digital signature";
                 Check($"update: the 自動 line says that unsigned versions are installed without asking ({look})", dialog.AutomaticLine.Contains(unsigned, StringComparison.Ordinal) && dialog.AutomaticChoice.Text == UpdateText.ModeName(UpdateMode.Automatic), dialog.AutomaticLine);
                 var missing = SmokeText.Missing(dialog).Distinct().Take(5).ToList();
                 Check($"update: the first-run dialog has no missing strings ({look})", missing.Count == 0 && !SmokeText.IsPlaceholder(dialog.AutomaticLine) && !SmokeText.IsPlaceholder(dialog.OkButton.Text), string.Join(" | ", missing));

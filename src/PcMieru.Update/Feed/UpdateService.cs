@@ -42,6 +42,12 @@ public sealed class UpdateServiceOptions
     public Func<IFeedTransport>? TransportFactory { get; init; }
 
     public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// How long a MANUAL check waits for check.lock when another check holds it (the one that Off just cancelled has not let go yet, or another window is just
+    /// finishing). A scheduled tick never waits: it gives way at once. Zero: do not wait.
+    /// </summary>
+    public TimeSpan ManualLockWait { get; init; } = TimeSpan.FromSeconds(3);
 }
 
 /// <summary>
@@ -70,7 +76,10 @@ public sealed class UpdateService : IUpdateService
         }
 
         ct.ThrowIfCancellationRequested();
-        switch (_store.TryLock(out var held))
+
+        // A manual check waits a moment for the lock (Off, then Notify, then "check now" in quick succession: the cancelled check is still unwinding); a tick does not.
+        var (taken, held) = await _store.TryLockAsync(manual ? _options.ManualLockWait : TimeSpan.Zero, ct).ConfigureAwait(false);
+        switch (taken)
         {
             case LockOutcome.Busy:
                 return UpdateCheck.Refuse(UpdateRefusal.AnotherCheckRunning, "check.lock is held", fetched: false);
@@ -101,9 +110,10 @@ public sealed class UpdateService : IUpdateService
             }
 
             UpdateCheck result;
+            AppVersion? read = null; // the version of the release once its answer was parsed, for a refusal that comes from a later request
             try
             {
-                result = await FetchAsync(ct).ConfigureAwait(false);
+                result = await FetchAsync(ct, v => read = v).ConfigureAwait(false);
             }
             catch (RateLimitedException limited)
             {
@@ -114,21 +124,30 @@ public sealed class UpdateService : IUpdateService
             }
             catch (UpdateHttpException refused)
             {
-                result = UpdateCheck.Refuse(refused.Reason, refused.Message, fetched: true);
+                result = UpdateCheck.Refuse(refused.Reason, refused.Message, fetched: true, UpdateRefusals.JudgedARelease(refused.Reason) ? read : null);
             }
 
+            // What is remembered. A failure that judged no release (UpdateRefusals.IsOperational: no answer, an unreadable or cut-off answer, a redirect somewhere else,
+            // this PC's own state) learned nothing about the release, so the candidate an earlier check found STAYS. Only an outcome that did judge one replaces it:
+            // a candidate, "nothing newer" after the answer was parsed, or a refusal of the release's own rules.
+            var operational = result is { Kind: UpdateCheckKind.Refused } && UpdateRefusals.IsOperational(result.Refusal);
             state.BackoffUntilUtc = null;
-            state.LatestVersion = result.Kind == UpdateCheckKind.Candidate ? result.Version!.Value.ToString() : null;
-            state.LatestPageUrl = result.Kind == UpdateCheckKind.Candidate ? result.PageUrl : null;
+            if (!operational)
+            {
+                state.LatestVersion = result.Kind == UpdateCheckKind.Candidate ? result.Version!.Value.ToString() : null;
+                state.LatestPageUrl = result.Kind == UpdateCheckKind.Candidate ? result.PageUrl : null;
+            }
+
             state.LastRefusal = result.Kind == UpdateCheckKind.Refused ? result.Refusal.ToString() : null;
+            state.RefusedVersion = result is { Kind: UpdateCheckKind.Refused, RefusedVersion: { } refusedVersion } ? refusedVersion.ToString() : null;
             _store.TryWrite(state);
             return result;
         }
     }
 
-    private async Task<UpdateCheck> FetchAsync(CancellationToken ct)
+    private async Task<UpdateCheck> FetchAsync(CancellationToken ct, Action<AppVersion> onVersionRead)
     {
-        using var transport = _options.TransportFactory?.Invoke() ?? new UpdateHttp(_options.Running.ToString());
+        using var transport = _options.TransportFactory?.Invoke() ?? new UpdateHttp(_options.Running.ToString(), clock: _options.Clock);
 
         var json = await transport.GetLatestReleaseJsonAsync(ct).ConfigureAwait(false);
         if (!ReleaseParser.TryParse(json, out var release, out var why, out var detail))
@@ -136,21 +155,26 @@ public sealed class UpdateService : IUpdateService
             return Refused(why, detail);
         }
 
+        onVersionRead(release!.Version);
+
         // Newer than BOTH the running and the installed version. Same or older is not an error: there is just nothing to offer.
         var floor = _options.Installed is { } installed && installed > _options.Running ? installed : _options.Running;
-        if (release!.Version <= floor)
+        if (release.Version <= floor)
         {
             return UpdateCheck.NoCandidate(fetched: true);
         }
 
+        // From here on the release has been read, so a refusal says which version it is about.
+        UpdateCheck RefusedV(UpdateRefusal reason, string text) => UpdateCheck.Refuse(reason, text, fetched: true, release.Version);
+
         if (_options.BlockedTags.Contains(release.Tag, StringComparer.Ordinal))
         {
-            return Refused(UpdateRefusal.BlockedTag, release.Tag + " is on the blocked list");
+            return RefusedV(UpdateRefusal.BlockedTag, release.Tag + " is on the blocked list");
         }
 
         if (!ReleaseParser.TrySelect(release, out var assets, out why, out detail))
         {
-            return Refused(why, detail);
+            return RefusedV(why, detail);
         }
 
         var version = release.Version.ToString();
@@ -160,35 +184,35 @@ public sealed class UpdateService : IUpdateService
             UpdateEndpoints.AssetUrl(release.Tag, assets!.HashList.Name), assets.HashList.Size, Sha256List.MaxBytes, ct).ConfigureAwait(false);
         if (!ReleaseParser.DigestAgrees(assets.HashList.Digest, Hex(listBytes)))
         {
-            return Refused(UpdateRefusal.DigestMismatch, "SHA256.txt is not what the release's digest says");
+            return RefusedV(UpdateRefusal.DigestMismatch, "SHA256.txt is not what the release's digest says");
         }
 
         var list = Sha256List.Parse(Encoding.UTF8.GetString(listBytes));
         if (list.For(assets.Zip.Name) is not { } zipHash || list.For(assets.Manifest.Name) is not { } manifestHash)
         {
-            return Refused(UpdateRefusal.HashListLine, "SHA256.txt has no single line for the zip and for the manifest");
+            return RefusedV(UpdateRefusal.HashListLine, "SHA256.txt has no single line for the zip and for the manifest");
         }
 
         if (!ReleaseParser.DigestAgrees(assets.Zip.Digest, zipHash) || !ReleaseParser.DigestAgrees(assets.Manifest.Digest, manifestHash))
         {
-            return Refused(UpdateRefusal.DigestMismatch, "a digest of the release differs from SHA256.txt");
+            return RefusedV(UpdateRefusal.DigestMismatch, "a digest of the release differs from SHA256.txt");
         }
 
         var manifestBytes = await transport.GetSmallAssetAsync(
             UpdateEndpoints.AssetUrl(release.Tag, assets.Manifest.Name), assets.Manifest.Size, Limits.Default.ManifestBytes, ct).ConfigureAwait(false);
         if (!string.Equals(Hex(manifestBytes), manifestHash, StringComparison.Ordinal))
         {
-            return Refused(UpdateRefusal.ManifestHashMismatch, "the manifest is not the one SHA256.txt names");
+            return RefusedV(UpdateRefusal.ManifestHashMismatch, "the manifest is not the one SHA256.txt names");
         }
 
         if (!BundleManifest.TryParse(manifestBytes, out var manifest, out var verdict))
         {
-            return Refused(UpdateRefusal.ManifestInvalid, verdict.ToString());
+            return RefusedV(UpdateRefusal.ManifestInvalid, verdict.ToString());
         }
 
         if (!string.Equals(manifest.Version, version, StringComparison.Ordinal))
         {
-            return Refused(UpdateRefusal.ManifestVersionMismatch, $"the manifest is for {manifest.Version}, the tag for {version}");
+            return RefusedV(UpdateRefusal.ManifestVersionMismatch, $"the manifest is for {manifest.Version}, the tag for {version}");
         }
 
         return UpdateCheck.Found(release.Version, release.PageUrl, manifest, UpdateEndpoints.AssetUrl(release.Tag, assets.Zip.Name), zipHash);

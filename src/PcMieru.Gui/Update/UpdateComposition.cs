@@ -33,10 +33,11 @@ internal static class UpdateComposition
             return new UpdateWiring(new UpdateController(unknown, settings, timers, () => new Placement(PlacementKind.ReadOnly, "no version"), running), null);
         }
 
-        var service = new DeferredUpdateService(() =>
-            InstallId.StateFolder(localFolder, programFile) is { } folder
+        var service = new DeferredUpdateService(
+            () => InstallId.StateFolder(localFolder, programFile) is { } folder
                 ? new UpdateService(new UpdateServiceOptions { Running = running, StateFolder = folder })
-                : new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "this program's file has no install id"));
+                : new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "this program's file has no install id"),
+            () => settings.UpdateMode);
         return new UpdateWiring(new UpdateController(service, settings, timers, () => PlacementOf(programFile), running), null);
     }
 
@@ -47,15 +48,19 @@ internal static class UpdateComposition
     }
 }
 
-/// <summary>Makes the real service the first time it is used (so a start with Ask or Off opens no file for it).</summary>
-internal sealed class DeferredUpdateService(Func<IUpdateService> make) : IUpdateService
+/// <summary>
+/// Makes the real service the first time it is used (so a start with Ask or Off opens no file for it). Reading the status is not a use in Ask or Off either (M9):
+/// the settings page and the notice ask for it, and the owner who has not chosen, or chose "off", must not get a state folder, a lock or a file read for that.
+/// </summary>
+internal sealed class DeferredUpdateService(Func<IUpdateService> make, Func<UpdateMode>? mode = null) : IUpdateService
 {
     private readonly Lazy<IUpdateService> _inner = new(make, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public Task<UpdateCheck> CheckAsync(UpdateMode mode, bool manual, CancellationToken ct) =>
         UpdateModes.MayUseNetwork(mode) ? _inner.Value.CheckAsync(mode, manual, ct) : Task.FromResult(UpdateCheck.NotAllowed(mode));
 
-    public UpdateStatus ReadStatus() => _inner.Value.ReadStatus();
+    public UpdateStatus ReadStatus() =>
+        !_inner.IsValueCreated && mode is not null && !UpdateModes.MayUseNetwork(mode()) ? UpdateStatus.Empty : _inner.Value.ReadStatus();
 }
 
 /// <summary>A service that cannot check (this PC cannot say who it is, or what version it is): it refuses with the reason and asks nobody.</summary>
@@ -138,10 +143,14 @@ internal sealed class FakeUpdateService(AppVersion running, TimeProvider? clock 
         {
             _status = result.Kind switch
             {
-                UpdateCheckKind.Candidate => _status with { LastCheckUtc = now, BackoffUntilUtc = null, CandidateVersion = result.Version, CandidatePageUrl = result.PageUrl, LastRefusal = UpdateRefusal.None },
-                UpdateCheckKind.Refused => _status with { LastCheckUtc = result.Fetched ? now : _status.LastCheckUtc, BackoffUntilUtc = null, CandidateVersion = null, CandidatePageUrl = null, LastRefusal = result.Refusal },
+                UpdateCheckKind.Candidate => _status with { LastCheckUtc = now, BackoffUntilUtc = null, CandidateVersion = result.Version, CandidatePageUrl = result.PageUrl, LastRefusal = UpdateRefusal.None, RefusedVersion = null },
+                // As the real service: a refusal before any request (another check running, no state folder) writes nothing.
+                UpdateCheckKind.Refused when !result.Fetched => _status,
+                // A failure that judged no release keeps the candidate (UpdateRefusals.IsOperational); a rule of the release itself clears it.
+                UpdateCheckKind.Refused when UpdateRefusals.IsOperational(result.Refusal) => _status with { LastCheckUtc = result.Fetched ? now : _status.LastCheckUtc, BackoffUntilUtc = null, LastRefusal = result.Refusal, RefusedVersion = null },
+                UpdateCheckKind.Refused => _status with { LastCheckUtc = result.Fetched ? now : _status.LastCheckUtc, BackoffUntilUtc = null, CandidateVersion = null, CandidatePageUrl = null, LastRefusal = result.Refusal, RefusedVersion = result.RefusedVersion },
                 UpdateCheckKind.Waiting => _status with { LastCheckUtc = now, BackoffUntilUtc = result.WaitUntil },
-                UpdateCheckKind.NoCandidate when result.Fetched => _status with { LastCheckUtc = now, BackoffUntilUtc = null, CandidateVersion = null, CandidatePageUrl = null, LastRefusal = UpdateRefusal.None },
+                UpdateCheckKind.NoCandidate when result.Fetched => _status with { LastCheckUtc = now, BackoffUntilUtc = null, CandidateVersion = null, CandidatePageUrl = null, LastRefusal = UpdateRefusal.None, RefusedVersion = null },
                 _ => _status,
             };
         }

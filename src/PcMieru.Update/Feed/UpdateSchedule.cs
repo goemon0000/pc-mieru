@@ -18,6 +18,9 @@ public static class UpdateSchedule
     /// <summary>How often a running app looks at whether a check is due.</summary>
     public static readonly TimeSpan Poll = TimeSpan.FromHours(1);
 
+    /// <summary>The wait after a check that got no answer (no network, an error status from GitHub): asked again after two hours, not a day. Never earlier than a back-off.</summary>
+    public static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(2);
+
     /// <summary>The least wait after a rate limit.</summary>
     public static readonly TimeSpan RateLimitBackoff = TimeSpan.FromHours(24);
 
@@ -27,6 +30,10 @@ public static class UpdateSchedule
     /// <summary>True while a rate limit is being waited out. A time further away than <see cref="MaxBackoff"/> is not believed.</summary>
     public static bool InBackoff(UpdateState state, DateTimeOffset now) =>
         state.BackoffUntilUtc is { } until && now < until && until - now <= MaxBackoff;
+
+    /// <summary>The wait between two scheduled checks: <see cref="RetryAfterFailure"/> after a check that got no answer, else <see cref="Interval"/>.</summary>
+    public static TimeSpan IntervalFor(UpdateState state) =>
+        Enum.TryParse<UpdateRefusal>(state.LastRefusal, ignoreCase: false, out var last) && UpdateRefusals.IsTransient(last) ? RetryAfterFailure : Interval;
 
     /// <summary>A scheduled check is due: not in a back-off, and never checked, or a day ago, or the last check is in the future (the clock was set back).</summary>
     public static bool IsDue(UpdateState state, DateTimeOffset now)
@@ -41,7 +48,7 @@ public static class UpdateSchedule
             return true;
         }
 
-        return last > now || now - last >= Interval;
+        return last > now || now - last >= IntervalFor(state);
     }
 
     /// <summary>A manual check may go ahead unless a rate limit is being waited out.</summary>
@@ -55,7 +62,7 @@ public static class UpdateSchedule
             return null;
         }
 
-        var due = last + Interval;
+        var due = last + IntervalFor(state);
         return state.BackoffUntilUtc is { } until && until > due ? until : due;
     }
 

@@ -14,6 +14,9 @@ internal sealed class MainForm : Form
     private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Name = "statusBar", AccessibleRole = AccessibleRole.StatusBar };
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Name = "statusText" };
     private readonly Label _updated = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updated" };
+
+    /// <summary>The quiet line about a newer version (<see cref="GuiContext.UpdateNotice"/>): between the messages and the time of the last update, in the normal text colour (it is not a link and not an alarm).</summary>
+    private readonly Label _notice = new() { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updateNotice", Visible = false };
     private readonly Button _pause = new() { Name = "pauseButton", TabStop = true, UseVisualStyleBackColor = false };
     private readonly ComboBox _interval = new() { Name = "intervalCombo", DropDownStyle = ComboBoxStyle.DropDownList, TabStop = true };
     private readonly Panel _controls = new() { Dock = DockStyle.Right, Name = "statusControls" };
@@ -73,6 +76,7 @@ internal sealed class MainForm : Form
 
         // Dock order: the last control added is laid out first (outermost on its edge), so Fill goes in first.
         _statusBar.Controls.Add(_status);
+        _statusBar.Controls.Add(_notice);
         _statusBar.Controls.Add(_updated);
         _statusBar.Controls.Add(_controls);
         Controls.Add(_host);
@@ -96,6 +100,8 @@ internal sealed class MainForm : Form
         };
         _context.LanguageChanged += ApplyLanguage;
         _context.StatusMessage += message => _status.Text = message;
+        _context.UpdateNoticeChanged += ShowNotice;
+        _statusBar.Resize += (_, _) => SizeNotice();
         _context.Theme.Changed += ApplyTheme;
         _context.Pump.Sampled += OnSampled;
         _context.Pump.Failed += ex => _status.Text = Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message });
@@ -494,6 +500,7 @@ internal sealed class MainForm : Form
     {
         _context.Theme.Apply(this);
         ShowPumpState();
+        SizeNotice();
     }
 
     private void ApplyLanguage()
@@ -543,5 +550,29 @@ internal sealed class MainForm : Form
         }
 
         ShowPumpState();
+        ShowNotice();
+    }
+
+    /// <summary>Writes the notice in the language shown now (so a language change rewrites it) or hides it when there is none.</summary>
+    private void ShowNotice()
+    {
+        var text = _context.UpdateNotice;
+        _notice.Text = text ?? string.Empty;
+        _notice.Visible = text is not null;
+        _tips.SetToolTip(_notice, text ?? string.Empty);
+        SizeNotice();
+    }
+
+    /// <summary>The notice is as wide as its text, at most 40 % of the bar (an ellipsis and the tool tip carry the rest), so the messages on its left keep their room.</summary>
+    private void SizeNotice()
+    {
+        if (!_notice.Visible)
+        {
+            return;
+        }
+
+        var wanted = TextRenderer.MeasureText(_notice.Text, _notice.Font).Width + LogicalToDeviceUnits(24);
+        var most = Math.Max((int)(_statusBar.ClientSize.Width * 0.4), LogicalToDeviceUnits(160));
+        _notice.Width = Math.Min(wanted, most);
     }
 }

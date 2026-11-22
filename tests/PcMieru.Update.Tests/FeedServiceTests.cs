@@ -388,24 +388,24 @@ public sealed class FeedServiceTests : IDisposable
     // ---------------------------------------------------------------------------------------------------------------- the connection
 
     [Fact]
-    public async Task An_error_status_is_a_refusal_with_its_own_reason_and_counts_as_the_days_check()
+    public async Task An_error_status_is_a_refusal_with_its_own_reason_and_is_asked_again_after_two_hours_not_a_day()
     {
-        // Ported from Failure_still_counts_as_todays_check.
+        // Ported from Failure_still_counts_as_todays_check; review round (S3): a look that got no answer is not "today's check", it is asked again after two hours.
         _rig.Gh.Status(FakeRelease.Api, HttpStatusCode.InternalServerError);
         var first = await _rig.Check();
         Assert.Equal(UpdateRefusal.HttpError, first.Refusal);
         Assert.Equal(1, _rig.Gh.Count);
 
-        _rig.Clock.Advance(TimeSpan.FromHours(2));
+        _rig.Clock.Advance(TimeSpan.FromMinutes(119));
         var second = await _rig.Check();
 
         Assert.Equal(UpdateCheckKind.NoCandidate, second.Kind);
         Assert.False(second.Fetched);
-        Assert.Equal(1, _rig.Gh.Count); // not asked again two hours later
+        Assert.Equal(1, _rig.Gh.Count); // 1 h 59 min later: not asked again
 
-        _rig.Clock.Advance(TimeSpan.FromHours(22));
+        _rig.Clock.Advance(TimeSpan.FromMinutes(1));
         await _rig.Check();
-        Assert.Equal(2, _rig.Gh.Count); // asked again a day after the first look
+        Assert.Equal(2, _rig.Gh.Count); // two hours after the first look: asked again
     }
 
     [Fact]
@@ -506,17 +506,7 @@ public sealed class FeedServiceTests : IDisposable
         Assert.Equal(_rig.Clock.Now.AddHours(expectedHours), result.WaitUntil);
     }
 
-    [Fact]
-    public async Task A_Retry_After_given_as_a_date_is_read_against_the_real_clock_and_still_waits_at_least_a_day()
-    {
-        // The date form is turned into a delay by the transport with the real clock (the fake clock is the service's own), so the assertion has room.
-        _rig.Gh.Status(FakeRelease.Api, HttpStatusCode.Forbidden, r => r.Headers.RetryAfter = new RetryConditionHeaderValue(DateTimeOffset.UtcNow.AddHours(48)));
-
-        var result = await _rig.Check();
-
-        var wait = result.WaitUntil!.Value - _rig.Clock.Now;
-        Assert.InRange(wait, TimeSpan.FromHours(47), TimeSpan.FromHours(48));
-    }
+    // A Retry-After given as a date is read against the clock the client was given: see FeedReviewFixTests (the exact wait, M1).
 
     [Fact]
     public async Task The_reset_time_of_the_rate_limit_is_honoured_when_no_requests_remain()
@@ -597,7 +587,7 @@ public sealed class FeedServiceTests : IDisposable
 
         var first = Task.Run(() => _rig.Check(UpdateMode.Notify, manual: true));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        var second = await _rig.Check(UpdateMode.Notify, manual: true);
+        var second = await _rig.Check(UpdateMode.Notify, manual: false); // a scheduled tick does not wait for the lock (a manual check does, see FeedReviewFixTests)
         Assert.Equal(UpdateRefusal.AnotherCheckRunning, second.Refusal);
         Assert.False(second.Fetched);
         Assert.Equal(1, _rig.Gh.Count);
