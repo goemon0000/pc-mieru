@@ -22,8 +22,8 @@ public static class BundleNames
     private static readonly string[] DeviceNames =
     [
         "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
     /// <summary>
@@ -143,7 +143,7 @@ public static class BundleNames
         return BundleVerdict.Pass;
     }
 
-    /// <summary>A DOS device name: the part before the first '.' (spaces before the dot dropped) is CON, PRN, AUX, NUL, COM1..9 or LPT1..9 in any case.</summary>
+    /// <summary>A DOS device name: the part before the first '.' (spaces before the dot dropped) is CON, PRN, AUX, NUL, COM0..9 or LPT0..9 in any case (Windows reserves COM0 and LPT0 too).</summary>
     private static bool IsDeviceName(string segment)
     {
         var dot = segment.IndexOf('.');

@@ -39,7 +39,11 @@ public static class BundleFloor
         "PCMieru.SensorHost.runtimeconfig.json",
     ];
 
-    /// <summary>The floor files that a published folder does not carry yet. Shrinks as the steps of DESIGN-B 11 land.</summary>
+    /// <summary>
+    /// The floor files that a published folder does not carry yet. Shrinks as the steps of DESIGN-B 11 land.
+    /// While it is not empty, ci.yml publishes with -PartialFloor (the floor of <see cref="ForThisBuild"/>) and release.yml does not, so a tag fails
+    /// until these files exist: steps 3/4 empty this list; then remove -PartialFloor from ci.yml.
+    /// </summary>
     public static IReadOnlyList<string> NotYetBuilt { get; } =
     [
         "PCMieru.Swap.exe",

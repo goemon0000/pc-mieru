@@ -180,12 +180,30 @@ public sealed class BundleManifest
                 : BundleVerdict.Refuse(BundleFault.ManifestSyntax, "not valid JSON: " + ex.Message);
             return false;
         }
+        catch (Exception ex) when (IsUnreadableText(ex))
+        {
+            verdict = BundleVerdict.Refuse(BundleFault.ManifestSyntax, "not valid JSON: " + ex.Message);
+            return false;
+        }
 
         using (document)
         {
-            return Interpret(document.RootElement, out manifest, out verdict);
+            try
+            {
+                return Interpret(document.RootElement, out manifest, out verdict);
+            }
+            catch (Exception ex) when (IsUnreadableText(ex))
+            {
+                // Well-formed JSON can still hold text that is not text: "\ud800" (half a surrogate pair) in a key or a value parses, and throws only when the
+                // name or the string is turned into a .NET string (InvalidOperationException; FormatException for the typed getters). That is a syntax fault.
+                manifest = null;
+                verdict = BundleVerdict.Refuse(BundleFault.ManifestSyntax, "not valid JSON: a string in the manifest is not valid text (" + ex.Message + ")");
+                return false;
+            }
         }
     }
+
+    private static bool IsUnreadableText(Exception ex) => ex is InvalidOperationException or FormatException;
 
     private static bool DuplicatesOnly(ReadOnlySpan<byte> utf8Json)
     {
@@ -194,7 +212,7 @@ public sealed class BundleManifest
             using var _ = JsonDocument.Parse(utf8Json.ToArray(), new JsonDocumentOptions { AllowDuplicateProperties = true, MaxDepth = 16 });
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException || IsUnreadableText(ex))
         {
             return false;
         }

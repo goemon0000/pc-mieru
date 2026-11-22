@@ -82,14 +82,24 @@ public class BundleZipTests
     }
 
     [Fact]
-    public void A_zip_comment_is_allowed()
+    public void A_zip_comment_is_refused()
     {
+        // A comment is the one place where a second end record can hide, and publish never writes one: the end record must be the last 22 bytes of the file.
         var bundle = new TestBundle();
         var zip = bundle.Zip();
         var withComment = zip.Concat(Encoding.ASCII.GetBytes("hello")).ToArray();
         BinaryPrimitives.WriteUInt16LittleEndian(withComment.AsSpan(zip.Length - 2), 5);
-        var result = bundle.Validate(withComment);
-        Assert.True(result.Ok, result.ToString());
+        var result = Refused(bundle, withComment, BundleFault.NotZip);
+        Assert.Contains("comment", result.Detail);
+    }
+
+    [Fact]
+    public void An_end_record_that_says_it_has_a_comment_it_does_not_have_is_refused()
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip();
+        BinaryPrimitives.WriteUInt16LittleEndian(zip.AsSpan(zip.Length - 2), 5);
+        Refused(bundle, zip, BundleFault.NotZip);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------ the floor
@@ -372,6 +382,21 @@ public class BundleZipTests
     [InlineData((ushort)0x0014, 0x00000400u)] // Windows: a reparse point (junction, symbolic link)
     [InlineData((ushort)0x0014, 0x00000040u)] // Windows: a device
     [InlineData((ushort)0x0014, 0x00000010u)] // Windows: the directory bit on a file name
+    // The made-by host does not say which half of the attributes is true: a zip that claims MS-DOS or NTFS may carry a Unix mode, and one that claims Unix may carry DOS bits.
+    [InlineData((ushort)0x0014, 0xA1FF0000u)] // host 0 (MS-DOS): a symbolic link in the Unix mode
+    [InlineData((ushort)0x0014, 0x21A40000u)] // host 0: a character device
+    [InlineData((ushort)0x0014, 0x61A40000u)] // host 0: a block device
+    [InlineData((ushort)0x0014, 0x11A40000u)] // host 0: a pipe
+    [InlineData((ushort)0x0014, 0xC1A40000u)] // host 0: a socket
+    [InlineData((ushort)0x0014, 0x41ED0000u)] // host 0: a directory mode on a file name
+    [InlineData((ushort)0x0A14, 0xA1FF0000u)] // host 10 (NTFS): a symbolic link in the Unix mode
+    [InlineData((ushort)0x0A14, 0x21A40000u)] // host 10: a character device
+    [InlineData((ushort)0x0A14, 0x00000400u)] // host 10: a reparse point
+    [InlineData((ushort)0x0A14, 0x00000040u)] // host 10: a device
+    [InlineData((ushort)0x0714, 0xA1FF0000u)] // some other host (7, Macintosh)
+    [InlineData((ushort)0x031E, 0x00000400u)] // host 3 (Unix): a reparse point in the DOS bits
+    [InlineData((ushort)0x031E, 0x81A40400u)] // host 3: a regular file mode and a reparse point
+    [InlineData((ushort)0x031E, 0x81A40040u)] // host 3: a regular file mode and a device
     public void A_link_or_a_special_file_is_refused(ushort madeBy, uint attributes)
     {
         var bundle = new TestBundle();
@@ -381,6 +406,41 @@ public class BundleZipTests
             entry.VersionMadeBy = madeBy;
             entry.ExternalAttributes = attributes;
         });
+        Refused(bundle, zip, BundleFault.Link);
+    }
+
+    [Theory]
+    [InlineData((ushort)0x0014, 0x00000000u)] // what .NET writes on Windows: nothing
+    [InlineData((ushort)0x0014, 0x00000020u)] // the DOS archive bit
+    [InlineData((ushort)0x0014, 0x00000001u)] // read only
+    [InlineData((ushort)0x0014, 0x81A40000u)] // host 0 with a regular file mode
+    [InlineData((ushort)0x0A14, 0x00000000u)]
+    [InlineData((ushort)0x0A14, 0x81A40020u)]
+    [InlineData((ushort)0x031E, 0x81A40000u)]
+    [InlineData((ushort)0x031E, 0x81ED0000u)] // an executable
+    public void A_plain_file_is_not_refused_whatever_host_made_the_zip(ushort madeBy, uint attributes)
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e =>
+        {
+            var entry = Find(e, "/NOTICE.txt");
+            entry.VersionMadeBy = madeBy;
+            entry.ExternalAttributes = attributes;
+        });
+        var result = bundle.Validate(zip);
+        Assert.True(result.Ok, result.ToString());
+    }
+
+    [Theory]
+    [InlineData((ushort)0x0014, 0x81A40000u)] // host 0: a regular file mode on a directory name
+    [InlineData((ushort)0x0A14, 0x81A40000u)] // host 10
+    [InlineData((ushort)0x031E, 0x81A40000u)] // host 3
+    [InlineData((ushort)0x0014, 0xA1FF0010u)] // host 0: a symbolic link that calls itself a directory
+    [InlineData((ushort)0x0A14, 0x00000410u)] // host 10: a reparse point that calls itself a directory
+    public void A_directory_entry_that_is_something_else_is_refused_on_every_host(ushort madeBy, uint attributes)
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e => e.Insert(0, new RawEntry(bundle.Root + "/ja/", []) { VersionMadeBy = madeBy, ExternalAttributes = attributes }));
         Refused(bundle, zip, BundleFault.Link);
     }
 
@@ -500,6 +560,267 @@ public class BundleZipTests
 
         Refused(bundle, bundle.Zip(e => Find(e, "/NOTICE.txt").UncompressedSize = uint.MaxValue), BundleFault.Zip64);
         Refused(bundle, bundle.Zip(e => Find(e, "/NOTICE.txt").CompressedSize = uint.MaxValue), BundleFault.Zip64);
+    }
+
+    // ----------------------------------------------------------------------------------------- the end record and the central directory
+
+    /// <summary>A bundle whose NOTICE.txt the real directory calls a symbolic link, and the same zip as it is without that (the fake directory).</summary>
+    private static (byte[] RealWithLink, List<byte[]> CleanRecords) LinkInTheRealDirectoryOnly(TestBundle bundle)
+    {
+        var real = bundle.Zip(e =>
+        {
+            var entry = Find(e, "/NOTICE.txt");
+            entry.VersionMadeBy = 0x031E;
+            entry.ExternalAttributes = 0xA1FF0000u; // lrwxrwxrwx
+        });
+        var (_, clean) = ZipSurgery.Split(bundle.Zip());
+        return (real, clean);
+    }
+
+    [Fact]
+    public void A_second_end_record_planted_in_the_comment_is_refused()
+    {
+        // The first end record (and the directory before it) is the real zip's, in which NOTICE.txt is a symbolic link. A second, proper-looking end record
+        // at the very end of the file points to a second directory in which NOTICE.txt is a plain file. A reader that takes the last end record (ZipArchive,
+        // and the hand reader of before) sees the clean zip; a reader that takes the first one sees the link. Neither is the zip we mean: refuse it.
+        var bundle = new TestBundle();
+        var (real, clean) = LinkInTheRealDirectoryOnly(bundle);
+        var planted = ZipSurgery.WithPlantedEnd(real, clean, fakeCommentLengthField: 0);
+
+        var result = Refused(bundle, planted, BundleFault.ZipAmbiguous);
+        Assert.Contains("end", result.Detail);
+    }
+
+    [Fact]
+    public void A_fake_end_record_that_lies_about_its_comment_is_refused()
+    {
+        // The same plant, but the last end record claims 7 bytes of comment after it that are not there. A reader that insists on the comment fitting skips it
+        // and takes the real one; ZipArchive takes it. Here the real directory is the clean one and the fake one has the link.
+        var bundle = new TestBundle();
+        var (withLink, clean) = LinkInTheRealDirectoryOnly(bundle);
+        var (_, linked) = ZipSurgery.Split(withLink);
+        var planted = ZipSurgery.WithPlantedEnd(bundle.Zip(), linked, fakeCommentLengthField: 7);
+
+        Refused(bundle, planted, BundleFault.NotZip);
+        Assert.NotEmpty(clean);
+    }
+
+    [Fact]
+    public void A_zip_whose_end_record_is_not_the_last_22_bytes_is_refused_whatever_follows_it()
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip();
+        Refused(bundle, zip.Concat(new byte[1]).ToArray(), BundleFault.NotZip);
+        Refused(bundle, zip.Concat(new byte[22]).ToArray(), BundleFault.NotZip);
+        Refused(bundle, zip.Concat(zip[^22..]).ToArray(), BundleFault.NotZip); // the end record twice in a row
+    }
+
+    [Fact]
+    public void A_central_record_with_a_comment_is_refused()
+    {
+        var bundle = new TestBundle();
+        var (body, records) = ZipSurgery.Split(bundle.Zip());
+        records[3] = ZipSurgery.WithComment(records[3], Encoding.ASCII.GetBytes("x"));
+        var result = Refused(bundle, ZipSurgery.Join(body, records), BundleFault.NotZip);
+        Assert.Contains("comment", result.Detail);
+    }
+
+    [Fact]
+    public void An_extra_field_of_a_kilobyte_is_read_and_one_byte_more_is_refused()
+    {
+        var bundle = new TestBundle();
+        var (body, records) = ZipSurgery.Split(bundle.Zip());
+
+        var edge = records.ToList();
+        edge[2] = ZipSurgery.WithExtra(edge[2], ZipSurgery.ExtraBlock(0xCAFE, 1020)); // 4 + 1020 = 1024 bytes
+        var result = bundle.Validate(ZipSurgery.Join(body, edge));
+        Assert.True(result.Ok, result.ToString());
+
+        var over = records.ToList();
+        over[2] = ZipSurgery.WithExtra(over[2], ZipSurgery.ExtraBlock(0xCAFE, 1021));
+        Refused(bundle, ZipSurgery.Join(body, over), BundleFault.NotZip);
+    }
+
+    [Fact]
+    public void An_extra_field_that_does_not_parse_is_refused()
+    {
+        var bundle = new TestBundle();
+        var (body, records) = ZipSurgery.Split(bundle.Zip());
+        var block = ZipSurgery.ExtraBlock(0xCAFE, 10)[..7]; // the block says 10 bytes and 3 are there
+        records[2] = ZipSurgery.WithExtra(records[2], block);
+        Refused(bundle, ZipSurgery.Join(body, records), BundleFault.NotZip);
+
+        var single = bundle.Zip();
+        var (body2, records2) = ZipSurgery.Split(single);
+        records2[2] = ZipSurgery.WithExtra(records2[2], [0x01, 0x02, 0x03]); // not even a block header
+        Refused(bundle, ZipSurgery.Join(body2, records2), BundleFault.NotZip);
+    }
+
+    [Theory]
+    [InlineData(0)] // the only block
+    [InlineData(1)] // after another block
+    public void A_zip64_extra_field_in_a_central_record_is_refused(int position)
+    {
+        var bundle = new TestBundle();
+        var (body, records) = ZipSurgery.Split(bundle.Zip());
+        byte[] extra = position == 0
+            ? ZipSurgery.ExtraBlock(0x0001, 0)
+            : [.. ZipSurgery.ExtraBlock(0xCAFE, 4), .. ZipSurgery.ExtraBlock(0x0001, 8)];
+        records[2] = ZipSurgery.WithExtra(records[2], extra);
+        Refused(bundle, ZipSurgery.Join(body, records), BundleFault.Zip64);
+    }
+
+    [Fact]
+    public void A_name_longer_than_255_bytes_is_refused_as_a_central_record()
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e => e.Add(Named(bundle, "{root}/" + new string('a', 300) + ".dll")));
+        Refused(bundle, zip, BundleFault.NotZip);
+    }
+
+    [Fact]
+    public void A_central_directory_that_no_allowed_entry_count_could_fill_is_refused_before_it_is_read()
+    {
+        // 8 MiB of nothing and an end record that says "one entry, the central directory is all of the 8 MiB". The most that n records can take is
+        // n x (46 + 255 + 1 KiB) (a name of 255 bytes, an extra field of 1 KiB, no comment); asking for more than that must not allocate and read it.
+        var limits = Limits.Default;
+        var size = 8 * 1024 * 1024;
+        Assert.True(size > 1L * (46 + 255 + 1024));
+        byte[] zip = [.. new byte[size], .. ZipSurgery.End(1, size, 0)];
+
+        var bundle = new TestBundle();
+        using var stream = FailingReadStream.Counting(new MemoryStream(zip));
+        var result = BundleZip.Validate(stream, bundle.Version, bundle.Outer(), limits, BundleFloor.ForThisBuild);
+        Assert.Equal(BundleFault.NotZip, result.Fault);
+        Assert.True(stream.BytesRead < size / 2, $"the directory was read: {stream.BytesRead} bytes");
+    }
+
+    [Fact]
+    public void A_central_record_that_points_at_no_local_header_is_refused()
+    {
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e => Find(e, "/NOTICE.txt").LocalHeaderOffset = 7); // the middle of the first local header
+        Refused(bundle, zip, BundleFault.NotZip);
+
+        // Or into the central directory itself.
+        var plain = bundle.Zip();
+        var (body, records) = ZipSurgery.Split(plain);
+        ZipSurgery.SetLocalOffset(records[1], (uint)body.Length);
+        Refused(bundle, ZipSurgery.Join(body, records), BundleFault.NotZip);
+    }
+
+    [Fact]
+    public void A_central_record_whose_local_header_belongs_to_another_file_is_refused()
+    {
+        // Two files with the same content (so the same compressed bytes): the records swap their local header offsets. ZipArchive opens each name through the
+        // other's header and reads the right bytes, the hashes agree, and nothing else notices; the local header's own name does.
+        var bundle = new TestBundle();
+        bundle.Files["a.dll"] = Encoding.ASCII.GetBytes("the same bytes");
+        bundle.Files["b.dll"] = Encoding.ASCII.GetBytes("the same bytes");
+        var (body, records) = ZipSurgery.Split(bundle.Zip());
+        var a = records.Single(r => ZipSurgery.NameOf(r).EndsWith("/a.dll", StringComparison.Ordinal));
+        var b = records.Single(r => ZipSurgery.NameOf(r).EndsWith("/b.dll", StringComparison.Ordinal));
+        var offsetOfA = ZipSurgery.LocalOffsetOf(a);
+        ZipSurgery.SetLocalOffset(a, ZipSurgery.LocalOffsetOf(b));
+        ZipSurgery.SetLocalOffset(b, offsetOfA);
+
+        var result = Refused(bundle, ZipSurgery.Join(body, records), BundleFault.ZipAmbiguous);
+        Assert.Contains("local header", result.Detail);
+    }
+
+    [Fact]
+    public void The_unchanged_pieces_put_together_again_are_the_good_zip()
+    {
+        // The surgery itself must not be what breaks the zips above.
+        var bundle = new TestBundle();
+        var zip = bundle.Zip();
+        var (body, records) = ZipSurgery.Split(zip);
+        var again = ZipSurgery.Join(body, records);
+        Assert.Equal(zip, again);
+        Assert.True(bundle.Validate(again).Ok);
+    }
+
+    // --------------------------------------------------------------------------------------------------------------- a stream that fails
+
+    [Theory]
+    [InlineData("io")]
+    [InlineData("not supported")]
+    [InlineData("disposed")]
+    [InlineData("unauthorized")]
+    public void A_stream_that_fails_on_any_read_gives_a_refusal_and_never_an_exception(string kind)
+    {
+        Func<Exception> failure = kind switch
+        {
+            "io" => () => new IOException("the disk went away"),
+            "not supported" => () => new NotSupportedException("no"),
+            "disposed" => () => new ObjectDisposedException("zip"),
+            _ => () => new UnauthorizedAccessException("denied"),
+        };
+
+        var bundle = new TestBundle();
+        var zip = bundle.Zip();
+        var reached = 0;
+        for (var failOn = 1; failOn <= 20_000; failOn++)
+        {
+            using var stream = new FailingReadStream(new MemoryStream(zip), failOn, failure);
+            BundleResult result;
+            try
+            {
+                result = BundleZip.Validate(stream, bundle.Version, bundle.Outer(), Limits.Default, BundleFloor.ForThisBuild);
+            }
+            catch (Exception ex)
+            {
+                Assert.Fail($"the failure of read {failOn} ({kind}) escaped as {ex.GetType().Name}: {ex.Message}");
+                return;
+            }
+
+            if (!stream.Triggered)
+            {
+                Assert.True(result.Ok, result.ToString()); // fewer reads than failOn: the sweep is over
+                Assert.True(reached > 20, $"only {reached} reads were swept");
+                return;
+            }
+
+            reached++;
+            Assert.False(result.Ok, $"the failure of read {failOn} ({kind}) was swallowed");
+            Assert.True(result.Fault is BundleFault.NotZip or BundleFault.ReadFailed, $"read {failOn} ({kind}): {result}");
+        }
+
+        Assert.Fail("the sweep never ended");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------- inflating past the headers
+
+    [Fact]
+    public void An_entry_that_is_shorter_than_its_headers_and_the_manifest_say_is_refused_on_its_length()
+    {
+        // The headers say 3000 bytes (as the manifest does) but the deflate stream holds 2000.
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e =>
+        {
+            var entry = Find(e, "/System.Runtime.dll");
+            entry.Data = Encoding.ASCII.GetBytes(new string('r', 2000));
+            entry.UncompressedSize = 3000;
+        });
+        var result = bundle.Validate(zip);
+        Assert.False(result.Ok);
+        Assert.True(result.Fault is BundleFault.LengthMismatch or BundleFault.NotZip or BundleFault.ReadFailed, result.ToString());
+    }
+
+    [Fact]
+    public void An_entry_whose_deflate_stream_inflates_past_the_headers_and_the_manifest_is_refused_on_its_length()
+    {
+        // The headers say 3000 bytes (as the manifest does) and the first 3000 bytes of the stream are exactly the manifest's file, but the stream goes on
+        // to 6000. The validator must not call that file good.
+        var bundle = new TestBundle();
+        var zip = bundle.Zip(e =>
+        {
+            var entry = Find(e, "/System.Runtime.dll");
+            entry.Data = Encoding.ASCII.GetBytes(new string('r', 6000));
+            entry.UncompressedSize = 3000;
+        });
+        var result = Refused(bundle, zip, BundleFault.LengthMismatch);
+        Assert.Contains("System.Runtime.dll", result.Detail);
     }
 
     // -------------------------------------------------------------------------------------------------------------- manifest and files

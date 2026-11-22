@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PcMieru.Update\PcMieru.Update.csproj" />
+    <!-- The command line of the validator (tools/publish.ps1 -Verify runs it): its options are tested in-process. -->
+    <ProjectReference Include="..\..\tools\BundleCheck\BundleCheck.csproj" />
   </ItemGroup>
 
 </Project>

@@ -316,6 +316,45 @@ public class BundleFolderTests
     }
 
     [Fact]
+    public void A_root_folder_that_is_itself_a_junction_is_a_link_too()
+    {
+        // The folder given to the validator is a junction to a perfectly good bundle: its children are plain files, so only the root itself can say it is a link.
+        var bundle = new TestBundle();
+        using var disk = new Disk(bundle);
+        var junction = Path.Combine(Path.GetTempPath(), "pcmieru-update-tests-link-" + Guid.NewGuid().ToString("N"));
+        var info = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{disk.Path}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using (var process = Process.Start(info)!)
+        {
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+            {
+                return; // no junction can be made here: nothing to test (xunit 2 cannot skip at run time)
+            }
+        }
+
+        try
+        {
+            var result = Refused(BundleFolder.Validate(junction, bundle.Version, null, Limits.Default, BundleFloor.ForThisBuild), BundleFault.Link);
+            Assert.Contains("link", result.Detail, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            // Remove the junction itself first, so that nothing ever goes through it into the real folder.
+            Directory.Delete(junction, recursive: false);
+        }
+
+        Assert.True(File.Exists(Path.Combine(disk.Path, "pcmi.exe")), "the real folder must be untouched");
+    }
+
+    [Fact]
     public void The_file_count_and_total_limits_hold_for_a_folder_too()
     {
         var bundle = new TestBundle();

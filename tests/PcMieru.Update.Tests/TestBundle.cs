@@ -27,6 +27,9 @@ internal sealed class RawEntry(string name, byte[] data)
     public uint? UncompressedSize { get; set; }
 
     public uint? ExternalAttributes { get; set; }
+
+    /// <summary>The offset of the local header, as the central directory says it.</summary>
+    public uint? LocalHeaderOffset { get; set; }
 }
 
 /// <summary>
@@ -212,6 +215,7 @@ internal sealed class TestBundle
             if (entry.CompressedSize is { } compressed) BinaryPrimitives.WriteUInt32LittleEndian(record[20..], compressed);
             if (entry.UncompressedSize is { } uncompressed) BinaryPrimitives.WriteUInt32LittleEndian(record[24..], uncompressed);
             if (entry.ExternalAttributes is { } attributes) BinaryPrimitives.WriteUInt32LittleEndian(record[38..], attributes);
+            if (entry.LocalHeaderOffset is { } offset) BinaryPrimitives.WriteUInt32LittleEndian(record[42..], offset);
             var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(record[28..]);
             var extraLength = BinaryPrimitives.ReadUInt16LittleEndian(record[30..]);
             var commentLength = BinaryPrimitives.ReadUInt16LittleEndian(record[32..]);

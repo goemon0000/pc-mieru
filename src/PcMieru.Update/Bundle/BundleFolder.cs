@@ -3,9 +3,9 @@ using PcMieru.Update.Feed;
 namespace PcMieru.Update.Bundle;
 
 /// <summary>
-/// The validator of a published folder (the same rules as the zip, applied to real files). tools/publish.ps1 runs it in <c>-SkipZip</c> mode, where there is
-/// no zip: the folder is judged against its own inner PCMieru.bundle.json, and against an outer manifest when one is given.
-/// The folder is only read. A link (a reparse point) anywhere inside it is refused and never followed.
+/// The validator of a published folder (the same rules as the zip, applied to real files). tools/publish.ps1 runs it on the folder before the zip is made
+/// (and in <c>-SkipZip</c> mode, where there is no zip): the folder is judged against its own inner PCMieru.bundle.json, and against an outer manifest when
+/// one is given. The folder is only read. A link (a reparse point) is refused and never followed, whether it is the folder itself or anything inside it.
 /// </summary>
 public static class BundleFolder
 {
@@ -28,6 +28,12 @@ public static class BundleFolder
         if (!top.Exists)
         {
             return BundleResult.Refuse(BundleFault.ReadFailed, $"'{folder}' is not a folder");
+        }
+
+        // The folder itself may be the link (a junction to a good-looking bundle elsewhere): the children of a junction are plain files, so only this says it.
+        if (top.Attributes.HasFlag(FileAttributes.ReparsePoint) || top.LinkTarget is not null)
+        {
+            return BundleResult.Refuse(BundleFault.Link, $"the folder '{folder}' is itself a link");
         }
 
         var entries = new List<BundleEntry>();

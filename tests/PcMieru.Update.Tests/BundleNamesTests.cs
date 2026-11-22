@@ -22,10 +22,9 @@ public class BundleNamesTests
     [InlineData("a.dll")]
     [InlineData("1.dll")]
     [InlineData("x_y-z.dll")]
-    [InlineData("COM0.dll")] // not a device name
-    [InlineData("COM10.dll")]
+    [InlineData("COM10.dll")] // not a device name (COM0 and LPT0 are: see the refused list)
     [InlineData("CONSOLE.dll")]
-    [InlineData("LPT0.txt")]
+    [InlineData("LPT10.txt")]
     // side files
     [InlineData("PCMieru.deps.json")]
     [InlineData("PCMieru.runtimeconfig.json")]
@@ -91,6 +90,16 @@ public class BundleNamesTests
     [InlineData("LPT1.txt", BundleFault.DeviceName)]
     [InlineData("lpt9", BundleFault.DeviceName)]
     [InlineData("Con.Dll", BundleFault.DeviceName)]
+    [InlineData("COM0", BundleFault.DeviceName)] // Windows reserves COM0 and LPT0 as well (Naming Files, Paths, and Namespaces)
+    [InlineData("com0.dll", BundleFault.DeviceName)]
+    [InlineData("Com0.Txt", BundleFault.DeviceName)]
+    [InlineData("COM0.resources.dll", BundleFault.DeviceName)]
+    [InlineData("LPT0", BundleFault.DeviceName)]
+    [InlineData("lpt0.txt", BundleFault.DeviceName)]
+    [InlineData("LPt0.json", BundleFault.DeviceName)]
+    [InlineData("LPT0 .txt", BundleFault.DeviceName)]
+    [InlineData("ja/COM0.resources.dll", BundleFault.DeviceName)]
+    [InlineData("ja/LPT0.x.resources.dll", BundleFault.DeviceName)]
     [InlineData("NUL.resources.dll", BundleFault.DeviceName)]
     [InlineData("NUL .txt", BundleFault.DeviceName)]
     [InlineData("ja/NUL.resources.dll", BundleFault.DeviceName)]

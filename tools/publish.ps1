@@ -18,10 +18,15 @@
      backslashes under Windows PowerShell 5.1), writes the outer manifest PCMieru-X.Y.Z-win-x64.manifest.json (every file
      including the inner manifest) and SHA256.txt (two lines: the zip and the outer manifest) next to it.
   7. With -Verify, the validator judges the zip against the outer manifest and SHA256.txt. With -SkipZip there is no zip:
-     the folder is judged against its own inner manifest.
+     the folder is judged against its own inner manifest. (CI no longer uses -SkipZip: it makes the zip in pwsh and in 5.1.)
 
-  The three files of the later steps (PCMieru.Swap.exe, PCMieru.gate.txt, PcMieru.Update.dll) are not built yet, so the
-  validator is asked for the floor of this build (BundleFloor.ForThisBuild), not the full one.
+  The three files of the later steps (PCMieru.Swap.exe, PCMieru.gate.txt, PcMieru.Update.dll) are not built yet. The validator is
+  always asked for the FULL floor (--floor full) unless -PartialFloor is given, which asks for the floor of this build
+  (BundleFloor.ForThisBuild). CI passes -PartialFloor; a release does not, so a tag fails until the three
+  files exist. Remove -PartialFloor from ci.yml when BundleFloor.NotYetBuilt is empty.
+
+  A published folder may hold no Hidden or System file (the zip would carry it and the validator would refuse the name or the
+  attributes on the client); the script lists with -Force and stops on one.
 
   Works in Windows PowerShell 5.1 and pwsh. ASCII only on purpose (5.1 reads BOM-less files as ANSI).
 
@@ -35,6 +40,7 @@ param(
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
     [switch]$SkipZip,
+    [switch]$PartialFloor,
     [switch]$SmokeFakes,
     [int]$HelperMaxKB = 8192,
     [int]$NetMeterMaxKB = 8192
@@ -49,8 +55,12 @@ $Output = [IO.Path]::GetFullPath($Output)
 
 # pcm-bundle/1 versions are plain X.Y.Z (no suffix, no leading zero) and the only runtime is win-x64: the manifests say so, and a
 # bundle the client would refuse is not worth building.
-if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw "Version must look like 1.2.3, with no suffix and no leading zero (got '$Version')" }
+if ($Version -notmatch '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\z') { throw "Version must look like 1.2.3 (each part 0 to 999999), with no suffix and no leading zero (got '$Version')" }
 if ($Runtime -ne 'win-x64') { throw "pcm-bundle/1 is win-x64 only (got '$Runtime')" }
+
+# The floor the validator is asked for, always spelled out (BundleCheck has no default): the full one, which a release needs, unless -PartialFloor
+# says that this build cannot meet it yet (ci.yml passes it, release.yml does not).
+$floorName = if ($PartialFloor) { 'this-build' } else { 'full' }
 
 $InnerManifestName = 'PCMieru.bundle.json'
 
@@ -252,11 +262,22 @@ function Write-Utf8File([string]$Path, [string]$Text) {
 function Get-FolderEntries([string]$Folder) {
     $base = (Resolve-Path -LiteralPath $Folder).Path.TrimEnd('\')
     $list = New-Object System.Collections.Generic.List[object]
-    foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File) {
+    foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File -Force) {
         $relative = $file.FullName.Substring($base.Length + 1).Replace('\', '/')
         $list.Add([pscustomobject]@{ Path = $relative; Bytes = [long]$file.Length; Sha256 = (Get-Sha256 $file.FullName); Full = $file.FullName })
     }
     return ,$list
+}
+
+# A hidden or system file in the release folder stops the script before the folder is hashed and zipped: nothing that ships is hidden, such a file is easy
+# to miss in Explorer, and Get-ChildItem does not list it at all without -Force. Directories are looked at too.
+function Assert-NoHiddenOrSystem([string]$Folder) {
+    $mask = [int]([IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System)
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($item in Get-ChildItem -LiteralPath $Folder -Recurse -Force) {
+        if (([int]$item.Attributes -band $mask) -ne 0) { $found.Add($item.FullName) }
+    }
+    if ($found.Count -gt 0) { throw ("the release folder has hidden or system files, which a bundle does not carry:`n  " + ($found -join "`n  ")) }
 }
 
 # One JSON string. The names of a bundle are plain ASCII (the validator refuses the rest), but this is correct for any text.
@@ -366,8 +387,9 @@ function New-BundleZip([string]$ZipPath, [string]$RootName, $Entries) {
 # Runs tools/BundleCheck (built into $bundleCheck by the -Verify step) and stops the script when it refuses. Its own line
 # ("OK: N files, M bytes" or "FAIL <Fault>: <detail>") is printed by the tool.
 function Invoke-BundleCheck([string[]]$CheckArgs) {
-    Write-Host ('BundleCheck ' + ($CheckArgs -join ' '))
-    & $bundleCheck @CheckArgs
+    $withFloor = @($CheckArgs) + @('--floor', $floorName)
+    Write-Host ('BundleCheck ' + ($withFloor -join ' '))
+    & $bundleCheck @withFloor
     if ($LASTEXITCODE -ne 0) { throw "BundleCheck refused the bundle (exit code $LASTEXITCODE): $($CheckArgs[0])" }
 }
 
@@ -377,7 +399,7 @@ function Merge-Folders([string[]]$Sources, [string]$Destination, [string[]]$Firs
     $first = @($FirstWins | ForEach-Object { $_.ToLowerInvariant() })
     foreach ($source in $Sources) {
         $base = (Resolve-Path -LiteralPath $source).Path.TrimEnd('\')
-        foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File) {
+        foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File -Force) {
             $relative = $file.FullName.Substring($base.Length + 1)
             if ($relative -like '*.pdb') { continue }
             $hash = Get-Sha256 $file.FullName
@@ -526,6 +548,7 @@ foreach ($stray in @('PCMieru.NetMeter.dll', 'PCMieru.NetMeter.runtimeconfig.jso
 # The inner manifest: every file of the folder but itself. buildId is new at every publish and lives in the manifests only.
 Write-Step 'Inner manifest'
 $buildId = [guid]::NewGuid().ToString('D')
+Assert-NoHiddenOrSystem $folder
 $innerEntries = Get-FolderEntries $folder
 $innerPath = Join-Path $folder $InnerManifestName
 Write-Utf8File $innerPath (New-BundleManifestText $Version $buildId $innerEntries)
@@ -550,7 +573,7 @@ if ($Verify) {
     Invoke-BundleCheck @('folder', $folder, $Version)
 }
 
-$files = @(Get-ChildItem -LiteralPath $folder -Recurse -File)
+$files = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Force)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
 Write-Step 'Result'
 Write-Host ('folder : {0}' -f $folder)
@@ -564,7 +587,7 @@ if (-not $SkipZip) {
     $zipEntries = New-Object System.Collections.Generic.List[object]
     foreach ($e in $innerEntries) { $zipEntries.Add($e) }
     $zipEntries.Add($innerSelf)
-    if (@(Get-ChildItem -LiteralPath $folder -Recurse -File).Count -ne $zipEntries.Count) { throw 'the release folder has files that the inner manifest does not list' }
+    if (@(Get-ChildItem -LiteralPath $folder -Recurse -File -Force).Count -ne $zipEntries.Count) { throw 'the release folder has files that the inner manifest does not list' }
 
     New-BundleZip $zip $name $zipEntries
     Write-Utf8File $outerManifest (New-BundleManifestText $Version $buildId $zipEntries)

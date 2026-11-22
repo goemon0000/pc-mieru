@@ -44,15 +44,26 @@ jobs:
           $path = Join-Path $env:RUNNER_TEMP 'smoke.json'
           if (Test-Path $path) { Get-Content $path -Raw }
 
-  # The release script is the only thing that produces the shipped folder, so it runs here too (without the zip).
+  # The release script is the only thing that produces the shipped folder, so it runs here too, zip included.
   # This catches a merge conflict between published files, a Helper that links something it should not, or a folder
   # whose exes do not start, on the pull request instead of on the tag.
-  # -Verify also builds tools/BundleCheck and runs the real bundle validator (the client's code) on the folder in
-  # -SkipZip mode, judged against its own inner manifest PCMieru.bundle.json: a file the manifest does not list, a name
-  # the rules refuse or a hash that differs fails here. (The zip itself is judged on the release run.)
+  # -Verify also builds tools/BundleCheck and runs the real bundle validator (the client's code) on the folder and on
+  # the zip: a file the manifest does not list, a name the rules refuse, a hash that differs or a zip that is built
+  # differently from what the client reads fails here, not on the tag.
+  #
+  # -PartialFloor asks the validator for BundleFloor.ForThisBuild: the floor without the three files that the later
+  # steps of DESIGN-B 11 have not built yet (BundleFloor.NotYetBuilt: Swap.exe, gate.txt, Update.dll). release.yml does
+  # not pass it, so a tag fails until those files exist. When BundleFloor.NotYetBuilt is empty (steps 3/4) remove
+  # -PartialFloor from both publish steps below: the full floor is then what every run asks for.
+  #
+  # The publish runs twice, once in each PowerShell, into its own output folder: the release is made by pwsh (7.x), but
+  # a person runs tools/publish.ps1 from Windows PowerShell 5.1 too, and 5.1 is where ZipFile.CreateFromDirectory names
+  # the entries with backslashes. The third step compares the entry names of the two zips, read by the validator.
+  # Cost: the job runs publish.ps1 twice (about twice the time of one publish; the second one finds the compiled
+  # objects of the first) and builds BundleCheck once more, which is why the timeout is 45 minutes.
   publish:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -60,6 +71,31 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Publish and run the folder
+      - name: Publish, zip and validate (pwsh)
         shell: pwsh
-        run: ./tools/publish.ps1 -Version 0.0.0 -Verify -SkipZip -SmokeFakes
+        run: ./tools/publish.ps1 -Version 0.0.0 -Output "$env:RUNNER_TEMP/dist-pwsh" -Verify -PartialFloor -SmokeFakes
+
+      - name: Publish, zip and validate (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/publish.ps1 -Version 0.0.0 -Output "$env:RUNNER_TEMP/dist-ps51" -Verify -PartialFloor -SmokeFakes
+
+      # publish.ps1 removes the BundleCheck it built, so it is built again here, once, to read both zips.
+      - name: Same entry names from both PowerShells
+        shell: pwsh
+        run: |
+          $tool = Join-Path $env:RUNNER_TEMP 'bundlecheck'
+          dotnet build tools/BundleCheck/BundleCheck.csproj -c Release -o $tool --nologo
+          if ($LASTEXITCODE -ne 0) { throw "building the bundle validator failed with exit code $LASTEXITCODE" }
+          $check = Join-Path $tool 'BundleCheck.exe'
+          $zipName = 'PCMieru-0.0.0-win-x64.zip'
+          $fromPwsh = @(& $check --list (Join-Path $env:RUNNER_TEMP "dist-pwsh/$zipName"))
+          if ($LASTEXITCODE -ne 0) { throw "BundleCheck could not read the zip of pwsh (exit code $LASTEXITCODE)" }
+          $fromLegacy = @(& $check --list (Join-Path $env:RUNNER_TEMP "dist-ps51/$zipName"))
+          if ($LASTEXITCODE -ne 0) { throw "BundleCheck could not read the zip of Windows PowerShell 5.1 (exit code $LASTEXITCODE)" }
+          Write-Host "entries: pwsh $($fromPwsh.Count), Windows PowerShell 5.1 $($fromLegacy.Count)"
+          if ($fromPwsh.Count -eq 0) { throw 'the zip of pwsh has no entries' }
+          $difference = @(Compare-Object -ReferenceObject $fromPwsh -DifferenceObject $fromLegacy -CaseSensitive)
+          if ($difference.Count -gt 0) {
+            $difference | ForEach-Object { Write-Host ("{0} {1}" -f $_.SideIndicator, $_.InputObject) }
+            throw 'the two PowerShells made zips with different entry names (<= only in pwsh, => only in 5.1)'
+          }

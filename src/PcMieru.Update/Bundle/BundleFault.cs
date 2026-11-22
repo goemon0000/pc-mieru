@@ -35,7 +35,7 @@ public enum BundleFault
     /// <summary>An element that ends with a dot or a space (Windows drops it, so the name on disk would not be the name in the list).</summary>
     TrailingDotOrSpace,
 
-    /// <summary>A DOS device name (CON, PRN, AUX, NUL, COM1..9, LPT1..9), with or without an extension, in any case.</summary>
+    /// <summary>A DOS device name (CON, PRN, AUX, NUL, COM0..9, LPT0..9), with or without an extension, in any case.</summary>
     DeviceName,
 
     /// <summary>A name that is none of the allowed shapes of the 3.2 table (a sub folder other than ja/ and en/, an exe or dll named some other way, ...).</summary>
@@ -127,7 +127,7 @@ public enum BundleFault
     /// <summary>A file and a directory with the same name.</summary>
     FileDirectoryCollision,
 
-    /// <summary>The central directory and the zip library disagree about the entries (names, sizes): the zip is ambiguous, so it is refused.</summary>
+    /// <summary>The zip can be read two ways: a second end record, a local header that names another file, or the central directory and the zip library disagreeing about an entry (name, sizes, attributes). It is refused.</summary>
     ZipAmbiguous,
 
     /// <summary>A file on the required floor is not in the bundle.</summary>

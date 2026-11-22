@@ -262,6 +262,46 @@ public class BundleManifestTests
         Assert.Equal(BundleFault.ManifestTooLarge, huge1.Fault);
     }
 
+    // ------------------------------------------------------------------------------------------------------------------ lone surrogates
+
+    // "\ud800" and "\udc00" are well-formed JSON, but half a surrogate pair cannot become a .NET string: System.Text.Json throws (InvalidOperationException)
+    // when the name or the value is read. A manifest is the input of a client that must answer "refused", never fall over.
+
+    [Theory]
+    [InlineData("\\udc00")] // a lone low surrogate
+    [InlineData("\\ud800")] // a lone high surrogate
+    [InlineData("\\ud800\\ud800")] // two high ones
+    [InlineData("\\udc00\\ud800")] // a pair in the wrong order
+    [InlineData("a\\ud83db")] // a high surrogate and then an ordinary character
+    public void A_lone_surrogate_in_the_name_of_an_unknown_key_is_a_syntax_fault(string escape)
+    {
+        Refused(Json(extra: $"\"{escape}\": 1"), BundleFault.ManifestSyntax);
+        Refused(Json(files: "[ { \"path\": \"pcmi.exe\", \"bytes\": 3, \"sha256\": \"" + Sha + $"\", \"{escape}\": true }} ]"), BundleFault.ManifestSyntax);
+        Refused(Json(extra: $"\"later\": {{ \"{escape}\": 1 }}"), BundleFault.ManifestSyntax);
+    }
+
+    [Theory]
+    [InlineData("\\ud800")]
+    [InlineData("\\udc00")]
+    [InlineData("0.5.\\ud800")]
+    public void A_lone_surrogate_in_a_value_is_a_syntax_fault_wherever_the_value_is(string escape)
+    {
+        Refused(Json(version: $"\"{escape}\""), BundleFault.ManifestSyntax);
+        Refused(Json(format: $"\"{escape}\""), BundleFault.ManifestSyntax);
+        Refused(Json(rid: $"\"{escape}\""), BundleFault.ManifestSyntax);
+        Refused(Json(buildId: $"\"{escape}\""), BundleFault.ManifestSyntax);
+        Refused(Json(files: "[ " + File(escape) + " ]"), BundleFault.ManifestSyntax);
+        Refused(Json(files: "[ " + File(sha: escape) + " ]"), BundleFault.ManifestSyntax);
+    }
+
+    [Fact]
+    public void A_surrogate_pair_written_as_two_escapes_is_an_ordinary_character()
+    {
+        // The same escapes, but a proper pair (U+1F600): an unknown key is skipped, and as a path it is a name the rules refuse, not a crash.
+        Assert.True(Read(Json(extra: "\"\\ud83d\\ude00\": 1")).Ok);
+        Refused(Json(files: "[ " + File("\\ud83d\\ude00.dll") + " ]"), BundleFault.NotAllowed);
+    }
+
     // ------------------------------------------------------------------------------------------------------------------------- writing
 
     private static BundleManifest Sample(params BundleFile[] files) => new("0.5.0", Guid1, files);
