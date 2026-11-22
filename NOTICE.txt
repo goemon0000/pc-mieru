@@ -136,6 +136,25 @@ goemon0000/parts-life and the owner's pl-sensors helper
       src/PartsLife.Check/PartsLife.Check.csproj
   src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
       the same post-link check, copied for the network meter
+  src/PcMieru.Checks/Recording/RunSummarizer.cs
+      every threshold and wording rule of the interval summary (the busy
+      level, the sustained window, the limit bits, the co-occurrence spans,
+      the notes), line for line, from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/Summarizer.cs and Summary.cs
+  src/PcMieru.Checks/Recording/LegacyRun.cs
+      the header fields and the CSV layout of the old partslife-run/1 runs
+      (read only), from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/RunStore.cs and Session.cs
+  src/PcMieru.Checks/Recording/RunCodes.cs
+  src/PcMieru.Checks/Recording/RunFiles.cs
+  src/PcMieru.Checks/Recording/RunSeries.cs
+  src/PcMieru.Checks/Recording/RunStore.cs
+  src/PcMieru.Checks/Recording/RunSummary.cs
+  src/PcMieru.Checks/Recording/RunTypes.cs
+      only the name of the old partslife-run/1 format and of the
+      Documents\PartsLife\runs folder it lived in, so that the old runs can be
+      listed and read (never written), from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/RunStore.cs
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART
