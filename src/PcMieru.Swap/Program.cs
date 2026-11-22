@@ -14,6 +14,8 @@ namespace PcMieru.Swap
     ///
     /// There is NO start gate call here, on purpose: the Launcher has to work while the gate says "recovery pending" (that is what it is for), and the Runner lives in I\update, where no gate is beside it.
     /// What the Runner does with the gate is the point of the program: it takes it exclusively (<c>InstallGate.EnterExclusive</c>) before it changes anything.
+    ///
+    /// There is no test entry here either. The test build of the runner (tests/PcMieru.Swap.TestBuild) compiles this very file with the symbol PCM_SWAP_TESTBUILD, which routes the command line through its own entry first.
     /// </summary>
     internal static class SwapMain
     {
@@ -44,7 +46,13 @@ namespace PcMieru.Swap
             }
 
             var self = Path.Combine(InstallGate.InstallFolderOf(processPath), Path.GetFileName(processPath));
-            return SwapCli.Run(args, new SwapHost { SelfPath = self, Out = Console.Out, Error = Console.Error });
+            var host = new SwapHost { SelfPath = self, Out = Console.Out, Error = Console.Error };
+#if PCM_SWAP_TESTBUILD
+            // Only tests/PcMieru.Swap.TestBuild defines the symbol (the product's csproj stops the build if it is defined there): the test-only entry lives in that project, never in the product.
+            return PcMieru.Swap.TestBuild.TestEntry.Run(args, host, Environment.GetEnvironmentVariable);
+#else
+            return SwapCli.Run(args, host);
+#endif
         }
     }
 

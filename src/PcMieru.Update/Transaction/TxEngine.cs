@@ -83,8 +83,22 @@ internal sealed partial class TxEngine
 
     private static string Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
+    /// <summary>The entries of update/ a cleaning found and left alone because they are not transaction folders (relative to update/); named in the detail of the result.</summary>
+    private IReadOnlyList<string> _leftAlone = [];
+
+    private string WithLeftAlone(string detail)
+    {
+        if (_leftAlone.Count == 0)
+        {
+            return detail;
+        }
+
+        var shown = string.Join(", ", _leftAlone.Take(5).Select(BundleNames.Show));
+        return $"{detail}; left alone, not a transaction folder: {shown}{(_leftAlone.Count > 5 ? $" and {_leftAlone.Count - 5} more" : string.Empty)}";
+    }
+
     private TxResult Make(TxOutcome outcome, TxReason reason, string detail, string? tag = null, bool cleanupPending = false) =>
-        new(outcome, reason, detail)
+        new(outcome, reason, WithLeftAlone(detail))
         {
             Tx = _tx,
             FromVersion = _fromRecord?.Version,
@@ -267,14 +281,22 @@ internal sealed partial class TxEngine
     {
         var tx = _tx!;
         CheckGate();
+
+        // NTFS or ReFS only, and asked before anything is written (not even last-result.json): the swap stands on the order of their metadata log (see TxNative).
+        if (!SystemVolumeFormat.IsSupported(_seams.Volume.FormatOf(_paths.Install)))
+        {
+            throw new TxFailure(TxReason.NotNtfs, "the volume of the install folder is not NTFS or ReFS");
+        }
+
         if (TxPaths.IsLink(_paths.Update))
         {
             throw new TxFailure(TxReason.UpdateFolderUnsafe, "the update folder is a link");
         }
 
-        if (ManagedSet.Exists(_paths.Journal) || ManagedSet.Exists(_paths.Sentinel))
+        if (ManagedSet.Exists(_paths.Journal) || ManagedSet.Exists(_paths.JournalTemp) || ManagedSet.Exists(_paths.Sentinel))
         {
-            throw new TxFailure(TxReason.JournalPresent, "journal.json or the recovery-failed sentinel is present");
+            // journal.json.tmp too: it is what is left of a journal write that was cut, and only a recovery decides what that means.
+            throw new TxFailure(TxReason.JournalPresent, "journal.json, journal.json.tmp or the recovery-failed sentinel is present");
         }
 
         _mayWriteResult = true;
@@ -362,10 +384,16 @@ internal sealed partial class TxEngine
         }
 
         CheckSpace(current, currentBytes, to, ops);
+        var newDirs = NewDirectories(ops);
 
-        foreach (var stale in _paths.TransactionFolders())
+        // Leftovers of earlier runs: only transaction folders (and links standing where they stand, unlinked and never entered); anything else in work/ or prev-*/ is not ours and stays.
+        var stale = _paths.ScanStale();
+        _leftAlone = stale.LeftAlone;
+        foreach (var folder in stale.ToDelete)
         {
-            _io.DeleteTree(TxSteps.StaleClean, stale);
+            // Best effort: what an earlier run left may hold a file a running program still has mapped (it was renamed aside there). That must not stop an update; the next cleaning gets it.
+            var one = folder;
+            Attempt(() => _io.DeleteTree(TxSteps.StaleClean, one));
         }
 
         // New files, on the same volume, next to the install.
@@ -423,9 +451,34 @@ internal sealed partial class TxEngine
             throw new TxFailure(TxReason.RunnerUnavailable, ex.Message);
         }
 
-        var journal = new TxJournal(tx, current, currentSha, to, to.Sha256, ops);
+        var journal = new TxJournal(tx, current, currentSha, to, to.Sha256, ops, newDirs);
         WriteJournal(journal, TxSteps.JournalPrepared);
         return journal;
+    }
+
+    /// <summary>The folders the added files need that are not there yet (names relative to I, with "/"): what a rollback may remove again, and nothing else.</summary>
+    private List<string> NewDirectories(List<TxOp> ops)
+    {
+        var made = new List<string>();
+        foreach (var add in ops.Where(o => o.Intent == TxOpIntent.Add))
+        {
+            var parts = add.Path.Split('/');
+            var path = _paths.Install;
+            for (var i = 0; i < parts.Length - 1; i++)
+            {
+                path = Path.Combine(path, parts[i]);
+                if (ManagedSet.Look(path) == Presence.Absent)
+                {
+                    var name = string.Join('/', parts.Take(i + 1));
+                    if (!made.Contains(name, StringComparer.Ordinal))
+                    {
+                        made.Add(name);
+                    }
+                }
+            }
+        }
+
+        return made;
     }
 
     /// <summary>Whether a new name is taken by something the record does not know: the name itself, or a file or a link in place of one of its folders.</summary>

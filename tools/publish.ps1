@@ -93,6 +93,11 @@ $KnownRuntimeSwitchNames = @('System.Net.SocketsHttpHandler.Http3Support')
 # Parts of method names in the ILC map that mean network code, in the map's spelling (dots are underscores). Case-sensitive on purpose.
 $NetworkMapFragments = @('System_Net', 'Http', 'Socket', 'WinInet', 'Dns', 'NetworkInformation', 'Feed_Update', 'Feed_Release')
 
+# The test-only entry of the runner (a scripted verdict, a stop at a named step) lives in the test-only build of the swapper and in no shipped program. Its option name and its environment variable
+# must not be in the published exe, as ASCII or as UTF-16 text (Test-NoTestEntry), and none of the names in $TestEntryMapFragments may be a compiled method in the ILC map (Test-SwapMap).
+$TestEntryNames = @('--test-swap', 'PCMIERU_SWAP_TEST')
+$TestEntryMapFragments = @('TestEntry', 'StopHere', 'WriteTestMarker')
+
 function Write-Step([string]$Text) { Write-Host ('== ' + $Text) -ForegroundColor Cyan }
 
 function Invoke-Dotnet([string[]]$DotnetArgs) {
@@ -265,13 +270,57 @@ function Find-NetworkMarkers([string]$Path) {
     return ,$found
 }
 
+# Which of $Names are in $Bytes, as ASCII text or as UTF-16 text, whatever the case (one char per byte, Latin-1, so that every byte pattern is found as it is).
+function Find-NamesInBytes([byte[]]$Bytes, [string[]]$Names) {
+    $text = [Text.Encoding]::GetEncoding(28591).GetString($Bytes)
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $Names) {
+        $wide = (($name.ToCharArray() | ForEach-Object { [string]$_ }) -join [string][char]0)
+        if ($text.IndexOf($name, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $text.IndexOf($wide, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $found.Add($name) }
+    }
+    return ,$found
+}
+
+# The swapper in the release folder has no test entry: neither the option nor the variable, in either encoding. A scan that finds nothing proves nothing, so it is proved first on samples that
+# are made here: each name as ASCII and as UTF-16 text between other bytes must be found, and the same bytes without a name must find nothing.
+function Test-NoTestEntry([string]$Path) {
+    $pad = [byte[]](1, 2, 3, 0, 4, 5)
+    $clean = Find-NamesInBytes $pad $TestEntryNames
+    if ($clean.Count -ne 0) { throw ('the test-entry scan reports ' + (@($clean) -join ', ') + ' in bytes that have no name; it cannot vouch for the swapper') }
+    foreach ($name in $TestEntryNames) {
+        foreach ($form in @('ASCII', 'UTF-16')) {
+            if ($form -eq 'ASCII') { $sample = [byte[]]($pad + [Text.Encoding]::ASCII.GetBytes($name) + $pad) } else { $sample = [byte[]]($pad + [Text.Encoding]::Unicode.GetBytes($name) + $pad) }
+            $seen = Find-NamesInBytes $sample $TestEntryNames
+            if ($seen -notcontains $name) { throw ("the test-entry scan cannot see '" + $name + "' as " + $form + ' text in a sample that has it; it cannot vouch for the swapper') }
+        }
+    }
+    Write-Host ('Swap test entry scan control: ' + $TestEntryNames.Count + ' names, each found as ASCII and as UTF-16 in a made sample, none in a clean one')
+    $found = Find-NamesInBytes ([IO.File]::ReadAllBytes($Path)) $TestEntryNames
+    if ($found.Count -gt 0) { throw ('PCMieru.Swap.exe has the test entry in it: ' + (@($found) -join ', ') + ' (the shipped swapper must not have it; it belongs to the test-only build)') }
+    Write-Host ('Swap test entry : none of ' + $TestEntryNames.Count + ' names in the exe (ASCII or UTF-16)')
+}
+
 # The strong evidence that no network code is in the swapper: the ILC map (IlcGenerateMapFile in PcMieru.Swap.csproj) lists every method the compiler kept, by its full name. The bytes of the exe only
 # hold the names of the types that reflection can see, so a method that is compiled in can have no name there; the map has them all. The map is trusted only when it names the swap's own code (a control),
 # and the names are then searched for the fragments of $NetworkMapFragments. Update.Feed has two harmless users in the swapper (AppVersion, Sha256List) and nothing else from the update client.
-function Test-SwapMap {
-    $maps = @(Get-ChildItem -LiteralPath (Join-Path $root 'src\PcMieru.Swap\obj') -Recurse -Filter 'PCMieru.Swap.map.xml' -File -Force | Sort-Object LastWriteTime -Descending)
-    if ($maps.Count -eq 0) { throw 'the ILC map of PCMieru.Swap (PCMieru.Swap.map.xml) was not found under src\PcMieru.Swap\obj; the network check of the swapper cannot run' }
-    $text = [IO.File]::ReadAllText($maps[0].FullName)
+#
+# Which map: the one of THIS publish, by its exact path (the target framework of PcMieru.Swap.csproj and the runtime of this script), never "the newest map under obj" (a Debug build, another runtime or an
+# earlier publish could have left another). The compiler writes the map and then the linker writes the exe (a fraction of a second later), so the map belongs to the exe in the release folder when the exe
+# is byte for byte the linker's output next to the map ($linked), is not older than the map and is not more than ten minutes younger. (The map cannot be newer than the exe: it is written first.)
+function Test-SwapMap([string]$ExePath) {
+    $mapPath = Join-Path $root ('src\PcMieru.Swap\obj\Release\net10.0-windows\' + $Runtime + '\native\PCMieru.Swap.map.xml')
+    $linked = Join-Path $root ('src\PcMieru.Swap\bin\Release\net10.0-windows\' + $Runtime + '\native\PCMieru.Swap.exe')
+    foreach ($needed in @($mapPath, $linked)) {
+        if (-not (Test-Path -LiteralPath $needed -PathType Leaf)) { throw ('the file of the swapper build was not found: ' + $needed + '; the network check of the swapper cannot run') }
+    }
+    $map = Get-Item -LiteralPath $mapPath -Force
+    $linkedItem = Get-Item -LiteralPath $linked -Force
+    if ((Get-Sha256 $linked) -ne (Get-Sha256 $ExePath)) { throw 'the exe in the release folder is not the exe the linker made next to the ILC map; the map cannot vouch for it' }
+    if ($map.LastWriteTimeUtc -gt $linkedItem.LastWriteTimeUtc) { throw 'the ILC map is newer than the exe that was linked: it is not the map of this build' }
+    $age = $linkedItem.LastWriteTimeUtc - $map.LastWriteTimeUtc
+    if ($age.TotalMinutes -gt 10) { throw ('the ILC map is ' + [int]$age.TotalMinutes + ' minutes older than the exe that was linked: it is a leftover, not the map of this build') }
+    Write-Host ('Swap map       : ' + $mapPath.Substring($root.Length + 1) + ' (' + [int]$age.TotalMilliseconds + ' ms before the exe was linked, the exe is the linker output)')
+    $text = [IO.File]::ReadAllText($map.FullName)
     $names = @([regex]::Matches($text, '<MethodCode Name="([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
     if ($names.Count -lt 1000) { throw ('the ILC map lists only ' + $names.Count + ' methods; it cannot vouch for the swapper') }
     $control = @($names | Where-Object { $_.StartsWith('PcMieru_Update_PcMieru_Update_Transaction_', [StringComparison]::Ordinal) })
@@ -284,9 +333,17 @@ function Test-SwapMap {
     }
     if ($hits.Count -gt 0) { throw ('PCMieru.Swap.exe has network code compiled in (ILC map): ' + ((@($hits) | Select-Object -First 5) -join ', ')) }
     Write-Host ('Swap network code: none of ' + $NetworkMapFragments.Count + ' name fragments in ' + $names.Count + ' compiled methods (' + $control.Count + ' of them the swap code)')
+    $entryHits = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $names) {
+        foreach ($fragment in $TestEntryMapFragments) {
+            if ($name.IndexOf($fragment, [StringComparison]::Ordinal) -ge 0) { $entryHits.Add($name); break }
+        }
+    }
+    if ($entryHits.Count -gt 0) { throw ('PCMieru.Swap.exe has the test entry compiled in (ILC map): ' + ((@($entryHits) | Select-Object -First 5) -join ', ')) }
+    Write-Host ('Swap test entry : none of ' + $TestEntryMapFragments.Count + ' name fragments in the ' + $names.Count + ' compiled methods')
 }
 
-# What only the swapper is held to (the import list is Test-AotExe's, with $AllowedSwapImports): no network names in its bytes and in its ILC map, and the manifest of an asInvoker program.
+# What only the swapper is held to (the import list is Test-AotExe's, with $AllowedSwapImports): no network names in its bytes and in its ILC map, no test entry (Test-NoTestEntry, and the map), and the manifest of an asInvoker program.
 # The scan is proved first: PcMieru.Update.dll (in $folder from the Gui publish) holds the update client, so it must show System.Net.Http and UpdateHttp. A scan that finds
 # nothing there cannot be trusted to find nothing in the swapper.
 function Test-SwapExe([string]$Path) {
@@ -298,7 +355,8 @@ function Test-SwapExe([string]$Path) {
     $found = Find-NetworkMarkers $Path
     if ($found.Count -gt 0) { throw ('PCMieru.Swap.exe has network names in it: ' + (@($found) -join ', ') + ' (it must not be able to reach network code)') }
     Write-Host ('Swap network names: none of ' + $NetworkMarkers.Count + ' in the exe')
-    Test-SwapMap
+    Test-NoTestEntry $Path
+    Test-SwapMap $Path
     $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Path))
     if ($text.IndexOf('asInvoker', [StringComparison]::Ordinal) -lt 0) { throw 'PCMieru.Swap.exe has no asInvoker manifest' }
     if ($text.IndexOf('requireAdministrator', [StringComparison]::OrdinalIgnoreCase) -ge 0) { throw 'PCMieru.Swap.exe asks for administrator rights; it must run as the invoker' }

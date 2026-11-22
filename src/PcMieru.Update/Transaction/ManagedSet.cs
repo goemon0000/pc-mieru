@@ -111,11 +111,17 @@ internal static class ManagedSet
             }
         }
 
-        // A link in a parent folder (ja/, en/) is also a difference: the file would be somewhere else.
-        var slash = file.Path.LastIndexOf('/');
-        if (slash > 0 && TxPaths.IsLink(Path.GetDirectoryName(paths.InInstall(file.Path))!))
+        // A link in ANY folder between the install folder and the file (ja/, en/ and whatever lies below them) is also a difference: the file would be somewhere else. Every segment is looked at, not only the last
+        // one; a link at "ja" with a real folder below it is just as much a link.
+        var segments = file.Path.Split('/');
+        var folder = paths.Install;
+        for (var i = 0; i < segments.Length - 1; i++)
         {
-            return new SetFinding(file.Path, FindingKind.Link);
+            folder = Path.Combine(folder, segments[i]);
+            if (TxPaths.IsLink(folder))
+            {
+                return new SetFinding(file.Path, FindingKind.Link);
+            }
         }
 
         switch (Probe(paths.InInstall(file.Path), out var length, out var sha))

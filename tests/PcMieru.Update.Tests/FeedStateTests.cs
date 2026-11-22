@@ -2,6 +2,7 @@
 // see NOTICE.txt) are ported; the lock, the id of an install, the refusal that is remembered and the placement kinds are new (DESIGN-B 4 and 5).
 using System.Text.RegularExpressions;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Tests;
 
@@ -434,8 +435,8 @@ public sealed class InstallPlacementTests : IDisposable
         return dir;
     }
 
-    private static Placement Check(string folder, bool elevated = false, DriveType drive = DriveType.Fixed) =>
-        InstallPlacement.Check(folder, () => elevated, _ => drive);
+    private static Placement Check(string folder, bool elevated = false, DriveType drive = DriveType.Fixed, string? format = "NTFS") =>
+        InstallPlacement.Check(folder, () => elevated, _ => drive, _ => format);
 
     [Fact]
     public void A_writable_folder_on_a_fixed_drive_can_be_swapped_and_the_probe_leaves_nothing_behind()
@@ -478,6 +479,45 @@ public sealed class InstallPlacementTests : IDisposable
         Assert.Equal(PlacementKind.NotFixedDrive, placement.Kind);
         Assert.False(placement.CanSwap);
         Assert.Empty(Directory.GetFileSystemEntries(folder));
+    }
+
+    [Theory]
+    [InlineData("FAT32")]
+    [InlineData("exFAT")]
+    [InlineData("FAT")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void A_volume_that_is_not_NTFS_or_ReFS_is_notify_only_and_is_not_even_probed(string? format)
+    {
+        var folder = Install();
+
+        var placement = Check(folder, format: format);
+
+        Assert.Equal(PlacementKind.NotNtfs, placement.Kind);
+        Assert.False(placement.CanSwap);
+        Assert.Empty(Directory.GetFileSystemEntries(folder));
+    }
+
+    [Theory]
+    [InlineData("NTFS")]
+    [InlineData("ntfs")]
+    [InlineData("ReFS")]
+    public void NTFS_and_ReFS_can_swap(string format) => Assert.Equal(PlacementKind.CanSwap, Check(Install(), format: format).Kind);
+
+    [Fact]
+    public void The_drive_type_and_the_elevation_are_asked_before_the_file_system()
+    {
+        Assert.Equal(PlacementKind.Elevated, Check(Install(), elevated: true, format: "FAT32").Kind);
+        Assert.Equal(PlacementKind.NotFixedDrive, Check(Install(), drive: DriveType.Removable, format: "FAT32").Kind);
+    }
+
+    [Fact]
+    public void The_real_file_system_question_names_ntfs_or_refs_for_a_scratch_folder_and_nothing_for_a_share()
+    {
+        Assert.True(SystemVolumeFormat.IsSupported(SystemVolumeFormat.Instance.FormatOf(Install())), "the scratch volume of these tests is NTFS or ReFS");
+        Assert.Null(SystemVolumeFormat.Instance.FormatOf(@"\\no-such-server\share\folder"));
+        Assert.False(SystemVolumeFormat.IsSupported(null));
+        Assert.False(SystemVolumeFormat.IsSupported("FAT32"));
     }
 
     [Fact]

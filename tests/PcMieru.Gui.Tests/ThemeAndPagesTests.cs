@@ -65,6 +65,28 @@ public class ThemeAndPagesTests
     }
 
     [Fact]
+    public void A_button_on_the_dark_window_has_an_outline_that_shows_against_the_window_and_against_the_button_itself()
+    {
+        // WCAG 2.1 1.4.11: the outline of a control needs 3:1 against what it sits on. The dark outline was (70,70,70): 1.7:1 on the window, so the 「回復する」 button of the start gate window
+        // read as a dim rectangle with no edge. The number is in the failure text so that a change of the colour shows what it came to.
+        using var dark = new ThemeService(ThemeMode.Dark);
+        var palette = dark.Palette;
+        var onWindow = BuildCodeUiTests.ContrastRatio(palette.ButtonBorder, palette.Window);
+        var onItself = BuildCodeUiTests.ContrastRatio(palette.ButtonBorder, palette.Surface);
+        Assert.True(onWindow >= 3.0, "outline on the window: " + onWindow.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + ":1");
+        Assert.True(onItself >= 3.0, "outline on the button's own fill: " + onItself.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + ":1");
+
+        // The theme really puts that colour on a button and on an unchosen toggle (a palette entry nobody reads would prove nothing).
+        using var button = new Button();
+        using var toggle = new ToggleButton();
+        dark.Apply(button);
+        dark.Apply(toggle);
+        Assert.Equal(palette.ButtonBorder, button.FlatAppearance.BorderColor);
+        Assert.Equal(palette.ButtonBorder, toggle.FlatAppearance.BorderColor);
+        Assert.NotEqual(palette.Border, button.FlatAppearance.BorderColor);
+    }
+
+    [Fact]
     public void Switching_the_theme_repaints_panels_and_labels_instead_of_freezing_the_first_colour()
     {
         using var theme = new ThemeService(ThemeMode.Dark);

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TEST ONLY, never shipped (tools/publish.ps1 does not know it, the bundle floor does not list it, and nothing in a release is built from it).
+    The TEST BUILD of PCMieru.Swap.exe: the product's own Program.cs (src/PcMieru.Swap/Program.cs, linked, not copied) compiled with the symbol PCM_SWAP_TESTBUILD, which adds the test-only entry
+    test-swap, with two hyphens as its option name (TestEntry.cs here: a swap of a staged folder with a scripted verdict, and a stop at a named step that writes a marker and sleeps so that a trial can kill the process there).
+    The shipped exe has none of that; the entry used to be in it, and a program that takes a scripted verdict must never be what is shipped.
+
+    The trial of step 4 (kill the runner at each step of a swap, then recover) is done with an exe built from this project. Build it the way the product is built:
+        dotnet publish tests/PcMieru.Swap.TestBuild -c Release -r win-x64 -p:GateNextToExe=false -p:Version=0.0.0 -o <folder>
+    and put the result where PCMieru.Swap.exe and I\update\recover.exe are (and record its hash in the install's record: the launcher starts only a recover.exe made from the RECORDED Swap.exe).
+    tests/PcMieru.Update.Tests runs the same TestEntry.cs in-process (it is linked into that project).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>PCMieru.Swap.TestBuild</AssemblyName>
+    <RootNamespace>PcMieru.Swap.TestBuild</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ApplicationManifest>..\..\src\PcMieru.Swap\app.manifest</ApplicationManifest>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <StackTraceSupport>false</StackTraceSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetricsSupport>false</MetricsSupport>
+    <DefineConstants>$(DefineConstants);PCM_SWAP_TESTBUILD</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\PcMieru.Swap\Program.cs" Link="Program.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PcMieru.Update\PcMieru.Update.csproj" />
+    <ProjectReference Include="..\..\src\PcMieru.Wire\PcMieru.Wire.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <LinkerArg Include="/DEPENDENTLOADFLAG:0x800" />
+  </ItemGroup>
+
+  <!-- The gate file beside the exe in a dev build, like every exe of the solution (see build/GateNextToExe.targets). The swap does not read it. -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
+
+</Project>

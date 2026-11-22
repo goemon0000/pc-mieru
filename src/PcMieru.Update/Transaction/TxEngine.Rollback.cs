@@ -65,6 +65,12 @@ internal sealed partial class TxEngine
         {
             return Fail(j, failure.Reason, failure.Message);
         }
+        catch (Exception ex) when (TxNative.IsInUse(ex))
+        {
+            // A running program holds one of the files (it could not even be renamed aside, or a read ran into its lock). Nothing is lost: the journal and the backup stay, there is NO sentinel, and the
+            // same recovery can be run again when the program is closed.
+            return Busy(j, ex.Message);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Fail(j, TxReason.RecoveryIoFailure, ex.Message);
@@ -105,7 +111,8 @@ internal sealed partial class TxEngine
                         break;
                     }
 
-                    _io.DeleteFileAndEmptyParents(TxSteps.RemoveNew, target, _paths.Install);
+                    // The folders the journal says this transaction made, and only those, go when the file leaves them empty.
+                    _io.DeleteFileAndEmptyParents(TxSteps.RemoveNew, target, _paths.Install, [.. j.NewDirs.Select(_paths.InInstall)], TxSteps.RestoreAside, TxPaths.Under(_paths.InUse(j.Tx), op.Path));
                     break;
 
                 case TxOpIntent.Overwrite:
@@ -185,10 +192,13 @@ internal sealed partial class TxEngine
             throw new TxFailure(TxReason.BackupUnavailable, ex.Message);
         }
 
-        _io.Move(TxSteps.RestorePlace, staging, target, replace: true);
+        _io.MoveOver(TxSteps.RestorePlace, TxSteps.RestoreAside, staging, target, TxPaths.Under(_paths.InUse(j.Tx), relativeName));
     }
 
-    /// <summary>The backup file is there, is a plain file and has the recorded length and hash. A lock or any read error is "unavailable", not an I/O failure of the rollback: the files are untouched.</summary>
+    /// <summary>
+    /// The backup file is there, is a plain file and has the recorded length and hash. A program that holds the file (a scanner) is "in use": the rollback stops with <see cref="TxOutcome.Busy"/> and goes on when the
+    /// file is let go. Any other read error is "unavailable", not an I/O failure of the rollback: the files are untouched.
+    /// </summary>
     private static void RequireBackupFile(string path, long bytes, string sha256, string label)
     {
         Presence presence;
@@ -197,6 +207,10 @@ internal sealed partial class TxEngine
         try
         {
             presence = ManagedSet.Probe(path, out length, out sha);
+        }
+        catch (Exception ex) when (TxNative.IsInUse(ex))
+        {
+            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -234,7 +248,25 @@ internal sealed partial class TxEngine
         _io.Move(TxSteps.RestoreInstalled, staging, _paths.Installed, replace: true);
     }
 
-    // ---------------------------------------------------------------------------------------------------------------- Failure
+    // ---------------------------------------------------------------------------------------------------------------- Busy and failure
+
+    /// <summary>
+    /// A rollback that stopped only because a running program uses a file: <see cref="TxOutcome.Busy"/>. The journal (phase Rollback) and the backup are kept and no sentinel is written, so the start gate says
+    /// "recovery pending" and the next recovery goes on from the real files. An automatic attempt that ended like this is not held against the three that are allowed (waiting for a program to close is not a failure).
+    /// </summary>
+    private TxResult Busy(TxJournal j, string detail)
+    {
+        if (_kind == "recovery" && _attemptCounted && j.RecoveryAttempts > 0)
+        {
+            j.RecoveryAttempts--;
+            Attempt(() => WriteJournal(j, TxSteps.JournalRecoveryAttempt));
+            _attemptCounted = false;
+        }
+
+        var result = Make(TxOutcome.Busy, TxReason.FilesInUse, detail, j.Tag);
+        WriteLastResult(result);
+        return result;
+    }
 
     /// <summary>
     /// A transaction or recovery that cannot be proven: the sentinel is written (so the start gate says "recovery failed" and nothing tries again by itself), the journal and the backup are KEPT, and the answer is
@@ -339,36 +371,81 @@ internal sealed partial class TxEngine
         _ => TxReason.Interrupted,
     };
 
-    /// <summary>No journal: a lone journal.json.tmp is removed; a sentinel is cleared only when the installed set verifies against installed.json; leftovers of a finished transaction are tidied.</summary>
-    private TxResult RecoverWithoutJournal()
+    /// <summary>
+    /// The record the installed set is held to when there is no journal: installed.json. When installed.json is NOT THERE AT ALL (<paramref name="allowOwnManifest"/>, only for a stale backup folder: a swap writes
+    /// the first record before anything else, so no swap has begun) the install's own manifest is used, as the preparation does for a first record, and it is trusted only as far as the files verify against it.
+    /// installed.json that is there but cannot be read or is refused gives nothing (null): the person decides.
+    /// </summary>
+    private InstalledRecord? ReadRecordToVerifyAgainst(bool allowOwnManifest, out string name)
     {
-        if (ManagedSet.Exists(_paths.JournalTemp))
+        name = "installed.json";
+        var bytes = ReadSmall(_paths.Installed, TxJson.MaxBytes);
+        if (bytes is not null)
         {
-            _io.DeleteFile(TxSteps.JournalTmpDelete, _paths.JournalTemp);
+            return InstalledRecord.TryParse(bytes, out var record, out _) ? record : null;
         }
 
-        if (ManagedSet.Exists(_paths.Sentinel))
+        if (!allowOwnManifest || ManagedSet.Exists(_paths.Installed))
         {
-            var bytes = ReadSmall(_paths.Installed, TxJson.MaxBytes);
-            if (bytes is null || !InstalledRecord.TryParse(bytes, out var record, out _))
+            return null;
+        }
+
+        var manifest = ReadSmall(_paths.InInstall(BundleFormat.InnerManifestName), BundleManifest.MaxBytes);
+        if (manifest is null || !BundleManifest.TryParse(manifest, out var bundle, out _))
+        {
+            return null;
+        }
+
+        name = BundleFormat.InnerManifestName;
+        return InstalledRecord.FromBundle(bundle, manifest);
+    }
+
+    /// <summary>
+    /// No journal. When there is anything to tidy that could still be a half-done swap (a journal.json.tmp, the sentinel, or a transaction folder with a backup in it), nothing is removed until the installed set
+    /// verifies against installed.json (<see cref="ReadRecordToVerifyAgainst"/>): a journal that is gone must not take the only copy of the old files with it. If it does not verify, everything is kept and the sentinel is written (a person, or a
+    /// journal put back, decides). Only then are the lone journal.json.tmp and the sentinel removed and the leftovers of a finished transaction tidied.
+    /// </summary>
+    private TxResult RecoverWithoutJournal()
+    {
+        var stale = _paths.ScanStale();
+        _leftAlone = stale.LeftAlone;
+        var sentinel = ManagedSet.Exists(_paths.Sentinel);
+        var temporary = ManagedSet.Exists(_paths.JournalTemp);
+
+        // Only a folder that can hold a BACKUP makes the verification necessary: prev-<version>/<tx>. work/<tx> holds only copies of the new files (and files renamed aside), and a preparation cut before its
+        // first record (installed.json) has made nothing else, so a first update of an install that was never recorded and was cut at its first step is not failed for a record that was never written.
+        var holdsBackup = stale.ToDelete.Any(folder => Path.GetRelativePath(_paths.Update, folder).StartsWith("prev-", StringComparison.OrdinalIgnoreCase));
+        if (sentinel || temporary || holdsBackup)
+        {
+            var what = sentinel ? "recovery-failed is set" : temporary ? "journal.json.tmp is left" : "a folder with a backup is left";
+            var record = ReadRecordToVerifyAgainst(allowOwnManifest: !sentinel && !temporary, out var recordName);
+            if (record is null)
             {
-                return Fail(null, TxReason.SetNotRestored, "recovery-failed is set, there is no journal and installed.json cannot be read");
+                return Fail(null, TxReason.SetNotRestored, $"{what}, there is no journal and installed.json cannot be read; nothing was removed");
             }
 
             var findings = ManagedSet.Verify(_paths, record, _gate);
             if (findings.Count > 0)
             {
-                return Fail(null, TxReason.SetNotRestored, "recovery-failed is set and the installed files are not what installed.json says: " + ManagedSet.Describe(findings));
+                return Fail(null, TxReason.SetNotRestored, $"{what}, there is no journal and the installed files are not what {recordName} says (the backup is kept): " + ManagedSet.Describe(findings));
             }
+        }
 
+        if (temporary)
+        {
+            _io.DeleteFile(TxSteps.JournalTmpDelete, _paths.JournalTemp);
+        }
+
+        if (sentinel)
+        {
             _io.DeleteFile(TxSteps.SentinelDelete, _paths.Sentinel);
         }
 
         var left = false;
-        foreach (var stale in _paths.TransactionFolders())
+        foreach (var folder in stale.ToDelete)
         {
-            var folder = stale;
-            left |= !Attempt(() => _io.DeleteTree(TxSteps.StaleClean, folder));
+            var one = folder;
+            left |= !Attempt(() => _io.DeleteTree(TxSteps.StaleClean, one));
         }
 
         left |= !Attempt(DeleteNote);

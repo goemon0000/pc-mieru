@@ -349,8 +349,10 @@ public sealed class TxRecoveryTests
     }
 
     [Fact]
-    public void A_backup_that_is_locked_during_the_recovery_stops_it_with_everything_kept_and_a_retry_works()
+    public void A_backup_that_is_locked_during_the_recovery_is_busy_with_everything_kept_and_no_sentinel_and_a_retry_works()
     {
+        // Review of step 4, S2: a scanner that holds a file for a moment is not a failure. The recovery answers "busy" (the journal and the backup stay, NO sentinel, so the start gate says "recovery pending"
+        // and not "recovery failed") and goes on from the real files when it is run again.
         using var rig = Rig.Create("rec-locked");
         Cut(rig, At(TxSteps.SwapOverwrite, TxEdge.After, 1));
         var journal = ReadJournal(rig);
@@ -362,9 +364,12 @@ public sealed class TxRecoveryTests
         {
             result = rig.Recover(automatic: true);
 
-            Assert.Equal((TxOutcome.RecoveryFailed, TxReason.BackupUnavailable), (result.Outcome, result.Reason));
-            Assert.True(File.Exists(rig.Paths.Sentinel));
+            Assert.Equal((TxOutcome.Busy, TxReason.FilesInUse), (result.Outcome, result.Reason));
+            Assert.False(File.Exists(rig.Paths.Sentinel), "busy is not failed: no sentinel");
             Assert.True(File.Exists(rig.Paths.Journal));
+            Assert.Equal(0, ReadJournal(rig).RecoveryAttempts); // waiting for a program is not one of the three attempts
+            using var start = InstallGate.EnterStartup(rig.ExePath);
+            Assert.Equal(GateOutcome.RecoveryPending, start.Outcome);
         }
 
         AssertBackupIntact(rig); // released: every backup file is whole
@@ -430,7 +435,7 @@ public sealed class TxRecoveryTests
     [Fact]
     public void A_lone_journal_temp_file_is_removed_and_a_stale_one_beside_a_valid_journal_too()
     {
-        using var rig = Rig.Create("rec-tmp");
+        using var rig = Rig.Create("rec-tmp", recorded: true); // a temp file is only tidied once the installed set verifies against installed.json (S1), so the install is recorded
         Directory.CreateDirectory(rig.Paths.Update);
         File.WriteAllText(rig.Paths.JournalTemp, "{ half a journal");
 

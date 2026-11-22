@@ -16,13 +16,24 @@ public sealed class TxVerifyException(string path, string detail) : IOException(
 }
 
 /// <summary>
+/// A managed file could not be replaced or deleted AND could not even be renamed aside: a running program has it open in a way that forbids it (a sharing violation, or access denied on the rename). Nothing was
+/// changed for that file. The transaction answers <see cref="TxOutcome.Busy"/> (journal kept, no sentinel), not <see cref="TxOutcome.RecoveryFailed"/>: closing the program and trying again is all it takes.
+/// </summary>
+public sealed class TxInUseException(string path, Exception inner) : IOException($"'{path}' is in use by a running program and cannot be moved aside: {inner.Message}", inner)
+{
+    public string Path { get; } = path;
+}
+
+/// <summary>
 /// THE ONLY PLACE THE TRANSACTION CHANGES THE FILE SYSTEM. Every write, rename, replace and delete of Transaction/ goes through a method here, and each one says which <see cref="TxStep"/> it is, calls
 /// <see cref="IFaultInjector.Reach"/> right before (<see cref="TxEdge.Before"/>), in the middle of a write (<see cref="TxEdge.Mid"/>) and right after (<see cref="TxEdge.After"/>). So a cut point cannot be forgotten:
 /// a test reads the source of Transaction/ and fails when a file change is made anywhere but here.
 ///
-/// <b>Durability.</b> A file's data is written and then flushed to the disk (<see cref="FileStream.Flush(bool)"/> with true) BEFORE the rename that makes the name point to it; the rename is
-/// <see cref="TxNative.Move"/> (write-through). JSON that must be replaced atomically (the journal, installed.json, last-result.json, blocked.json) is written to "&lt;name&gt;.tmp" in the SAME directory, flushed, and
-/// moved over the target: the target is always either the old file or the new one, never half of one.
+/// <b>What is promised about durability, and what is not.</b> A file's data is written and then flushed to the disk (<see cref="FileStream.Flush(bool)"/> with true) BEFORE the rename that makes the name point to it. The
+/// rename is <see cref="TxNative.Move"/> (MoveFileEx with the write-through flag), but for a rename inside one volume that flag is NOT a promise that the new name is on the disk when the call returns. What the
+/// transaction stands on is the ORDER (data first, then the name; NTFS and ReFS log their metadata in order, which is why a swap is refused on any other file system) and the journal's readers, which decide by the
+/// real hashes of the files and never assume that the last rename survived. JSON that must be replaced in one step (the journal, installed.json, last-result.json, blocked.json) is written to "&lt;name&gt;.tmp" in the
+/// SAME directory, flushed, and moved over the target: the target is always either the old file or the new one, never half of one.
 /// </summary>
 internal sealed class TxIo(IFaultInjector fault)
 {
@@ -149,6 +160,46 @@ internal sealed class TxIo(IFaultInjector fault)
         Reach(step, TxEdge.After, destination);
     }
 
+    /// <summary>
+    /// Puts <paramref name="source"/> at <paramref name="target"/> over a file that is there. The replace is tried first (one atomic rename: the target is the old file or the new one). When it fails the way a file in
+    /// use fails (access denied, a sharing violation) the file at <paramref name="target"/> is renamed ASIDE to "<paramref name="asideBase"/>.&lt;random&gt;" (a running program's mapped image cannot be overwritten or
+    /// deleted, but its name can be changed) and the source is put at the free name. If even the rename fails the same way, <see cref="TxInUseException"/> is thrown and nothing was changed. The name is free for a
+    /// moment in between; every reader of the journal decides from the real files and treats a missing one as "restore it from the backup".
+    /// </summary>
+    public void MoveOver(TxStep place, TxStep aside, string source, string target, string asideBase)
+    {
+        Reach(place, TxEdge.Before, target);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        try
+        {
+            TxNative.Move(source, target, replace: true);
+        }
+        catch (Exception ex) when (TxNative.IsLockedFailure(ex) && ManagedSet.Look(target) == Presence.File)
+        {
+            SetAside(aside, target, asideBase);
+            TxNative.Move(source, target, replace: false);
+        }
+
+        Reach(place, TxEdge.After, target);
+    }
+
+    private void SetAside(TxStep step, string target, string asideBase)
+    {
+        Reach(step, TxEdge.Before, target);
+        var destination = asideBase + "." + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        try
+        {
+            TxNative.Move(target, destination, replace: false);
+        }
+        catch (Exception ex) when (TxNative.IsLockedFailure(ex))
+        {
+            throw new TxInUseException(target, ex);
+        }
+
+        Reach(step, TxEdge.After, target);
+    }
+
     /// <summary>Deletes a file (a file that is not there is not an error).</summary>
     public void DeleteFile(TxStep step, string path)
     {
@@ -158,17 +209,29 @@ internal sealed class TxIo(IFaultInjector fault)
     }
 
     /// <summary>
-    /// Deletes a file the transaction put there, and then the folders that this leaves EMPTY, up to (not including) <paramref name="stopAt"/>. A folder with anything in it (a user's file) stays: only
-    /// the folders that the added file alone was keeping are removed, and a plain rmdir never removes a non-empty folder.
+    /// Deletes a file the transaction put there, and then the folders that this leaves EMPTY, up to (not including) <paramref name="stopAt"/>, but only those <paramref name="mayRemove"/> names (full paths): the folders the
+    /// journal records this transaction CREATED. A folder that was there before the swap (even an empty one a person made) stays, and so does a folder with anything in it; a plain rmdir never removes a non-empty folder.
+    /// A file that cannot be deleted because a program has it mapped (a running image) is renamed ASIDE to "<paramref name="asideBase"/>.&lt;random&gt;" (<paramref name="aside"/>) instead: its name is then free, which is
+    /// all the rollback needs. If even the rename fails the same way, <see cref="TxInUseException"/> is thrown and nothing was changed.
     /// </summary>
-    public void DeleteFileAndEmptyParents(TxStep step, string path, string stopAt)
+    public void DeleteFileAndEmptyParents(TxStep step, string path, string stopAt, IReadOnlyCollection<string> mayRemove, TxStep aside, string asideBase)
     {
         Reach(step, TxEdge.Before, path);
-        File.Delete(path);
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (TxNative.IsLockedFailure(ex) && ManagedSet.Look(path) == Presence.File)
+        {
+            // A mapped image cannot be deleted; its name can be changed. The name is then free, which is all the rollback needs.
+            SetAside(aside, path, asideBase);
+        }
+
         var stop = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stopAt));
         var parent = Path.GetDirectoryName(Path.GetFullPath(path));
         while (parent is not null && !string.Equals(parent, stop, StringComparison.OrdinalIgnoreCase)
             && parent.StartsWith(stop + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            && mayRemove.Contains(parent, StringComparer.OrdinalIgnoreCase)
             && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
         {
             Directory.Delete(parent, recursive: false);
@@ -179,23 +242,78 @@ internal sealed class TxIo(IFaultInjector fault)
     }
 
     /// <summary>
-    /// Deletes a folder and everything in it (a folder that is not there is not an error), and then its parent when that is left empty (work/ or prev-&lt;old&gt;/). A link is removed as a link, never followed.
+    /// Deletes a folder and everything in it (a folder that is not there is not an error), and then its parent when that is work/ or prev-&lt;old&gt;/ and is left empty. The tree is walked HERE and no link is ever
+    /// entered: a reparse point (a junction or a symbolic link, to a folder or to a file) is removed as itself, one level at a time, so what it points to is never touched. When the folder's own parent (work/ or
+    /// prev-&lt;old&gt;/) has become a link, that link is what is unlinked and nothing is deleted through it. A <paramref name="directory"/> that is a plain file is left alone.
     /// </summary>
     public void DeleteTree(TxStep step, string directory)
     {
         Reach(step, TxEdge.Before, directory);
-        if (Directory.Exists(directory))
+        var full = Path.GetFullPath(directory);
+        var parent = Path.GetDirectoryName(full);
+        var parentIsContainer = parent is not null && TxPaths.IsContainerName(Path.GetFileName(parent));
+        if (parentIsContainer && ManagedSet.Look(parent!) == Presence.Link)
         {
-            var isLink = new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint);
-            Directory.Delete(directory, recursive: !isLink);
+            RemoveLink(parent!);
         }
-
-        var parent = Path.GetDirectoryName(Path.GetFullPath(directory));
-        if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+        else
         {
-            Directory.Delete(parent, recursive: false);
+            RemoveTree(full, top: true);
+            if (parentIsContainer && Directory.Exists(parent!) && ManagedSet.Look(parent!) == Presence.Other && !Directory.EnumerateFileSystemEntries(parent!).Any())
+            {
+                Directory.Delete(parent!, recursive: false);
+            }
         }
 
         Reach(step, TxEdge.After, directory);
+    }
+
+    private static void RemoveTree(string path, bool top)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        if (attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            RemoveLink(path);
+            return;
+        }
+
+        if (!attributes.HasFlag(FileAttributes.Directory))
+        {
+            if (!top)
+            {
+                File.Delete(path);
+            }
+
+            return;
+        }
+
+        foreach (var entry in Directory.GetFileSystemEntries(path))
+        {
+            RemoveTree(entry, top: false);
+        }
+
+        Directory.Delete(path, recursive: false);
+    }
+
+    /// <summary>Removes the link itself (a directory link with a non-recursive rmdir, a file link with a delete) and nothing it points to.</summary>
+    private static void RemoveLink(string path)
+    {
+        if (File.GetAttributes(path).HasFlag(FileAttributes.Directory))
+        {
+            Directory.Delete(path, recursive: false);
+        }
+        else
+        {
+            File.Delete(path);
+        }
     }
 }

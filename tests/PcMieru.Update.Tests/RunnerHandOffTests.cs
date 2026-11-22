@@ -221,6 +221,37 @@ public sealed class RunnerHandOffTests
     }
 
     [Fact]
+    public void The_recovery_note_says_what_recovery_does_and_leaves_alone_and_not_to_run_it_as_administrator()
+    {
+        var text = RecoverNote.Text("0.5.0", "0.5.1");
+        var ja = text[..text.IndexOf("[English]", StringComparison.Ordinal)];
+        var en = text[text.IndexOf("[English]", StringComparison.Ordinal)..];
+
+        // What it does: one whole version, either one. What it never touches: a file it did not install. Where the person's own things are: outside this folder.
+        Assert.Contains("更新前か更新後のどちらかにそろえます", ja, StringComparison.Ordinal);
+        Assert.Contains("写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。", ja, StringComparison.Ordinal);
+        Assert.Contains("設定や記録はこのフォルダーの外にあるので", ja, StringComparison.Ordinal);
+        Assert.Contains("one complete version, either the one from before the update or the new one", en, StringComparison.Ordinal);
+        Assert.Contains("Files that PC Mieru did not install, such as photos and documents, are not changed.", en, StringComparison.Ordinal);
+        Assert.Contains("kept outside this folder", en, StringComparison.Ordinal);
+
+        // A recovery runs with normal rights only (recover.exe refuses an elevated token): the note says not to ask for administrator rights, and still offers the new folder.
+        Assert.Contains("「管理者として実行」は使わないでください", ja, StringComparison.Ordinal);
+        Assert.Contains("Do not use \"Run as administrator\"", en, StringComparison.Ordinal);
+        Assert.Contains("新しいフォルダーに展開", ja, StringComparison.Ordinal);
+        Assert.Contains("into a new folder", en, StringComparison.Ordinal);
+
+        // It no longer promises what recovery cannot promise ("tidies up", "fixes it").
+        Assert.DoesNotContain("直らない", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("does not fix it", text, StringComparison.Ordinal);
+        // Plain words: no file, folder or tool is named except the one thing to run, and no number but the two versions.
+        Assert.DoesNotContain("journal", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("installed.json", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("gate", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("%", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_swap_writes_the_note_before_its_first_change_and_the_gate_points_at_it()
     {
         using var rig = Rig.Create("ho-note", recorded: true);

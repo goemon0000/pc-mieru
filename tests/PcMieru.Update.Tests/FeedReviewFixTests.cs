@@ -314,7 +314,7 @@ public sealed class FeedReviewFixTests : IDisposable
         File.SetLastWriteTimeUtc(fresh, now.AddMinutes(-10)); // may be another window's probe running right now
         File.SetLastWriteTimeUtc(other, now.AddDays(-30));     // not a probe file: never touched
 
-        var placement = InstallPlacement.Check(temp.Path, () => false, _ => DriveType.Fixed);
+        var placement = InstallPlacement.Check(temp.Path, () => false, _ => DriveType.Fixed, _ => "NTFS");
 
         Assert.Equal(PlacementKind.CanSwap, placement.Kind);
         Assert.False(File.Exists(stale));

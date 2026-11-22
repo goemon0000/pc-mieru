@@ -186,6 +186,12 @@ internal sealed class StartGateWindow : Form
     /// </summary>
     internal bool RecoverOffered { get; private set; }
 
+    /// <summary>
+    /// The entry is an interrupted update but this process runs elevated: there is no 「回復する」 (a recovery with administrator rights would leave files the normal start cannot replace), and the text says to open
+    /// PC Mieru again without "run as administrator".
+    /// </summary>
+    internal bool RecoverElevated { get; private set; }
+
     /// <summary>True once 「回復する」 has started recover.exe: the window then closes and the app ends (recover.exe starts it again when the install can be used).</summary>
     internal bool RecoveryStarted { get; private set; }
 
@@ -196,12 +202,14 @@ internal sealed class StartGateWindow : Form
     internal static string ReasonFor(GateEntry entry) => ReasonFor(entry, recoverOffered: false, recoveryFailedToStart: false);
 
     /// <summary>
-    /// The same, for a window that has the recovery button (<paramref name="recoverOffered"/>: the text says what the button does, then the new folder as what to do when that does not work) or
-    /// whose recovery could not be started (<paramref name="recoveryFailedToStart"/>: the new folder only, and what went wrong in one plain sentence).
+    /// The same, for a window that has the recovery button (<paramref name="recoverOffered"/>: the text says what the button does) or whose recovery could not be started
+    /// (<paramref name="recoveryFailedToStart"/>: what went wrong in one plain sentence, then the new folder, and that settings and records are not in this folder) or that runs elevated
+    /// (<paramref name="elevated"/>: no button; open it again with normal rights).
     /// </summary>
-    internal static string ReasonFor(GateEntry entry, bool recoverOffered, bool recoveryFailedToStart) => entry.Outcome switch
+    internal static string ReasonFor(GateEntry entry, bool recoverOffered, bool recoveryFailedToStart, bool elevated = false) => entry.Outcome switch
     {
         GateOutcome.Busy => Strings.Get("gui.gate.busy"),
+        GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed when elevated => Strings.Get("gui.gate.recover.elevated"),
         GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed when recoveryFailedToStart => Strings.Get("gui.gate.recover.failed"),
         GateOutcome.RecoveryPending => Strings.Get(recoverOffered ? "gui.gate.recoverypending.button" : "gui.gate.recoverypending"),
         GateOutcome.RecoveryFailed => Strings.Get(recoverOffered ? "gui.gate.recoveryfailed.button" : "gui.gate.recoveryfailed"),
@@ -260,9 +268,9 @@ internal sealed class StartGateWindow : Form
     }
 
     /// <summary>
-    /// What 「回復する」 does; the tests call it without a mouse. The shared gate is not held for an interrupted update (the entry is already closed), and is let go of here anyway; then recover.exe is
-    /// started (it waits for this program to end, recovers, and starts the app again) and the window closes. False when it could not be started: the window says so, offers the new folder as the way on,
-    /// and the button is gone.
+    /// What 「回復する」 does; the tests call it without a mouse. The entry of an interrupted update holds no gate (it was refused), and is disposed here anyway; then recover.exe is started and the window
+    /// closes. recover.exe waits for this program to end, takes the gate exclusively and holds it for the whole recovery, lets it go when the work is over, and only then starts PCMieru.exe, which enters the
+    /// gate on its own like any start. False when it could not be started: the window says so, offers the new folder as the way on, and the button is gone.
     /// </summary>
     internal bool RecoverNow()
     {
@@ -303,13 +311,15 @@ internal sealed class StartGateWindow : Form
     private void Fill()
     {
         var interrupted = _current.Outcome is GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed;
-        if (interrupted && !_recoveryFailedToStart)
+        // An elevated process offers no recovery (and has no need to hash recover.exe to find out whether it could).
+        RecoverElevated = interrupted && _recovery.IsElevated;
+        if (interrupted && !_recoveryFailedToStart && !RecoverElevated)
         {
             _recoveryAvailable ??= _recovery.IsAvailable(_current);
         }
 
-        RecoverOffered = interrupted && !_recoveryFailedToStart && _recoveryAvailable == true;
-        _reason.Text = ReasonFor(_current, RecoverOffered, _recoveryFailedToStart);
+        RecoverOffered = interrupted && !_recoveryFailedToStart && !RecoverElevated && _recoveryAvailable == true;
+        _reason.Text = ReasonFor(_current, RecoverOffered, _recoveryFailedToStart, RecoverElevated);
         _hint.Text = HintFor(_current);
         // No empty line under a reason that has nothing to add: the label goes, and the reason takes the space the label's margin gave.
         _hint.Visible = _hint.Text.Length > 0;
@@ -331,7 +341,7 @@ internal static class GateStrings
         new("gui.gate.recover", "回復する", "Recover"),
 
         // Every refusal is one text: what is wrong, then what to do. None of them names a file or a folder, and none suggests that the person deleted or moved something. The texts WITHOUT a button are the
-        // plain ones (recover.exe is not there or is not the file the records vouch for: the advice is a new folder); the texts WITH the button say what it does and keep the new folder for when it does not work.
+        // plain ones (recover.exe is not there or is not the file the records vouch for: the advice is a new folder); the texts WITH the button say what it does (and, after a failed recovery, keep the new folder for when it fails again).
         new(
             "gui.gate.busy",
             "PCミエルのファイルが使用中です。しばらく待ってから、もう一度試してください。",
@@ -345,19 +355,28 @@ internal static class GateStrings
             "gui.gate.recoveryfailed",
             "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
             "PC Mieru could not undo the last update, so it cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+        // What recovery does, as it is: it puts PC Mieru's own files back to ONE whole version (the earlier one, or the new one when the update had already been confirmed) and never touches a file it did not
+        // install. "If that works, PC Mieru opens by itself" because that is true only when the recovery ends well (a busy or a failed recovery does not start the app).
         new(
             "gui.gate.recoverypending.button",
-            "前回の更新が途中で止まったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、途中の更新を片づけてから PCミエルを開きます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
-            "The last update did not finish, so PC Mieru cannot open from this folder. Press \"Recover\" to clear up the unfinished update and then open PC Mieru. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+            "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。",
+            "The last update did not finish. Press \"Recover\" to put PC Mieru's files back into one complete version. If that works, PC Mieru opens by itself. Files that PC Mieru did not install, such as photos and documents, are not changed."),
+        // The text of a recovery that failed keeps the new folder as the way on: the window comes back with the same button every time, and the person must not be left without another road.
         new(
             "gui.gate.recoveryfailed.button",
-            "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、もう一度元に戻してみます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
-            "PC Mieru could not undo the last update, so it cannot open from this folder. Press \"Recover\" to try putting the earlier version back once more. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
-        // The button was pressed and recover.exe could not be started: nothing was changed, and the new folder is the way on.
+            "前回の更新のあと、PCミエルのファイルを元の版にそろえられませんでした。「回復する」を押すと、もう一度試します。PCミエルが入れたもの以外のファイルは変わりません。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
+            "After the last update, PC Mieru's files could not be put back into one version. Press \"Recover\" to try again. Files that PC Mieru did not install are not changed. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+        // The button was pressed and recover.exe could not be started: nothing was changed, and the new folder is the way on. Settings, check history, run records and the helper live outside the install
+        // folder (%LOCALAPPDATA%\PCMieru, Documents\PCMieru), so they are still there when PC Mieru is opened from a new folder.
         new(
             "gui.gate.recover.failed",
-            "回復のプログラムを起動できませんでした。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。",
-            "The recovery program could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+            "回復を始められませんでした。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。設定や記録はこのフォルダーの外にあるので、新しいフォルダーで開いても残っています。",
+            "Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder."),
+        // This process runs with administrator rights: no button. A recovery (like an update) runs with normal rights only, so the person opens PC Mieru again the ordinary way. The same advice is in RECOVER.txt.
+        new(
+            "gui.gate.recover.elevated",
+            "前回の更新が途中で止まっています。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。いったん閉じて、「管理者として実行」を使わずに開き直し、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
+            "The last update did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close it, open PC Mieru again without \"Run as administrator\", and press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
         // The one dim line under an interrupted update: which folder this is. {path} is the last thing in it (the line is broken after the words and at backslashes, never inside a name).
         new("gui.gate.folder", "このフォルダー: {path}", "This folder: {path}"),
 

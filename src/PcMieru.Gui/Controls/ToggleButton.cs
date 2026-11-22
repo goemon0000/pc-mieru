@@ -55,7 +55,7 @@ internal sealed class ToggleButton : Button, IThemed
 
         BackColor = _checked ? palette.Selection : palette.Surface;
         ForeColor = _checked ? palette.SelectionText : palette.Text;
-        FlatAppearance.BorderColor = _checked ? palette.Accent : palette.Border;
+        FlatAppearance.BorderColor = _checked ? palette.Accent : palette.ButtonBorder;
         FlatAppearance.MouseOverBackColor = _checked ? palette.Selection : palette.Border;
     }
 

@@ -167,6 +167,9 @@ public static class TxSteps
     /// <summary>A file the new version does not have goes to displaced/.</summary>
     public static readonly TxStep SwapDisplace = Define("swap.displace", TxPhase.Swapping, TxStepKind.Rename);
 
+    /// <summary>A file the replace could not overwrite (a running program has it mapped) is renamed aside into work/&lt;tx&gt;/inuse first; the new file is then put at its name. Reached only for a file in use.</summary>
+    public static readonly TxStep SwapAside = Define("swap.aside", TxPhase.Swapping, TxStepKind.Rename);
+
     /// <summary>installed.json becomes the new record.</summary>
     public static readonly TxStep SwapInstalled = Define("swap.installed", TxPhase.Swapping, TxStepKind.Write);
 
@@ -217,6 +220,9 @@ public static class TxSteps
 
     /// <summary>The restored copy is renamed over the file (or into its place).</summary>
     public static readonly TxStep RestorePlace = Define("rollback.restore-place", TxPhase.Rollback, TxStepKind.Rename);
+
+    /// <summary>A file the rollback could not overwrite or delete (a running program has it mapped) is renamed aside into work/&lt;tx&gt;/inuse; the old file is then put at its name (or the name is simply left free). Reached only for a file in use.</summary>
+    public static readonly TxStep RestoreAside = Define("rollback.aside", TxPhase.Rollback, TxStepKind.Rename);
 
     /// <summary>A file the new version added (and whose hash is the new one) is removed.</summary>
     public static readonly TxStep RemoveNew = Define("rollback.remove-new", TxPhase.Rollback, TxStepKind.Delete);

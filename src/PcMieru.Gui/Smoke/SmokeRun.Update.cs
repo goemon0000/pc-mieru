@@ -211,8 +211,9 @@ internal static partial class SmokeRun
         /// focus in every look, at every scale the run is made at (all five states at 200 percent too). This run's own gate is not touched. The folder line under an interrupted update is also checked
         /// for what it must be: broken only after backslashes, and every line of it inside the label.
         ///
-        /// An interrupted update is shown in three more ways, with 「回復する」 (a recovery that is available: the walk gives the window one that starts nothing) and, for the third, after the button was pressed
-        /// and recover.exe could not be started (the window says so and the button is gone). The five plain states have no recover.exe in their folder, so they show no button, as in a real folder that has none.
+        /// An interrupted update is shown in four more ways, with 「回復する」 (a recovery that is available: the walk gives the window one that starts nothing), after the button was pressed
+        /// and recover.exe could not be started (the window says so and the button is gone), and in a process that runs elevated (no button; the text says to open PC Mieru again with normal rights). The five
+        /// plain states have no recover.exe in their folder, so they show no button, as in a real folder that has none.
         /// </summary>
         private async Task ShootStartGate()
         {
@@ -266,7 +267,7 @@ internal static partial class SmokeRun
                 });
                 Check("gate: the busy state is held by a swapper of its own for the walk", holder.IsOpen, holder.Detail);
 
-                // Recovery: "" = the real one (these folders have no recover.exe: no button), "button" = one that is available, "startfails" = available, and the button is pressed: it cannot be started.
+                // Recovery: "" = the real one (these folders have no recover.exe: no button), "button" = one that is available, "startfails" = available, and the button is pressed: it cannot be started, "elevated" = this process is elevated: no button.
                 var states = new (string Name, GateOutcome Outcome, string Exe, string Recovery)[]
                 {
                     ("busy", GateOutcome.Busy, busy, string.Empty),
@@ -277,6 +278,7 @@ internal static partial class SmokeRun
                     ("recoverypending-button", GateOutcome.RecoveryPending, pending, "button"),
                     ("recoveryfailed-button", GateOutcome.RecoveryFailed, failed, "button"),
                     ("recoverypending-startfailed", GateOutcome.RecoveryPending, pending, "startfails"),
+                    ("recoverypending-elevated", GateOutcome.RecoveryPending, pending, "elevated"),
                 };
                 foreach (var (name, outcome, exe, recoveryMode) in states)
                 {
@@ -284,7 +286,7 @@ internal static partial class SmokeRun
                     {
                         var entry = InstallGate.EnterStartup(exe);
                         Check($"gate: the {name} state is the real outcome of the gate ({look})", entry.Outcome == outcome, entry.Outcome + ": " + entry.Detail);
-                        IGateRecovery? recovery = recoveryMode.Length == 0 ? null : new ShotRecovery(starts: recoveryMode != "startfails");
+                        IGateRecovery? recovery = recoveryMode.Length == 0 ? null : new ShotRecovery(starts: recoveryMode != "startfails", elevated: recoveryMode == "elevated");
                         using var window = new StartGateWindow(context.Theme, entry, () => InstallGate.EnterStartup(exe), recovery);
                         window.PreventActivation();
                         window.StartPosition = FormStartPosition.Manual;
@@ -305,6 +307,10 @@ internal static partial class SmokeRun
                             var pressed = window.RecoverNow();
                             await Task.Delay(300).ConfigureAwait(true);
                             Check($"gate: the {name} window, after the press, is still open, shows the plain failure text and no button ({look})", !pressed && !window.RecoveryStarted && !window.RecoverOffered && !window.RecoverButton.Visible && window.ReasonText == Strings.Get("gui.gate.recover.failed") && window.AcceptButton == window.CloseButton, window.ReasonText);
+                        }
+                        else if (recoveryMode == "elevated")
+                        {
+                            Check($"gate: the {name} window offers no 「回復する」 and says to open PC Mieru again with normal rights ({look})", window.RecoverElevated && !window.RecoverOffered && !window.RecoverButton.Visible && window.ReasonText == Strings.Get("gui.gate.recover.elevated") && window.AcceptButton == window.CloseButton, window.ReasonText);
                         }
                         else
                         {
@@ -360,9 +366,11 @@ internal static partial class SmokeRun
         }
 
         /// <summary>The recovery of the start gate walk: always available, starts nothing (<paramref name="starts"/> false: the start is refused, as when recover.exe cannot be run).</summary>
-        private sealed class ShotRecovery(bool starts) : IGateRecovery
+        private sealed class ShotRecovery(bool starts, bool elevated = false) : IGateRecovery
         {
             public bool IsAvailable(GateEntry entry) => true;
+
+            public bool IsElevated => elevated;
 
             public bool Start(GateEntry entry, out string detail)
             {

@@ -1060,6 +1060,7 @@ public sealed class UpdateUiTests
     [InlineData(PlacementKind.ReadOnly)]
     [InlineData(PlacementKind.Elevated)]
     [InlineData(PlacementKind.NotFixedDrive)]
+    [InlineData(PlacementKind.NotNtfs)]
     public void An_install_that_cannot_be_updated_in_place_says_so_and_why_but_still_announces(PlacementKind kind)
     {
         using var rig = new PageRig("notify");

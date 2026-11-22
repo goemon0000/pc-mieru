@@ -116,6 +116,17 @@ public sealed class GateAssetTests
 
         foreach (var project in projects)
         {
+            // The test build of the swapper (tests/PcMieru.Swap.TestBuild) is the swapper's own Program.cs compiled with one more symbol, plus the test-only entry: it has no Program.cs of its own, and like the
+            // swapper it must NOT ask the start gate.
+            if (Path.GetFileName(Path.GetDirectoryName(project)) == "PcMieru.Swap.TestBuild")
+            {
+                var text = File.ReadAllText(project);
+                Assert.Contains("src\\PcMieru.Swap\\Program.cs", text, StringComparison.Ordinal);
+                Assert.Contains("PCM_SWAP_TESTBUILD", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("InstallGate.EnterStartup(", File.ReadAllText(Path.Combine(Path.GetDirectoryName(project)!, "TestEntry.cs")), StringComparison.Ordinal);
+                continue;
+            }
+
             var program = Path.Combine(Path.GetDirectoryName(project)!, "Program.cs");
             Assert.True(File.Exists(program), "no Program.cs next to " + project);
             var code = File.ReadAllText(program);

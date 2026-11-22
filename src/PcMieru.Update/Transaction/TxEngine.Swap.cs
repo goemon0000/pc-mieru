@@ -110,7 +110,8 @@ internal sealed partial class TxEngine
                 _io.Move(TxSteps.SwapAdd, TxPaths.Under(_paths.Next(j.Tx), op.Path), target, replace: false);
                 break;
             case TxOpIntent.Overwrite:
-                _io.Move(TxSteps.SwapOverwrite, TxPaths.Under(_paths.Next(j.Tx), op.Path), target, replace: true);
+                // A file a running program has mapped cannot be overwritten: it is renamed aside into work/<tx>/inuse and the new file takes its name.
+                _io.MoveOver(TxSteps.SwapOverwrite, TxSteps.SwapAside, TxPaths.Under(_paths.Next(j.Tx), op.Path), target, TxPaths.Under(_paths.InUse(j.Tx), op.Path));
                 break;
             default:
                 _io.Move(TxSteps.SwapDisplace, target, TxPaths.Under(_paths.Displaced(j.Tx), op.Path), replace: false);

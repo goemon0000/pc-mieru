@@ -13,6 +13,12 @@ internal interface IGateRecovery
     bool IsAvailable(GateEntry entry);
 
     /// <summary>
+    /// True when this process runs with an elevated token ("run as administrator"). Then the window does not offer the button at all: a recovery that runs elevated would leave files that the normal start can no
+    /// longer replace, so the window says to open PC Mieru again without elevation (the same advice RECOVER.txt gives). recover.exe refuses by itself as well (<see cref="SwapExit.Elevated"/>).
+    /// </summary>
+    bool IsElevated { get; }
+
+    /// <summary>
     /// Starts the recovery and does not wait for it (see <see cref="RunnerGateRecovery"/>). False, with a short English line for a log, when it could not be started: the window then says so and takes
     /// the button away.
     /// </summary>
@@ -22,22 +28,33 @@ internal interface IGateRecovery
 /// <summary>
 /// The real recovery start. <b>It hands over; it does not wait.</b> The window runs inside <c>PCMieru.exe</c>, and a running exe cannot be replaced, so a recovery that waited here would fail on exactly the
 /// file it has to put back. So the button starts <c>I\update\recover.exe --recover --after-pid &lt;this process&gt; --then-start</c> and the window ends the app; recover.exe waits for this process to be gone,
-/// takes the gate, recovers, and, when the install can be used, starts PCMieru.exe again (the gate is let go of by then). recover.exe has its own console window, where it says what it did, in plain words.
+/// then takes the gate EXCLUSIVELY and holds it for the whole recovery. When the work is over it lets the gate go, and only then, if the install can be used, starts PCMieru.exe, which enters the gate on its own
+/// like any start (nothing is passed down to it). recover.exe has its own console window, where it says what it did, in plain words.
 ///
 /// It starts recover.exe only when <see cref="RunnerHandOff.Check"/> says it is the Swap.exe that installed.json or the journal records (checked again right before the start). Anything else (no file, another
 /// file, a link in the update folder) and there is no button: the text under the window is then the plain advice of a new folder from the downloaded ZIP.
 /// </summary>
-internal sealed class RunnerGateRecovery(IRunnerStarter? starter = null, int? processId = null) : IGateRecovery
+internal sealed class RunnerGateRecovery(IRunnerStarter? starter = null, int? processId = null, Func<bool>? isElevated = null) : IGateRecovery
 {
     private readonly IRunnerStarter _starter = starter ?? ProcessRunnerStarter.Instance;
     private readonly int _processId = processId ?? Environment.ProcessId;
+    private readonly Func<bool> _isElevated = isElevated ?? ProcessElevation.IsElevated;
 
     public static RunnerGateRecovery Instance { get; } = new();
+
+    public bool IsElevated => _isElevated();
 
     public bool IsAvailable(GateEntry entry) => InstallOf(entry) is { } install && RunnerHandOff.Check(install).IsReady;
 
     public bool Start(GateEntry entry, out string detail)
     {
+        // The window does not offer the button when elevated; this is the second line of defence for a caller that does not ask (recover.exe would refuse as well).
+        if (_isElevated())
+        {
+            detail = "this process is elevated; a recovery runs with normal rights only";
+            return false;
+        }
+
         if (InstallOf(entry) is not { } install)
         {
             detail = "the install folder is not known";

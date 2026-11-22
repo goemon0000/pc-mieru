@@ -5,16 +5,19 @@ using Microsoft.Win32.SafeHandles;
 namespace PcMieru.Update.Transaction;
 
 /// <summary>
-/// The four Windows calls the swap needs that the BCL does not give: a rename that returns only when it is on the disk (MoveFileEx with MOVEFILE_WRITE_THROUGH), the free space of a volume
-/// (GetDiskFreeSpaceEx), and the identity of a file (volume serial and file index, asked of an open HANDLE with no access, so a gate held exclusively can still be asked).
-/// Library-import P/Invoke: the swapper that calls this is NativeAOT. The DLL is resolved from System32 only.
+/// The Windows calls the swap needs that the BCL does not give: a rename that can replace (MoveFileEx), the free space of a volume (GetDiskFreeSpaceEx), and the identity of a file (volume serial and file index,
+/// asked of an open HANDLE with no access, so a gate held exclusively can still be asked). Library-import P/Invoke: the swapper that calls this is NativeAOT. The DLL is resolved from System32 only.
 ///
 /// <b>Why MoveFileEx and not ReplaceFile (DESIGN-B 5, "a Windows API that waits for the write to complete").</b> The journal, installed.json and every swapped file are put in place with one call that
 /// (a) works when the target does not exist yet (the first journal, a new name) and when it does (MOVEFILE_REPLACE_EXISTING), where ReplaceFile fails on a missing target;
 /// (b) has no backup file and no merge of attributes, ACLs or alternate streams, so what a replace does is one thing and the same in every case;
-/// (c) is one rename of the directory entry, atomic, and with MOVEFILE_WRITE_THROUGH does not return before the move has reached the disk;
-/// (d) without MOVEFILE_COPY_ALLOWED is an error across volumes, never a silent copy-then-delete (a copy would not be atomic). The file's DATA is flushed before the call (FileStream.Flush(true), see
-/// <see cref="TxIo"/>), so "the data is on the disk, then the name points to it" is the order.
+/// (c) is one rename of the directory entry, atomic;
+/// (d) without MOVEFILE_COPY_ALLOWED is an error across volumes, never a silent copy-then-delete (a copy would not be atomic).
+///
+/// <b>What is promised, and what is not.</b> MOVEFILE_WRITE_THROUGH is passed, but for a rename inside one volume it is not a promise that the new name is on the disk when the call returns (the flag is documented for
+/// the copy case, which is refused here). What the swap stands on is the ORDER: a file's data is flushed (FileStream.Flush(true), see <see cref="TxIo"/>) BEFORE the rename that gives it its name, and NTFS (and ReFS) log
+/// their metadata changes in order, so after a power cut a name never points at data that was not on the disk. Whether the last rename survived is not assumed: the journal says what was intended, and every recovery decides from
+/// the real hashes of the files (a file is the old one, the new one, or recovery stops). That is why a swap is prepared only on NTFS or ReFS (<see cref="SystemVolumeFormat.IsSupported"/>); a recovery runs on any file system.
 /// </summary>
 internal static partial class TxNative
 {
@@ -84,12 +87,6 @@ internal static partial class TxNative
         return GetConsoleProcessList(ref slot, 1) == 1;
     }
 
-    /// <summary>
-    /// TEST ONLY (the kill entry of PCMieru.Swap.exe, see <see cref="SwapCli"/>): writes the marker file that tells the test where the process stands before it is killed. The marker is a file the TEST named, outside the
-    /// install; it is here, with the other native calls, because nothing outside this file and TxIo.cs may change a file (TxFaultMatrixTests checks that), and it is not a step: a cut here would test nothing.
-    /// </summary>
-    internal static void WriteTestMarker(string path, string text) => File.WriteAllText(path, text);
-
     /// <summary>Renames <paramref name="source"/> to <paramref name="target"/> and returns when it is on the disk. An existing target is replaced only when <paramref name="replace"/> is true (else it is an <see cref="IOException"/>).</summary>
     /// <exception cref="IOException">The rename failed (a sharing violation is one, with the HRESULT of ERROR_SHARING_VIOLATION).</exception>
     /// <exception cref="UnauthorizedAccessException">Access was denied.</exception>
@@ -156,6 +153,15 @@ internal static partial class TxNative
     /// <summary>Whether the exception is the failure of a file held open by someone else.</summary>
     internal static bool IsSharingViolation(Exception ex) =>
         ex is IOException io && ((io.HResult & 0xFFFF) is ErrorSharingViolation or ErrorLockViolation);
+
+    /// <summary>
+    /// Whether a rename or a delete failed in the way a file in use fails: a sharing or lock violation, or "access denied" (a mapped image of a running program answers a replace or a delete with that). Used to decide
+    /// whether the name should be tried aside; it does not say the file is in use (a file with a read-only attribute answers the same way, and renaming it aside works as well).
+    /// </summary>
+    internal static bool IsLockedFailure(Exception ex) => ex is UnauthorizedAccessException || IsSharingViolation(ex);
+
+    /// <summary>Whether the exception says "a running program is using a managed file": it could not even be moved aside (<see cref="TxInUseException"/>) or a read ran into a lock.</summary>
+    internal static bool IsInUse(Exception ex) => ex is TxInUseException || IsSharingViolation(ex);
 }
 
 /// <summary>A file's identity on a volume (what its name pointed to): the swapper keeps the gate file's from the start to the end of a swap.</summary>

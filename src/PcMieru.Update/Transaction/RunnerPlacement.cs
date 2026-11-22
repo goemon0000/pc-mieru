@@ -4,9 +4,10 @@ using PcMieru.Wire.Gate;
 namespace PcMieru.Update.Transaction;
 
 /// <summary>
-/// The text of <c>I\update\RECOVER.txt</c> (DESIGN-B 13 item 3): written by the runner BEFORE the first change, never shipped in a bundle. Plain Japanese and English, what happened, the one thing to run
-/// (recover.exe in this folder) and the fallback (unzip the downloaded ZIP into a new folder). No URL: a page address in a note that is written by a program is something a copy of this note could be turned into
-/// a link with. UTF-8 with a byte order mark (so Notepad of every Windows version reads the Japanese) and CRLF line ends.
+/// The text of <c>I\update\RECOVER.txt</c> (DESIGN-B 13 item 3): written by the runner BEFORE the first change, never shipped in a bundle. Plain Japanese and English: what happened, what recover.exe does and
+/// what it leaves alone (the same two sentences the start gate window says, so the note and the window never tell two stories), the one thing to run (recover.exe in this folder, never "as administrator") and the
+/// fallback (unzip the downloaded ZIP into a new folder, and the settings and records are still there). No URL: a page address in a note that is written by a program is something a copy of this note could be
+/// turned into a link with. UTF-8 with a byte order mark (so Notepad of every Windows version reads the Japanese) and CRLF line ends.
 /// </summary>
 public static class RecoverNote
 {
@@ -20,19 +21,21 @@ public static class RecoverNote
             string.Empty,
             "[日本語]",
             $"PCミエルの更新（{what}）が、途中で止まったかもしれません。",
+            "recover.exe を使うと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。設定や記録はこのフォルダーの外にあるので、そのまま残ります。",
             "次の順に進めてください。",
             "  1. PCミエルをすべて終了します。",
-            "  2. このフォルダー（update）の recover.exe をダブルクリックします。黒い画面がしばらく出て、自動で閉じます。",
+            "  2. このフォルダー（update）の recover.exe をダブルクリックします。黒い画面がしばらく出て、自動で閉じます。「管理者として実行」は使わないでください。",
             "  3. PCミエルを、いつもどおり起動します。",
-            "recover.exe でも直らないときは、ダウンロードした ZIP を新しいフォルダーに展開して、そちらを使ってください。",
+            "うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開して、そちらを使ってください。設定や記録は、新しいフォルダーで開いても残っています。",
             string.Empty,
             "[English]",
             $"An update of PC Mieru ({what}) may have stopped part-way.",
+            "recover.exe puts PC Mieru's files back into one complete version, either the one from before the update or the new one. Files that PC Mieru did not install, such as photos and documents, are not changed. Your settings and records are kept outside this folder, so they stay as they are.",
             "Please do this, in order:",
             "  1. Close PC Mieru completely.",
-            "  2. In this folder (the \"update\" folder), double-click recover.exe. A black window stays open for a while and closes by itself.",
+            "  2. In this folder (the \"update\" folder), double-click recover.exe. A black window stays open for a while and closes by itself. Do not use \"Run as administrator\".",
             "  3. Start PC Mieru as usual.",
-            "If recover.exe does not fix it, unzip the ZIP file you downloaded into a new folder and use that copy.",
+            "If that does not work, unzip the ZIP file you downloaded into a new folder and use that copy. Your settings and records are still there when you open PC Mieru from a new folder.",
             string.Empty);
     }
 

@@ -71,6 +71,7 @@ public static class TxTag
 ///   "launchAttempts": 0,                  counted BEFORE each launch of the new version, at most 3
 ///   "recoveryAttempts": 0,                counted BEFORE each recovery acts; automatic recovery stops at 3
 ///   "tag": null,                          "launch-failed" | "generation-mismatch" | null (what the rollback writes to blocked.json)
+///   "newDirs": ["en"],                    the folders this transaction creates (they did not exist at the preparation): the only ones a rollback may remove
 ///   "from": { "version": "0.5.0", "buildId": "...", "installedSha256": "...", "files": [ { "path", "bytes", "sha256" } ] },
 ///   "to":   { "version": "0.5.1", "buildId": "...", "installedSha256": "...", "files": [ ... ] },
 ///   "ops": [ { "path": "PCMieru.exe", "intent": "overwrite", "state": "pending", "old": "&lt;sha&gt;", "new": "&lt;sha&gt;" } ]
@@ -84,7 +85,7 @@ public sealed class TxJournal
 {
     public const string Format = "pcm-journal/1";
 
-    public TxJournal(string tx, InstalledRecord from, string fromInstalledSha256, InstalledRecord to, string toInstalledSha256, IReadOnlyList<TxOp> ops)
+    public TxJournal(string tx, InstalledRecord from, string fromInstalledSha256, InstalledRecord to, string toInstalledSha256, IReadOnlyList<TxOp> ops, IReadOnlyList<string>? newDirs = null)
     {
         Tx = tx;
         From = from;
@@ -92,7 +93,14 @@ public sealed class TxJournal
         To = to;
         ToInstalledSha256 = toInstalledSha256;
         Ops = ops;
+        NewDirs = newDirs ?? [];
     }
+
+    /// <summary>
+    /// The folders (names relative to the install folder, with "/") that did NOT exist when this transaction was prepared and that the added files need: the only folders a rollback may remove again (when it
+    /// has taken the files out and they are empty). A folder that was there before the swap (even an empty one a person made) is never in this list. A journal written without the line has none.
+    /// </summary>
+    public IReadOnlyList<string> NewDirs { get; }
 
     public string Tx { get; }
 
@@ -211,6 +219,7 @@ public sealed class TxJournal
         text.Append("  \"launchAttempts\": ").Append(TxJson.Number(LaunchAttempts)).Append(",\n");
         text.Append("  \"recoveryAttempts\": ").Append(TxJson.Number(RecoveryAttempts)).Append(",\n");
         text.Append("  \"tag\": ").Append(TxJson.QuoteOrNull(Tag)).Append(",\n");
+        text.Append("  \"newDirs\": [").Append(string.Join(", ", NewDirs.Select(TxJson.Quote))).Append("],\n");
         AppendGeneration(text, "from", From, FromInstalledSha256);
         text.Append(",\n");
         AppendGeneration(text, "to", To, ToInstalledSha256);
@@ -342,7 +351,29 @@ public sealed class TxJournal
                 return false;
             }
 
-            journal = new TxJournal(tx, from, fromSha, to, toSha, ops)
+            var newDirs = new List<string>();
+            if (root.TryGetProperty("newDirs", out var dirsElement))
+            {
+                if (dirsElement.ValueKind != JsonValueKind.Array)
+                {
+                    error = "newDirs is not an array";
+                    return false;
+                }
+
+                foreach (var element in dirsElement.EnumerateArray())
+                {
+                    var dir = element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+                    if (dir is null || !BundleNames.CheckDirectory(dir).Ok || !ops.Any(o => o.Intent == TxOpIntent.Add && o.Path.StartsWith(dir + "/", StringComparison.Ordinal)))
+                    {
+                        error = "newDirs holds a name that is not a folder of an added file";
+                        return false;
+                    }
+
+                    newDirs.Add(dir);
+                }
+            }
+
+            journal = new TxJournal(tx, from, fromSha, to, toSha, ops, newDirs)
             {
                 Phase = phase,
                 LaunchAttempts = launch,

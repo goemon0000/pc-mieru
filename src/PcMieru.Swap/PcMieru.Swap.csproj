@@ -96,6 +96,15 @@
                             Pinned="$(PinnedNativeSearchAssemblies)" />
   </Target>
 
+  <!--
+    The shipped exe has NO test entry. Program.cs reaches the test-only entry (tests/PcMieru.Swap.TestBuild/TestEntry.cs) only behind the compile symbol PCM_SWAP_TESTBUILD, and that symbol belongs to the test build's
+    project alone. A build of THIS project with it defined (a stray DefineConstants, a command line switch) stops here, before the compiler runs; tools/publish.ps1 then also looks for the entry's option name and
+    environment variable name in the published exe.
+  -->
+  <Target Name="NoTestEntryInTheProduct" BeforeTargets="CoreCompile" Condition="$(DefineConstants.Contains('PCM_SWAP_TESTBUILD'))">
+    <Error Text="PCM_SWAP_TESTBUILD is defined in the product's PCMieru.Swap project. The test entry (--test-swap) is only in tests/PcMieru.Swap.TestBuild and must never be in the shipped exe." />
+  </Target>
+
   <!-- Dev builds: the start gate file beside the exe (see build/GateNextToExe.targets). The swap does not read it (it works on the gate of the install it is in); the copy keeps the dev output like the others. -->
   <Import Project="..\..\build\GateNextToExe.targets" />
 

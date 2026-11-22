@@ -17,6 +17,12 @@ public enum TxOutcome
 
     /// <summary>The recovery could not put the files back or could not prove the result. The journal and the backup are kept, the sentinel is written, and a person must run recover.exe or unzip a new copy.</summary>
     RecoveryFailed,
+
+    /// <summary>
+    /// The recovery (or the swap's own rollback) could not finish BECAUSE a file of the install is in use by a running program (a sharing violation, or a rename that was refused). Nothing is lost: the journal and the
+    /// backup are kept, NO sentinel is written, and the same recovery can be run again once the program is closed.
+    /// </summary>
+    Busy,
 }
 
 /// <summary>
@@ -36,6 +42,12 @@ public enum TxReason
 
     /// <summary>I\update is a link (a reparse point) or cannot be used.</summary>
     UpdateFolderUnsafe,
+
+    /// <summary>The install is on a volume that is not NTFS or ReFS (a FAT or exFAT stick, a network share). The swap relies on the file system's ordered metadata log; it does not update there.</summary>
+    NotNtfs,
+
+    /// <summary>The process runs with an elevated token (as an administrator). A swap or a recovery is refused: it would leave files that a normal start cannot write.</summary>
+    Elevated,
 
     /// <summary>The staged folder has no readable PCMieru.bundle.json, or one that is refused.</summary>
     StagedUnreadable,
@@ -107,6 +119,10 @@ public enum TxReason
 
     /// <summary>Three automatic attempts were used; only a person (recover.exe) tries again.</summary>
     RetriesExhausted,
+
+    // ----------------------------------------------------------------- Busy
+    /// <summary>A file of the install is in use by a running program and could not even be moved aside. The journal is kept; close the program and run the recovery again.</summary>
+    FilesInUse,
 }
 
 /// <summary>The answer of <see cref="SwapTransaction.Run"/> and <see cref="TxRecovery.Recover"/>.</summary>
@@ -129,8 +145,11 @@ public sealed record TxResult(TxOutcome Outcome, TxReason Reason, string Detail)
     /// <summary>True when prev-/work/ could not be removed after a commit or a rollback (it is retried; the result stands).</summary>
     public bool CleanupPending { get; init; }
 
-    /// <summary>The install is in a state the next start can use as it is (a commit, a rollback, nothing to do, an abort).</summary>
-    public bool InstallUsable => Outcome != TxOutcome.RecoveryFailed;
+    /// <summary>
+    /// The install is in a state the next start can use as it is (a commit, a rollback, nothing to do, an abort). Not when the recovery failed, and not when it is only waiting (Busy: the journal is still there, so the
+    /// start gate would say "recovery pending").
+    /// </summary>
+    public bool InstallUsable => Outcome is not (TxOutcome.RecoveryFailed or TxOutcome.Busy);
 
     public override string ToString() => $"{Outcome}/{Reason}: {Detail}";
 }
@@ -144,6 +163,8 @@ public static class TxReasonText
         TxReason.JournalPresent => "前回の更新が途中で止まっています。先にその回復が必要です。",
         TxReason.GateLost => "PCミエルの起動の門を確かめられなかったため、更新しませんでした。",
         TxReason.UpdateFolderUnsafe => "更新用のフォルダー（update）が使えないため、更新しませんでした。",
+        TxReason.NotNtfs => "このフォルダーのあるドライブは NTFS ではないため、自動では更新しません。ZIP を新しいフォルダーに展開してください。",
+        TxReason.Elevated => "管理者として実行されているため、更新も回復も行いません。ふつうの権限で、もう一度開いてください。",
         TxReason.StagedUnreadable or TxReason.StagedMismatch => "ダウンロードした内容を確かめられなかったため、更新しませんでした。もう一度試してください。",
         TxReason.SameBuild => "すでに同じ版です。",
         TxReason.NoRecord or TxReason.InstalledRecordUnreadable or TxReason.InstalledFilesChanged =>
@@ -156,6 +177,7 @@ public static class TxReasonText
         TxReason.Interrupted => "更新が途中で止まったため、元の状態に戻しました。",
         TxReason.JournalUnreadable or TxReason.FileNeitherHash or TxReason.BackupUnavailable or TxReason.RecoveryIoFailure or TxReason.SetNotRestored or TxReason.RetriesExhausted =>
             "元に戻す作業が終わりませんでした。update フォルダーの recover.exe を実行するか、ZIP を新しいフォルダーに展開してください。",
+        TxReason.FilesInUse => "PCミエルのファイルを使っているプログラムがあるため、回復はまだ終わっていません。PCミエルを閉じてから、もう一度回復を試してください。",
         _ => string.Empty,
     };
 
@@ -165,6 +187,8 @@ public static class TxReasonText
         TxReason.JournalPresent => "An earlier update stopped part-way. It has to be recovered first.",
         TxReason.GateLost => "PC Mieru's start gate could not be checked, so nothing was updated.",
         TxReason.UpdateFolderUnsafe => "The update folder cannot be used, so nothing was updated.",
+        TxReason.NotNtfs => "The drive of this folder is not NTFS, so PC Mieru does not update itself here. Unzip the ZIP into a new folder.",
+        TxReason.Elevated => "This is running as administrator, so it does not update or recover anything. Open it again with normal rights.",
         TxReason.StagedUnreadable or TxReason.StagedMismatch => "The downloaded files could not be checked, so nothing was updated. Try again.",
         TxReason.SameBuild => "This is already the same version.",
         TxReason.NoRecord or TxReason.InstalledRecordUnreadable or TxReason.InstalledFilesChanged =>
@@ -177,6 +201,7 @@ public static class TxReasonText
         TxReason.Interrupted => "The update stopped part-way, so the earlier state was put back.",
         TxReason.JournalUnreadable or TxReason.FileNeitherHash or TxReason.BackupUnavailable or TxReason.RecoveryIoFailure or TxReason.SetNotRestored or TxReason.RetriesExhausted =>
             "Putting the earlier version back did not finish. Run recover.exe in the update folder, or unzip the ZIP into a new folder.",
+        TxReason.FilesInUse => "A program is using PC Mieru's files, so the recovery is not finished yet. Close PC Mieru and try the recovery again.",
         _ => string.Empty,
     };
 }

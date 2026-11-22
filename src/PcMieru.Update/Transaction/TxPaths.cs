@@ -1,3 +1,4 @@
+using PcMieru.Update.Feed;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Update.Transaction;
@@ -68,6 +69,9 @@ public sealed class TxPaths
 
     public string Restore(string tx) => Path.Combine(Work(tx), "restore");
 
+    /// <summary>Where a managed file that a running program has mapped is renamed aside to (a mapped image cannot be overwritten or deleted, but its name can be changed): work/&lt;tx&gt;/inuse.</summary>
+    public string InUse(string tx) => Path.Combine(Work(tx), "inuse");
+
     /// <summary>The path of a bundle-relative name (with "/") below <paramref name="root"/>. The name must already have passed <c>BundleNames.Check</c> (the readers of a record and a journal do that).</summary>
     public static string Under(string root, string relativeName) => Path.Combine(root, relativeName.Replace('/', Path.DirectorySeparatorChar));
 
@@ -77,29 +81,73 @@ public sealed class TxPaths
     /// <summary>A transaction id: 12 lower-case hex digits (short, because the folders made from it sit deep in the install folder).</summary>
     public static string NewTx() => Convert.ToHexStringLower(Guid.NewGuid().ToByteArray().AsSpan(0, 6));
 
+    /// <summary>The two folders that hold transaction folders: <c>work</c> and <c>prev-&lt;version&gt;</c> (the only parents a cleaning may remove when they are left empty).</summary>
+    public static bool IsContainerName(string name) =>
+        string.Equals(name, "work", StringComparison.OrdinalIgnoreCase) || name.StartsWith("prev-", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsValidTx(string? tx) => tx is { Length: 12 } && tx.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f');
 
-    /// <summary>The folders a preparation leaves: work/&lt;tx&gt; and prev-*/&lt;tx&gt;. Nothing is returned when update/ does not exist.</summary>
-    public IReadOnlyList<string> TransactionFolders()
+    /// <summary>The folders a preparation leaves that a cleaning may delete (see <see cref="ScanStale"/>). Nothing is returned when update/ does not exist.</summary>
+    public IReadOnlyList<string> TransactionFolders() => ScanStale().ToDelete;
+
+    /// <summary>
+    /// What a cleaning of update/ may delete and what it must leave alone. <see cref="ToDelete"/>: <c>work/&lt;tx&gt;</c> and <c>prev-&lt;version&gt;/&lt;tx&gt;</c> (a real folder with a transaction id for a name, <see cref="IsValidTx"/>), and a LINK at
+    /// <c>work</c>, at <c>prev-*</c> or at one of those (the link itself is what is deleted: <see cref="TxIo.DeleteTree"/> unlinks it). <see cref="LeftAlone"/>: anything else (a file, a folder with another name, a
+    /// <c>prev-</c> entry whose suffix is not a version), as paths relative to update/ for a text. A link is NEVER entered: not to list it, not to delete in it (a junction made to point at a folder of the user's would
+    /// otherwise lose it).
+    /// </summary>
+    public StaleScan ScanStale()
     {
-        var found = new List<string>();
-        if (!Directory.Exists(Update))
+        var delete = new List<string>();
+        var alone = new List<string>();
+        if (ManagedSet.Look(Update) != Presence.Other)
         {
-            return found;
+            return new StaleScan(delete, alone);
         }
 
-        var work = Path.Combine(Update, "work");
-        if (Directory.Exists(work))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(Update))
         {
-            found.AddRange(Directory.EnumerateDirectories(work));
+            var name = Path.GetFileName(entry);
+            var isWork = string.Equals(name, "work", StringComparison.OrdinalIgnoreCase);
+            var isPrev = name.StartsWith("prev-", StringComparison.OrdinalIgnoreCase);
+            if (!isWork && !isPrev)
+            {
+                continue; // installed.json, the journal, recover.exe, ...: not a transaction folder
+            }
+
+            if (isPrev && !(AppVersion.TryParse(name["prev-".Length..], out var version) && version.ToString() == name["prev-".Length..]))
+            {
+                alone.Add(name);
+                continue;
+            }
+
+            switch (ManagedSet.Look(entry))
+            {
+                case Presence.Link:
+                    delete.Add(entry); // unlinked, never entered
+                    break;
+                case Presence.Other:
+                    foreach (var child in Directory.EnumerateFileSystemEntries(entry))
+                    {
+                        var childName = Path.GetFileName(child);
+                        if (IsValidTx(childName) && ManagedSet.Look(child) is Presence.Other or Presence.Link)
+                        {
+                            delete.Add(child);
+                        }
+                        else
+                        {
+                            alone.Add(name + "/" + childName);
+                        }
+                    }
+
+                    break;
+                case Presence.File:
+                    alone.Add(name);
+                    break;
+            }
         }
 
-        foreach (var prev in Directory.EnumerateDirectories(Update, "prev-*"))
-        {
-            found.AddRange(Directory.EnumerateDirectories(prev));
-        }
-
-        return found;
+        return new StaleScan(delete, alone);
     }
 
     /// <summary>Whether <paramref name="path"/> exists and is a link (a reparse point). A path that is not there is not a link.</summary>
@@ -118,3 +166,6 @@ public sealed class TxPaths
         }
     }
 }
+
+/// <summary>What <see cref="TxPaths.ScanStale"/> found: the folders (and links) a cleaning deletes, and the entries of update/ it leaves alone (relative to update/, with "/").</summary>
+public sealed record StaleScan(IReadOnlyList<string> ToDelete, IReadOnlyList<string> LeftAlone);

@@ -1,4 +1,4 @@
-using System.Security.Principal;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Feed;
 
@@ -16,6 +16,9 @@ public enum PlacementKind
 
     /// <summary>The folder is on a removable drive, a network drive or a path that has no drive. Only a fixed drive can be swapped.</summary>
     NotFixedDrive,
+
+    /// <summary>The drive is a fixed disk but its file system is not NTFS or ReFS (FAT32, exFAT, an unknown answer). The swap relies on the ordered metadata log of those two (see TxNative); a recovery does not need it.</summary>
+    NotNtfs,
 }
 
 /// <summary>The answer of <see cref="InstallPlacement.Check"/>: the kind and a short technical text for a log.</summary>
@@ -34,10 +37,10 @@ public static class InstallPlacement
     /// <summary>The folder a swap would work in below the install folder.</summary>
     public const string UpdateFolderName = "update";
 
-    public static Placement Check(string installFolder) => Check(installFolder, IsElevated, DriveTypeOf);
+    public static Placement Check(string installFolder) => Check(installFolder, ProcessElevation.IsElevated, DriveTypeOf, SystemVolumeFormat.Instance.FormatOf);
 
-    /// <summary>The same with the two questions given by the caller (a test's answers).</summary>
-    public static Placement Check(string installFolder, Func<bool> isElevated, Func<string, DriveType> driveTypeOf)
+    /// <summary>The same with the three questions given by the caller (a test's answers). <paramref name="formatOf"/> is the file system name of the folder's volume ("NTFS", "ReFS", ...).</summary>
+    public static Placement Check(string installFolder, Func<bool> isElevated, Func<string, DriveType> driveTypeOf, Func<string, string?> formatOf)
     {
         if (isElevated())
         {
@@ -47,6 +50,12 @@ public static class InstallPlacement
         if (driveTypeOf(installFolder) != DriveType.Fixed)
         {
             return new Placement(PlacementKind.NotFixedDrive, "the folder is not on a fixed drive");
+        }
+
+        // NTFS or ReFS only: the swap stands on the order of their metadata log (TxNative). A recovery does not ask this question.
+        if (!SystemVolumeFormat.IsSupported(formatOf(installFolder)))
+        {
+            return new Placement(PlacementKind.NotNtfs, "the volume is not NTFS or ReFS");
         }
 
         // I\update is probed when it exists. When it does not, making it needs I to be writable, which the first probe shows.
@@ -125,12 +134,6 @@ public static class InstallPlacement
 
             return ex.GetType().Name + ": " + ex.Message;
         }
-    }
-
-    private static bool IsElevated()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     private static DriveType DriveTypeOf(string folder)

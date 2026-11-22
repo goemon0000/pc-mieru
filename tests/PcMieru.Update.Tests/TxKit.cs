@@ -144,6 +144,72 @@ internal sealed class FakeLauncher(params LaunchVerdict[] script) : ILaunchVerif
     }
 }
 
+/// <summary>The bytes of a real, loadable 64-bit image: a copy of a small Windows DLL (never its original: the tests map the copy in the scratch folder).</summary>
+internal static class RealImage
+{
+    public static byte[] Bytes(int overlay = 0)
+    {
+        var original = File.ReadAllBytes(Path.Combine(Environment.SystemDirectory, "version.dll"));
+        if (overlay == 0)
+        {
+            return original;
+        }
+
+        // Data after the last section (an "overlay") does not stop the image from loading and makes it another file.
+        var data = new byte[original.Length + overlay];
+        original.CopyTo(data, 0);
+        Array.Fill(data, (byte)0x5A, original.Length, overlay);
+        return data;
+    }
+}
+
+/// <summary>
+/// A file mapped as an IMAGE by this process (LoadLibraryEx with DONT_RESOLVE_DLL_REFERENCES: no entry point runs, nothing else is loaded). Windows then refuses to delete the file and to replace it by name, while
+/// renaming it works: exactly what a running program's DLL or exe does to the swap.
+/// </summary>
+internal sealed class MappedImage : IDisposable
+{
+    private const uint DontResolveDllReferences = 0x00000001;
+    private IntPtr _module;
+
+    private MappedImage(IntPtr module, string path)
+    {
+        _module = module;
+        Path = path;
+    }
+
+    public string Path { get; }
+
+    public static MappedImage Load(string path)
+    {
+        var module = LoadLibraryExW(path, IntPtr.Zero, DontResolveDllReferences);
+        Assert.True(module != IntPtr.Zero, $"the image {path} could not be mapped (error {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+        return new MappedImage(module, path);
+    }
+
+    public void Dispose()
+    {
+        var module = Interlocked.Exchange(ref _module, IntPtr.Zero);
+        if (module != IntPtr.Zero)
+        {
+            FreeLibrary(module);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryExW(string fileName, IntPtr file, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool FreeLibrary(IntPtr module);
+}
+
+/// <summary>The file system name the volume of the install folder answers with (null or empty when Windows does not say).</summary>
+internal sealed class FixedVolume(string? format) : IVolumeFormat
+{
+    public string? FormatOf(string folder) => format;
+}
+
 internal sealed class FixedDisk(long free) : IDiskSpace
 {
     public Action? OnAsk { get; init; }
@@ -321,7 +387,47 @@ internal sealed class Rig : IDisposable
         }
     }
 
-    public void Dispose() => Scratch.Delete(Root);
+    /// <summary>Things a scenario keeps alive for the whole life of the rig (an image a "running program" has mapped): let go before the scratch folder is deleted, in the opposite order.</summary>
+    public List<IDisposable> Holds { get; } = [];
+
+    public void Dispose()
+    {
+        for (var i = Holds.Count - 1; i >= 0; i--)
+        {
+            Holds[i].Dispose();
+        }
+
+        Holds.Clear();
+        Scratch.Delete(Root);
+    }
+
+    /// <summary>Lets go of everything the scenario held (the "program" ends): a mapped image is unmapped and its file can be deleted again.</summary>
+    public void ReleaseHolds()
+    {
+        foreach (var hold in Holds)
+        {
+            hold.Dispose();
+        }
+
+        Holds.Clear();
+    }
+
+    /// <summary>The shape of a release whose changed library, added library and dropped library are REAL images (a Windows DLL's bytes), so that a process can map them: see <see cref="MappedImage"/>.</summary>
+    public static void RealImages(SyntheticSet old, SyntheticSet next)
+    {
+        old.Files["PcMieru.Core.dll"] = RealImage.Bytes();
+        old.Files["old-only.dll"] = RealImage.Bytes();
+        next.Files["PcMieru.Core.dll"] = RealImage.Bytes(overlay: 4096);
+        next.Files["new-feature.dll"] = RealImage.Bytes(overlay: 8192);
+    }
+
+    /// <summary>Maps the install's file as an image, as a running program would (it lives until the rig is disposed or <see cref="ReleaseHolds"/>).</summary>
+    public MappedImage Map(string relativeName)
+    {
+        var image = MappedImage.Load(TxPaths.Under(Install, relativeName));
+        Holds.Add(image);
+        return image;
+    }
 
     /// <summary>A directory junction (no privilege needed): <c>mklink /J</c>. Remove it with <c>Directory.Delete(link)</c> (the link only) BEFORE the rig is disposed.</summary>
     public static void Junction(string link, string target)
@@ -338,13 +444,14 @@ internal sealed class Rig : IDisposable
 
     public GateEntry Enter() => InstallGate.EnterExclusive(ExePath);
 
-    public static TxSeams Seams(IFaultInjector? fault = null, ILaunchVerifier? launcher = null, IDiskSpace? disk = null, IRunnerPlacement? placement = null) =>
+    public static TxSeams Seams(IFaultInjector? fault = null, ILaunchVerifier? launcher = null, IDiskSpace? disk = null, IRunnerPlacement? placement = null, IVolumeFormat? volume = null) =>
         new()
         {
             Fault = fault ?? NoFaults.Instance,
             Launcher = launcher,
             Disk = disk ?? SystemDiskSpace.Instance,
             Placement = placement ?? RealRunnerPlacement.Instance,
+            Volume = volume ?? SystemVolumeFormat.Instance,
         };
 
     /// <summary>A swap of the staged folder with a fresh gate entry (disposed when the call ends, however it ends: a power cut unwinds through it).</summary>

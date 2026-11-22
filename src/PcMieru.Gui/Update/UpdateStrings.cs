@@ -65,6 +65,7 @@ internal static class UpdateStrings
         new("gui.update.placement.readonly", "読み取り専用か、書き込みの許可がありません", "it is read-only, or there is no permission to write"),
         new("gui.update.placement.elevated", "管理者として開いています", "running as administrator"),
         new("gui.update.placement.notfixeddrive", "固定ディスクではない場所にあります", "not on a fixed disk"),
+        new("gui.update.placement.notntfs", "NTFS ではないドライブにあります", "on a drive that is not NTFS"),
         new("gui.update.candidate.label", "利用できる新しい版", "Available version"),
         new("gui.update.candidate.none", "なし", "none"),
         new("gui.update.status.label", "状態", "Status"),

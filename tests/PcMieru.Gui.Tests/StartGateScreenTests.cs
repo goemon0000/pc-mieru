@@ -238,7 +238,7 @@ public sealed class StartGateScreenTests : IDisposable
     public void A_missing_gate_does_not_say_that_the_person_deleted_or_moved_anything_and_the_unreadable_text_is_not_the_denied_text(Language language)
     {
         using var _ = Harness.Locale(language);
-        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed", "gui.gate.recoverypending.button", "gui.gate.recoveryfailed.button", "gui.gate.recover.failed" })
+        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed", "gui.gate.recoverypending.button", "gui.gate.recoveryfailed.button", "gui.gate.recover.failed", "gui.gate.recover.elevated" })
         {
             var text = Strings.Get(key, language);
             foreach (var blame in language == Language.Ja ? new[] { "削除", "移動", "消し", "動かし" } : new[] { "deleted", "moved", "you deleted", "your fault" })
@@ -496,11 +496,13 @@ public sealed class StartGateScreenTests : IDisposable
     // ---- 「回復する」 ----
 
     /// <summary>A recovery that is told what to answer and counts what it is asked; nothing is started.</summary>
-    private sealed class FakeRecovery(bool available, bool starts = true) : IGateRecovery
+    private sealed class FakeRecovery(bool available, bool starts = true, bool elevated = false) : IGateRecovery
     {
         public int Asked { get; private set; }
 
         public List<GateOutcome> Started { get; } = [];
+
+        public bool IsElevated => elevated;
 
         public bool IsAvailable(GateEntry entry)
         {
@@ -518,10 +520,10 @@ public sealed class StartGateScreenTests : IDisposable
 
     public static TheoryData<GateOutcome, Language, bool, string> TheWordsWithTheButton() => new()
     {
-        { GateOutcome.RecoveryPending, Language.Ja, false, "前回の更新が途中で止まったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、途中の更新を片づけてから PCミエルを開きます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
-        { GateOutcome.RecoveryPending, Language.En, false, "The last update did not finish, so PC Mieru cannot open from this folder. Press \"Recover\" to clear up the unfinished update and then open PC Mieru. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
-        { GateOutcome.RecoveryFailed, Language.Ja, true, "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、もう一度元に戻してみます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
-        { GateOutcome.RecoveryFailed, Language.En, true, "PC Mieru could not undo the last update, so it cannot open from this folder. Press \"Recover\" to try putting the earlier version back once more. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+        { GateOutcome.RecoveryPending, Language.Ja, false, "前回の更新が途中で止まりました。「回復する」を押すと、PCミエルのファイルを更新前か更新後のどちらかにそろえます。うまくいけば、そのまま PCミエルが開きます。写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。" },
+        { GateOutcome.RecoveryPending, Language.En, false, "The last update did not finish. Press \"Recover\" to put PC Mieru's files back into one complete version. If that works, PC Mieru opens by itself. Files that PC Mieru did not install, such as photos and documents, are not changed." },
+        { GateOutcome.RecoveryFailed, Language.Ja, true, "前回の更新のあと、PCミエルのファイルを元の版にそろえられませんでした。「回復する」を押すと、もう一度試します。PCミエルが入れたもの以外のファイルは変わりません。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.RecoveryFailed, Language.En, true, "After the last update, PC Mieru's files could not be put back into one version. Press \"Recover\" to try again. Files that PC Mieru did not install are not changed. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
     };
 
     [Theory]
@@ -629,13 +631,123 @@ public sealed class StartGateScreenTests : IDisposable
 
         Assert.False(window.RecoverNow());
 
-        Assert.Equal("The recovery program could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there.", window.ReasonText);
+        // First what happened, then the new folder as the way on, then the one thing a person who is about to leave this folder wants to know: settings and records stay.
+        Assert.Equal("Recovery could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there. Your settings and records are kept outside this folder, so they are still there when you open PC Mieru from a new folder.", window.ReasonText);
         Assert.False(window.RecoverOffered);
         Assert.False(window.RecoverButton.Visible);
         Assert.Same(window.CloseButton, window.AcceptButton);
         Assert.False(window.RecoveryStarted);
         Assert.False(window.RecoverNow()); // once is all: there is no button to press again
         Assert.Single(recovery.Started);
+    }
+
+    [Theory]
+    [InlineData(GateOutcome.RecoveryPending, Language.Ja)]
+    [InlineData(GateOutcome.RecoveryPending, Language.En)]
+    [InlineData(GateOutcome.RecoveryFailed, Language.Ja)]
+    [InlineData(GateOutcome.RecoveryFailed, Language.En)]
+    public void An_elevated_process_offers_no_recover_button_and_shows_the_advice_to_open_it_again_with_normal_rights(GateOutcome outcome, Language language)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(ThemeMode.Dark);
+        var recovery = new FakeRecovery(available: true, elevated: true);
+        using var window = new StartGateWindow(theme, Refused(outcome), () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.True(window.RecoverElevated);
+        Assert.False(window.RecoverOffered);
+        Assert.False(window.RecoverButton.Visible);
+        Assert.Same(window.CloseButton, window.AcceptButton);
+        Assert.Equal(Strings.Get("gui.gate.recover.elevated", language), window.ReasonText);
+        Assert.Contains(language == Language.Ja ? "管理者として実行" : "Run as administrator", window.ReasonText, StringComparison.Ordinal);
+        // The new folder stays as the way on, and the text still names no file and no path.
+        Assert.Contains(language == Language.Ja ? "新しいフォルダーに展開" : "into a new folder", window.ReasonText, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\", window.ReasonText, StringComparison.Ordinal);
+        Assert.DoesNotContain(GateFile.RecoverNoteName, window.ReasonText, StringComparison.Ordinal);
+        // Nothing was asked of the recovery (it would hash recover.exe) and nothing can be started, not even by calling the handler without the button.
+        Assert.Equal(0, recovery.Asked);
+        Assert.False(window.RecoverNow());
+        Assert.Empty(recovery.Started);
+        // The folder line is still there: which copy of PC Mieru this is.
+        Assert.StartsWith(language == Language.Ja ? "このフォルダー:" : "This folder:", window.HintText, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public void The_window_and_RECOVER_txt_say_the_same_two_things_in_the_same_words(Language language)
+    {
+        // The note is written by the runner and the window is shown by the app, in two projects. One sentence each is shared word for word, so a change to one of them that is not made to the other fails here.
+        var note = RecoverNote.Text("0.5.0", "0.5.1");
+        var pending = Strings.Get("gui.gate.recoverypending.button", language);
+        var leavesAlone = language == Language.Ja ? "写真や文書など、PCミエルが入れたもの以外のファイルは変わりません。" : "Files that PC Mieru did not install, such as photos and documents, are not changed.";
+        Assert.Contains(leavesAlone, pending, StringComparison.Ordinal);
+        Assert.Contains(leavesAlone, note, StringComparison.Ordinal);
+
+        var elevated = Strings.Get("gui.gate.recover.elevated", language);
+        var notAdmin = language == Language.Ja ? "「管理者として実行」" : "\"Run as administrator\"";
+        Assert.Contains(notAdmin, elevated, StringComparison.Ordinal);
+        Assert.Contains(notAdmin, note, StringComparison.Ordinal);
+
+        var newFolder = language == Language.Ja ? "ダウンロードした ZIP を新しいフォルダーに展開し" : "unzip the ZIP file you downloaded into a new folder";
+        Assert.Contains(language == Language.Ja ? "ダウンロードした ZIP を新しいフォルダーに展開し" : "unzip the downloaded ZIP file into a new folder", Strings.Get("gui.gate.recoveryfailed.button", language), StringComparison.Ordinal);
+        Assert.Contains(newFolder, note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_busy_or_refused_gate_never_says_elevated_even_in_an_elevated_process()
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true, elevated: true);
+
+        using var window = new StartGateWindow(theme, Refused(GateOutcome.MissingGate), () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.False(window.RecoverElevated);
+        Assert.Equal(StartGateWindow.ReasonFor(Refused(GateOutcome.MissingGate)), window.ReasonText);
+    }
+
+    [Fact]
+    public void The_real_recovery_starts_nothing_in_an_elevated_process_even_for_the_recorded_recover_exe()
+    {
+        byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
+        var entry = InterruptedInstallWithRunner(swap, swap);
+        var starter = new RecordingStarter();
+        var recovery = new RunnerGateRecovery(starter, processId: 1, isElevated: () => true);
+
+        Assert.True(recovery.IsElevated);
+        Assert.False(recovery.Start(entry, out var detail));
+        Assert.Empty(starter.Calls);
+        Assert.Contains("elevated", detail, StringComparison.Ordinal);
+
+        // The same folder and the same file start normally with normal rights: the refusal is the elevation and nothing else.
+        var normal = new RunnerGateRecovery(starter, processId: 1, isElevated: () => false);
+        Assert.False(normal.IsElevated);
+        Assert.True(normal.Start(entry, out _));
+        Assert.Single(starter.Calls);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public void The_words_with_the_button_say_what_recovery_does_and_do_not_promise_more_than_it_does(Language language)
+    {
+        using var _ = Harness.Locale(language);
+        var pending = Strings.Get("gui.gate.recoverypending.button", language);
+        var failed = Strings.Get("gui.gate.recoveryfailed.button", language);
+        var startFailed = Strings.Get("gui.gate.recover.failed", language);
+
+        // Recovery gives one whole version (either one) and leaves every file it did not install alone; it does not promise that PC Mieru opens (a busy or a failed recovery does not start it).
+        Assert.Contains(language == Language.Ja ? "更新前か更新後のどちらか" : "one complete version", pending, StringComparison.Ordinal);
+        Assert.Contains(language == Language.Ja ? "うまくいけば、そのまま PCミエルが開きます" : "If that works, PC Mieru opens by itself", pending, StringComparison.Ordinal);
+        Assert.DoesNotContain(language == Language.Ja ? "片づけ" : "clear up", pending, StringComparison.Ordinal);
+        foreach (var text in new[] { pending, failed })
+        {
+            Assert.Contains(language == Language.Ja ? "PCミエルが入れたもの以外のファイルは変わりません" : "Files that PC Mieru did not install", text, StringComparison.Ordinal);
+        }
+
+        // The settings and the records are outside the install folder (%LOCALAPPDATA%\PCMieru and Documents\PCMieru); a new folder keeps them.
+        Assert.Contains(language == Language.Ja ? "設定や記録はこのフォルダーの外にあるので、新しいフォルダーで開いても残っています" : "Your settings and records are kept outside this folder", startFailed, StringComparison.Ordinal);
+        Assert.StartsWith(language == Language.Ja ? "回復を始められませんでした。" : "Recovery could not be started.", startFailed, StringComparison.Ordinal);
     }
 
     [Fact]

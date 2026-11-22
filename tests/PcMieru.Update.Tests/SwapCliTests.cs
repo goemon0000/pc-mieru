@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using PcMieru.Swap.TestBuild;
 using PcMieru.Update.Transaction;
 using PcMieru.Wire.Gate;
 
@@ -24,9 +25,11 @@ internal sealed class FakeStarter : IRunnerStarter
 }
 
 /// <summary>
-/// <c>PCMieru.Swap.exe</c> as a library (DESIGN-B 5, 13 item 3): the command line, the two roles (Runner = <c>I\update\recover.exe</c>, Launcher = <c>I\PCMieru.Swap.exe</c>), the test-only entry and its switch,
-/// the waits (the process that handed over, the gate), <c>--then-start</c>, and every exit code. In-process, on scratch folders, with a fake starter: nothing is started and no real install is looked at.
-/// The real exe is exercised from a publish folder by the trial script and by <see cref="TxRealPublishTests"/>.
+/// <c>PCMieru.Swap.exe</c> as a library (DESIGN-B 5, 13 item 3): the command line, the two roles (Runner = <c>I\update\recover.exe</c>, Launcher = <c>I\PCMieru.Swap.exe</c>), the waits (the process that handed over,
+/// the gate), <c>--then-start</c>, the refusal of an elevated token, and every exit code. In-process, on scratch folders, with a fake starter: nothing is started and no real install is looked at.
+/// <c>Run</c> of the harness is the PRODUCT's program (the shipped exe); <c>RunTestBuild</c> is the program of the TEST BUILD of the runner, whose test-only entry (<see cref="TestEntry"/>, the file that exe is made from) is
+/// what gives a swap its scripted verdict and its stop at a named step. The product has no such entry: TestBuildSeparationTests and tools/publish.ps1 (on the built exe) say so.
+/// The real exe is exercised by the trial script (with the test build) and by the smoke run of the publish folder.
 /// </summary>
 public sealed class SwapCliTests
 {
@@ -64,14 +67,24 @@ public sealed class SwapCliTests
 
         public string Self { get; set; } = self;
 
-        public int Run(params string[] args)
+        /// <summary>What the process says about its token. False unless a test says otherwise, whatever the shell the tests are run from.</summary>
+        public bool Elevated { get; set; }
+
+        /// <summary>The PRODUCT's program (what the shipped PCMieru.Swap.exe runs).</summary>
+        public int Run(params string[] args) => SwapCli.Run(args, Host());
+
+        /// <summary>The program of the TEST BUILD of the runner: the test-only entry first (tests/PcMieru.Swap.TestBuild/TestEntry.cs, the very file the test build exe is made from), the product's program for everything else.</summary>
+        public int RunTestBuild(params string[] args) =>
+            TestEntry.Run(args, Host(), GetVariable ?? (name => Environment.TryGetValue(name, out var value) ? value : null));
+
+        private SwapHost Host()
         {
-            var host = new SwapHost
+            return new SwapHost
             {
                 SelfPath = Self,
                 Out = Out,
                 Error = Err,
-                GetVariable = GetVariable ?? (name => Environment.TryGetValue(name, out var value) ? value : null),
+                IsElevated = () => Elevated,
                 ProcessId = OwnPid,
                 Seams = Seams,
                 Starter = Starter,
@@ -92,13 +105,12 @@ public sealed class SwapCliTests
                 AfterPidWait = TimeSpan.FromSeconds(30),
                 ReadingPause = TimeSpan.FromSeconds(7),
             };
-            return SwapCli.Run(args, host);
         }
 
         public string[] TestSwap(string verdict, string step = "-", string edge = "Before", string nth = "1") =>
             ["--test-swap", rig.Staged, step, edge, nth, Path.Combine(rig.Root, "marker.txt"), verdict];
 
-        public void SwitchOn() => Environment[SwapCli.TestVariable] = rig.Install;
+        public void SwitchOn() => Environment[TestEntry.Variable] = rig.Install;
     }
 
     private static Harness Runner(Rig rig) => new(rig, rig.Paths.Recover);
@@ -190,14 +202,7 @@ public sealed class SwapCliTests
     [InlineData("--after-pid|-5")]
     [InlineData("--after-pid|99999999999")]
     [InlineData("--test-swap")]
-    [InlineData("--test-swap|s|-|Before|1|m")]
-    [InlineData("--test-swap|s|-|Before|1|m|ok|extra")]
-    [InlineData("--test-swap|s|no-such-step|Before|1|m|ok")]
-    [InlineData("--test-swap|s|-|Middle|1|m|ok")]
-    [InlineData("--test-swap|s|-|before|1|m|ok")]
-    [InlineData("--test-swap|s|-|Before|0|m|ok")]
-    [InlineData("--test-swap|s|-|Before|x|m|ok")]
-    [InlineData("--test-swap|s|-|Before|1|m|maybe")]
+    [InlineData("--test-swap|s|-|Before|1|m|ok")] // the product does not know the test build's entry: it is a command line it does not understand, with the switch on or off
     [InlineData("--then-start|--test-swap|s|-|Before|1|m|ok")]
     public void A_command_line_that_is_not_understood_is_exit_2_and_changes_nothing(string line)
     {
@@ -214,6 +219,47 @@ public sealed class SwapCliTests
         Assert.Empty(cli.Waits);
     }
 
+    [Theory]
+    [InlineData("--test-swap")]
+    [InlineData("--test-swap|s|-|Before|1|m")]
+    [InlineData("--test-swap|s|-|Before|1|m|ok|extra")]
+    [InlineData("--test-swap|s|no-such-step|Before|1|m|ok")]
+    [InlineData("--test-swap|s|-|Middle|1|m|ok")]
+    [InlineData("--test-swap|s|-|before|1|m|ok")]
+    [InlineData("--test-swap|s|-|Before|0|m|ok")]
+    [InlineData("--test-swap|s|-|Before|x|m|ok")]
+    [InlineData("--test-swap|s|-|Before|1|m|maybe")]
+    [InlineData("--then-start|--test-swap|s|-|Before|1|m|ok")]
+    public void The_test_build_entry_refuses_a_command_line_it_does_not_understand_with_exit_2_and_changes_nothing(string line)
+    {
+        using var rig = Rig.Create("cli-bad-tb", recorded: true);
+        var before = Rig.Snapshot(rig.Install, includeUpdate: true);
+        var cli = Runner(rig);
+        cli.SwitchOn();
+
+        Assert.Equal(SwapExit.BadCommandLine, cli.RunTestBuild(line.Split('|')));
+
+        Assert.StartsWith("swap: ", cli.Err.ToString(), StringComparison.Ordinal);
+        rig.AssertUnchanged(before, "a bad command line of the test entry", includeUpdate: true);
+        Assert.Empty(cli.Starter.Starts);
+        Assert.Empty(cli.Waits);
+    }
+
+    [Fact]
+    public void The_test_build_passes_everything_that_is_not_its_entry_to_the_product_unchanged()
+    {
+        using var rig = Rig.Create("cli-tb-pass", recorded: true);
+        var cli = Runner(rig);
+        cli.SwitchOn();
+
+        Assert.Equal(SwapExit.NothingToDo, cli.RunTestBuild("--recover"));
+        Assert.Equal(SwapExit.NothingToDo, cli.RunTestBuild());
+        Assert.Equal(SwapExit.BadCommandLine, cli.RunTestBuild("--bogus"));
+        Assert.Equal(SwapExit.NothingToDo, cli.RunTestBuild("--help"));
+        Assert.Contains("exit codes", cli.Out.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("--test-swap", cli.Out.ToString(), StringComparison.Ordinal); // the usage of the product does not name the test entry
+    }
+
     [Fact]
     public void An_exe_that_is_neither_the_installed_swap_exe_nor_recover_exe_does_nothing_to_an_install()
     {
@@ -225,7 +271,7 @@ public sealed class SwapCliTests
             var cli = new Harness(rig, self);
             cli.SwitchOn();
             Assert.Equal(SwapExit.WrongPlace, cli.Run("--recover"));
-            Assert.Equal(SwapExit.WrongPlace, cli.Run(cli.TestSwap("ok")));
+            Assert.Equal(SwapExit.WrongPlace, cli.RunTestBuild(cli.TestSwap("ok")));
             Assert.Contains("PCMieru.Swap.exe", cli.Err.ToString(), StringComparison.Ordinal);
             Assert.Empty(cli.Starter.Starts);
         }
@@ -233,7 +279,69 @@ public sealed class SwapCliTests
         rig.AssertUnchanged(before, "a Swap.exe in the wrong place", includeUpdate: true);
     }
 
-    // ---------------------------------------------------------------------------------------------------------------------------- the test switch
+    // ---------------------------------------------------------------------------------------------------------------------------- an elevated token (review of step 4, S4)
+
+    [Theory]
+    [InlineData(true, "--recover")]
+    [InlineData(true, "--recover|--then-start")]
+    [InlineData(true, "--after-pid|4242|--recover|--then-start")]
+    [InlineData(true, "")]
+    [InlineData(false, "--recover")]
+    [InlineData(false, "--then-start|--recover")]
+    [InlineData(false, "")]
+    public void An_exe_that_runs_as_administrator_neither_recovers_nor_hands_over_and_changes_nothing(bool runner, string line)
+    {
+        // A swap or a recovery that runs elevated leaves files that the normal start can no longer replace, and a recovery would touch files a person did not expect an administrator's program to touch.
+        using var rig = Rig.Create("cli-elevated", recorded: true);
+        CutSwap(rig, TxSteps.SwapOverwrite, TxEdge.After); // an open journal: exactly the situation a recovery is for
+        var before = Rig.Snapshot(rig.Install, includeUpdate: true);
+        var journal = File.ReadAllBytes(rig.Paths.Journal);
+        var cli = runner ? Runner(rig) : Launcher(rig);
+        cli.Elevated = true;
+
+        var code = cli.Run(line.Length == 0 ? [] : line.Split('|'));
+
+        Assert.Equal(SwapExit.Elevated, code);
+        Assert.False(SwapExit.InstallUsable(code));
+        Assert.Empty(cli.Starter.Starts); // nothing was started, not even the runner
+        Assert.Empty(cli.Waits);          // and nothing was waited for
+        Assert.Empty(cli.Sleeps);
+        rig.AssertUnchanged(before, "an elevated exe changes nothing", includeUpdate: true);
+        Assert.Equal(journal, File.ReadAllBytes(rig.Paths.Journal));
+        Assert.False(File.Exists(rig.Paths.Sentinel));
+        Assert.False(File.Exists(rig.Paths.LastResult), "no result is written: nothing was tried");
+        Assert.Contains("Elevated", cli.Out.ToString(), StringComparison.Ordinal);
+        Assert.Contains("administrator", cli.Err.ToString(), StringComparison.Ordinal);
+        Assert.Contains(TxReasonText.Ja(TxReason.Elevated), cli.Out.ToString(), StringComparison.Ordinal);
+        Assert.Contains(TxReasonText.En(TxReason.Elevated), cli.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_same_exe_with_a_normal_token_does_the_recovery_so_the_refusal_above_is_the_token_and_nothing_else()
+    {
+        using var rig = Rig.Create("cli-not-elevated", recorded: true);
+        CutSwap(rig, TxSteps.SwapOverwrite, TxEdge.After);
+        var cli = Runner(rig);
+        cli.Elevated = false;
+
+        Assert.Equal(SwapExit.RolledBack, cli.Run("--recover"));
+
+        Assert.DoesNotContain("Elevated", cli.Out.ToString(), StringComparison.Ordinal);
+        Assert.Equal(Generation.Old, rig.AssertEnded("after the recovery"));
+    }
+
+    [Fact]
+    public void The_help_text_works_even_when_elevated_because_it_changes_nothing()
+    {
+        using var rig = Rig.Create("cli-elevated-help", recorded: true);
+        var cli = Runner(rig);
+        cli.Elevated = true;
+
+        Assert.Equal(SwapExit.NothingToDo, cli.Run("--help"));
+        Assert.Contains("32", cli.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------- the test switch (the test build's entry)
 
     [Fact]
     public void The_test_only_entry_is_refused_without_the_switch_before_anything_is_placed_or_written()
@@ -243,8 +351,8 @@ public sealed class SwapCliTests
 
         foreach (var cli in new[] { Runner(rig), Launcher(rig) })
         {
-            Assert.Equal(SwapExit.TestSwitchMissing, cli.Run(cli.TestSwap("ok")));
-            Assert.Contains(SwapCli.TestVariable, cli.Err.ToString(), StringComparison.Ordinal);
+            Assert.Equal(TestEntry.SwitchMissing, cli.RunTestBuild(cli.TestSwap("ok")));
+            Assert.Contains(TestEntry.Variable, cli.Err.ToString(), StringComparison.Ordinal);
             Assert.Empty(cli.Starter.Starts);
             Assert.Empty(cli.Waits);
         }
@@ -264,9 +372,9 @@ public sealed class SwapCliTests
         using var rig = Rig.Create("cli-switch2", recorded: true);
         var before = Rig.Snapshot(rig.Install, includeUpdate: true);
         var cli = Runner(rig);
-        cli.Environment[SwapCli.TestVariable] = value;
+        cli.Environment[TestEntry.Variable] = value;
 
-        Assert.Equal(SwapExit.TestSwitchMissing, cli.Run(cli.TestSwap("ok")));
+        Assert.Equal(TestEntry.SwitchMissing, cli.RunTestBuild(cli.TestSwap("ok")));
 
         rig.AssertUnchanged(before, "a wrong switch value", includeUpdate: true);
     }
@@ -276,9 +384,9 @@ public sealed class SwapCliTests
     {
         using var rig = Rig.Create("cli-switch3", recorded: true);
         var cli = Runner(rig);
-        cli.Environment[SwapCli.TestVariable] = rig.Install.ToUpperInvariant() + Path.DirectorySeparatorChar;
+        cli.Environment[TestEntry.Variable] = rig.Install.ToUpperInvariant() + Path.DirectorySeparatorChar;
 
-        Assert.Equal(SwapExit.Committed, cli.Run(cli.TestSwap("ok")));
+        Assert.Equal(SwapExit.Committed, cli.RunTestBuild(cli.TestSwap("ok")));
         rig.AssertTree(Generation.New, "a switch spelled with another case and a trailing separator");
     }
 
@@ -290,7 +398,7 @@ public sealed class SwapCliTests
         var cli = Runner(rig);
         cli.GetVariable = _ => throw new InvalidOperationException("the environment is gone");
 
-        Assert.Equal(SwapExit.Crashed, cli.Run(cli.TestSwap("ok")));
+        Assert.Equal(SwapExit.Crashed, cli.RunTestBuild(cli.TestSwap("ok")));
 
         Assert.Contains("unexpected InvalidOperationException", cli.Err.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("environment is gone", cli.Err.ToString(), StringComparison.Ordinal); // the type only: a message may hold a path
@@ -305,7 +413,7 @@ public sealed class SwapCliTests
         cli.SwitchOn();
         cli.Seams = new TxSeams { Fault = new Cutter(new CutPoint(TxSteps.JournalPrepared, TxEdge.After, 1)) };
 
-        Assert.Throws<PowerCutException>(() => cli.Run(cli.TestSwap("ok")));
+        Assert.Throws<PowerCutException>(() => cli.RunTestBuild(cli.TestSwap("ok")));
 
         Assert.True(File.Exists(rig.Paths.Journal), "the cut left the journal, as a real cut does");
     }
@@ -364,7 +472,7 @@ public sealed class SwapCliTests
         cli.SwitchOn();
         var arguments = cli.TestSwap("ok");
 
-        Assert.Equal(SwapExit.HandedOver, cli.Run(arguments));
+        Assert.Equal(SwapExit.HandedOver, cli.RunTestBuild(arguments));
 
         rig.AssertTree(Generation.Old, "the installed Swap.exe must not swap");
         Assert.False(File.Exists(rig.Paths.Journal));
@@ -502,7 +610,7 @@ public sealed class SwapCliTests
         var cli = Runner(rig);
         cli.SwitchOn();
 
-        Assert.Equal(SwapExit.Committed, cli.Run(cli.TestSwap("ok")));
+        Assert.Equal(SwapExit.Committed, cli.RunTestBuild(cli.TestSwap("ok")));
 
         rig.AssertTree(Generation.New, "committed");
         Assert.Contains("result Committed ", cli.Out.ToString(), StringComparison.Ordinal);
@@ -520,7 +628,7 @@ public sealed class SwapCliTests
         var cli = Runner(rig);
         cli.SwitchOn();
 
-        Assert.Equal(SwapExit.RolledBack, cli.Run(cli.TestSwap("fail")));
+        Assert.Equal(SwapExit.RolledBack, cli.RunTestBuild(cli.TestSwap("fail")));
 
         rig.AssertTree(Generation.Old, "rolled back after three failed launches");
         Assert.Contains("result RolledBack LaunchFailed ", cli.Out.ToString(), StringComparison.Ordinal);
@@ -535,7 +643,7 @@ public sealed class SwapCliTests
         cli.SwitchOn();
         var before = Rig.Snapshot(rig.Install);
 
-        Assert.Equal(SwapExit.Aborted, cli.Run("--test-swap", Path.Combine(rig.Root, "no-such-staged"), "-", "Before", "1", Path.Combine(rig.Root, "m.txt"), "ok"));
+        Assert.Equal(SwapExit.Aborted, cli.RunTestBuild("--test-swap", Path.Combine(rig.Root, "no-such-staged"), "-", "Before", "1", Path.Combine(rig.Root, "m.txt"), "ok"));
 
         rig.AssertUnchanged(before, "an abort");
     }
@@ -554,7 +662,7 @@ public sealed class SwapCliTests
             {
                 // The verdict is checked LAST: a step and an edge that parse get as far as the verdict, which is refused, so nothing runs; an unknown step or edge would be named instead.
                 cli.Err.GetStringBuilder().Clear();
-                Assert.Equal(SwapExit.BadCommandLine, cli.Run("--test-swap", rig.Staged, step.Name, edge, "1", marker, "neither"));
+                Assert.Equal(SwapExit.BadCommandLine, cli.RunTestBuild("--test-swap", rig.Staged, step.Name, edge, "1", marker, "neither"));
                 Assert.Contains("the verdict is ok or fail", cli.Err.ToString(), StringComparison.Ordinal);
             }
         }
@@ -620,7 +728,7 @@ public sealed class SwapCliTests
         cli.SwapGateWait = TimeSpan.FromSeconds(2);
         cli.RecoverGateWait = TimeSpan.FromSeconds(1);
 
-        Assert.Equal(SwapExit.Busy, cli.Run(cli.TestSwap("ok")));
+        Assert.Equal(SwapExit.Busy, cli.RunTestBuild(cli.TestSwap("ok")));
         Assert.Equal(8, cli.Sleeps.Count);
         cli.Sleeps.Clear();
         Assert.Equal(SwapExit.Busy, cli.Run("--recover"));
@@ -770,13 +878,14 @@ public sealed class SwapCliTests
         var swap = Runner(rig);
         swap.Alone = true;
         swap.SwitchOn();
-        Assert.Equal(SwapExit.Committed, swap.Run(swap.TestSwap("ok")));
+        Assert.Equal(SwapExit.Committed, swap.RunTestBuild(swap.TestSwap("ok")));
         Assert.Empty(swap.Sleeps);
     }
 
     [Fact]
     public void The_test_variable_has_the_one_spelling_the_trial_script_and_the_documents_use()
     {
-        Assert.Equal("PCMIERU_SWAP_TEST", SwapCli.TestVariable);
+        Assert.Equal("PCMIERU_SWAP_TEST", TestEntry.Variable);
+        Assert.Equal("--test-swap", TestEntry.Option);
     }
 }

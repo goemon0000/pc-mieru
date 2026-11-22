@@ -45,6 +45,14 @@ internal static class Scenarios
 
         // A recovery with no journal at all: a journal temp file, a sentinel, stale folders and a note are tidied.
         new Scenario("recover-tidy", label => WithTidyLeftovers(Rig.Create(label, recorded: true)), (rig, fault) => rig.Recover(fault: fault)),
+
+        // A swap while a running program has the changed library and the dropped library mapped as IMAGES (a mapped image cannot be overwritten or deleted, but can be renamed): the changed one is set aside
+        // (swap.aside) and the new one takes its name. The "program" ends (the images are unmapped) before the last recovery, which then tidies what was set aside.
+        new Scenario("swap-image", label => MapOld(Rig.Create(label, recorded: true, shape: Rig.RealImages)), (rig, fault) => rig.Swap(Rig.Seams(fault, FakeLauncher.Ok())), rig => rig.ReleaseHolds()),
+
+        // A swap whose new version fails its check while it still has its NEW library and its added library mapped (the verify run that hangs): the rollback sets them aside (rollback.aside) and puts the
+        // old ones back. The "program" ends before the last recovery.
+        new Scenario("swap-rollback-image", label => Rig.Create(label, recorded: true, shape: Rig.RealImages), (rig, fault) => rig.Swap(Rig.Seams(fault, MapsTheNewImages(rig))), rig => rig.ReleaseHolds()),
     }.ToDictionary(s => s.Name, StringComparer.Ordinal);
 
     public static IEnumerable<string> Names => ByName.Keys;
@@ -54,6 +62,23 @@ internal static class Scenarios
     public static Scenario Get(string name) => ByName[name];
 
     // ------------------------------------------------------------------------------------------------------------------------ states
+
+    private static Rig MapOld(Rig rig)
+    {
+        rig.Map("PcMieru.Core.dll");
+        rig.Map("old-only.dll");
+        return rig;
+    }
+
+    /// <summary>A launcher that, when the swap starts the new version, has that version map its libraries (the way a real start does) and then answers that it failed its check.</summary>
+    private static FakeLauncher MapsTheNewImages(Rig rig) => new(LaunchVerdict.Failed)
+    {
+        OnCall = _ =>
+        {
+            rig.Map("PcMieru.Core.dll");
+            rig.Map("new-feature.dll");
+        },
+    };
 
     private static Rig WithStale(Rig rig)
     {

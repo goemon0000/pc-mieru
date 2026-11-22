@@ -163,6 +163,95 @@ public partial class WorkflowPolicyTests
     }
 
     [Fact]
+    public void Publish_asserts_that_the_swapper_has_no_test_entry_and_proves_the_scan_on_made_samples_first()
+    {
+        var script = Read("tools", "publish.ps1");
+        Assert.Contains("$TestEntryNames = @('--test-swap', 'PCMIERU_SWAP_TEST')", script, StringComparison.Ordinal);
+        Assert.Contains("Test-NoTestEntry $Path", script, StringComparison.Ordinal); // Test-SwapExe runs it on the built exe
+        Assert.Contains("[Text.Encoding]::ASCII.GetBytes($name)", script, StringComparison.Ordinal);   // the control makes both spellings itself
+        Assert.Contains("[Text.Encoding]::Unicode.GetBytes($name)", script, StringComparison.Ordinal);
+
+        // The control comes before the scan of the exe, so a scan that sees nothing stops the script before it can say "none".
+        var control = script.IndexOf("the test-entry scan cannot see", StringComparison.Ordinal);
+        var scan = script.IndexOf("Find-NamesInBytes ([IO.File]::ReadAllBytes($Path)) $TestEntryNames", StringComparison.Ordinal);
+        Assert.True(control > 0 && scan > control, "the control of the test-entry scan must come before the scan of the exe");
+
+        // The map: a method of the test entry is not compiled in. And the script does not know the test-only build at all (its own test is in TestBuildSeparationTests).
+        Assert.Contains("$TestEntryMapFragments = @('TestEntry', 'StopHere', 'WriteTestMarker')", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_test_entry_scan_of_publish_finds_either_name_in_either_encoding_whatever_the_case_and_passes_a_clean_file()
+    {
+        // The functions are taken out of publish.ps1 as they are and run by Windows PowerShell 5.1 on made files: a scan that is not what the script says it is would show here.
+        var lines = Lines(Read("tools", "publish.ps1"));
+        var start = Array.FindIndex(lines, l => l.StartsWith("function Find-NamesInBytes", StringComparison.Ordinal));
+        var test = Array.FindIndex(lines, l => l.StartsWith("function Test-NoTestEntry", StringComparison.Ordinal));
+        Assert.True(start >= 0 && test > start);
+        var end = Array.FindIndex(lines, test, l => l == "}");
+        Assert.True(end > test);
+        var functions = string.Join("\r\n", lines[start..(end + 1)]);
+
+        var dir = Scratch.NewFolder("pub-scan");
+        try
+        {
+            var noise = Enumerable.Range(0, 4096).Select(i => (byte)(i * 7 % 251 + (i % 3 == 0 ? 0 : 1))).ToArray();
+            File.WriteAllBytes(Path.Combine(dir, "clean.bin"), noise);
+            File.WriteAllBytes(Path.Combine(dir, "ascii.bin"), [.. noise, .. System.Text.Encoding.ASCII.GetBytes("--test-swap"), .. noise]);
+            File.WriteAllBytes(Path.Combine(dir, "wide.bin"), [.. noise, .. System.Text.Encoding.Unicode.GetBytes("PCMIERU_SWAP_TEST"), .. noise]);
+            File.WriteAllBytes(Path.Combine(dir, "case.bin"), [.. noise, .. System.Text.Encoding.ASCII.GetBytes("pcmieru_swap_test"), .. noise]);
+            File.WriteAllBytes(Path.Combine(dir, "wideoption.bin"), [.. noise, .. System.Text.Encoding.Unicode.GetBytes("--TEST-SWAP"), .. noise]);
+            var scriptPath = Path.Combine(dir, "scan.ps1");
+            File.WriteAllText(scriptPath, "Set-StrictMode -Version Latest\r\n$ErrorActionPreference = 'Stop'\r\n$TestEntryNames = @('--test-swap', 'PCMIERU_SWAP_TEST')\r\n" + functions
+                + "\r\nforeach ($case in 'clean', 'ascii', 'wide', 'case', 'wideoption') {\r\n"
+                + "    try { Test-NoTestEntry (Join-Path $args[0] ($case + '.bin')); Write-Output ('RESULT ' + $case + ' passed') }\r\n"
+                + "    catch { Write-Output ('RESULT ' + $case + ' refused ' + $_.Exception.Message) }\r\n}\r\n", new System.Text.UTF8Encoding(false));
+
+            var info = new System.Diagnostics.ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\" \"{dir}\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var process = System.Diagnostics.Process.Start(info)!;
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(60_000), "PowerShell did not finish");
+
+            var results = output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').Where(l => l.StartsWith("RESULT ", StringComparison.Ordinal)).ToList();
+            Assert.True(results.Count == 5, "five results expected, got: " + output + error);
+            Assert.Contains(results, l => l == "RESULT clean passed");
+            foreach (var (name, found) in new[] { ("ascii", "--test-swap"), ("wide", "PCMIERU_SWAP_TEST"), ("case", "PCMIERU_SWAP_TEST"), ("wideoption", "--test-swap") })
+            {
+                Assert.Contains(results, l => l.StartsWith("RESULT " + name + " refused ", StringComparison.Ordinal) && l.Contains("has the test entry in it: " + found, StringComparison.Ordinal));
+            }
+        }
+        finally
+        {
+            Scratch.Delete(dir);
+        }
+    }
+
+    [Fact]
+    public void Publish_takes_the_ilc_map_by_its_exact_path_and_ties_it_to_the_linked_exe_and_does_not_pick_the_newest_map_under_obj()
+    {
+        var script = Read("tools", "publish.ps1");
+        var csproj = Read("src", "PcMieru.Swap", "PcMieru.Swap.csproj");
+        var framework = Regex.Match(csproj, "<TargetFramework>([^<]+)</TargetFramework>").Groups[1].Value;
+        Assert.False(string.IsNullOrEmpty(framework));
+
+        Assert.DoesNotContain("-Filter 'PCMieru.Swap.map.xml'", script, StringComparison.Ordinal);                       // no search, no "newest of many"
+        Assert.DoesNotContain("Sort-Object LastWriteTime -Descending", script, StringComparison.Ordinal);
+        Assert.Contains(@"src\PcMieru.Swap\obj\Release\" + framework + @"\' + $Runtime + '\native\PCMieru.Swap.map.xml", script, StringComparison.Ordinal);
+        Assert.Contains(@"src\PcMieru.Swap\bin\Release\" + framework + @"\' + $Runtime + '\native\PCMieru.Swap.exe", script, StringComparison.Ordinal);
+        Assert.Contains("(Get-Sha256 $linked) -ne (Get-Sha256 $ExePath)", script, StringComparison.Ordinal);                // the exe in the folder is the linker's output
+        Assert.Contains("$map.LastWriteTimeUtc -gt $linkedItem.LastWriteTimeUtc", script, StringComparison.Ordinal);       // the map is written first, never after the exe
+        Assert.Contains("$age.TotalMinutes -gt 10", script, StringComparison.Ordinal);                                    // and not a leftover from long before
+        Assert.Contains("Test-SwapMap $Path", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Publish_looks_at_hidden_and_system_files_every_time_it_lists_a_folder()
     {
         var script = Read("tools", "publish.ps1");

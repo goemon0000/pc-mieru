@@ -34,7 +34,44 @@ public sealed class SystemDiskSpace : IDiskSpace
     public long FreeBytes(string folder) => TxNative.FreeBytes(folder);
 }
 
-/// <summary>What the launcher is asked to do.</summary>
+/// <summary>The file system of a volume. A test answers for it.</summary>
+public interface IVolumeFormat
+{
+    /// <summary>The file system name of the volume that holds <paramref name="folder"/> ("NTFS", "ReFS", "FAT32", "exFAT", ...), or null when it cannot be told (a network path, a path with no drive).</summary>
+    string? FormatOf(string folder);
+}
+
+/// <summary>The real one (<see cref="DriveInfo.DriveFormat"/> of the drive the folder is on).</summary>
+public sealed class SystemVolumeFormat : IVolumeFormat
+{
+    public static SystemVolumeFormat Instance { get; } = new();
+
+    public string? FormatOf(string folder)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(folder));
+            return string.IsNullOrEmpty(root) || root.StartsWith(@"\\", StringComparison.Ordinal) ? null : new DriveInfo(root).DriveFormat;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The swap runs only on NTFS or ReFS: the order in which the file system logs its metadata changes (a rename after the data was flushed) is what the journal and the "the new name never points to a
+    /// half-written file" rule stand on. FAT, exFAT, a network share or an unknown answer do not promise it. A recovery does not ask: it must run on any file system, because the files are already there.
+    /// </summary>
+    public static bool IsSupported(string? format) =>
+        format is not null && (format.Equals("NTFS", StringComparison.OrdinalIgnoreCase) || format.Equals("ReFS", StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// What the launcher is asked to do. The verify run is part of the SWAP, not a start after it: the swapper still holds the start gate EXCLUSIVELY while the new version is verified (DESIGN-B 5, "the conditions of
+/// the run", first point). The launcher therefore gives the new program that exclusive handle by limited inheritance (only that handle is passed down), together with an anonymous pipe for the answer and
+/// <see cref="Tx"/> as the transaction id; the program enters verify mode only with them, and nothing else (a normal start) gets past the gate while the swap is open.
+/// </summary>
 public sealed record LaunchRequest(string InstallFolder, string Tx, int Attempt, int MaxAttempts, string Version, string BuildId, TimeSpan UiCheck, TimeSpan Total);
 
 /// <summary>The answer of a launch.</summary>
@@ -50,6 +87,11 @@ public enum LaunchVerdict
 /// <summary>
 /// "Start the new version and see that it lives" (DESIGN-B 5, VerifyPending). Step 4 only defines the seam; the tests use a fake, and step 5 wires the real one (the verify-only GUI start, 15 s of UI
 /// check, 120 s per attempt). An exception from it counts as <see cref="LaunchVerdict.Failed"/>. The transaction calls it with the journal already saying that this attempt was made.
+/// <para>
+/// The caller still HOLDS the exclusive start gate during this call, and it stays held for the whole verification. The real launcher gives the child that very handle (limited handle inheritance: the one
+/// handle, an anonymous pipe, the transaction id), so the verify GUI is the only program that is inside the gate; a start by a person meanwhile is held back by the gate, not let in. The gate is released only
+/// after the commit (or the rollback) is done.
+/// </para>
 /// </summary>
 public interface ILaunchVerifier
 {
@@ -80,6 +122,9 @@ public sealed class TxSeams
 
     public IDiskSpace Disk { get; init; } = SystemDiskSpace.Instance;
 
+    /// <summary>The file system of the install's volume. A swap is prepared only on NTFS or ReFS (<see cref="SystemVolumeFormat.IsSupported"/>); a recovery does not ask.</summary>
+    public IVolumeFormat Volume { get; init; } = SystemVolumeFormat.Instance;
+
     /// <summary>Null: no launch is possible (a local recovery). A swap needs one.</summary>
     public ILaunchVerifier? Launcher { get; init; }
 
@@ -90,4 +135,15 @@ public sealed class TxSeams
 
     /// <summary>The real seams, with the given launcher (null for a recovery that must not launch).</summary>
     public static TxSeams Production(ILaunchVerifier? launcher = null) => new() { Launcher = launcher };
+
+    /// <summary>A copy with the fault injector and/or the launcher replaced (the test build of the swapper uses it; the runner placement stays the real one).</summary>
+    public TxSeams With(IFaultInjector? fault = null, ILaunchVerifier? launcher = null) => new()
+    {
+        Fault = fault ?? Fault,
+        Disk = Disk,
+        Launcher = launcher ?? Launcher,
+        Placement = Placement,
+        Volume = Volume,
+        UtcNow = UtcNow,
+    };
 }

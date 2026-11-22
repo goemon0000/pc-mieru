@@ -504,6 +504,7 @@ public sealed class TxSwapTests
     [Theory]
     [InlineData("journal.json")]
     [InlineData("recovery-failed")]
+    [InlineData("journal.json.tmp")] // what a cut journal write leaves: only a recovery decides what it means, a new swap must not build on it
     public void An_open_journal_or_a_sentinel_stops_a_new_swap_and_is_left_as_it_is(string name)
     {
         using var rig = Rig.Create("open");
@@ -518,6 +519,57 @@ public sealed class TxSwapTests
         Assert.Equal(content, File.ReadAllBytes(path));
         rig.AssertTree(Generation.Old, "an open journal");
         Assert.False(Directory.Exists(Path.Combine(rig.Paths.Update, "work")));
+    }
+
+    [Theory]
+    [InlineData("NTFS")]
+    [InlineData("ReFS")]
+    public void A_volume_that_is_NTFS_or_ReFS_is_swapped(string format)
+    {
+        using var rig = Rig.Create("ntfs-" + format);
+
+        var result = rig.Swap(Rig.Seams(launcher: FakeLauncher.Ok(), volume: new FixedVolume(format)));
+
+        Assert.Equal(TxOutcome.Committed, result.Outcome);
+        rig.AssertTree(Generation.New, "a supported volume");
+    }
+
+    [Theory]
+    [InlineData("FAT32")]
+    [InlineData("exFAT")]
+    [InlineData("FAT")]
+    [InlineData("CDFS")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void A_volume_that_is_not_NTFS_or_ReFS_is_refused_before_anything_is_written(string? format)
+    {
+        using var rig = Rig.Create("notntfs");
+        var before = Rig.Snapshot(rig.Install, includeUpdate: true);
+
+        var result = rig.Swap(Rig.Seams(launcher: FakeLauncher.Ok(), volume: new FixedVolume(format)));
+
+        Assert.Equal((TxOutcome.Aborted, TxReason.NotNtfs), (result.Outcome, result.Reason));
+        rig.AssertUnchanged(before, "a volume that is not NTFS", includeUpdate: true);
+        Assert.False(Directory.Exists(Path.Combine(rig.Paths.Update, "work")));
+        Assert.False(File.Exists(rig.Paths.LastResult), "refused before anything is written, last-result.json included");
+        Assert.False(string.IsNullOrWhiteSpace(TxReasonText.Ja(TxReason.NotNtfs)));
+        Assert.Contains("NTFS", TxReasonText.En(TxReason.NotNtfs), StringComparison.Ordinal);
+        Assert.Contains("NTFS", TxReasonText.Ja(TxReason.NotNtfs), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_recovery_runs_on_any_file_system_whatever_the_volume_says()
+    {
+        using var rig = Rig.Create("recover-fat");
+        var cut = Assert.Throws<PowerCutException>(() => rig.Swap(Rig.Seams(launcher: FakeLauncher.Ok(), fault: new Cutter(new CutPoint(TxSteps.SwapOverwrite, TxEdge.After, 1)))));
+        Assert.NotNull(cut);
+        Assert.True(File.Exists(rig.Paths.Journal));
+
+        using var gate = rig.Enter();
+        var result = TxRecovery.Recover(gate, Rig.Seams(volume: new FixedVolume("FAT32")), automatic: false);
+
+        Assert.Equal(TxOutcome.RolledBack, result.Outcome);
+        rig.AssertTree(Generation.Old, "recovery on FAT32");
     }
 
     [Fact]

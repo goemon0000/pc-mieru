@@ -12,13 +12,15 @@ namespace PcMieru.Update.Transaction;
 ///   1  HandedOver         (the installed PCMieru.Swap.exe only) recover.exe was made ready and started; it does the work and shows the result itself
 ///   2  BadCommandLine     the arguments are not understood
 ///   3  Crashed            an unexpected exception (nothing in the install is changed by the code that handles it)
-///   4  TestSwitchMissing  the test-only entry was asked for without PCMIERU_SWAP_TEST (see <see cref="SwapCli.TestVariable"/>)
+///   4  (retired)          was the code of an entry that only a test build has; no code of the product, never reused
 ///  10  Committed          a swap ended with the new version in place (or a recovery finished it: the commit had been decided)
 ///  11  RolledBack         the earlier version was put back, verified (the new version is NOT installed)
 ///  12  Aborted            the swap stopped before its first change (nothing in the install changed)
 ///  20  RecoveryFailed     the journal and the backup are kept; run recover.exe again or unzip the ZIP into a new folder
-///  30  Busy               a program of the install holds the start gate (close PC Mieru and run again)
+///  30  Busy               a program of the install is using PC Mieru's files: it holds the start gate, or a file could not even be moved aside, or the program that asked is still closing.
+///                         Nothing is lost, the journal is kept and no failure mark is written: close PC Mieru and run recover.exe again
 ///  31  GateRefused        the gate cannot be entered (missing, access denied, a link, unreadable)
+///  32  Elevated           this exe runs as administrator (an elevated token): it neither swaps nor recovers, it changes nothing and says to open it again with normal rights
 ///  40  WrongPlace         this exe is neither I\PCMieru.Swap.exe nor I\update\recover.exe: it does nothing to an install
 ///  41  RunnerUnavailable  recover.exe could not be made ready or started (it is not the recorded Swap.exe, or a file operation failed)
 /// </code>
@@ -29,13 +31,13 @@ public static class SwapExit
     public const int HandedOver = 1;
     public const int BadCommandLine = 2;
     public const int Crashed = 3;
-    public const int TestSwitchMissing = 4;
     public const int Committed = 10;
     public const int RolledBack = 11;
     public const int Aborted = 12;
     public const int RecoveryFailed = 20;
     public const int Busy = 30;
     public const int GateRefused = 31;
+    public const int Elevated = 32;
     public const int WrongPlace = 40;
     public const int RunnerUnavailable = 41;
 
@@ -47,6 +49,7 @@ public static class SwapExit
         TxOutcome.RolledBack => RolledBack,
         TxOutcome.Aborted => Aborted,
         TxOutcome.RecoveryFailed => RecoveryFailed,
+        TxOutcome.Busy => Busy,
         _ => Crashed,
     };
 
@@ -64,11 +67,9 @@ public sealed class SwapHost
 
     public required TextWriter Error { get; init; }
 
-    public Func<string, string?> GetVariable { get; init; } = static name => Environment.GetEnvironmentVariable(name);
-
     public int ProcessId { get; init; } = Environment.ProcessId;
 
-    /// <summary>What the transaction takes from outside (disk space, the placement, the clock). The launcher of a recovery stays null.</summary>
+    /// <summary>What the transaction takes from outside (disk space, the placement, the clock, the file system of the volume). The launcher of a recovery stays null.</summary>
     public TxSeams Seams { get; init; } = TxSeams.Production();
 
     public IRunnerStarter Starter { get; init; } = ProcessRunnerStarter.Instance;
@@ -80,6 +81,9 @@ public sealed class SwapHost
 
     /// <summary>True when this process is the only one on its console (a double-click on recover.exe): the window would close the moment the work ends, so the result is left on screen for a while.</summary>
     public Func<bool> ConsoleIsAlone { get; init; } = static () => TxNative.ConsoleIsOwnedByThisProcess();
+
+    /// <summary>Whether this process runs with an elevated token (<see cref="ProcessElevation.IsElevated"/>). When it does, nothing is swapped or recovered (<see cref="SwapExit.Elevated"/>).</summary>
+    public Func<bool> IsElevated { get; init; } = static () => ProcessElevation.IsElevated();
 
     /// <summary>How long a swap waits for the programs of the install to let go of the gate (the process that asked for the swap is closing).</summary>
     public TimeSpan SwapGateWait { get; init; } = TimeSpan.FromSeconds(60);
@@ -111,6 +115,9 @@ public static class SwapProcesses
     }
 }
 
+/// <summary>The options every command line of the program may carry, taken out of it (see <see cref="SwapCli.TryParseOptions"/>); <see cref="Rest"/> is what is left.</summary>
+public sealed record SwapOptions(int? AfterPid, bool ThenStart, IReadOnlyList<string> Rest);
+
 /// <summary>
 /// The program of <c>PCMieru.Swap.exe</c> (DESIGN-B 5 and 13 item 3), as a library so that it is tested in-process: the exe is only <c>Program.cs</c> (library search pinned to System32, console encoding) and a call to
 /// <see cref="Run"/>. No network code is reachable from here: this file, <see cref="RunnerHandOff"/> and the Transaction folder name no System.Net type (the exe is NativeAOT, so what it cannot reach is not in it;
@@ -118,27 +125,22 @@ public static class SwapProcesses
 ///
 /// <b>Two roles, decided from the process's own path (<see cref="RunnerRules"/>).</b>
 /// <list type="bullet">
-/// <item><b>Runner</b>: the exe is <c>I\update\recover.exe</c>. It takes the gate exclusively, then does what it was asked: <c>--recover</c> (also: no argument at all, which is what a double-click does) runs the
-/// recovery; <c>--test-swap</c> (test only) runs a swap of a staged folder with a scripted verdict instead of a launch.</item>
+/// <item><b>Runner</b>: the exe is <c>I\update\recover.exe</c>. It takes the gate exclusively, then runs the recovery (<c>--recover</c>; no argument at all does the same, which is what a double-click does).</item>
 /// <item><b>Launcher</b>: the exe is <c>I\PCMieru.Swap.exe</c>. It does NOT swap or recover (a swap replaces this very file, and a running exe cannot be replaced). It only makes sure a trusted
 /// <c>I\update\recover.exe</c> is there (<see cref="RunnerHandOff.Prepare"/>), starts it with the same arguments plus <c>--after-pid</c> (its own id), and ends at once, so that nothing runs from
 /// <c>I\PCMieru.Swap.exe</c> while the swap or the recovery replaces it.</item>
 /// </list>
-/// Anywhere else the exe does nothing to an install (exit 40).
+/// Anywhere else the exe does nothing to an install (exit 40). With an elevated token it does nothing at all (exit 32).
 ///
-/// <b>The test-only entry</b> (<c>--test-swap</c>) puts a SCRIPTED verdict in the place of the launch of the new version, so a swap can end as "committed" without anything having started: it must never be reachable
-/// by accident. It is refused (exit 4, before anything is placed or written) unless the environment variable <see cref="TestVariable"/> holds the full path of the install folder the exe belongs to: the
-/// switch names ONE folder, so a variable that is left set somewhere else opens nothing, and a person has to type the folder to use it. Nothing in the product sets it.
+/// <b>There is no test entry in this program.</b> A swap that ends as "committed" without anything having started needs a scripted verdict, and a program that can take one must never be what is shipped: the entry lives
+/// only in the TEST BUILD of the runner (tests/PcMieru.Swap.TestBuild, built from the same Program.cs with a compile symbol the product never sets). The test build runs its swap through <see cref="RunRunner"/> and
+/// <see cref="HandOver"/>, which are public for that reason, so the gate, the waits, the reports and the exit codes are the product's own. tools/publish.ps1 proves that the published exe has no trace of the entry.
 /// </summary>
 public static class SwapCli
 {
-    /// <summary>The environment variable that switches the test-only entry on for ONE install folder (its full path).</summary>
-    public const string TestVariable = "PCMIERU_SWAP_TEST";
-
     private const string AfterPidOption = "--after-pid";
     private const string ThenStartOption = "--then-start";
     private const string RecoverOption = "--recover";
-    private const string TestSwapOption = "--test-swap";
     private static readonly TimeSpan GatePoll = TimeSpan.FromMilliseconds(250);
 
     public const string Usage =
@@ -146,10 +148,9 @@ public static class SwapCli
         + "  --recover                         recover an interrupted update (no argument does the same)\n"
         + "  --after-pid <n>                   wait for that process to end first (set by whoever starts it)\n"
         + "  --then-start                      (with --recover) start PCMieru.exe afterwards when the install can be used; set by the start gate window's Recover button\n"
-        + "  --test-swap <staged> <step|-> <edge> <nth> <marker> <ok|fail>\n"
-        + "                                    TEST ONLY: swap a staged folder with a scripted verdict; needs the environment variable PCMIERU_SWAP_TEST = the install folder\n"
-        + "exit codes: 0 nothing to do, 1 handed over to recover.exe, 2 bad command line, 3 crashed, 4 test switch missing,\n"
-        + "            10 committed, 11 rolled back, 12 aborted (nothing changed), 20 recovery failed, 30 busy, 31 gate refused,\n"
+        + "exit codes: 0 nothing to do, 1 handed over to recover.exe, 2 bad command line, 3 crashed,\n"
+        + "            10 committed, 11 rolled back, 12 aborted (nothing changed), 20 recovery failed, 30 busy (a program is using PC Mieru's files), 31 gate refused,\n"
+        + "            32 refused: running as administrator (open it again with normal rights),\n"
         + "            40 wrong place (not I\\PCMieru.Swap.exe or I\\update\\recover.exe), 41 recover.exe could not be made ready";
 
     /// <summary>
@@ -158,14 +159,6 @@ public static class SwapCli
     /// </summary>
     public static IReadOnlyList<string> RecoverAndStartArguments(int afterPid) =>
         [RecoverOption, AfterPidOption, afterPid.ToString(CultureInfo.InvariantCulture), ThenStartOption];
-
-    private enum CommandKind
-    {
-        Recover,
-        TestSwap,
-    }
-
-    private sealed record Command(CommandKind Kind, int? AfterPid, bool ThenStart, IReadOnlyList<string> Tokens, string Staged, TxStep? Step, TxEdge Edge, int Nth, string Marker, bool VerdictOk);
 
     /// <summary>Runs the program and returns its exit code (<see cref="SwapExit"/>). Never throws, except for a <see cref="PowerCutException"/> that a test injector throws on purpose.</summary>
     public static int Run(string[] args, SwapHost host)
@@ -189,12 +182,15 @@ public static class SwapCli
             return SwapExit.NothingToDo;
         }
 
-        var command = Parse(args, out var problem);
-        if (command is null)
+        if (!TryParseOptions(args, out var options, out var problem))
         {
-            host.Error.WriteLine("swap: " + problem);
-            host.Error.WriteLine(Usage);
-            return SwapExit.BadCommandLine;
+            return BadCommandLine(host, problem);
+        }
+
+        var rest = options.Rest;
+        if (!(rest.Count == 0 || (rest.Count == 1 && rest[0] == RecoverOption)))
+        {
+            return BadCommandLine(host, "the arguments are not understood");
         }
 
         var site = RunnerRules.Locate(host.SelfPath);
@@ -205,23 +201,36 @@ public static class SwapCli
             return SwapExit.WrongPlace;
         }
 
-        if (command.Kind == CommandKind.TestSwap && !TestSwitchOn(host, site.InstallFolder))
+        if (RefuseIfElevated(host) is { } refused)
         {
-            host.Error.WriteLine($"swap: {TestSwapOption} is a test-only entry; it needs the environment variable {TestVariable} set to the full path of the install folder");
-            return SwapExit.TestSwitchMissing;
+            return refused;
         }
 
-        return site.Role == RunnerRole.Runner ? RunRunner(host, site.InstallFolder, command) : RunLauncher(host, site.InstallFolder, command);
+        return site.Role == RunnerRole.Runner
+            ? RunRunner(host, site.InstallFolder, recovery: true, options.AfterPid, options.ThenStart, gate => TxRecovery.Recover(gate, host.Seams, automatic: false))
+            : HandOver(host, site.InstallFolder, options.ThenStart, rest);
+    }
+
+    private static int BadCommandLine(SwapHost host, string problem)
+    {
+        host.Error.WriteLine("swap: " + problem);
+        host.Error.WriteLine(Usage);
+        return SwapExit.BadCommandLine;
     }
 
     // ------------------------------------------------------------------------------------------------------------ the command line
 
-    private static Command? Parse(string[] args, out string problem)
+    /// <summary>
+    /// Takes <c>--after-pid &lt;n&gt;</c> and <c>--then-start</c> out of the arguments (wherever they stand); what is left is <see cref="SwapOptions.Rest"/>. False, with the problem in words, when
+    /// <c>--after-pid</c> has no process id after it.
+    /// </summary>
+    public static bool TryParseOptions(string[] args, out SwapOptions options, out string problem)
     {
         problem = string.Empty;
+        options = new SwapOptions(null, false, []);
         int? after = null;
         var thenStart = false;
-        var tokens = new List<string>();
+        var rest = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == ThenStartOption)
@@ -232,90 +241,49 @@ public static class SwapCli
 
             if (args[i] != AfterPidOption)
             {
-                tokens.Add(args[i]);
+                rest.Add(args[i]);
                 continue;
             }
 
             if (i + 1 >= args.Length || !int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid <= 0)
             {
                 problem = AfterPidOption + " needs a process id";
-                return null;
+                return false;
             }
 
             after = pid;
             i++;
         }
 
-        if (tokens.Count == 0 || (tokens.Count == 1 && tokens[0] == RecoverOption))
-        {
-            return new Command(CommandKind.Recover, after, thenStart, tokens, string.Empty, null, TxEdge.Before, 0, string.Empty, false);
-        }
-
-        if (tokens[0] != TestSwapOption || tokens.Count != 7)
-        {
-            problem = "the arguments are not understood";
-            return null;
-        }
-
-        if (thenStart)
-        {
-            problem = ThenStartOption + " goes with --recover only";
-            return null;
-        }
-
-        TxStep? step = null;
-        if (tokens[2] != "-")
-        {
-            step = TxSteps.All.FirstOrDefault(s => s.Name == tokens[2]);
-            if (step is null)
-            {
-                problem = "unknown step '" + tokens[2] + "'";
-                return null;
-            }
-        }
-
-        if (!Enum.TryParse<TxEdge>(tokens[3], ignoreCase: false, out var edge) || !Enum.IsDefined(edge))
-        {
-            problem = "unknown edge '" + tokens[3] + "' (Before, Mid or After)";
-            return null;
-        }
-
-        if (!int.TryParse(tokens[4], NumberStyles.None, CultureInfo.InvariantCulture, out var nth) || nth < 1)
-        {
-            problem = "the count must be a number from 1";
-            return null;
-        }
-
-        if (tokens[6] is not ("ok" or "fail"))
-        {
-            problem = "the verdict is ok or fail";
-            return null;
-        }
-
-        return new Command(CommandKind.TestSwap, after, false, tokens, tokens[1], step, edge, nth, tokens[5], tokens[6] == "ok");
+        options = new SwapOptions(after, thenStart, rest);
+        return true;
     }
 
-    private static bool TestSwitchOn(SwapHost host, string installFolder)
+    /// <summary>
+    /// With an elevated token nothing is swapped and nothing is recovered: what an elevated program writes is owned by the administrators group and carries the ACL of an elevated creator, so the normal start of PC Mieru
+    /// could no longer replace it, and a recovery would reach files that a person did not expect an administrator's program to touch. Returns <see cref="SwapExit.Elevated"/> (after saying so, in plain words) or null.
+    /// It is asked before anything is placed, entered or written.
+    /// </summary>
+    public static int? RefuseIfElevated(SwapHost host)
     {
-        var value = host.GetVariable(TestVariable);
-        if (string.IsNullOrWhiteSpace(value))
+        if (!host.IsElevated())
         {
-            return false;
+            return null;
         }
 
-        try
-        {
-            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(value)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(installFolder)), StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
+        host.Out.WriteLine("result Refused Elevated exit=" + SwapExit.Elevated.ToString(CultureInfo.InvariantCulture));
+        host.Error.WriteLine("swap: running as administrator (an elevated token); nothing was changed");
+        Say(host, TxReasonText.Ja(TxReason.Elevated), TxReasonText.En(TxReason.Elevated));
+        return SwapExit.Elevated;
     }
 
     // ------------------------------------------------------------------------------------------------------------ the Launcher
 
-    private static int RunLauncher(SwapHost host, string install, Command command)
+    /// <summary>
+    /// The Launcher's work (<c>I\PCMieru.Swap.exe</c>): make a trusted recover.exe ready, start it with <paramref name="tokens"/> (and <c>--then-start</c> when asked) and its own process id after <c>--after-pid</c>, and
+    /// end at once. Public because the test build of the runner hands over its own arguments the same way.
+    /// </summary>
+    public static int HandOver(SwapHost host, string install, bool thenStart, IReadOnlyList<string> tokens)
     {
         var paths = new TxPaths(install);
         var ready = RunnerHandOff.Prepare(install);
@@ -327,12 +295,12 @@ public static class SwapCli
         }
 
         var arguments = new List<string> { AfterPidOption, host.ProcessId.ToString(CultureInfo.InvariantCulture) };
-        if (command.ThenStart)
+        if (thenStart)
         {
             arguments.Add(ThenStartOption);
         }
 
-        arguments.AddRange(command.Tokens);
+        arguments.AddRange(tokens);
         if (!host.Starter.TryStart(paths.Recover, install, arguments, out var detail))
         {
             host.Error.WriteLine("swap: recover.exe could not be started: " + detail);
@@ -347,11 +315,20 @@ public static class SwapCli
 
     // ------------------------------------------------------------------------------------------------------------ the Runner
 
-    private static int RunRunner(SwapHost host, string install, Command command)
+    /// <summary>
+    /// The Runner's work (<c>I\update\recover.exe</c>): wait for the process that handed over, take the gate EXCLUSIVELY (waiting for the programs of the install to let go of it), run <paramref name="work"/> with it,
+    /// say the result (a machine line, then two plain sentences) and return the exit code. For a <paramref name="recovery"/> the gate is waited for the recovery's own time and the result is left on screen in a console of
+    /// its own. Public for the test build of the runner, which gives a swap as the work; the product gives the recovery.
+    ///
+    /// <b>The gate stays held for the whole of <paramref name="work"/>, the verification of a new version included.</b> The program that is started to verify a new version does not enter the gate: it gets the exclusive
+    /// handle passed down from here (DESIGN-B 5, "設計上の実行条件": limited handle inheritance, an anonymous pipe and the transaction id; step 5 builds that), so no other program can enter while the files are being judged.
+    /// The gate is let go of only when the work has ended; only after that, with <paramref name="thenStart"/>, is PCMieru.exe started, and it enters the gate on its own.
+    /// </summary>
+    public static int RunRunner(SwapHost host, string install, bool recovery, int? afterPid, bool thenStart, Func<GateEntry, TxResult> work)
     {
-        var code = RunnerWork(host, install, command); // the gate is let go of when this returns: a program that is started below can enter it
+        var code = RunnerWork(host, install, recovery, afterPid, thenStart, work); // the gate is held until this returns (the whole work, a verification included) and is released then, never earlier
         var started = false;
-        if (command.ThenStart && SwapExit.InstallUsable(code))
+        if (thenStart && SwapExit.InstallUsable(code))
         {
             // The start gate window's "Recover" button: it handed over and ended (its own exe cannot be replaced while it runs), so the program is started again here, once the install is in order.
             var exe = Path.Combine(install, "PCMieru.exe");
@@ -367,7 +344,7 @@ public static class SwapCli
             }
         }
 
-        if (command.Kind == CommandKind.Recover && !started && host.ConsoleIsAlone())
+        if (recovery && !started && host.ConsoleIsAlone())
         {
             host.Sleep(host.ReadingPause); // a double-click: the window is this process's own and goes away when it ends, so the result is left to be read
         }
@@ -375,14 +352,18 @@ public static class SwapCli
         return code;
     }
 
-    private static int RunnerWork(SwapHost host, string install, Command command)
+    private static int RunnerWork(SwapHost host, string install, bool recovery, int? afterPid, bool thenStart, Func<GateEntry, TxResult> work)
     {
-        if (command.AfterPid is { } pid)
+        if (afterPid is { } pid && !host.WaitForProcessEnd(pid, host.AfterPidWait) && thenStart)
         {
-            host.WaitForProcessEnd(pid, host.AfterPidWait); // the process that handed over (the installed Swap.exe, or the program that is closing) must be gone before anything is replaced
+            // The program that handed over (the start gate window) was told to close and is still there after the wait. Its image is a file of the install that the recovery may have to replace, and the program that
+            // is started afterwards would run beside it: do not go on, say so, and start nothing. Nothing was changed; the person closes it and presses Recover again.
+            host.Out.WriteLine("result AfterPid Busy exit=" + SwapExit.Busy.ToString(CultureInfo.InvariantCulture));
+            Say(host, "PCミエルがまだ終了していません。PCミエルをすべて終了してから、もう一度実行してください。", "PC Mieru has not closed yet. Close PC Mieru completely, then run this again.");
+            return SwapExit.Busy;
         }
 
-        var wait = command.Kind == CommandKind.Recover ? host.RecoverGateWait : host.SwapGateWait;
+        var wait = recovery ? host.RecoverGateWait : host.SwapGateWait;
         using var gate = EnterGate(host, install, wait);
         if (!gate.IsOpen)
         {
@@ -399,24 +380,7 @@ public static class SwapCli
             return SwapExit.GateRefused;
         }
 
-        TxResult result;
-        if (command.Kind == CommandKind.Recover)
-        {
-            result = TxRecovery.Recover(gate, host.Seams, automatic: false);
-        }
-        else
-        {
-            var seams = new TxSeams
-            {
-                Fault = command.Step is { } step ? new StopHere(step, command.Edge, command.Nth, command.Marker) : host.Seams.Fault,
-                Disk = host.Seams.Disk,
-                Launcher = new ScriptedLauncher(command.VerdictOk ? LaunchVerdict.Ok : LaunchVerdict.Failed),
-                Placement = host.Seams.Placement,
-                UtcNow = host.Seams.UtcNow,
-            };
-            result = SwapTransaction.Run(gate, new SwapRequest(command.Staged), seams);
-        }
-
+        var result = work(gate);
         var exit = SwapExit.For(result.Outcome);
         host.Out.WriteLine($"result {result.Outcome} {result.Reason} exit={exit.ToString(CultureInfo.InvariantCulture)}");
         Say(host, SwapSentences.Ja(result), SwapSentences.En(result));
@@ -452,32 +416,6 @@ public static class SwapCli
         host.Out.WriteLine(ja);
         host.Out.WriteLine(en);
     }
-
-    // ------------------------------------------------------------------------------------------------------------ the test-only seams
-
-    /// <summary>Writes the marker and then never returns: the test kills the process there (a power cut in a real process).</summary>
-    private sealed class StopHere(TxStep step, TxEdge edge, int nth, string marker) : IFaultInjector
-    {
-        private readonly Dictionary<(string, TxEdge), int> _counts = [];
-
-        public void Reach(TxStep reached, TxEdge reachedEdge, string? item)
-        {
-            var key = (reached.Name, reachedEdge);
-            _counts.TryGetValue(key, out var n);
-            _counts[key] = ++n;
-            if (reached.Name == step.Name && reachedEdge == edge && n == nth)
-            {
-                TxNative.WriteTestMarker(marker, $"{step.Name}/{edge}#{nth} {item}");
-                Thread.Sleep(Timeout.Infinite);
-            }
-        }
-    }
-
-    /// <summary>The verdict is given by the command line: nothing is started.</summary>
-    private sealed class ScriptedLauncher(LaunchVerdict verdict) : ILaunchVerifier
-    {
-        public LaunchVerdict LaunchAndVerify(LaunchRequest request) => verdict;
-    }
 }
 
 /// <summary>The plain sentences of what <see cref="SwapCli"/> prints after the machine line (Japanese, then English).</summary>
@@ -489,6 +427,7 @@ public static class SwapSentences
         TxOutcome.Committed => $"新しい版（{result.ToVersion}）に入れ替えました。PCミエルをいつもどおり起動できます。",
         TxOutcome.RolledBack => TxReasonText.Ja(result.Reason) + " PCミエルをいつもどおり起動できます。",
         TxOutcome.Aborted => TxReasonText.Ja(result.Reason),
+        TxOutcome.Busy => TxReasonText.Ja(result.Reason) is { Length: > 0 } busy ? busy : TxReasonText.Ja(TxReason.FilesInUse),
         _ => TxReasonText.Ja(result.Reason) is { Length: > 0 } text ? text : "元に戻す作業が終わりませんでした。ZIP を新しいフォルダーに展開して使ってください。",
     };
 
@@ -498,6 +437,7 @@ public static class SwapSentences
         TxOutcome.Committed => $"Updated to the new version ({result.ToVersion}). You can start PC Mieru as usual.",
         TxOutcome.RolledBack => TxReasonText.En(result.Reason) + " You can start PC Mieru as usual.",
         TxOutcome.Aborted => TxReasonText.En(result.Reason),
+        TxOutcome.Busy => TxReasonText.En(result.Reason) is { Length: > 0 } busy ? busy : TxReasonText.En(TxReason.FilesInUse),
         _ => TxReasonText.En(result.Reason) is { Length: > 0 } text ? text : "Putting the earlier version back did not finish. Unzip the ZIP into a new folder and use that copy.",
     };
 }
