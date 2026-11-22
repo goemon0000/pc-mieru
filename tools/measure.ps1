@@ -221,6 +221,8 @@ $script:RecordingPeriodMs = 1000
 $script:NominalPeriodsMs = @(500, 1000, 2000, 5000)
 $script:PeriodToleranceFraction = 0.25
 $script:PeriodHoldShare = 0.9
+# "Back at the user's interval" is judged from the gaps of the phase after the stop, and a few gaps say little: with fewer lines than this it is not judged.
+$script:MinAfterPeriodLines = 6
 
 # ---- small helpers ----
 
@@ -715,6 +717,9 @@ public static class PcmMeasureWin
     private static extern bool IsWindowVisible(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
     private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
 
     [DllImport("user32.dll")]
@@ -769,6 +774,34 @@ public static class PcmMeasureWin
             return true;
         }, IntPtr.Zero);
         return best;
+    }
+
+    // What the process's main window is doing, as the window sees it: "normal" (visible, not minimized), "minimized", "hidden" (it has a top-level
+    // window and none is visible: the tray) or "none" (no top-level window at all, e.g. the process has not made one yet or is gone). The GUI
+    // asks the sampler for slow mode (5 s) while it is minimized or hidden, so these two are the states in which the user interval is not in force.
+    public static string WindowStateOf(int processId)
+    {
+        IntPtr visible = IntPtr.Zero;
+        long visibleArea = -1;
+        bool anyTopLevel = false;
+        EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
+        {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId || GetWindow(hwnd, 4) != IntPtr.Zero) { return true; }
+            StringBuilder name = new StringBuilder(256);
+            GetClassName(hwnd, name, 256);
+            string cls = name.ToString();
+            if (cls == "SysShadow" || cls.IndexOf("tooltips_class", StringComparison.OrdinalIgnoreCase) >= 0) { return true; }
+            anyTopLevel = true;
+            if (!IsWindowVisible(hwnd)) { return true; }
+            RECT rect;
+            long area = GetWindowRect(hwnd, out rect) ? (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top) : 0;
+            if (area > visibleArea) { visibleArea = area; visible = hwnd; }
+            return true;
+        }, IntPtr.Zero);
+        if (visible != IntPtr.Zero) { return IsIconic(visible) ? "minimized" : "normal"; }
+        return anyTopLevel ? "hidden" : "none";
     }
 
     // WM_CLOSE to a top-level window, as Process.CloseMainWindow does, but to the window MainWindowOf chose.
@@ -1006,6 +1039,16 @@ function Get-WindowSize($Proc) {
     }
     catch { $r.note = Get-ShortError $_ }
     return $r
+}
+
+# What the window of a process is doing: normal / minimized / hidden / none (see PcmMeasureWin.WindowStateOf); $null when it cannot be asked.
+# The GUI runs its sampler in slow mode (5 s) while it is minimized or hidden, so the report says which state each moment of a record run was in.
+function Get-WindowState($Proc) {
+    try {
+        Initialize-Win32
+        return [PcmMeasureWin]::WindowStateOf([int]$Proc.Id)
+    }
+    catch { return $null }
 }
 
 # ---- process series ----
@@ -1539,10 +1582,58 @@ function Get-GapStats($Gaps) {
     }
 }
 
-function Get-PeriodSummary($Events, $UserIntervalMs) {
+# What the window was doing at a moment (seconds from the stopwatch zero): the last look at or before it. $null: no look had been taken by then.
+function Get-WindowStateAt($States, $AtSeconds) {
+    if ($null -eq $AtSeconds) { return $null }
+    $at = $null
+    foreach ($s in @($States | Where-Object { $null -ne $_ })) {
+        if ([double]$s.t_s -le [double]$AtSeconds) { $at = [string]$s.state } else { break }
+    }
+    return $at
+}
+
+# The window's state at the start, at the stop and through the phase after the stop (every state it had from the "stopped" event to the end of the
+# run), from the changes the run loop noted ({ t_s; state }, in time order). minimized and hidden are slow mode: the sampler runs at 5 s there, not at
+# the user's interval, so a run whose stop or after phase was spent in one cannot show "back at the user interval".
+function Get-WindowStateSummary($States, $Timeline, [double]$Duration) {
+    $list = @()
+    if ($null -ne $States) { $list = @($States) }
+    $atStart = Get-WindowStateAt $list $Timeline.start_s
+    $atStop = Get-WindowStateAt $list $Timeline.stop_s
+    $afterStates = New-Object System.Collections.ArrayList
+    if ($null -ne $Timeline.stopped_s) {
+        $from = [double]$Timeline.stopped_s
+        $first = Get-WindowStateAt $list $from
+        if ($null -ne $first) { [void]$afterStates.Add($first) }
+        foreach ($s in $list) {
+            if ([double]$s.t_s -gt $from -and [double]$s.t_s -le $Duration -and -not $afterStates.Contains([string]$s.state)) { [void]$afterStates.Add([string]$s.state) }
+        }
+    }
+    $slow = @('minimized', 'hidden')
+    $slowAtStop = ($slow -contains $atStop)
+    $slowAfter = (@($afterStates | Where-Object { $slow -contains $_ }).Count -gt 0)
+    $slowAtStart = ($slow -contains $atStart)
+    return [ordered]@{
+        looks = $list.Count
+        at_start = $atStart
+        at_stop = $atStop
+        after = @($afterStates)
+        changes = $list
+        slow_mode_at_start = $slowAtStart
+        slow_mode_at_stop = $slowAtStop
+        slow_mode_after_the_stop = $slowAfter
+        note = $(if ($list.Count -eq 0) { 'the window state was not read (no look was taken)' } elseif ($slowAtStart -or $slowAtStop -or $slowAfter) { 'the window was minimized or hidden at some point that matters: the sampler was in slow mode (5 s), not at the user interval' } else { $null })
+    }
+}
+
+# $WindowSummary (optional, Get-WindowStateSummary): a run whose after phase was spent minimized or hidden is in slow mode, so the return to the user's
+# interval is not judged. Alongside the gap statistics the period lines carry what the loop itself ran at (loopPeriodMs) and how many recording
+# leases it held (leases): an exact reading, no jitter, so "recording at 1 s" is also checked from it (per phase: loop_period_ms, leases and the
+# count of lines that agree with the phase; during_recording_loop_period and after_stop_no_lease). A GUI that does not write them leaves those null.
+function Get-PeriodSummary($Events, $UserIntervalMs, $WindowSummary = $null) {
     $phases = [ordered]@{}
     foreach ($name in @('before', 'recording', 'stopping', 'after')) {
-        $phases[$name] = @{ lines = 0; gaps = (New-Object System.Collections.ArrayList); effective = @{}; snapshots = 0 }
+        $phases[$name] = @{ lines = 0; gaps = (New-Object System.Collections.ArrayList); effective = @{}; snapshots = 0; loop = @{}; leases = @{}; loop_lines = 0; agree = 0 }
     }
     foreach ($e in @($Events)) {
         if ([string](Get-Prop $e 'event' '') -ne 'period') { continue }
@@ -1557,6 +1648,18 @@ function Get-PeriodSummary($Events, $UserIntervalMs) {
         $snap = Get-Prop $e 'snapshotsInPhase'
         if ($null -ne $snap) { $p.snapshots = [int]$snap }
         if ($null -eq $UserIntervalMs) { $UserIntervalMs = Get-Prop $e 'userIntervalMs' }
+        # What the loop itself runs at and how many leases it holds (not the jittering gap): the exact reading of "recording at 1 s".
+        $loopMs = Get-Prop $e 'loopPeriodMs'
+        $leaseCount = Get-Prop $e 'leases'
+        if ($null -ne $loopMs -and $null -ne $leaseCount) {
+            $p.loop_lines = $p.loop_lines + 1
+            $p.loop[[string]$loopMs] = 1
+            $p.leases[[string]$leaseCount] = 1
+            # A line agrees with its phase when it runs at the recording period holding a lease (recording, stopping), or holds none and runs at the
+            # period the pump asked for (before, after).
+            if ($ph -eq 'recording' -or $ph -eq 'stopping') { if ([int]$loopMs -eq $script:RecordingPeriodMs -and [int]$leaseCount -ge 1) { $p.agree = $p.agree + 1 } }
+            elseif ([int]$leaseCount -eq 0 -and $null -ne $eff -and [int]$loopMs -eq [int]$eff) { $p.agree = $p.agree + 1 }
+        }
     }
     $out = [ordered]@{}
     foreach ($name in $phases.Keys) {
@@ -1572,6 +1675,10 @@ function Get-PeriodSummary($Events, $UserIntervalMs) {
             first_core_interval_ms = $first
             last_core_interval_ms = $last
             snapshots_at_last_line = $p.snapshots
+            loop_period_ms = @($p.loop.Keys | ForEach-Object { [int]$_ } | Sort-Object)
+            leases = @($p.leases.Keys | ForEach-Object { [int]$_ } | Sort-Object)
+            loop_lines = $p.loop_lines
+            loop_lines_agreeing = $p.agree
         }
     }
     $user = $null
@@ -1582,19 +1689,40 @@ function Get-PeriodSummary($Events, $UserIntervalMs) {
     if ($null -ne $rec.core_gap_ms) { $duringOk = ($rec.core_gap_ms.nominal_ms -eq $script:RecordingPeriodMs -and $rec.core_gap_ms.share_near_nominal -ge $script:PeriodHoldShare) }
     $returns = $null
     if ($null -ne $after.core_gap_ms -and $null -ne $user) { $returns = ($after.core_gap_ms.settled_nominal_ms -eq $user -and $after.core_gap_ms.last_nominal_ms -eq $user) }
+    # A few gaps say little, and a minimized or hidden window is in slow mode (5 s): in both cases the return to the user's interval is not judged.
+    $notJudged = $null
+    if ($after.period_lines -gt 0 -and $after.period_lines -lt $script:MinAfterPeriodLines) {
+        $returns = $null
+        $notJudged = ('only {0} period line(s) came after the stop ({1} or more are needed to judge a return to the user interval; a longer -AfterSeconds gives the after phase more lines)' -f $after.period_lines, $script:MinAfterPeriodLines)
+    }
+    elseif ($null -ne $WindowSummary -and $WindowSummary.slow_mode_after_the_stop -eq $true) {
+        $returns = $null
+        $notJudged = ('the window was {0} after the stop (slow mode, 5 s): the sampler was not at the user interval, so a return to it is not judged' -f ($WindowSummary.after -join '/'))
+    }
     $observable = ($null -ne $user -and $user -ne $script:RecordingPeriodMs)
     $note = $null
     if ($rec.period_lines -eq 0) { $note = 'no snapshot reached the window while recording: the period during the recording is missing' }
     elseif ($after.period_lines -eq 0) { $note = 'no snapshot reached the window after the stop: the period after the stop is missing' }
     elseif (-not $observable) { $note = ('the user interval ({0} ms) equals the recording period ({1} ms): a return to the user setting cannot be told from staying at the recording period; run with -UserIntervalMs 2000' -f $user, $script:RecordingPeriodMs) }
+    if ($null -ne $notJudged) { $note = $(if ($null -ne $note) { $note + '; ' + $notJudged } else { $notJudged }) }
+    # The loop's own reading (no jitter): while recording every line must say the recording period with a lease held; after the stop no line may
+    # hold a lease. Null when the GUI wrote no such field (an older PCMieru.exe) - the gap statistics above are then all there is.
+    $duringLoop = $null
+    if ($rec.loop_lines -gt 0) { $duringLoop = ($rec.loop_lines_agreeing -eq $rec.loop_lines -and $rec.period_lines -eq $rec.loop_lines) }
+    $afterLoop = $null
+    if ($after.loop_lines -gt 0) { $afterLoop = ($after.loop_lines_agreeing -eq $after.loop_lines -and $after.period_lines -eq $after.loop_lines) }
     return [ordered]@{
         user_interval_ms = $user
         recording_period_ms = $script:RecordingPeriodMs
         measured = 'Core reports the gap it measured between snapshots, which jitters around the period the loop runs at: each phase is judged on the median gap put to the nearest of 500/1000/2000/5000 ms'
+        loop_reading = 'the period lines also carry loopPeriodMs (what the sampler loop itself runs at) and leases (how many recordings hold it): an exact reading, no jitter'
         during_recording_is_recording_period = $duringOk
+        during_recording_loop_period_is_recording_period = $duringLoop
+        after_stop_loop_period_is_user_setting_without_lease = $afterLoop
         after_stop_returns_to_user_interval = $returns
         return_observable = $observable
         note = $note
+        window_state = $WindowSummary
         phases = $out
     }
 }
@@ -1797,13 +1925,18 @@ function Get-RecordWindows($MainRows, $ChildRows, $TotalRows, $Timeline, [double
 
 # Everything the record scenario adds to a run: the timeline, the periods, the CSV read from outside, the backlog evidence and the SensorHost period
 # evidence, plus the windows (returned under "windows"; the caller puts them where the other windows are). $Warnings gets one line per problem.
-function Get-RecordSection($Plan, [string]$EventsPath, [DateTime]$ZeroUtc, [double]$Duration, $MainRows, $ChildRows, $TotalRows, [int]$Cpus, $Warnings) {
+function Get-RecordSection($Plan, [string]$EventsPath, [DateTime]$ZeroUtc, [double]$Duration, $MainRows, $ChildRows, $TotalRows, [int]$Cpus, $Warnings, $WindowStates = $null) {
     $ev = Read-RecordEvents $EventsPath
     $timeline = Get-RecordTimeline $ev.events $ZeroUtc
-    $periods = Get-PeriodSummary $ev.events $timeline.user_interval_ms
+    $windowSummary = $null
+    if ($null -ne $WindowStates) { $windowSummary = Get-WindowStateSummary $WindowStates $timeline $Duration }
+    $periods = Get-PeriodSummary $ev.events $timeline.user_interval_ms $windowSummary
     $notes = New-Object System.Collections.ArrayList
     $windows = Get-RecordWindows $MainRows $ChildRows $TotalRows $timeline $Duration $Cpus $notes
     foreach ($n in $notes) { [void]$Warnings.Add($n) }
+    if ($null -ne $windowSummary -and ($windowSummary.slow_mode_at_start -or $windowSummary.slow_mode_at_stop -or $windowSummary.slow_mode_after_the_stop)) {
+        [void]$Warnings.Add(('the PC Mieru window was minimized or hidden during the run (at the start: {0}, at the stop: {1}, after the stop: {2}): the sampler ran in slow mode (5 s) there, which is not the user interval' -f $windowSummary.at_start, $windowSummary.at_stop, ($windowSummary.after -join '/')))
+    }
 
     if (-not $ev.found) { [void]$Warnings.Add('the record events file was not written: the GUI did not begin the recording (an old PCMieru.exe without --measure-record?)') }
     elseif ($null -eq $timeline.start_s) { [void]$Warnings.Add('no start event: the GUI never tried to start the recording') }
@@ -2160,6 +2293,8 @@ function Invoke-MeasuredRun {
     $churnStarted = 0; $churnFailed = 0
     $markDoneT = $null
     $windowSize = $null
+    $windowStates = New-Object System.Collections.ArrayList # record mode: { t_s; state } at the start and at every change of the window's state
+    $lastWindowState = '(not asked yet)'
     $tmSettings = $null
     $tmInfo = $null
     $tmStart = $null
@@ -2267,6 +2402,13 @@ function Invoke-MeasuredRun {
 
             # The size of the window, once, a few seconds in (a bigger window draws more: the comparison needs both apps' sizes).
             if (-not $Warmup -and $null -eq $windowSize -and $t -ge $script:WindowSizeAtSeconds) { $windowSize = Get-WindowSize $proc }
+
+            # Record mode: what the window is doing, at every tick (normal / minimized / hidden). A minimized or hidden window puts the sampler in slow mode
+            # (5 s), which is not the user's interval: the report must say so rather than let it pass for a return to the user interval.
+            if ($null -ne $Record) {
+                $ws = Get-WindowState $proc
+                if ($ws -ne $lastWindowState) { [void]$windowStates.Add([ordered]@{ t_s = [math]::Round($t, 1); state = $ws }); $lastWindowState = $ws }
+            }
 
             if ($Warmup) {
                 if ($null -ne $markDoneT -and $t -ge $markDoneT + 5) { $ended = 'warm-up done'; break }
@@ -2402,7 +2544,7 @@ function Invoke-MeasuredRun {
             main = (Get-WindowStats $mainRows 0 $first $Cpus)
             total = (Get-WindowStats $totalRows 0 $first $Cpus)
         }
-        $recordSection = Get-RecordSection $Record (Get-RecordEventsPath $markFile) $zeroUtc $DurationSeconds $mainRows $childRows $totalRows $Cpus $warnings
+        $recordSection = Get-RecordSection $Record (Get-RecordEventsPath $markFile) $zeroUtc $DurationSeconds $mainRows $childRows $totalRows $Cpus $warnings $windowStates
         foreach ($k in $recordSection.windows.Keys) { $windows[$k] = $recordSection.windows[$k] }
         $recordSection.Remove('windows')
         $run['record'] = $recordSection
@@ -2511,6 +2653,15 @@ function Write-RecordReport($Rec) {
         }
     }
     Write-Host ('  period   user interval {0} ms; while recording at {1} ms: {2}; back at the user interval after the stop: {3}{4}' -f (Fmt $p.user_interval_ms '0'), $p.recording_period_ms, $(if ($null -ne $p.during_recording_is_recording_period) { $p.during_recording_is_recording_period } else { 'missing' }), $(if ($null -ne $p.after_stop_returns_to_user_interval) { $p.after_stop_returns_to_user_interval } else { 'missing' }), $(if ($null -ne $p.note) { ' (' + $p.note + ')' } else { '' }))
+    foreach ($name in $p.phases.Keys) {
+        $x = $p.phases[$name]
+        if ($x.loop_lines -gt 0) { Write-Host ('  period   {0,-9}: the loop ran at {1} ms holding {2} lease(s); {3} of {4} line(s) agree with the phase' -f $name, ($x.loop_period_ms -join '/'), ($x.leases -join '/'), $x.loop_lines_agreeing, $x.loop_lines) }
+    }
+    Write-Host ('  period   from the loop itself: recording at {0} ms with a lease: {1}; no lease and the user setting after the stop: {2}' -f $p.recording_period_ms, $(if ($null -ne $p.during_recording_loop_period_is_recording_period) { $p.during_recording_loop_period_is_recording_period } else { 'missing (an older PCMieru.exe)' }), $(if ($null -ne $p.after_stop_loop_period_is_user_setting_without_lease) { $p.after_stop_loop_period_is_user_setting_without_lease } else { 'missing' }))
+    $wsum = $p.window_state
+    if ($null -ne $wsum) {
+        Write-Host ('  window   state at the start: {0}; at the stop: {1}; after the stop: {2}; {3} change(s) seen{4}' -f $(if ($null -ne $wsum.at_start) { $wsum.at_start } else { 'missing' }), $(if ($null -ne $wsum.at_stop) { $wsum.at_stop } else { 'missing' }), $(if (@($wsum.after).Count -gt 0) { @($wsum.after) -join '/' } else { 'missing' }), @($wsum.changes).Count, $(if ($null -ne $wsum.note) { ' (' + $wsum.note + ')' } else { '' }))
+    }
     $c = $Rec.csv
     if (-not $c.read) { Write-Host ('  csv      not analysed: {0}' -f $c.note) -ForegroundColor Yellow }
     else {

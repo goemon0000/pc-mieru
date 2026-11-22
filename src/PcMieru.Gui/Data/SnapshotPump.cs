@@ -79,6 +79,15 @@ internal sealed class SnapshotPump : IDisposable
     /// <summary>The interval actually in force (slow mode raises it to 5 s, never lowers it).</summary>
     public int EffectiveIntervalMs => (int)_settings.EffectiveInterval.TotalMilliseconds;
 
+    /// <summary>
+    /// The period the sampler loop waits between samples right now, in milliseconds: the recording's own while a recording holds a lease (the user's
+    /// interval and slow mode do not show it), otherwise the same as <see cref="EffectiveIntervalMs"/>. Read only.
+    /// </summary>
+    public int LoopPeriodMs => (int)_loop.EffectivePeriod.TotalMilliseconds;
+
+    /// <summary>How many recording leases the loop holds right now (0: nothing is recording). Read only.</summary>
+    public int RecordingLeases => _loop.LeaseCount;
+
     public void Start()
     {
         if (_started || _disposed)

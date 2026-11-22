@@ -136,6 +136,32 @@ public sealed class RecordingLeaseTests
     }
 
     [Fact]
+    public void The_loop_period_and_the_lease_count_are_public_and_read_only_so_a_window_can_show_what_a_recording_does_to_the_beat()
+    {
+        // A front end outside Core (the window, the measured run) reads them; nothing of it may be able to change them.
+        foreach (var name in new[] { nameof(SamplerLoop.EffectivePeriod), nameof(SamplerLoop.LeaseCount) })
+        {
+            var property = typeof(SamplerLoop).GetProperty(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+            Assert.NotNull(property);
+            Assert.True(property.GetMethod is { IsPublic: true }, name + " must be public");
+            Assert.True(property.SetMethod is null, name + " must be read only");
+        }
+
+        var control = new TestControl { Interval = TimeSpan.FromSeconds(5) };
+        using var loop = NewLoop(new ScriptedSource(), control);
+        Assert.Equal(0, loop.LeaseCount);
+        Assert.Equal(TimeSpan.FromSeconds(5), loop.EffectivePeriod);
+        using (loop.AcquireRecordingLease())
+        {
+            Assert.Equal(1, loop.LeaseCount);
+            Assert.Equal(FastBeat, loop.EffectivePeriod);
+        }
+
+        Assert.Equal(0, loop.LeaseCount);
+        Assert.Equal(TimeSpan.FromSeconds(5), loop.EffectivePeriod);
+    }
+
+    [Fact]
     public void The_last_release_goes_back_to_the_settings_as_they_are_now_not_as_they_were_at_the_first_lease()
     {
         var control = new TestControl { Interval = TimeSpan.FromSeconds(5), MinimizedInterval = TimeSpan.FromSeconds(7) };

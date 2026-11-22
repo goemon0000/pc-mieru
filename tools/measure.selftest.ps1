@@ -574,19 +574,24 @@ Check 'record: the period summary - Core''s measured gap jitters; the recording 
     $jitter = @(-9, 0, 6, 3, -2, 12, 1, -5, 4, 8)
     # One period line per snapshot, with a gap that jitters around the nominal period as the real Core's does (the gap is measured, never exactly 1000).
     # After the stop the first two gaps are still the recording's: the return is judged on the settled half and the last line.
-    function New-PeriodLine($Phase, $Gap, $Eff, $Count, $User) {
-        return ((ConvertTo-EventLine @{ event = 'period'; phase = $Phase; coreIntervalMs = [int]$Gap; userIntervalMs = $User; effectiveIntervalMs = $Eff; snapshotsInPhase = $Count } $zero 10) | ConvertFrom-Json)
+    # $Loop / $Leases: what the GUI's period line says the sampler loop ran at and how many recordings held it (loopPeriodMs / leases); $null leaves the
+    # fields out, as an older PCMieru.exe does.
+    function New-PeriodLine($Phase, $Gap, $Eff, $Count, $User, $Loop = $null, $Leases = $null) {
+        $f = @{ event = 'period'; phase = $Phase; coreIntervalMs = [int]$Gap; userIntervalMs = $User; effectiveIntervalMs = $Eff; snapshotsInPhase = $Count }
+        if ($null -ne $Loop) { $f['loopPeriodMs'] = $Loop; $f['leases'] = $Leases }
+        return ((ConvertTo-EventLine $f $zero 10) | ConvertFrom-Json)
     }
-    function New-Periods([int]$User, [int]$Before, [int]$Rec, [int]$After, $RecOverride = $null) {
+    # $WithLoop: the lines carry the loop fields as the real GUI writes them (no lease before and after at the pump's period, one lease while recording at 1 s).
+    function New-Periods([int]$User, [int]$Before, [int]$Rec, [int]$After, $RecOverride = $null, [switch]$WithLoop, [int]$AfterLines = 8) {
         $e = @()
         $c = 0
-        foreach ($j in $jitter[0..5]) { $c++; $e += , (New-PeriodLine 'before' ($Before + $j) $Before $c $User) }
+        foreach ($j in $jitter[0..5]) { $c++; $e += , (New-PeriodLine 'before' ($Before + $j) $Before $c $User $(if ($WithLoop) { $Before }) $(if ($WithLoop) { 0 })) }
         $c = 0
         $recGaps = $(if ($null -ne $RecOverride) { $RecOverride } else { @($jitter | ForEach-Object { $Rec + $_ }) })
-        foreach ($g in $recGaps) { $c++; $e += , (New-PeriodLine 'recording' $g $Rec $c $User) }
+        foreach ($g in $recGaps) { $c++; $e += , (New-PeriodLine 'recording' $g $Rec $c $User $(if ($WithLoop) { $Rec }) $(if ($WithLoop) { 1 })) }
         $c = 0
-        foreach ($g in @(($Rec + 7), ($Rec - 3))) { $c++; $e += , (New-PeriodLine 'after' $g $After $c $User) }
-        foreach ($j in $jitter[0..5]) { $c++; $e += , (New-PeriodLine 'after' ($After + $j) $After $c $User) }
+        $afterGaps = @(($Rec + 7), ($Rec - 3)) + @($jitter[0..5] | ForEach-Object { $After + $_ })
+        foreach ($g in @($afterGaps[0..($AfterLines - 1)])) { $c++; $e += , (New-PeriodLine 'after' $g $After $c $User $(if ($WithLoop) { $After }) $(if ($WithLoop) { 0 })) }
         return $e
     }
     $ok = Get-PeriodSummary (New-Periods 2000 2000 1000 2000) $null
@@ -629,6 +634,71 @@ Check 'record: the period summary - Core''s measured gap jitters; the recording 
     Assert-That ($null -eq $noAfter.after_stop_returns_to_user_interval -and $noAfter.note -match 'after the stop is missing') ('no after line: ' + $noAfter.note)
     $none = Get-PeriodSummary @() $null
     Assert-That ($null -eq $none.during_recording_is_recording_period -and $null -eq $none.after_stop_returns_to_user_interval -and $null -eq $none.user_interval_ms) 'no events: everything missing, nothing invented'
+    Assert-That ($null -eq $none.during_recording_loop_period_is_recording_period -and $null -eq $none.after_stop_loop_period_is_user_setting_without_lease) 'no events: the loop checks are missing too'
+
+    # The loop's own reading (loopPeriodMs and leases): exact, no jitter. An older PCMieru.exe writes neither, and the checks are then null, not false.
+    $plain = Get-PeriodSummary (New-Periods 2000 2000 1000 2000) 2000
+    Assert-That ($null -eq $plain.during_recording_loop_period_is_recording_period -and $null -eq $plain.after_stop_loop_period_is_user_setting_without_lease -and $plain.phases['recording'].loop_lines -eq 0) 'lines without the loop fields: the loop checks are null'
+    $loopOk = Get-PeriodSummary (New-Periods 2000 2000 1000 2000 -WithLoop) 2000
+    Assert-That ($loopOk.during_recording_loop_period_is_recording_period -eq $true -and $loopOk.after_stop_loop_period_is_user_setting_without_lease -eq $true) ('the loop fields as the GUI writes them: ' + $loopOk.during_recording_loop_period_is_recording_period + '/' + $loopOk.after_stop_loop_period_is_user_setting_without_lease)
+    $lp = $loopOk.phases['recording']; $lb = $loopOk.phases['before']
+    Assert-That ((@($lp.loop_period_ms) -join ',') -eq '1000' -and (@($lp.leases) -join ',') -eq '1' -and $lp.loop_lines -eq 10 -and $lp.loop_lines_agreeing -eq 10 -and (@($lb.leases) -join ',') -eq '0' -and (@($lb.loop_period_ms) -join ',') -eq '2000') ('loop per phase: ' + (@($lp.loop_period_ms) -join ',') + ' / ' + (@($lp.leases) -join ',') + ' / ' + $lp.loop_lines_agreeing + ' of ' + $lp.loop_lines)
+    # A recording whose loop did not go to 1 s (or whose lease was never taken) is not at the recording period, whatever the gaps say.
+    $slowLoop = New-Periods 2000 2000 1000 2000 -WithLoop
+    $slowLoop[8].loopPeriodMs = 2000
+    Assert-That ((Get-PeriodSummary $slowLoop 2000).during_recording_loop_period_is_recording_period -eq $false) 'one recording line at the loop period of 2000 ms must fail the check'
+    $noLease = New-Periods 2000 2000 1000 2000 -WithLoop
+    $noLease[8].leases = 0
+    Assert-That ((Get-PeriodSummary $noLease 2000).during_recording_loop_period_is_recording_period -eq $false) 'a recording line that holds no lease must fail the check'
+    # A lease still held after the stop (a leak), or a loop still at 1 s after it, fails the after check.
+    $leak = New-Periods 2000 2000 1000 2000 -WithLoop
+    $leak[$leak.Count - 1].leases = 1
+    Assert-That ((Get-PeriodSummary $leak 2000).after_stop_loop_period_is_user_setting_without_lease -eq $false) 'a lease held after the stop must fail the check'
+    $stuckLoop = New-Periods 2000 2000 1000 2000 -WithLoop
+    $stuckLoop[$stuckLoop.Count - 1].loopPeriodMs = 1000
+    Assert-That ((Get-PeriodSummary $stuckLoop 2000).after_stop_loop_period_is_user_setting_without_lease -eq $false) 'a loop still at 1 s after the stop must fail the check'
+
+    # "Back at the user interval" is judged only with enough lines in the after phase: five say little, six are judged.
+    $five = Get-PeriodSummary (New-Periods 2000 2000 1000 2000 -AfterLines 5) 2000
+    Assert-That ($null -eq $five.after_stop_returns_to_user_interval -and $five.note -match 'only 5 period line' -and $five.note -match '6 or more') ('five after lines are not judged: ' + $five.after_stop_returns_to_user_interval + ' / ' + $five.note)
+    $six = Get-PeriodSummary (New-Periods 2000 2000 1000 2000 -AfterLines 6) 2000
+    Assert-That ($six.after_stop_returns_to_user_interval -eq $true -and $null -eq $six.note) ('six after lines are judged: ' + $six.after_stop_returns_to_user_interval + ' / ' + $six.note)
+    $stuck5 = Get-PeriodSummary (New-Periods 2000 2000 1000 1000 -AfterLines 5) 2000
+    Assert-That ($null -eq $stuck5.after_stop_returns_to_user_interval) 'five lines that stay at 1 s are not judged either (not "false" on thin evidence)'
+}
+
+Check 'record: the window state - normal, minimized and hidden at the start, at the stop and after it; slow mode is not read as the user interval' {
+    $states = @(
+        [ordered]@{ t_s = 1.0; state = 'normal' },
+        [ordered]@{ t_s = 50.0; state = 'minimized' },
+        [ordered]@{ t_s = 60.0; state = 'normal' }
+    )
+    Assert-That ($null -eq (Get-WindowStateAt $states 0.5)) 'before the first look nothing is known'
+    Assert-That ((Get-WindowStateAt $states 1.0) -eq 'normal' -and (Get-WindowStateAt $states 49.9) -eq 'normal' -and (Get-WindowStateAt $states 50.0) -eq 'minimized' -and (Get-WindowStateAt $states 200) -eq 'normal') 'the state at a moment is the last look at or before it'
+    Assert-That ($null -eq (Get-WindowStateAt @() 10) -and $null -eq (Get-WindowStateAt $null 10) -and $null -eq (Get-WindowStateAt $states $null)) 'no looks, or no moment: null'
+    $timeline = [ordered]@{ start_s = 20.0; stop_s = 80.0; stopped_s = 81.0 }
+    $calm = Get-WindowStateSummary $states $timeline 140.0
+    Assert-That ($calm.at_start -eq 'normal' -and $calm.at_stop -eq 'normal' -and (@($calm.after) -join ',') -eq 'normal' -and -not $calm.slow_mode_at_start -and -not $calm.slow_mode_at_stop -and -not $calm.slow_mode_after_the_stop -and $null -eq $calm.note) ('a calm run: ' + $calm.at_start + '/' + $calm.at_stop + '/' + (@($calm.after) -join ',') + ' ' + $calm.note)
+    $minimizedAtStop = @([ordered]@{ t_s = 1.0; state = 'normal' }, [ordered]@{ t_s = 70.0; state = 'minimized' }, [ordered]@{ t_s = 90.0; state = 'hidden' })
+    $slowRun = Get-WindowStateSummary $minimizedAtStop $timeline 140.0
+    Assert-That ($slowRun.at_stop -eq 'minimized' -and $slowRun.slow_mode_at_stop -and $slowRun.slow_mode_after_the_stop -and (@($slowRun.after) -join ',') -eq 'minimized,hidden' -and $null -ne $slowRun.note) ('a minimized window: ' + $slowRun.at_stop + '/' + (@($slowRun.after) -join ',') + ' ' + $slowRun.note)
+    $nothing = Get-WindowStateSummary @() $timeline 140.0
+    Assert-That ($nothing.looks -eq 0 -and $null -eq $nothing.at_start -and $nothing.note -match 'not read') ('no looks: ' + $nothing.note)
+    $unfinished = Get-WindowStateSummary $states ([ordered]@{ start_s = 20.0; stop_s = $null; stopped_s = $null }) 140.0
+    Assert-That ($null -eq $unfinished.at_stop -and @($unfinished.after).Count -eq 0) 'a recording that never stopped has no stop state and no after states'
+    # In slow mode the return to the user interval is not judged, even with enough lines that would otherwise say it is back.
+    $zero = New-RecordZero
+    $ev = @()
+    foreach ($k in 1..8) { $ev += , ((ConvertTo-EventLine @{ event = 'period'; phase = 'recording'; coreIntervalMs = 1000; userIntervalMs = 2000; effectiveIntervalMs = 1000; snapshotsInPhase = $k } $zero 10) | ConvertFrom-Json) }
+    foreach ($k in 1..8) { $ev += , ((ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2000; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = $k } $zero 10) | ConvertFrom-Json) }
+    $judged = Get-PeriodSummary $ev 2000 $calm
+    Assert-That ($judged.after_stop_returns_to_user_interval -eq $true -and $judged.window_state.at_stop -eq 'normal') 'a calm window leaves the judgement as it was'
+    $slowJudged = Get-PeriodSummary $ev 2000 $slowRun
+    Assert-That ($null -eq $slowJudged.after_stop_returns_to_user_interval -and $slowJudged.note -match 'slow mode' -and $slowJudged.note -match 'minimized/hidden') ('slow mode after the stop is not judged: ' + $slowJudged.after_stop_returns_to_user_interval + ' / ' + $slowJudged.note)
+    # The window of a process id that does not exist has no window at all; the answer for a real process is one of the four words.
+    Initialize-Win32
+    Assert-That ([PcmMeasureWin]::WindowStateOf(2147483000) -eq 'none') 'a process that does not exist has no window'
+    Assert-That (@('normal', 'minimized', 'hidden', 'none') -contains (Get-WindowState ([Diagnostics.Process]::GetCurrentProcess()))) 'this process: one of the four states'
 }
 
 Check 'record: a path inside one of the user''s folders is found; a sibling, a parent and an empty path are not' {
@@ -697,7 +767,12 @@ Check 'record: the windows and the whole section from synthetic rows, events and
         (ConvertTo-EventLine @{ event = 'period'; phase = 'recording'; coreIntervalMs = 1000; userIntervalMs = 2000; effectiveIntervalMs = 1000; snapshotsInPhase = 10 } $zero 60),
         (ConvertTo-EventLine @{ event = 'stop'; reason = 'user'; selfEnded = $false } $zero 101),
         (ConvertTo-EventLine @{ event = 'stopped'; stopMs = 300; saved = $true; status = 'completed'; stopReason = 'user'; rows = 60; droppedTicks = 2; durationUs = 60000000; csv = $csvPath } $zero 101.3),
-        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2000; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 10 } $zero 120)
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2000; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 10 } $zero 120),
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2003; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 11 } $zero 122),
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 1998; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 12 } $zero 124),
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2001; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 13 } $zero 126),
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 2004; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 14 } $zero 128),
+        (ConvertTo-EventLine @{ event = 'period'; phase = 'after'; coreIntervalMs = 1996; userIntervalMs = 2000; effectiveIntervalMs = 2000; snapshotsInPhase = 15 } $zero 129)
     )
     [IO.File]::WriteAllText($events, (($lines -join "`n") + "`n"))
     $main = @(); $child = @(); $total = @()
@@ -711,7 +786,7 @@ Check 'record: the windows and the whole section from synthetic rows, events and
     $warnings = New-Object System.Collections.ArrayList
     $plan = @{ Folder = $WorkDir; Lead = 40; For = 60; Interval = 2000 }
     $sec = Get-RecordSection $plan $events $zero 130.0 $main $child $total 8 $warnings
-    Assert-That ($sec.events_found -and $sec.events_count -eq 7) ('events: ' + $sec.events_count)
+    Assert-That ($sec.events_found -and $sec.events_count -eq 12) ('events: ' + $sec.events_count)
     $w = $sec.windows
     Assert-That (@($w.Keys) -join ',' -eq 'before,recording,after') ('windows: ' + (@($w.Keys) -join ','))
     Assert-That ($w['before'].main.window_from_s -eq 30 -and $w['before'].main.window_to_s -eq 39) ('before: ' + $w['before'].main.window_from_s + '-' + $w['before'].main.window_to_s)
@@ -727,6 +802,19 @@ Check 'record: the windows and the whole section from synthetic rows, events and
     Assert-That (@($warnings | Where-Object { $_ -match 'dropped 2 tick' }).Count -eq 1) ('no dropped-tick warning: ' + ($warnings -join ' | '))
     Assert-That (@($warnings | Where-Object { $_ -match 'frame-number jumps' }).Count -eq 1) ('no frame-jump warning: ' + ($warnings -join ' | '))
     Assert-That ($warnings.Count -eq 2) ('other warnings: ' + ($warnings -join ' | '))
+    # The window states the run loop noted go through the section: a window minimized at the stop is a warning and the return is not judged; a calm one is reported and not warned about.
+    $calmStates = New-Object System.Collections.ArrayList
+    [void]$calmStates.Add([ordered]@{ t_s = 1.0; state = 'normal' })
+    $wCalm = New-Object System.Collections.ArrayList
+    $secCalm = Get-RecordSection $plan $events $zero 130.0 $main $child $total 8 $wCalm $calmStates
+    Assert-That ($secCalm.periods.window_state.at_start -eq 'normal' -and $secCalm.periods.window_state.at_stop -eq 'normal' -and $secCalm.periods.after_stop_returns_to_user_interval -eq $true -and $wCalm.Count -eq 2) ('a calm window: ' + $secCalm.periods.window_state.at_stop + ' ' + ($wCalm -join ' | '))
+    $slowStates = New-Object System.Collections.ArrayList
+    [void]$slowStates.Add([ordered]@{ t_s = 1.0; state = 'normal' })
+    [void]$slowStates.Add([ordered]@{ t_s = 90.0; state = 'minimized' })
+    $wSlow = New-Object System.Collections.ArrayList
+    $secSlow = Get-RecordSection $plan $events $zero 130.0 $main $child $total 8 $wSlow $slowStates
+    Assert-That ($secSlow.periods.window_state.at_stop -eq 'minimized' -and $null -eq $secSlow.periods.after_stop_returns_to_user_interval -and $secSlow.periods.note -match 'slow mode') ('a minimized window: ' + $secSlow.periods.window_state.at_stop + ' / ' + $secSlow.periods.note)
+    Assert-That (@($wSlow | Where-Object { $_ -match 'minimized or hidden during the run' }).Count -eq 1) ('no slow-mode warning: ' + ($wSlow -join ' | '))
     # No events at all (an old PCMieru.exe): the windows are empty and one warning says why; nothing is invented.
     $w2 = New-Object System.Collections.ArrayList
     $s2 = Get-RecordSection $plan (Join-Path $WorkDir 'none.record.jsonl') $zero 130.0 $main $child $total 8 $w2
@@ -799,6 +887,8 @@ else {
             $size = Get-WindowSize $proc
             Assert-That ($null -ne $size.width -and $size.width -gt 200 -and $size.height -gt 200) ('window size: ' + $size.note)
             Info ('step: ' + $from + ' -> ' + $step.to + ' by ' + (@($step.keys) -join ',') + '; window ' + $size.width + ' x ' + $size.height)
+            $winState = Get-WindowState $proc
+            Assert-That ($winState -eq 'normal') ('the shown GUI window must read as normal, not ' + $winState)
             # The close the measurement uses: WM_CLOSE to the window Get-MainWindow chose ends the GUI without a kill (a tooltip under a
             # resting mouse pointer once made Process.MainWindowHandle the tooltip's shadow and every run ended in a kill).
             $close = Close-Politely $proc 20

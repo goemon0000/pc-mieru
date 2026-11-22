@@ -205,11 +205,14 @@ public sealed class SamplerLoop : IDisposable, IRecordingSamples
     /// <summary>True while at least one recording lease is held: the loop then runs at <see cref="RecordingPeriod"/> and samples even while paused.</summary>
     public bool IsRecording => Volatile.Read(ref _recording) != 0;
 
-    /// <summary>The period the loop waits between samples right now: the recording period while leased, otherwise the user's (minimized-aware) interval, read fresh.</summary>
-    internal TimeSpan EffectivePeriod => IsRecording ? _recordingPeriod : _control.EffectiveInterval;
+    /// <summary>
+    /// The period the loop waits between samples right now: the recording period while leased, otherwise the user's (minimized-aware) interval, read fresh.
+    /// Read only. A window shows it next to the user's own setting, which does not say what a recording does to the beat.
+    /// </summary>
+    public TimeSpan EffectivePeriod => IsRecording ? _recordingPeriod : _control.EffectiveInterval;
 
-    /// <summary>Held leases, for tests.</summary>
-    internal int LeaseCount
+    /// <summary>How many recording leases are held right now (each recording holds one). Read only.</summary>
+    public int LeaseCount
     {
         get
         {

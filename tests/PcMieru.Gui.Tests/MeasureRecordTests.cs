@@ -622,6 +622,38 @@ public class MeasureRecordTests
         });
     }
 
+    [Fact]
+    public void A_period_line_says_the_period_the_sampler_loop_runs_at_and_the_leases_it_holds_next_to_the_users_setting()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new Rig(leadSeconds: 60, recordSeconds: 60, userIntervalMs: 2000);
+            rig.Recording.Begin();
+            Assert.Equal(2000, rig.Line(0).GetProperty("loopPeriodMs").GetInt32());
+            Assert.Equal(0, rig.Line(0).GetProperty("leases").GetInt32());
+            rig.Recording.Observe(2001);
+            Assert.Equal(2000, rig.Last("period").GetProperty("userIntervalMs").GetInt32());
+            Assert.Equal(2000, rig.Last("period").GetProperty("loopPeriodMs").GetInt32());
+            Assert.Equal(0, rig.Last("period").GetProperty("leases").GetInt32());
+
+            // A recording holds one lease and the loop runs at its own 1 s: the user's setting and the pump's effective interval do not show it, the line does.
+            using (rig.Services.Sampler.AcquireRecordingLease())
+            {
+                rig.Recording.Observe(1001);
+                Assert.Equal(2000, rig.Last("period").GetProperty("userIntervalMs").GetInt32());
+                Assert.Equal(2000, rig.Last("period").GetProperty("effectiveIntervalMs").GetInt32());
+                Assert.Equal(1000, rig.Last("period").GetProperty("loopPeriodMs").GetInt32());
+                Assert.Equal(1, rig.Last("period").GetProperty("leases").GetInt32());
+                Assert.Equal(1000, rig.Pump.LoopPeriodMs);
+                Assert.Equal(1, rig.Pump.RecordingLeases);
+            }
+
+            rig.Recording.Observe(1999);
+            Assert.Equal(2000, rig.Last("period").GetProperty("loopPeriodMs").GetInt32());
+            Assert.Equal(0, rig.Last("period").GetProperty("leases").GetInt32());
+        });
+    }
+
     /// <summary>The pump delivers through the window's handle and a refresh resumes on the UI context, so the test thread plays both message loops until the condition holds (the bound only ends a broken test).</summary>
     private static bool PumpingUntil(QueueContext ui, Func<bool> condition, int timeoutMs = 20_000)
     {

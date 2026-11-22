@@ -159,8 +159,9 @@ internal sealed record MeasureRecordPlan(string Folder, int LeadSeconds, int Rec
 /// recording through the window's recording hub, as the Start button does, lets it run for <see cref="MeasureRecordPlan.RecordSeconds"/> and stops it the way
 /// the Stop button does. It leaves the facts <c>tools/measure.ps1</c> cannot read from outside in one JSON object per line next to the marks file:
 /// <c>begin</c>, <c>start</c> (how long the start took), <c>period</c> (one line per snapshot that reached the window: the time Core measured since the
-/// snapshot before it, which is not the nominal period but jitters around it; the user's interval; and the pump's effective interval, which is the user's with slow mode applied and does NOT
-/// show the recording's own 1 s: that lives inside the sampler loop and is seen only in the measured gap), <c>stop</c>, <c>stopped</c> (how long the stop took, which is how long the
+/// snapshot before it, which is not the nominal period but jitters around it; the user's interval; the pump's effective interval, which is the user's with slow mode applied and does NOT
+/// show the recording's own 1 s; and the sampler loop's own period and lease count, read from the loop itself (<c>loopPeriodMs</c>, <c>leases</c>): that is where the recording's 1 s shows),
+/// <c>stop</c>, <c>stopped</c> (how long the stop took, which is how long the
 /// writer needed to drain, and the run's own result: rows, dropped ticks, status). Every line has the system time in 7 digits and a Z, comparable with
 /// the marks and with the process times. Nothing here runs unless the switch was given; a failure is a line and never reaches the window.
 /// </summary>
@@ -251,6 +252,8 @@ internal sealed class MeasureRecording : IDisposable
             json.WriteNumber("recordSeconds", _plan.RecordSeconds);
             json.WriteNumber("userIntervalMs", _pump.IntervalMs);
             json.WriteNumber("effectiveIntervalMs", _pump.EffectiveIntervalMs);
+            json.WriteNumber("loopPeriodMs", _pump.LoopPeriodMs);
+            json.WriteNumber("leases", _pump.RecordingLeases);
         });
         _ = RunSafelyAsync();
     }
@@ -274,6 +277,8 @@ internal sealed class MeasureRecording : IDisposable
             json.WriteNumber("coreIntervalMs", coreIntervalMs);
             json.WriteNumber("userIntervalMs", _pump.IntervalMs);
             json.WriteNumber("effectiveIntervalMs", _pump.EffectiveIntervalMs);
+            json.WriteNumber("loopPeriodMs", _pump.LoopPeriodMs);
+            json.WriteNumber("leases", _pump.RecordingLeases);
             json.WriteNumber("snapshotsInPhase", snapshots);
         });
     }
