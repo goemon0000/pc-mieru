@@ -1137,8 +1137,11 @@ public sealed class UpdateUiTests
             }
 
             // ... and the page says why nothing will be put in place here, and still lets the person look for a new version.
-            Assert.Equal(PlacementKind.ReadOnly, InstallPlacement.Check(folder).Kind);
-            using var rig = new PageRig("notify", probe: () => InstallPlacement.Check(folder));
+            // The three questions that are not about the folder's rights are answered here (not elevated, a fixed NTFS disk): what is asked is the probe, on whatever disk and with whatever token the test runs.
+            // The plain Check(folder) reads the real token, and a hosted CI runner is elevated: it answers Elevated before it looks at the folder (the run of 2026-11-22).
+            Placement ReadOnlyCheck() => InstallPlacement.Check(folder, () => false, _ => DriveType.Fixed, _ => "NTFS");
+            Assert.Equal(PlacementKind.ReadOnly, ReadOnlyCheck().Kind);
+            using var rig = new PageRig("notify", probe: ReadOnlyCheck);
             rig.Controller.Start();
             rig.Activate();
 
@@ -1152,6 +1155,25 @@ public sealed class UpdateUiTests
             File.SetAttributes(exe, FileAttributes.Normal);
             File.SetAttributes(gate, FileAttributes.Normal);
         }
+    }
+
+    [Fact]
+    public void An_elevated_gui_in_a_folder_that_could_be_swapped_says_it_cannot_update_itself_because_of_the_elevation()
+    {
+        // The answer "elevated" is given here, on purpose (the tests that are not about elevation give "not elevated"): the same writable folder is CanSwap for a normal token and Elevated for this one.
+        using var root = new Ui.TempRoot();
+        Placement Check(bool elevated) => InstallPlacement.Check(root.Path, () => elevated, _ => DriveType.Fixed, _ => "NTFS");
+        Assert.Equal(PlacementKind.CanSwap, Check(elevated: false).Kind);
+        Assert.Equal(PlacementKind.Elevated, Check(elevated: true).Kind);
+
+        using var rig = new PageRig("notify", probe: () => Check(elevated: true));
+        rig.Controller.Start();
+        rig.Activate();
+
+        var reason = Strings.Get("gui.update.placement.elevated");
+        Assert.Equal("The app cannot update itself in this folder (" + reason + ")", rig.Page.UpdatePlacementText);
+        Assert.Equal(CellTone.Warning, rig.Page.UpdatePlacementTone);
+        Assert.True(rig.Page.UpdateCheckNowButton.Enabled);
     }
 
     [Fact]

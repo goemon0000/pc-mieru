@@ -349,10 +349,8 @@ public sealed class InstallIdTests : IDisposable
     {
         var info = new System.Diagnostics.ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         info.Arguments = "/c mklink /J \"" + link + "\" \"" + target + "\""; // one string on purpose: cmd.exe does not read the escaping of ArgumentList
-        using var process = System.Diagnostics.Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, "mklink /J failed: " + output);
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0, "mklink /J failed: " + made.Output);
     }
 
     [Fact]

@@ -89,6 +89,27 @@ public partial class WorkflowPolicyTests
     }
 
     [Fact]
+    public void Ci_runs_the_tests_with_a_hang_timeout_that_names_the_test_and_writes_no_dump()
+    {
+        // 2026-11-22: the Update tests used the whole 20 minutes of the job and the log said nothing about where. A hung test is now stopped after the blame time and named.
+        var yaml = Read(".github", "workflows", "ci.yml");
+        var tests = Steps(yaml).Where(s => CodeOf(s).Contains("dotnet test", StringComparison.Ordinal)).ToArray();
+        Assert.Single(tests);
+        var code = CodeOf(tests[0]);
+
+        var hang = Regex.Match(code, @"--blame-hang-timeout\s+(?<n>\d+)(?<unit>m|min|s|h)\b");
+        Assert.True(hang.Success, "the test step has no --blame-hang-timeout");
+        var minutes = int.Parse(hang.Groups["n"].Value) * hang.Groups["unit"].Value switch { "s" => 1.0 / 60, "h" => 60.0, _ => 1.0 };
+        Assert.InRange(minutes, 1, 10);
+        Assert.Matches(@"--blame-hang-dump-type\s+none\b", code);
+        Assert.Contains("--filter \"Category!=RealMachine\"", code, StringComparison.Ordinal); // the flags were added to the line, nothing else of it was taken away
+
+        // The hang timeout must come before the job's own limit, or it can never be the one that speaks.
+        var limit = int.Parse(Regex.Match(yaml, @"^  test:\s*\r?\n(?:    .*\r?\n)*?    timeout-minutes:\s*(?<n>\d+)", RegexOptions.Multiline).Groups["n"].Value);
+        Assert.True(minutes < limit, "the hang timeout is not shorter than the limit of the job");
+    }
+
+    [Fact]
     public void Ci_compares_the_entry_names_of_the_two_zips_and_fails_when_they_differ()
     {
         var yaml = Read(".github", "workflows", "ci.yml");
@@ -214,10 +235,9 @@ public partial class WorkflowPolicyTests
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            using var process = System.Diagnostics.Process.Start(info)!;
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(60_000), "PowerShell did not finish");
+            var scan = BoundedProcess.Run(info, TimeSpan.FromSeconds(120)); // the streams were read BEFORE the wait: a PowerShell that did not end held the test forever
+            var output = scan.Output;
+            var error = string.Empty;
 
             var results = output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').Where(l => l.StartsWith("RESULT ", StringComparison.Ordinal)).ToList();
             Assert.True(results.Count == 5, "five results expected, got: " + output + error);

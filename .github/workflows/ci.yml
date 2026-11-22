@@ -29,8 +29,13 @@ jobs:
       # RealMachine tests read live hardware, spawn real processes or compare against the host's registry/processes;
       # a headless CI runner (few processes, no interactive desktop, no discrete GPU) cannot satisfy them. They run
       # locally on a real workstation. Everything environment-independent runs here.
+      #
+      # --blame-hang-timeout: a test that does not return within 5 minutes is named and its test host is stopped, so a hang
+      # ends in a failure that says which test, not in the 20 minutes of the job (2026-11-22: the Update tests used the whole
+      # limit and the log did not say where). No dump is written (the dump of a test host is large and says nothing more here).
+      # The console logger lists every test with its time, so a slow run (and not a hang) shows where the time went.
       - name: Test
-        run: dotnet test PcMieru.slnx -c Release --no-build --nologo --filter "Category!=RealMachine"
+        run: dotnet test PcMieru.slnx -c Release --no-build --nologo --filter "Category!=RealMachine" --blame-hang-timeout 5m --blame-hang-dump-type none --logger "console;verbosity=normal"
 
       # Opens the real window off screen on sample data (--fakes), walks every page in both languages and themes,
       # exits 0 only if every check holds. Sample data so a headless runner (no windowed app, no icons) is enough.

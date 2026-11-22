@@ -434,19 +434,18 @@ internal sealed class Rig : IDisposable
     {
         var info = new System.Diagnostics.ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         info.Arguments = $"/c mklink /J \"{link}\" \"{target}\"";
-        using var process = System.Diagnostics.Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0 && Directory.Exists(link), "mklink /J failed: " + output);
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0 && Directory.Exists(link), "mklink /J failed: " + made.Output);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------ running
 
     public GateEntry Enter() => InstallGate.EnterExclusive(ExePath);
 
-    public static TxSeams Seams(IFaultInjector? fault = null, ILaunchVerifier? launcher = null, IDiskSpace? disk = null, IRunnerPlacement? placement = null, IVolumeFormat? volume = null) =>
+    public static TxSeams Seams(IFaultInjector? fault = null, ILaunchVerifier? launcher = null, IDiskSpace? disk = null, IRunnerPlacement? placement = null, IVolumeFormat? volume = null, bool durable = false) =>
         new()
         {
+            Durable = durable,
             Fault = fault ?? NoFaults.Instance,
             Launcher = launcher,
             Disk = disk ?? SystemDiskSpace.Instance,

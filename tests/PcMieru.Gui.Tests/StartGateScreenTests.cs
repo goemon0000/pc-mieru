@@ -53,11 +53,8 @@ public sealed class StartGateScreenTests : IDisposable
     private void Junction(string link, string target)
     {
         var info = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        using var process = Process.Start(info)!;
-        process.StandardOutput.ReadToEnd();
-        process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.Equal(0, process.ExitCode);
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0, "mklink /J failed: " + made.Output);
         _undo.Add(() => Directory.Delete(link)); // removes the junction only, never the target
     }
 
@@ -168,7 +165,7 @@ public sealed class StartGateScreenTests : IDisposable
         var entry = Refused(outcome);
         Assert.Equal(outcome, entry.Outcome);
 
-        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.False(SmokeText.IsPlaceholder(window.ReasonText), window.ReasonText);
         Assert.False(SmokeText.IsPlaceholder(window.HintText), window.HintText);
@@ -227,7 +224,7 @@ public sealed class StartGateScreenTests : IDisposable
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(ThemeMode.Light);
 
-        using var window = new StartGateWindow(theme, Refused(outcome), () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, Refused(outcome), () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.Equal(expected, window.ReasonText);
     }
@@ -322,7 +319,7 @@ public sealed class StartGateScreenTests : IDisposable
         var entry = InstallGate.EnterStartup(exe);
         Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
 
-        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.True(window.HintText.Split('\n').Length >= 2, window.HintText);
         Assert.Null(window.HintProblem());
@@ -338,7 +335,7 @@ public sealed class StartGateScreenTests : IDisposable
         Directory.CreateDirectory(Update(exe));
         File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
 
-        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.False(window.HintLabel.UseMnemonic);
         Assert.Contains("R&D tools", window.HintText.Replace("\n", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
@@ -354,7 +351,7 @@ public sealed class StartGateScreenTests : IDisposable
         var first = InstallGate.EnterStartup(exe);
         Assert.Equal(GateOutcome.Busy, first.Outcome);
 
-        using var window = new StartGateWindow(theme, first, () => InstallGate.EnterStartup(exe));
+        using var window = new StartGateWindow(theme, first, () => InstallGate.EnterStartup(exe), NotElevated());
         Assert.True(window.RetryOffered);
         Assert.Equal(Strings.Get("gui.gate.retry"), window.RetryButton.Text);
 
@@ -386,7 +383,7 @@ public sealed class StartGateScreenTests : IDisposable
         using var theme = new ThemeService(ThemeMode.Light);
         var exe = Install();
         var holder = InstallGate.EnterExclusive(exe);
-        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => InstallGate.EnterStartup(exe));
+        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => InstallGate.EnterStartup(exe), NotElevated());
         holder.Dispose();
         File.Delete(Path.Combine(Path.GetDirectoryName(exe)!, GateFile.FileName));
 
@@ -404,7 +401,7 @@ public sealed class StartGateScreenTests : IDisposable
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(ThemeMode.Light);
 
-        using var window = new StartGateWindow(theme, Refused(GateOutcome.Busy), () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, Refused(GateOutcome.Busy), () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.Equal(expected, window.ReasonText);
         Assert.True(window.RetryOffered);
@@ -420,7 +417,7 @@ public sealed class StartGateScreenTests : IDisposable
         using var theme = new ThemeService(ThemeMode.Light);
         var entry = Refused(GateOutcome.Unreadable);
 
-        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.Equal(GateOutcome.Unreadable, entry.Outcome);
         Assert.StartsWith(firstSentence, window.ReasonText, StringComparison.Ordinal);
@@ -495,6 +492,12 @@ public sealed class StartGateScreenTests : IDisposable
 
     // ---- 「回復する」 ----
 
+    /// <summary>
+    /// The real recovery with "this process is not elevated" given to it. A window built without a recovery reads the token of the machine the test runs on, and a hosted CI runner is elevated: the gate window then
+    /// shows the advice for an elevated process instead of the words under test (nine tests failed there on 2026-11-22). A test that is about elevation says so with <c>elevated: true</c> and gives the answer itself.
+    /// </summary>
+    private static RunnerGateRecovery NotElevated() => new(isElevated: () => false);
+
     /// <summary>A recovery that is told what to answer and counts what it is asked; nothing is started.</summary>
     private sealed class FakeRecovery(bool available, bool starts = true, bool elevated = false) : IGateRecovery
     {
@@ -560,7 +563,7 @@ public sealed class StartGateScreenTests : IDisposable
 
         // The default recovery looks at the real folder: no I\update\recover.exe there, so nothing is offered.
         var entry = Refused(outcome);
-        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), NotElevated());
 
         Assert.False(window.RecoverOffered);
         Assert.False(window.RecoverButton.Visible);
@@ -843,7 +846,7 @@ public sealed class StartGateScreenTests : IDisposable
         var entry = InterruptedInstallWithRunner(swap, swap);
         var install = Path.GetDirectoryName(entry.GatePath)!;
         var starter = new RecordingStarter();
-        var recovery = new RunnerGateRecovery(starter, processId: 4242);
+        var recovery = new RunnerGateRecovery(starter, processId: 4242, isElevated: () => false);
 
         Assert.True(recovery.IsAvailable(entry));
         Assert.True(recovery.Start(entry, out _));
@@ -862,7 +865,7 @@ public sealed class StartGateScreenTests : IDisposable
         byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
         var entry = InterruptedInstallWithRunner(swap, what == "missing" ? null : [9, 9, 9, 9, 9, 9, 9, 9]);
         var starter = new RecordingStarter();
-        var recovery = new RunnerGateRecovery(starter, processId: 1);
+        var recovery = new RunnerGateRecovery(starter, processId: 1, isElevated: () => false);
 
         Assert.False(recovery.IsAvailable(entry));
         Assert.False(recovery.Start(entry, out var detail));
@@ -876,7 +879,7 @@ public sealed class StartGateScreenTests : IDisposable
         byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
         var entry = InterruptedInstallWithRunner(swap, swap);
         var starter = new RecordingStarter();
-        var recovery = new RunnerGateRecovery(starter, processId: 1);
+        var recovery = new RunnerGateRecovery(starter, processId: 1, isElevated: () => false);
         Assert.True(recovery.IsAvailable(entry));
 
         File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(entry.GatePath)!, "update", "recover.exe"), [7, 7, 7]);
@@ -893,7 +896,7 @@ public sealed class StartGateScreenTests : IDisposable
         byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
         var entry = InterruptedInstallWithRunner(swap, swap);
         var starter = new RecordingStarter(starts: false);
-        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), new RunnerGateRecovery(starter, processId: 1));
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), new RunnerGateRecovery(starter, processId: 1, isElevated: () => false));
         Assert.True(window.RecoverOffered);
 
         Assert.False(window.RecoverNow());

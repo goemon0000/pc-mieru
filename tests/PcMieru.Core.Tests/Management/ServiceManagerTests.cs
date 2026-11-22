@@ -360,9 +360,9 @@ public class ServiceManagerTests
             RedirectStandardOutput = true,
             StandardOutputEncoding = System.Text.Encoding.UTF8,
         };
-        using var process = Process.Start(info)!;
-        var text = process.StandardOutput.ReadToEnd();
-        Assert.True(process.WaitForExit(60_000) && process.ExitCode == 0);
+        var ran = BoundedProcess.Run(info, TimeSpan.FromSeconds(60));
+        Assert.True(ran.ExitCode == 0, "powershell failed: " + ran.Output);
+        var text = ran.Output;
 
         var compared = 0;
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -405,17 +405,13 @@ public class ServiceManagerTests
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
             };
-            using var process = Process.Start(info);
-            if (process is null)
+            var ran = BoundedProcess.Run(info, TimeSpan.FromSeconds(30));
+            if (ran.ExitCode != 0)
             {
                 return null;
             }
 
-            var text = process.StandardOutput.ReadToEnd();
-            if (!process.WaitForExit(30_000) || process.ExitCode != 0)
-            {
-                return null;
-            }
+            var text = ran.Output;
 
             var result = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
             foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

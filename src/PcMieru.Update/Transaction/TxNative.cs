@@ -90,9 +90,9 @@ internal static partial class TxNative
     /// <summary>Renames <paramref name="source"/> to <paramref name="target"/> and returns when it is on the disk. An existing target is replaced only when <paramref name="replace"/> is true (else it is an <see cref="IOException"/>).</summary>
     /// <exception cref="IOException">The rename failed (a sharing violation is one, with the HRESULT of ERROR_SHARING_VIOLATION).</exception>
     /// <exception cref="UnauthorizedAccessException">Access was denied.</exception>
-    internal static void Move(string source, string target, bool replace)
+    internal static void Move(string source, string target, bool replace, bool durable = true)
     {
-        var flags = MoveWriteThrough | (replace ? MoveReplaceExisting : 0);
+        var flags = (durable ? MoveWriteThrough : 0) | (replace ? MoveReplaceExisting : 0);
         if (!MoveFileEx(Extended(source), Extended(target), flags))
         {
             throw Failure(Marshal.GetLastPInvokeError(), $"could not rename '{source}' to '{target}'");

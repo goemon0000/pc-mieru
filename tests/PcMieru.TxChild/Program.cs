@@ -51,7 +51,7 @@ try
         _ => null,
     };
 
-    var seams = new TxSeams { Fault = fault, Launcher = launcher };
+    var seams = new TxSeams { Fault = fault, Launcher = launcher, Durable = false }; // a kill loses nothing the operating system holds: no flush to the disk
     using var gate = InstallGate.EnterExclusive(Path.Combine(install, "PCMieru.exe"));
     if (!gate.IsOpen)
     {

@@ -138,6 +138,13 @@ public sealed class TxSeams
     /// <summary>Null: no launch is possible (a local recovery). A swap needs one.</summary>
     public ILaunchVerifier? Launcher { get; init; }
 
+    /// <summary>
+    /// True (and it is true in every production seam): data is flushed to the disk before the rename that names it and renames are written through. A TEST may set it false: the fault matrix and the kill tests stop the
+    /// transaction at named steps (an exception, a killed process), which loses nothing the operating system already holds, so the flush adds no proof and, on a disk with a slow flush, takes minutes (a CI runner hit its
+    /// limit). A source scan test fails when anything under src/ sets it to false.
+    /// </summary>
+    public bool Durable { get; init; } = true;
+
     internal IRunnerPlacement Placement { get; init; } = RealRunnerPlacement.Instance;
 
     /// <summary>The clock for last-result.json and blocked.json.</summary>
@@ -152,6 +159,7 @@ public sealed class TxSeams
         Fault = fault ?? Fault,
         Disk = Disk,
         Launcher = launcher ?? Launcher,
+        Durable = Durable,
         Placement = Placement,
         Volume = Volume,
         UtcNow = UtcNow,

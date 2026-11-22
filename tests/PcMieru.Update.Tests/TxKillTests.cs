@@ -38,13 +38,13 @@ public sealed class TxKillTests
         {
             if (process.HasExited)
             {
-                process.WaitForExit();
-                return new ChildRun(true, process.ExitCode, stdout.Result + stderr.Result);
+                Assert.True(process.WaitForExit(15_000), "the ended child did not report its end");
+                return new ChildRun(true, process.ExitCode, BoundedProcess.Drained(stdout, stderr));
             }
 
             if (clock.Elapsed > WaitForMarker)
             {
-                process.Kill(entireProcessTree: true);
+                BoundedProcess.Kill(process);
                 Assert.Fail("the child never reached the stop point within " + WaitForMarker);
             }
 
@@ -52,8 +52,8 @@ public sealed class TxKillTests
         }
 
         Assert.False(process.HasExited, "the child must still be alive at its stop point");
-        process.Kill(entireProcessTree: true);
-        Assert.True(process.WaitForExit(15_000), "the killed child did not end");
+        BoundedProcess.Kill(process);
+        Assert.True(process.HasExited, "the killed child did not end");
         return new ChildRun(false, process.ExitCode, string.Empty);
     }
 
@@ -140,10 +140,9 @@ public sealed class TxKillTests
                 info.ArgumentList.Add(arg);
             }
 
-            using var process = Process.Start(info)!;
-            var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(120_000));
-            Assert.True(process.ExitCode == 0, "the child failed: " + output);
+            var run = BoundedProcess.Run(info, TimeSpan.FromSeconds(120));
+            var output = run.Output;
+            Assert.True(run.ExitCode == 0, "the child failed: " + output);
             Assert.StartsWith("result " + outcome, output.Trim(), StringComparison.Ordinal);
             Assert.Equal(generation, rig.AssertEnded("the child's own run"));
             Assert.False(File.Exists(Path.Combine(rig.Root, "never.txt")));

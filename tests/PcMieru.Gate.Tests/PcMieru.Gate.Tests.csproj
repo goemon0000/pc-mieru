@@ -20,7 +20,12 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="PcMieru.TestSupport" />
     <Using Include="Xunit.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/BoundedProcess.cs" Link="Shared/BoundedProcess.cs" />
   </ItemGroup>
 
   <ItemGroup>

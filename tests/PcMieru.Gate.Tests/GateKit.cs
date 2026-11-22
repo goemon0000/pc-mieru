@@ -82,10 +82,8 @@ internal sealed class Scratch : IDisposable
         var info = new ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         // One string on purpose: cmd.exe does not read the escaping that ArgumentList would put around a quoted pair of paths.
         info.Arguments = "/c mklink /J \"" + link + "\" \"" + target + "\"";
-        using var process = Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, "mklink /J failed: " + output);
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0, "mklink /J failed: " + made.Output);
         return OnDispose(() => Directory.Delete(link)); // a junction: removes the link only
     }
 
@@ -100,10 +98,8 @@ internal sealed class Scratch : IDisposable
         var info = new ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         // One string on purpose (see Junction).
         info.Arguments = "/c mklink /H \"" + link + "\" \"" + target + "\"";
-        using var process = Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, "mklink /H failed: " + output);
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0, "mklink /H failed: " + made.Output);
         return OnDispose(() => File.Delete(link));
     }
 
@@ -254,7 +250,8 @@ internal sealed class RunningChild : IDisposable
             throw new TimeoutException("the child did not end within " + timeoutMs + " ms");
         }
 
-        _process.WaitForExit(); // the one without a time: it also waits for the end of the redirected streams
+        // The one without a time also waits for the end of the redirected streams: that wait has a bound too (a grandchild that holds the pipe open must not hold the test).
+        Assert.True(Task.Run(() => _process.WaitForExit()).Wait(TimeSpan.FromSeconds(15)), "the streams of the ended child did not close");
         lock (_lock)
         {
             return new Ran(_process.ExitCode, _out.ToString(), _err.ToString());
@@ -606,10 +603,7 @@ internal static class Probes
             info.ArgumentList.Add("8dot3name");
             info.ArgumentList.Add("query");
             info.ArgumentList.Add(Path.GetPathRoot(Path.GetTempPath())!.TrimEnd(Path.DirectorySeparatorChar));
-            using var process = Process.Start(info)!;
-            var text = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-            process.WaitForExit(15_000);
-            return text.ReplaceLineEndings(" ").Trim();
+            return BoundedProcess.Run(info, TimeSpan.FromSeconds(15)).Output.ReplaceLineEndings(" ").Trim();
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

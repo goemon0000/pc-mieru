@@ -33,8 +33,24 @@ public static partial class ProcessElevation
     [LibraryImport("kernel32.dll")]
     private static partial nint GetCurrentProcess();
 
-    /// <summary>True when the token of this process is elevated.</summary>
+    /// <summary>
+    /// True when the token of this process is elevated.
+    ///
+    /// <b>The forced build.</b> A hosted CI runner (GitHub's Windows runner) runs with an elevated token, and a developer's machine does not, so a test that reads the real token passes on one and fails on the other.
+    /// A build with <c>-p:PcmForceElevated=true</c> (the compile symbol PCM_FORCE_ELEVATED, set in PcMieru.Update.csproj and nowhere else) answers true here, in every program that is built from this project, so
+    /// the tests can be run locally in the state the runner is in, without ever running elevated. It is a build of the TEST runs only: the csproj stops a publish that has it, and TestBuildSeparationTests says
+    /// the symbol is in this one place.
+    /// </summary>
     public static bool IsElevated()
+    {
+#if PCM_FORCE_ELEVATED
+        return true;
+#else
+        return TokenIsElevated();
+#endif
+    }
+
+    private static bool TokenIsElevated()
     {
         if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out var token) || token.IsInvalid)
         {

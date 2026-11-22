@@ -301,13 +301,8 @@ public class BundleFolderTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        using (var process = Process.Start(info)!)
-        {
-            process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            Assert.Equal(0, process.ExitCode);
-        }
+        var made = BoundedProcess.Run(info);
+        Assert.True(made.ExitCode == 0, "mklink /J failed: " + made.Output);
 
         try
         {
@@ -335,15 +330,10 @@ public class BundleFolderTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        using (var process = Process.Start(info)!)
+        var made = BoundedProcess.Run(info);
+        if (made.ExitCode != 0)
         {
-            process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                return; // no junction can be made here: nothing to test (xunit 2 cannot skip at run time)
-            }
+            return; // no junction can be made here: nothing to test (xunit 2 cannot skip at run time)
         }
 
         try

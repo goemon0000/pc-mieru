@@ -148,7 +148,7 @@ public sealed class WindowsSnapshotSourceTests : IDisposable
         Assert.Equal(child.StartTime.ToFileTimeUtc() / 10_000, info.Key.CreateTime / 10_000);
 
         child.Kill(true);
-        await child.WaitForExitAsync();
+        await child.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         var after = await source.SampleAsync();
         Assert.DoesNotContain(after.Processes, p => p.Key == info.Key);
     }

@@ -51,12 +51,9 @@ public sealed class GateAltCredentialTests : IClassFixture<Boxes>
             LoadUserProfile = false,
         };
         info.PasswordInClearText = password;
-        using var process = Process.Start(info)!;
-        process.WaitForExit(60_000);
-
-        var error = process.StandardError.ReadToEnd();
-        Assert.DoesNotContain(InstallGate.ReasonOf(GateOutcome.Denied), error, StringComparison.Ordinal);
-        Assert.Equal(2, process.ExitCode); // "no arguments": past the gate, into its own check
+        var ran = BoundedProcess.Run(info, TimeSpan.FromSeconds(60));
+        Assert.DoesNotContain(InstallGate.ReasonOf(GateOutcome.Denied), ran.Output, StringComparison.Ordinal);
+        Assert.Equal(2, ran.ExitCode); // "no arguments": past the gate, into its own check
     }
 }
 

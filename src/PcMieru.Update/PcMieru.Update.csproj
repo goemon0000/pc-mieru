@@ -20,4 +20,22 @@
     <InternalsVisibleTo Include="PcMieru.Update.Tests" />
   </ItemGroup>
 
+  <!--
+    The forced-elevation test build (Transaction/ProcessElevation.cs): "dotnet test -p:PcmForceElevated=true" makes ProcessElevation.IsElevated() answer true in every program built from this project, which is the
+    state of a hosted CI runner, so the tests can be run in that state on a machine that is not elevated. The property is a switch of a test run; it must never reach a shipped file, so a publish that has it stops
+    here (the swapper is published with PublishAot, which also sets _IsPublishing).
+  -->
+  <PropertyGroup Condition="'$(PcmForceElevated)' == 'true'">
+    <DefineConstants>$(DefineConstants);PCM_FORCE_ELEVATED</DefineConstants>
+  </PropertyGroup>
+
+  <!-- The build says so about itself, so a test run that is meant to be forced can prove that it was (TestEnvironmentTests: PCM_EXPECT_FORCED_ELEVATED=1). -->
+  <ItemGroup Condition="'$(PcmForceElevated)' == 'true'">
+    <AssemblyMetadata Include="PcmForcedElevation" Value="true" />
+  </ItemGroup>
+
+  <Target Name="NoForcedElevationInTheProduct" BeforeTargets="CoreCompile" Condition="'$(PcmForceElevated)' == 'true' And '$(_IsPublishing)' == 'true'">
+    <Error Text="PcmForceElevated is set in a publish. ProcessElevation.IsElevated() would answer true in the shipped files. The switch is only for a test run (dotnet test -p:PcmForceElevated=true)." />
+  </Target>
+
 </Project>

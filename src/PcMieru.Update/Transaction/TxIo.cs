@@ -35,11 +35,14 @@ public sealed class TxInUseException(string path, Exception inner) : IOException
 /// real hashes of the files and never assume that the last rename survived. JSON that must be replaced in one step (the journal, installed.json, last-result.json, blocked.json) is written to "&lt;name&gt;.tmp" in the
 /// SAME directory, flushed, and moved over the target: the target is always either the old file or the new one, never half of one.
 /// </summary>
-internal sealed class TxIo(IFaultInjector fault)
+internal sealed class TxIo(IFaultInjector fault, bool durable = true)
 {
     private const int MaxChunk = 1 << 16;
 
     public IFaultInjector Fault { get; } = fault;
+
+    /// <summary>True in the product (every flush goes to the disk and every rename is written through). A test may turn it off (<see cref="TxSeams.Durable"/>): a simulated power cut or a killed process does not depend on it, and on a slow disk it is most of the time of a test.</summary>
+    public bool Durable { get; } = durable;
 
     /// <summary>Null in the product. A test sets it to act between the steps of the tree walk of <see cref="DeleteTree"/> (see <see cref="TxNative.RemoveTree"/>): "open" before a node is opened, "opened" after it was looked at.</summary>
     internal Action<string, string>? TreeHook { get; init; }
@@ -86,7 +89,7 @@ internal sealed class TxIo(IFaultInjector fault)
                 throw new TxSourceMismatchException(source, total != expectedBytes ? $"{total} bytes, expected {expectedBytes}" : "the SHA-256 differs");
             }
 
-            to.Flush(flushToDisk: true);
+            to.Flush(flushToDisk: Durable);
         }
 
         VerifyFile(destination, expectedBytes, expectedSha256);
@@ -118,7 +121,7 @@ internal sealed class TxIo(IFaultInjector fault)
         using (var to = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, MaxChunk))
         {
             WriteHalves(step, to, bytes, destination);
-            to.Flush(flushToDisk: true);
+            to.Flush(flushToDisk: Durable);
         }
 
         Reach(step, TxEdge.After, destination);
@@ -136,10 +139,10 @@ internal sealed class TxIo(IFaultInjector fault)
         using (var to = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, MaxChunk))
         {
             WriteHalves(step, to, bytes, destination);
-            to.Flush(flushToDisk: true);
+            to.Flush(flushToDisk: Durable);
         }
 
-        TxNative.Move(temporary, destination, replace: true);
+        TxNative.Move(temporary, destination, replace: true, Durable);
         Reach(step, TxEdge.After, destination);
     }
 
@@ -159,7 +162,7 @@ internal sealed class TxIo(IFaultInjector fault)
     {
         Reach(step, TxEdge.Before, destination);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        TxNative.Move(source, destination, replace);
+        TxNative.Move(source, destination, replace, Durable);
         Reach(step, TxEdge.After, destination);
     }
 
@@ -175,12 +178,12 @@ internal sealed class TxIo(IFaultInjector fault)
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         try
         {
-            TxNative.Move(source, target, replace: true);
+            TxNative.Move(source, target, replace: true, Durable);
         }
         catch (Exception ex) when (TxNative.IsLockedFailure(ex) && ManagedSet.Look(target) == Presence.File)
         {
             SetAside(aside, target, asideBase);
-            TxNative.Move(source, target, replace: false);
+            TxNative.Move(source, target, replace: false, Durable);
         }
 
         Reach(place, TxEdge.After, target);
@@ -193,7 +196,7 @@ internal sealed class TxIo(IFaultInjector fault)
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         try
         {
-            TxNative.Move(target, destination, replace: false);
+            TxNative.Move(target, destination, replace: false, Durable);
         }
         catch (Exception ex) when (TxNative.IsLockedFailure(ex))
         {

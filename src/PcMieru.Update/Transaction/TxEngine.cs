@@ -75,7 +75,7 @@ internal sealed partial class TxEngine
         _gate = gate;
         _seams = seams;
         _kind = kind;
-        _io = new TxIo(seams.Fault);
+        _io = new TxIo(seams.Fault, seams.Durable);
         _paths = new TxPaths(Path.GetDirectoryName(gate.GatePath)!);
     }
 
