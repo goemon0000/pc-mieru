@@ -19,7 +19,10 @@ internal sealed record Palette(
     Color Border,
     Color Selection,
     Color SelectionText,
-    Color TextDisabled);
+    Color TextDisabled,
+    Color Good,
+    Color Warning,
+    Color Danger);
 
 /// <summary>
 /// Light/dark plumbing. Pages never hard-code a colour: they take it from <see cref="Palette"/> and are re-applied
@@ -36,7 +39,10 @@ internal sealed class ThemeService : IDisposable
         Border: Color.FromArgb(214, 214, 214),
         Selection: Color.FromArgb(204, 228, 247),
         SelectionText: Color.FromArgb(0, 0, 0),
-        TextDisabled: Color.FromArgb(118, 118, 118));
+        TextDisabled: Color.FromArgb(118, 118, 118),
+        Good: Color.FromArgb(20, 118, 60),
+        Warning: Color.FromArgb(158, 80, 0),
+        Danger: Color.FromArgb(190, 28, 28));
 
     private static readonly Palette DarkPalette = new(
         Window: Color.FromArgb(32, 32, 32),
@@ -47,7 +53,10 @@ internal sealed class ThemeService : IDisposable
         Border: Color.FromArgb(70, 70, 70),
         Selection: Color.FromArgb(0, 80, 140),
         SelectionText: Color.FromArgb(255, 255, 255),
-        TextDisabled: Color.FromArgb(150, 150, 150));
+        TextDisabled: Color.FromArgb(150, 150, 150),
+        Good: Color.FromArgb(120, 214, 150),
+        Warning: Color.FromArgb(255, 176, 96),
+        Danger: Color.FromArgb(255, 140, 132));
 
     private readonly Func<bool> _systemIsDark;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> _hooked = new();
@@ -198,8 +207,16 @@ internal sealed class ThemeService : IDisposable
     }
 
     /// <summary>
+    /// The colour a disabled button's label is painted in: the palette's disabled grey, except for the chosen side of a toggle
+    /// (CPU / Memory while a check runs), which stays in the selection's own text colour so what is running is still read at a glance.
+    /// </summary>
+    internal static Color DisabledTextColor(Button button, Palette palette) =>
+        button is ToggleButton { Checked: true } ? palette.SelectionText : palette.TextDisabled;
+
+    /// <summary>
     /// A flat button that is disabled is painted by Windows with its own grey, which on the dark surface is nearly the
-    /// background. The label is painted again in the palette's disabled colour (still clearly dimmer than an enabled one).
+    /// background. The label is painted again in the palette's disabled colour (still clearly dimmer than an enabled one;
+    /// see <see cref="DisabledTextColor"/> for the chosen side of a toggle).
     /// </summary>
     private void HookDisabledText(Button button)
     {
@@ -229,7 +246,7 @@ internal sealed class ThemeService : IDisposable
                 button.Text,
                 button.Font,
                 inner,
-                palette.TextDisabled,
+                DisabledTextColor(button, palette),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         };
     }

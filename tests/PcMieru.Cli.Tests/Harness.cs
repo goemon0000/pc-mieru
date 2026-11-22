@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using PcMieru.Checks;
+using PcMieru.Checks.Build;
 using PcMieru.Cli.Mcp;
 using PcMieru.Core.Hardware.Model;
 
@@ -23,14 +25,37 @@ internal static class CliRun
         int width = 120,
         Action<ServiceRegistry>? configure = null,
         string? helperDirectory = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        CliChecks? checks = null,
+        IBuildCodeProvider? buildCodeProvider = null,
+        bool errorIsTerminal = false)
     {
         var output = new StringWriter { NewLine = "\n" };
         var error = new StringWriter { NewLine = "\n" };
-        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language, helperDirectory);
+        var env = new CliEnvironment(new StringReader(stdin), output, error, o => Services(o, configure), width, language, helperDirectory, checks, buildCodeProvider, errorIsTerminal);
         var code = await CliApp.RunAsync(args, env, ct);
         return new CliResult(code, output.ToString(), error.ToString());
     }
+
+    /// <summary>
+    /// A command of the checks, run against a temporary data folder and a fake runner: nothing of this PC is read or written. With no runner
+    /// the live one would be made, so a test that runs a check always gives one.
+    /// </summary>
+    public static Task<CliResult> CheckAsync(
+        string[] args,
+        TempFolder data,
+        ICheckRunner? runner = null,
+        Language language = Language.En,
+        bool errorIsTerminal = false,
+        CancellationToken ct = default,
+        int width = 120) =>
+        RunAsync(
+            args,
+            language: language,
+            width: width,
+            ct: ct,
+            checks: new CliChecks(data.Path, LegacyDirectory: null, RunnerFactory: runner is null ? null : _ => runner),
+            errorIsTerminal: errorIsTerminal);
 }
 
 internal static class Samples
@@ -213,12 +238,38 @@ internal static class McpRun
     public static PcMieruServices Services(bool redact = true) =>
         CliRun.Services(new PcMieruOptions { Redact = redact });
 
-    public static async Task<List<JsonNode>> RunAsync(IReadOnlyInsights insights, IRedactor redactor, params string[] lines)
+    /// <summary>A history that has nothing: opened on a folder that does not exist (and, being read-only, is never made).</summary>
+    public static IReadOnlyCheckHistory EmptyHistory() =>
+        CheckHistory.OpenReadOnly(Path.Combine(Path.GetTempPath(), "pcmi-no-such-checks-" + Guid.NewGuid().ToString("N")));
+
+    public static Task<List<JsonNode>> RunAsync(IReadOnlyInsights insights, IRedactor redactor, params string[] lines) =>
+        RunWithHistoryAsync(EmptyHistory(), historyRedactor: null, insights, redactor, lines);
+
+    /// <summary>One server with the given history (and, to make a test exact, the redactor the history tool applies; null: the real one).</summary>
+    public static async Task<List<JsonNode>> RunWithHistoryAsync(
+        IReadOnlyCheckHistory history,
+        IRedactor? historyRedactor,
+        IReadOnlyInsights insights,
+        IRedactor redactor,
+        params string[] lines)
     {
         var sink = new LineSink();
-        var server = new McpServer(insights, redactor, "9.9.9");
+        var server = new McpServer(insights, redactor, "9.9.9", history, TimeSpan.FromSeconds(45), historyRedactor);
         await server.RunAsync(new StringReader(string.Join("\n", lines) + "\n"), sink, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
         return sink.Messages;
+    }
+
+    /// <summary>Initialize, then one tools/call against the given history; returns the call result object.</summary>
+    public static async Task<JsonNode> HistoryToolAsync(
+        IReadOnlyCheckHistory history,
+        string arguments = "{}",
+        bool redact = true,
+        IRedactor? historyRedactor = null,
+        string version = "2025-06-18")
+    {
+        using var services = Services(redact);
+        var messages = await RunWithHistoryAsync(history, historyRedactor, services.Insights, services.Redactor, InitializeWith(version), Initialized, Call("c", "get_check_history", arguments));
+        return Reply(messages, "c")["result"]!;
     }
 
     public static async Task<List<JsonNode>> RunAsync(params string[] lines)

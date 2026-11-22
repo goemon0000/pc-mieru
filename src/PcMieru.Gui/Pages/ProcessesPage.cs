@@ -155,6 +155,12 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         _list.Cells = Cell;
+        if (context.Measure is not null)
+        {
+            // --measure only: the list reports what each paint drew, so the first paint with rows and the first with CPU values can be marked.
+            _list.PaintObserver = NotePainted;
+        }
+
         _list.RowStyles = row => row >= 0 && row < _model.Count && _model[row].IsGroup ? RowStyle.Header : RowStyle.Normal;
         _list.CellTip = CellTip;
         _list.ContextMenuStrip = _menu;
@@ -230,6 +236,62 @@ internal sealed partial class ProcessesPage : PageBase
     public int VisibleRowCount => _list.VirtualListSize;
 
     internal ProcessTableModel Model => _model;
+
+    /// <summary>
+    /// <c>--measure</c>: a paint of the list finished and drew these cells. It is "painted with rows" when a drawn cell belongs to a process row (not a
+    /// group header), and "painted with CPU values" when a drawn cell of the CPU column belongs to a process whose CPU share has a value (the first
+    /// sample has none: it has no baseline). The decision is made from what was drawn, not from when the data arrived. Stops watching once both
+    /// marks are written, so a normal paint costs nothing afterwards.
+    /// </summary>
+    internal void NotePainted(IReadOnlyList<(int Row, int Column)> drawn)
+    {
+        if (Context.Measure is not { } marks)
+        {
+            return;
+        }
+
+        var cpuColumn = _visible.FindIndex(s => s.Column == ProcessColumn.Cpu);
+        var rows = false;
+        var cpu = false;
+        foreach (var (row, column) in drawn)
+        {
+            if (row < 0 || row >= _model.Count || _model[row].Process is not { } process)
+            {
+                continue;
+            }
+
+            rows = true;
+            if (column == cpuColumn && process.CpuPercent.TryGet(out _))
+            {
+                cpu = true;
+            }
+        }
+
+        marks.Painted(rows, cpu);
+        if (marks.Done)
+        {
+            _list.PaintObserver = null;
+        }
+    }
+
+    /// <summary>
+    /// <c>--measure</c>: one more sample reached the page. The watch ends after <see cref="MeasureMarks.WatchSamples"/> samples or
+    /// <see cref="MeasureMarks.WatchTime"/> since the first paint even when the CPU mark never came (it stays missing), so a list that never
+    /// shows CPU values does not record every paint for the rest of the run.
+    /// </summary>
+    private void NoteSampled()
+    {
+        if (Context.Measure is not { } marks)
+        {
+            return;
+        }
+
+        marks.Sampled();
+        if (marks.Done)
+        {
+            _list.PaintObserver = null;
+        }
+    }
 
     internal GridView List => _list;
 
@@ -730,7 +792,7 @@ internal sealed partial class ProcessesPage : PageBase
         }
     }
 
-    private void OnSampled(Snapshot snapshot)
+    internal void OnSampled(Snapshot snapshot)
     {
         _classifier.Refresh();
         _model.Frozen = ComputeFrozen();
@@ -759,6 +821,7 @@ internal sealed partial class ProcessesPage : PageBase
         }
 
         UpdateFooter();
+        NoteSampled();
     }
 
     private bool ComputeFrozen() => _menuOpen || (_selectedKey is not null && _list.SelectedRow >= 0);

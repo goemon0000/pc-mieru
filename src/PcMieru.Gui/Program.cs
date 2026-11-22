@@ -8,7 +8,16 @@ internal static class Program
         var startedAt = DateTime.Now;
         if (!GuiArgs.TryParse(args, out var options, out var problem))
         {
-            MessageBox.Show(problem, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            // A measurement run is unattended and read from outside (tools/measure.ps1): its problems go to stderr, never to a box nobody clicks.
+            if (IsMeasureRun(args))
+            {
+                Console.Error.WriteLine(problem.ReplaceLineEndings(" "));
+            }
+            else
+            {
+                MessageBox.Show(problem, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
             return 1;
         }
 
@@ -26,8 +35,8 @@ internal static class Program
             MessageBox.Show(e.Exception.Message, Strings.Get("core.app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         };
 
-        // A smoke run never reads or writes the user's settings file.
-        var settings = options.SmokeOutput is null ? GuiSettings.Load(GuiSettings.DefaultPath) : new GuiSettings();
+        // A smoke run and a --measure run never read or write the user's settings file.
+        var settings = GuiSettings.ForRun(options, GuiSettings.DefaultPath);
         if (options.Language is { } language)
         {
             settings.Language = language;
@@ -45,13 +54,23 @@ internal static class Program
 
         Strings.Current = settings.Language;
 
-        using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = options.ForceFakes });
+        // --measure (test-only): the marker file is made before any window exists, so a path that cannot be written is said at once.
+        MeasureMarks? marks = null;
+        if (options.MeasureOutput is { } markerFile)
+        {
+            if (!TryOpenMeasureMarks(markerFile, Console.Error, out marks))
+            {
+                return 1;
+            }
+        }
+
+        using var services = PcMieruServices.Create(options.CoreOptions);
         using var pump = new SnapshotPump(services, settings.IntervalMs);
         using var theme = new ThemeService(settings.Theme);
-        var context = new GuiContext(services, pump, theme, settings);
+        var context = new GuiContext(services, pump, theme, settings, measure: marks);
         using var form = new MainForm(context);
 
-        if (options.Page is { } page && !form.ShowPage(page))
+        if (options.StartPage is { } page && !form.ShowPage(page))
         {
             MessageBox.Show("--page: " + page, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
@@ -63,7 +82,34 @@ internal static class Program
         }
 
         Application.Run(form);
+
+        // A window closed by Windows ending (or the task manager) did not wait for a check that was told to stop. The message loop is gone, so
+        // waiting here blocks no screen: the stopped run gets a few seconds to write its result, and what is not saved by then is left to the
+        // folder's own .tmp clean-up (DESIGN-A §7).
+        context.Checks.WaitUntilIdle(CheckController.ExitWait);
         return 0;
+    }
+
+    /// <summary>The command line asks for a measurement run (<c>--measure</c> is on it, however well the rest parses).</summary>
+    internal static bool IsMeasureRun(string[] args) => Array.IndexOf(args, "--measure") >= 0;
+
+    /// <summary>
+    /// <c>--measure</c>: makes the marker file before any window exists. A path that cannot be made is one line on <paramref name="error"/> (what
+    /// <c>tools/measure.ps1</c> reads) and the caller exits 1; no message box, because nobody is there to click it in an unattended measurement.
+    /// </summary>
+    internal static bool TryOpenMeasureMarks(string path, TextWriter error, out MeasureMarks? marks)
+    {
+        try
+        {
+            marks = MeasureMarks.Create(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            marks = null;
+            error.WriteLine("--measure: " + ex.Message.ReplaceLineEndings(" "));
+            return false;
+        }
     }
 }
 
@@ -77,7 +123,15 @@ internal sealed record GuiOptions(
     bool OnScreen = false,
     int Dpi = 0,
     TextSize? TextSize = null,
-    bool NetMeter = false);
+    bool NetMeter = false,
+    string? MeasureOutput = null)
+{
+    /// <summary>The page to open at start: the process page for <c>--measure</c> (what the marks are about), else <c>--page</c> (null: the first page).</summary>
+    public string? StartPage => MeasureOutput is not null ? "processes" : Page;
+
+    /// <summary>What the services are built with. <c>--measure</c> keeps the real services off PC Mieru's own state files (eco-state.json).</summary>
+    public PcMieruOptions CoreOptions => new() { ForceFakes = ForceFakes, NoStateFiles = MeasureOutput is not null };
+}
 
 /// <summary>
 /// Command line of PCMieru.exe. These switches exist for verification (smoke run, screenshots, picking a page);
@@ -97,6 +151,7 @@ internal static class GuiArgs
         var dpi = 0;
         TextSize? textSize = null;
         var netMeter = false;
+        string? measure = null;
         problem = string.Empty;
         options = new GuiOptions(null, null, null, null, null, false);
 
@@ -161,6 +216,17 @@ internal static class GuiArgs
                     }
 
                     break;
+                case "--measure":
+                    // Test-only (tools/measure.ps1), left out of every help text and menu: writes the two render-time marks to this file and
+                    // runs on the default settings, starting on the process page, without ever writing gui.ini or eco-state.json.
+                    measure = Next();
+                    if (string.IsNullOrEmpty(measure))
+                    {
+                        problem = "--measure needs an output file";
+                        return false;
+                    }
+
+                    break;
                 case "--fakes":
                     fakes = true;
                     break;
@@ -201,7 +267,13 @@ internal static class GuiArgs
             }
         }
 
-        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize, netMeter);
+        if (measure is not null && (smoke is not null || page is not null))
+        {
+            problem = "--measure starts on the process page and is not combined with --smoke or --page";
+            return false;
+        }
+
+        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize, netMeter, measure);
         return true;
     }
 }

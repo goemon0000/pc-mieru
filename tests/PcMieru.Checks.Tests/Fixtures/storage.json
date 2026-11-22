@@ -1,0 +1,493 @@
+{
+  "format": "pcm-check/1",
+  "app": "PCMieru 0.4.0",
+  "runId": "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a",
+  "kind": "storage",
+  "startedAtUtc": "2026-11-20T03:00:00.000Z",
+  "endedAtUtc": "2026-11-20T03:00:00.820Z",
+  "outcome": "completed",
+  "verdict": "caution",
+  "counts": {
+    "ok": 14,
+    "caution": 3,
+    "check": 0,
+    "unavailable": 0,
+    "info": 18
+  },
+  "items": [
+    {
+      "id": "storage.devices",
+      "value": 2,
+      "unit": "count",
+      "verdict": "info",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "storage.health",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "healthy",
+      "unit": null,
+      "verdict": "ok",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "storage.capacity",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "2000398934016",
+      "unit": "B",
+      "verdict": "info",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "storage.temperature",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": 41,
+      "unit": "°C",
+      "verdict": "ok",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.critical_warning",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": 0,
+      "unit": "bits",
+      "verdict": "ok",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.available_spare",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": 100,
+      "unit": "%",
+      "verdict": "ok",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.spare_threshold",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": 10,
+      "unit": "%",
+      "verdict": "info",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.percentage_used",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": 3,
+      "unit": "%",
+      "verdict": "ok",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.media_errors",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "0",
+      "unit": "count",
+      "verdict": "ok",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.error_log_entries",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "15",
+      "unit": "count",
+      "verdict": "caution",
+      "source": "nvme",
+      "reason": null,
+      "evidence": {
+        "code": "counter_increased"
+      }
+    },
+    {
+      "id": "storage.nvme.unsafe_shutdowns",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "45",
+      "unit": "count",
+      "verdict": "info",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.power_cycles",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "812",
+      "unit": "count",
+      "verdict": "info",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.power_on_hours",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "9100",
+      "unit": "h",
+      "verdict": "info",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.data_units_written",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "123456789",
+      "unit": "nvme_data_unit",
+      "verdict": "info",
+      "source": "nvme",
+      "reason": null
+    },
+    {
+      "id": "storage.nvme.critical_warning.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "0",
+      "unit": "bits",
+      "verdict": "ok",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "0",
+        "after": "0",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.available_spare.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": null,
+      "unit": "%",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": "partial",
+      "evidence": {
+        "code": "baseline_missing_counter"
+      }
+    },
+    {
+      "id": "storage.nvme.percentage_used.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "0",
+      "unit": "%",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "3",
+        "after": "3",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.media_errors.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "0",
+      "unit": "count",
+      "verdict": "ok",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "0",
+        "after": "0",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.error_log_entries.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "3",
+      "unit": "count",
+      "verdict": "caution",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "code": "counter_increased",
+        "before": "12",
+        "after": "15",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.unsafe_shutdowns.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "1",
+      "unit": "count",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "44",
+        "after": "45",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.power_on_hours.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "12",
+      "unit": "h",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "9088",
+        "after": "9100",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.nvme.data_units_written.delta",
+      "subject": {
+        "id": "disk-1",
+        "model": "Samsung SSD 980 PRO 2TB"
+      },
+      "value": "89",
+      "unit": "nvme_data_unit",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": null,
+      "evidence": {
+        "before": "123456700",
+        "after": "123456789",
+        "sinceUtc": "2026-11-17T03:00:00.000Z"
+      }
+    },
+    {
+      "id": "storage.health",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "healthy",
+      "unit": null,
+      "verdict": "ok",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "storage.capacity",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "500107862016",
+      "unit": "B",
+      "verdict": "info",
+      "source": "storage_query",
+      "reason": null
+    },
+    {
+      "id": "storage.temperature",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": 35.5,
+      "unit": "°C",
+      "verdict": "ok",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.predict_failure",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": false,
+      "unit": null,
+      "verdict": "ok",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.threshold_status",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "within",
+      "unit": null,
+      "verdict": "ok",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.5",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "0",
+      "unit": "smart_raw",
+      "verdict": "ok",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.197",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "0",
+      "unit": "smart_raw",
+      "verdict": "ok",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.199",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "5",
+      "unit": "smart_raw",
+      "verdict": "caution",
+      "source": "ata",
+      "reason": null,
+      "evidence": {
+        "code": "likely_cable"
+      }
+    },
+    {
+      "id": "storage.ata.9",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": "21000",
+      "unit": "smart_raw",
+      "verdict": "info",
+      "source": "ata",
+      "reason": null
+    },
+    {
+      "id": "storage.ata.5.delta",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": null,
+      "unit": "smart_raw",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": "partial",
+      "evidence": {
+        "code": "baseline_first"
+      }
+    },
+    {
+      "id": "storage.ata.197.delta",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": null,
+      "unit": "smart_raw",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": "partial",
+      "evidence": {
+        "code": "baseline_first"
+      }
+    },
+    {
+      "id": "storage.ata.199.delta",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": null,
+      "unit": "smart_raw",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": "partial",
+      "evidence": {
+        "code": "baseline_first"
+      }
+    },
+    {
+      "id": "storage.ata.9.delta",
+      "subject": {
+        "id": "disk-2",
+        "model": "CT500MX500SSD1"
+      },
+      "value": null,
+      "unit": "smart_raw",
+      "verdict": "info",
+      "source": "baseline",
+      "reason": "partial",
+      "evidence": {
+        "code": "baseline_first"
+      }
+    }
+  ],
+  "notes": []
+}

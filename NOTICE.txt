@@ -8,8 +8,12 @@ This folder is self-contained: it carries the .NET runtime, so no separate
   Copyright (c) .NET Foundation and Contributors. MIT License.
   https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
 
-PC Mieru has no other third-party runtime dependency (no NuGet package is
-shipped; every native call is a P/Invoke into a Windows system DLL, and the
+System.Management and System.CodeDom (the WMI questions of the system check)
+  Copyright (c) .NET Foundation and Contributors. MIT License.
+  https://github.com/dotnet/runtime
+
+PC Mieru has no other third-party runtime dependency (no other NuGet package is
+shipped; every other native call is a P/Invoke into a Windows system DLL, and the
 vendor GPU libraries nvml.dll and amdadlx64.dll are loaded from System32 at
 run time and are not redistributed here).
 
@@ -42,6 +46,91 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Wire/Privileged/DiskOperations.cs
       the open / retry / fallback order follows the owner's pl-sensors
       StorageReader
+  src/PcMieru.Wire/Privileged/DiskIdentity.cs
+      the order of the four identity queries and what is kept of each, from
+      the owner's pl-sensors StorageReader.ReadOne
+  src/PcMieru.Core/Hardware/Storage/InspectionParsers.cs
+      the NVMe counter offsets and the ulong saturation rule, from the
+      owner's pl-sensors NvmeHealth.Parse
+  src/PcMieru.Core/Hardware/Collectors/StorageInspectionReader.cs
+      the walk over the physical drives, from the owner's pl-sensors
+      StorageReader
+  src/PcMieru.Checks/Storage/DiskKey.cs
+      the key text, the escaping, the bus names and the usable-serial rule,
+      from the owner's pl-sensors BaselineIdentity and BusType
+  src/PcMieru.Checks/Storage/BaselineCounters.cs
+      the counter names, the ATA bit masks, the growth verdicts and the
+      continuity rule, from the owner's pl-sensors Baseline
+  src/PcMieru.Checks/Storage/BaselineRecords.cs
+      the history file shape, SafeName and the file name rule, from the
+      owner's pl-sensors BaselineStore and BaselineIdentity
+  src/PcMieru.Checks/Storage/BaselineEngine.cs
+      what is compared and when (keys, twins, withheld record, trim), from
+      the owner's pl-sensors BaselineStore
+  src/PcMieru.Checks/SystemInfo/EventCountQuery.cs
+      the provider names, the level sets and the Kernel-Power event id, from
+      the owner's parts-life EventCounts
+  src/PcMieru.Checks/SystemInfo/NativeEventLogApi.cs
+      the wevtapi calls (EvtQuery, EvtNext, EvtClose) and the batch loop, from
+      the owner's parts-life EventCounts
+  src/PcMieru.Checks/SystemInfo/SystemJudge.cs
+      the thresholds and verdict rules of the system check, from the owner's
+      pl-cloud src/PartsLife.Checks/SystemInfo/SystemCheck.cs (the
+      parts-life Checks code)
+  src/PcMieru.Checks/SystemInfo/SystemWmi.cs
+      the page file and video controller questions, from the same
+      SystemCheck.cs (ReadPagefile, ReadVideo)
+  src/PcMieru.Checks/SystemInfo/DiskHealthReader.cs
+      the disk health verdict rule (HealthStatus and OperationalStatus), from
+      the same SystemCheck.cs (JudgeDisk)
+  src/PcMieru.Checks/Load/CpuLoadTest.cs
+      the chunk and its 16 seeds, the counters kept 128 bytes apart and the
+      one-second tick loop, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/CpuLoadTest.cs
+  src/PcMieru.Checks/Load/Steadiness.cs
+      the steadiness score and its verdict boundaries, from the owner's
+      pl-cloud src/PartsLife.Checks/Load/Steadiness.cs
+  src/PcMieru.Checks/Load/MemoryTest.cs
+      the plan (the fraction, the cap, the floor, the 64 MiB rounding), the
+      block-by-block growth with a free-memory check, the pattern rotation and
+      the 4 MiB slices, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/MemoryTest.cs
+  src/PcMieru.Checks/Load/Patterns.cs
+      the four patterns, SplitMix and the fill and verify loops, from the
+      owner's pl-cloud src/PartsLife.Checks/Load/Patterns.cs
+  src/PcMieru.Checks/Load/RealMemoryTestSession.cs
+      the aligned allocation, the touch of every page and the memory status
+      call, from the same MemoryTest.cs
+  src/PcMieru.Checks/Build/BuildConfig.cs
+      the part record and the category list with its order, from the owner's
+      pl-cloud src/PartsLife.Checks/Build/BuildConfig.cs
+  src/PcMieru.Checks/Build/BuildRules.cs
+      every rule, table, regular expression and limit of the configuration
+      code, from the owner's pl-cloud src/PartsLife.Checks/Build/BuildRules.cs
+  src/PcMieru.Checks/Build/BuildCode.cs
+      the PCB1 format, the order and omission rules, the merge of equal parts
+      and the limits, byte for byte, from the owner's pl-cloud
+      src/PartsLife.Checks/Build/BuildCode.cs
+  src/PcMieru.Checks/Build/BuildCollector.cs
+      the sources, their order and "a category that cannot be read stays
+      empty", from the owner's pl-cloud
+      src/PartsLife.Checks/Build/BuildCollector.cs
+  src/PcMieru.Checks/Build/WindowsBuildReaders.cs
+      the WMI questions, their order and fall-backs, from the same
+      BuildCollector.cs and the owner's pl-cloud
+      src/PartsLife.Checks/SystemInfo/SystemCheck.cs (ReadCpus)
+  src/PcMieru.Checks/Build/DxgiGpuReader.cs
+      the DXGI walk, the adapter description layout and the PCI address from
+      D3DKMT, from the owner's pl-cloud src/PartsLife.Checks/Gpu/GpuAdapters.cs
+  src/PcMieru.Checks/Build/GpuAliasRule.cs
+      the alias rule for a graphics card seen twice, from the owner's pl-cloud
+      src/Shared/GpuAliasRule.cs
+  src/PcMieru.Core/Hardware/Collectors/LogicalCpuMap.cs
+      the walk over the logical processor records, from the owner's pl-cloud
+      src/PartsLife.Checks/Load/CpuTopology.cs
+  src/PcMieru.Core/Collection/PdhReadRule.cs
+      the package-power instance pick (the _PKG suffix, milliwatts summed, the
+      plausible range), from the owner's pl-sensors Sources.System
   src/PcMieru.Helper/PcMieru.Helper.csproj
       the CheckLazyNativeModules post-link check, from the owner's pl-sensors
       src/PartsLife.Check/PartsLife.Check.csproj

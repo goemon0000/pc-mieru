@@ -1,0 +1,40 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "ssd": [
+      {
+        "n": "PCIe SSD",
+        "cap": 512,
+        "t": "nvme"
+      },
+      {
+        "n": "CSSD-S6L1TMGAX 1TB",
+        "cap": 1000,
+        "t": "sata"
+      },
+      {
+        "n": "Corsair MP600 PRO LPX",
+        "cap": 2000,
+        "t": "nvme"
+      },
+      {
+        "n": "Samsung SSD 870 EVO 1TB",
+        "cap": 1000,
+        "t": "sata"
+      }
+    ],
+    "hdd": [
+      {
+        "n": "TOSHIBA MG04ACA200E",
+        "cap": 2000,
+        "t": "sata"
+      },
+      {
+        "n": "WDC WD40EZAZ-00SF3B0",
+        "cap": 4000,
+        "t": "sata"
+      }
+    ]
+  }
+}

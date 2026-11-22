@@ -178,6 +178,64 @@ public class EdidParserTests
         Assert.Null(EdidParser.Parse(edid)!.PhysicalSizeMm);
     }
 
+    /// <summary>Puts a text descriptor (0xFC name, 0xFF serial, 0xFE text) in slot 0 to 3 of the base block: 13 characters, a line feed after a shorter text, then spaces.</summary>
+    internal static void TextDescriptor(byte[] edid, int slot, byte tag, string text)
+    {
+        var at = 54 + (18 * slot);
+        Array.Clear(edid, at, 18);
+        edid[at + 3] = tag;
+        var bytes = System.Text.Encoding.ASCII.GetBytes(text + "\n");
+        for (var i = 0; i < 13; i++)
+        {
+            edid[at + 5 + i] = i < bytes.Length ? bytes[i] : (byte)' ';
+        }
+    }
+
+    [Fact]
+    public void ANameLongerThanThirteenCharactersIsJoinedFromItsDescriptorsInOrder()
+    {
+        // Slot 0 holds the serial and slot 2 other text; the two name parts in slots 1 and 3 are joined, nothing else is.
+        var edid = BaseBlock(extensions: 0);
+        TextDescriptor(edid, 0, 0xFF, "SER123");
+        TextDescriptor(edid, 1, 0xFC, "LG ULTRAGEAR ");
+        TextDescriptor(edid, 2, 0xFE, "OTHERTEXT");
+        TextDescriptor(edid, 3, 0xFC, "27GP950-B");
+        Fix(edid);
+
+        var e = EdidParser.Parse(edid)!;
+        Assert.Equal("LG ULTRAGEAR 27GP950-B", e.MonitorName);
+        Assert.Equal("SER123", e.SerialText);
+    }
+
+    [Fact]
+    public void TheNamePartsFollowTheDescriptorOrderNotTheAlphabet()
+    {
+        var edid = BaseBlock(extensions: 0);
+        TextDescriptor(edid, 1, 0xFC, "ZZZZZZZZZZZZZ");
+        TextDescriptor(edid, 2, 0xFC, "AAAAAAAAAAAAA");
+        TextDescriptor(edid, 3, 0xFC, "mid");
+        Fix(edid);
+
+        Assert.Equal("ZZZZZZZZZZZZZAAAAAAAAAAAAAmid", EdidParser.Parse(edid)!.MonitorName);
+    }
+
+    [Fact]
+    public void ANameWithNoCharactersIsNoName()
+    {
+        var edid = BaseBlock(extensions: 0);
+        TextDescriptor(edid, 1, 0xFC, string.Empty);
+        TextDescriptor(edid, 2, 0xFC, "   ");
+        Fix(edid);
+
+        Assert.Null(EdidParser.Parse(edid)!.MonitorName);
+
+        // Spaces around the joined name are trimmed once, at the end.
+        TextDescriptor(edid, 1, 0xFC, "  ");
+        TextDescriptor(edid, 2, 0xFC, "ASUS VG27AQ");
+        Fix(edid);
+        Assert.Equal("ASUS VG27AQ", EdidParser.Parse(edid)!.MonitorName);
+    }
+
     internal static byte[] BaseBlock(int extensions)
     {
         var b = new byte[128];

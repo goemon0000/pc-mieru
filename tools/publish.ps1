@@ -15,11 +15,11 @@
   Works in Windows PowerShell 5.1 and pwsh. ASCII only on purpose (5.1 reads BOM-less files as ANSI).
 
 .EXAMPLE
-  powershell -File tools\publish.ps1 -Version 0.2.0 -Verify
+  powershell -File tools\publish.ps1 -Version 0.4.0 -Verify
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.2.0',
+    [string]$Version = '0.4.0',
     [string]$Output = '',
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
@@ -338,10 +338,14 @@ Write-Step 'Merge (same-named files must be identical)'
 # Only the Gui references the Windows Desktop runtime, so its System.Drawing.dll and Microsoft.VisualBasic.dll are the
 # Desktop pack's type-forward facades; the base pack's copies (what Cli and SensorHost publish) forward fewer types.
 # Checked on the string tables: the Gui copy adds forwards to System.Windows.Forms and the VB forms types and drops only
-# the obsolete PrintingPermission forwards, which nothing here uses. The Gui is merged first, so for these two names
+# the obsolete PrintingPermission forwards, which nothing here uses. The Gui is merged first, so for these names
 # its copy wins. Every other same-named file must still be byte-identical.
-$desktopFacades = @('System.Drawing.dll', 'Microsoft.VisualBasic.dll')
-$count = Merge-Folders -Sources @($apps | ForEach-Object { Join-Path $work $_.Name }) -Destination $folder -FirstWins $desktopFacades
+# System.CodeDom.dll is the third. The Gui's copy is the one the Desktop pack ships (file version 10.0.926.27113); the Cli's comes from
+# the System.CodeDom package that System.Management pulls in (10.0.25.52411) and is compiled ReadyToRun by this publish. Same assembly
+# identity (10.0.0.0) and the same public surface (1047 public types and members, compared with System.Reflection.Metadata: none missing
+# either way); only the bytes differ. The Gui is merged first, so its copy wins.
+$guiCopyWins = @('System.Drawing.dll', 'Microsoft.VisualBasic.dll', 'System.CodeDom.dll')
+$count = Merge-Folders -Sources @($apps | ForEach-Object { Join-Path $work $_.Name }) -Destination $folder -FirstWins $guiCopyWins
 Write-Host ("merged $count files from $($apps.Count) publishes")
 
 Publish-AotExe 'Helper' 'src\PcMieru.Helper\PcMieru.Helper.csproj' 'PCMieru.Helper.exe' $HelperMaxKB
@@ -352,7 +356,9 @@ foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $folder $extra) }
 }
 
-$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll')
+# System.Management.dll and System.CodeDom.dll are the Checks' dependencies (WMI for the hardware checks). A publish that drops
+# them would start fine and fail on the first check, so a release folder without them is not a release.
+$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll', 'System.Management.dll', 'System.CodeDom.dll')
 foreach ($file in $expected) {
     if (-not (Test-Path -LiteralPath (Join-Path $folder $file))) { throw "missing from the release folder: $file" }
 }

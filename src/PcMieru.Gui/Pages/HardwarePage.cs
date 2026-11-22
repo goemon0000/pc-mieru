@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using PcMieru.Checks.Build;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Share;
 
 namespace PcMieru.Gui;
 
@@ -22,6 +24,8 @@ internal sealed class HardwarePage : PageBase
     private readonly Button _reload = new() { Name = "partsReload", AutoSize = true };
     private readonly Button _copyText = new() { Name = "partsCopyText", AutoSize = true };
     private readonly Button _copyJson = new() { Name = "partsCopyJson", AutoSize = true };
+    private readonly Button _share = new() { Name = "partsShare", AutoSize = true };
+    private readonly Button _buildCode = new() { Name = "partsBuildCode", AutoSize = true };
     private readonly CheckBox _redact = new() { Name = "partsRedact", AutoSize = true, Checked = true };
     private readonly Label _stamp = new() { AutoSize = true, Name = "partsStamp", Margin = new Padding(0, 0, 16, 0) };
     private readonly ToneLabel _hint = new() { AutoSize = true, Name = "partsHint" };
@@ -75,9 +79,13 @@ internal sealed class HardwarePage : PageBase
         _reload.MinimumSize = new Size(Px(88), Px(30));
         _copyText.MinimumSize = new Size(Px(88), Px(30));
         _copyJson.MinimumSize = new Size(Px(88), Px(30));
+        _share.MinimumSize = new Size(Px(88), Px(30));
+        _buildCode.MinimumSize = new Size(Px(88), Px(30));
         _reload.Click += (_, _) => RefreshNow();
         _copyText.Click += (_, _) => Copy(json: false);
         _copyJson.Click += (_, _) => Copy(json: true);
+        _share.Click += (_, _) => Run(ShareAsync);
+        _buildCode.Click += (_, _) => Run(BuildCodeAsync);
         _redact.Checked = Context.Services.Redactor.Enabled && context.Settings.GetBool("hw.redact", true);
         _redact.Enabled = Context.Services.Redactor.Enabled;
         _redact.CheckedChanged += (_, _) => context.Settings.SetBool("hw.redact", _redact.Checked);
@@ -88,6 +96,8 @@ internal sealed class HardwarePage : PageBase
         _redact.TabIndex = 3;
         _copyText.TabIndex = 4;
         _copyJson.TabIndex = 5;
+        _share.TabIndex = 6;
+        _buildCode.TabIndex = 7;
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Name = "partsBody" };
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(260)));
@@ -101,6 +111,11 @@ internal sealed class HardwarePage : PageBase
         var pad = Px(12);
         Controls.Add(body);
         Controls.Add(PageLayout.Footer("partsFooter", pad, _stamp, _hint));
+        // The share button has a bar of its own under the first one: the first bar already fills the page's width at the window's
+        // smallest size, and a button this wide would push the copy buttons off the right edge.
+        var shareBar = PageLayout.Bar("partsShareBar", pad, [_share, _buildCode], []);
+        shareBar.Padding = new Padding(pad, 0, pad, pad * 2 / 3);
+        Controls.Add(shareBar);
         Controls.Add(PageLayout.Bar("partsBar", pad, [_reload], [_redact, _copyText, _copyJson]));
         ApplyLanguage();
     }
@@ -141,10 +156,14 @@ internal sealed class HardwarePage : PageBase
         _reload.Text = Strings.Get("gui.common.reload");
         _copyText.Text = Strings.Get("gui.hw.copy.text");
         _copyJson.Text = Strings.Get("gui.hw.copy.json");
+        _share.Text = Strings.Get("gui.hw.share");
+        _buildCode.Text = Strings.Get("gui.hw.pcb1");
         _redact.Text = Strings.Get("gui.hw.redact");
         _tips.SetToolTip(_redact, Strings.Get(Context.Services.Redactor.Enabled ? "gui.hw.redact.tip" : "gui.hw.redact.off"));
         _tips.SetToolTip(_copyText, Strings.Get("gui.hw.copy.tip"));
         _tips.SetToolTip(_copyJson, Strings.Get("gui.hw.copy.tip"));
+        _tips.SetToolTip(_share, Strings.Get("gui.hw.share.tip"));
+        _tips.SetToolTip(_buildCode, Strings.Get("gui.hw.pcb1.tip"));
         _tree.AccessibleName = Strings.Get("gui.hw.tree");
         _grid.AccessibleName = Strings.Get("gui.nav.hardware");
         string[] keys = ["item", "value", "status"];
@@ -174,6 +193,15 @@ internal sealed class HardwarePage : PageBase
 
     protected override void Dispose(bool disposing)
     {
+        // A control can be disposed twice (its parent disposes it and so does its owner): the source is cancelled and let go of once.
+        if (disposing && !_codeSourceDisposed)
+        {
+            _codeSourceDisposed = true;
+            // A configuration code that is still being read is not wanted any more (the read gives up; no dialog opens on a page that is gone).
+            _codeCancel.Cancel();
+            _codeCancel.Dispose();
+        }
+
         if (disposing)
         {
             _tips.Dispose();
@@ -467,6 +495,124 @@ internal sealed class HardwarePage : PageBase
 
         var redact = _redact.Checked && Context.Services.Redactor.Enabled;
         Context.CopyText(BuildCopy(json, redact), redact ? "gui.hw.copied.redacted" : "gui.hw.copied.plain");
+    }
+
+    /// <summary>
+    /// "型番だけコピー（サイト用）": collects the model-numbers document and shows it in a dialog. Nothing is copied or sent until the person
+    /// presses Copy in the dialog. Kept separate from the page's own tree so the document can never pick up fields the page shows.
+    /// </summary>
+    internal async Task ShareAsync()
+    {
+        // One at a time: the button is off while the list is being collected and while the dialog is open, and a second call that
+        // gets past it anyway (a keyboard repeat, a test) does nothing.
+        if (_sharing)
+        {
+            return;
+        }
+
+        _sharing = true;
+        _share.Enabled = false;
+        try
+        {
+            string json;
+            try
+            {
+                json = await PartsShare.CreateJsonAsync(ShareReader ?? DefaultShareReader, AppInfo.Version, includeUsb: false).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+            {
+                // The status bar is easy to miss: say it where the person is looking.
+                Dialogs.Info(FindForm(), Context.Theme, Strings.Get("gui.hw.share"), Strings.Format("gui.hw.share.error", Fmt.Dict(("error", ex.Message))));
+                return;
+            }
+
+            PartsShareDialog.Open(FindForm(), Context.Theme, json, text => Context.CopyText(text, "gui.common.copied"));
+        }
+        finally
+        {
+            _sharing = false;
+            _share.Enabled = true;
+        }
+    }
+
+    private bool _sharing;
+
+    private Task<HardwareInfo> DefaultShareReader(HardwareCategory category, CancellationToken ct) => Context.Services.Hardware.GetAsync(category, ct);
+
+    /// <summary>Where the share document reads the hardware from. Null means the app's hardware service; tests put their own here.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Func<HardwareCategory, CancellationToken, Task<HardwareInfo>>? ShareReader { get; set; }
+
+    /// <summary>The share button, for tests.</summary>
+    internal Button ShareButton => _share;
+
+    /// <summary>The configuration code button, for tests.</summary>
+    internal Button BuildCodeButton => _buildCode;
+
+    /// <summary>Where the configuration code comes from. Null means the window's provider (the real one, or the sample with <c>--fakes</c>); tests put their own here.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal IBuildCodeProvider? BuildCodeProvider { get; set; }
+
+    private readonly CancellationTokenSource _codeCancel = new();
+    private bool _codeSourceDisposed;
+    private bool _codeRunning;
+
+    /// <summary>
+    /// "構成コードをコピー（/my-config 用）": makes the configuration code and shows it in a dialog. The read (WMI and the graphics adapter) is
+    /// slow, so it runs on a pool thread and nothing before it touches the machine on the UI thread. Nothing is copied, saved or sent until the
+    /// person presses a button in the dialog. A read that fails opens no dialog: the status line says that it failed, with the type and the HRESULT
+    /// of the exception and never its message (which can carry a path or a user name). The button is back on every path.
+    /// </summary>
+    internal async Task BuildCodeAsync()
+    {
+        if (_codeRunning || IsDisposed)
+        {
+            return;
+        }
+
+        _codeRunning = true;
+        _buildCode.Enabled = false;
+        try
+        {
+            var provider = BuildCodeProvider ?? Context.BuildCode;
+            var cancel = _codeCancel.Token;
+            BuildCodeResult result;
+            try
+            {
+                result = await Task.Run(() => provider.CreateAsync(cancel), cancel).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+            {
+                // Our own cancel (the page is going away): quiet. Any other cancellation (a provider that gives up on a token of its own) is a
+                // failed read and falls through to the fixed text below, so a button press never ends with no dialog and no word.
+                return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Context.Report(Strings.Format("gui.hw.pcb1.failed", Fmt.Dict(("detail", CheckFormat.ExceptionDetail(ex)))));
+                return;
+            }
+
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            try
+            {
+                BuildCodeDialog.Open(FindForm(), Context.Theme, result, text => Context.CopyText(text, "gui.common.copied"));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // The page's own error path (Run) would write the exception's message; this one never does.
+                Context.Report(Strings.Format("gui.hw.pcb1.failed", Fmt.Dict(("detail", CheckFormat.ExceptionDetail(ex)))));
+            }
+        }
+        finally
+        {
+            _codeRunning = false;
+            _buildCode.Enabled = true;
+        }
     }
 
     private readonly record struct Line(PartsRow? Row, int ExpertCount);

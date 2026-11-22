@@ -444,7 +444,7 @@ internal static class BoardCollector
         }
     }
 
-    private static string ChassisType(int t) => t switch
+    internal static string ChassisType(int t) => t switch
     {
         3 => "Desktop",
         4 => "Low profile desktop",

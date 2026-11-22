@@ -9,7 +9,7 @@ public class McpServerTests
 {
     private static readonly string[] ToolNames =
     [
-        "get_system_summary", "list_processes", "get_process", "get_hardware", "get_storage_health", "diagnose", "get_report",
+        "get_system_summary", "list_processes", "get_process", "get_hardware", "get_storage_health", "diagnose", "get_report", "get_check_history",
     ];
 
     [Theory]
@@ -84,7 +84,7 @@ public class McpServerTests
     }
 
     [Fact]
-    public async Task Tools_list_has_the_seven_tools_each_marked_read_only()
+    public async Task Tools_list_has_the_eight_tools_each_marked_read_only()
     {
         var messages = await McpRun.RunAsync(McpRun.Initialize, McpRun.Initialized, McpRun.Request("t", "tools/list"));
         var tools = McpRun.Reply(messages, "t")["result"]!["tools"]!.AsArray();
@@ -326,7 +326,7 @@ public class McpServerTests
     {
         var sink = new LineSink();
         using var services = McpRun.Services();
-        var server = new McpServer(services.Insights, services.Redactor, "9.9.9");
+        var server = new McpServer(services.Insights, services.Redactor, "9.9.9", McpRun.EmptyHistory());
         await server.RunAsync(new StringReader("\r\n\n" + McpRun.Request("a", "ping") + "\r\n"), sink, CancellationToken.None);
         Assert.Single(sink.Messages);
     }
@@ -336,7 +336,7 @@ public class McpServerTests
     {
         var sink = new LineSink();
         using var services = McpRun.Services();
-        var server = new McpServer(services.Insights, services.Redactor, "9.9.9");
+        var server = new McpServer(services.Insights, services.Redactor, "9.9.9", McpRun.EmptyHistory());
         await server.RunAsync(new StringReader(McpRun.Request("a", "ping")), sink, CancellationToken.None);
         Assert.Single(sink.Messages);
     }
@@ -346,7 +346,7 @@ public class McpServerTests
     {
         var sink = new LineSink();
         using var services = McpRun.Services();
-        var server = new McpServer(services.Insights, services.Redactor, "9.9.9");
+        var server = new McpServer(services.Insights, services.Redactor, "9.9.9", McpRun.EmptyHistory());
         await server.RunAsync(new StringReader(string.Empty), sink, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(string.Empty, sink.Text);
     }
@@ -358,7 +358,7 @@ public class McpServerTests
         var sink = new LineSink();
         using var services = McpRun.Services();
         using var cancel = new CancellationTokenSource();
-        var run = new McpServer(services.Insights, services.Redactor, "9.9.9").RunAsync(input, sink, cancel.Token);
+        var run = new McpServer(services.Insights, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(input, sink, cancel.Token);
         input.Send(McpRun.Request("a", "ping"));
         await sink.WaitForLinesAsync(1);
         await cancel.CancelAsync();
@@ -381,7 +381,7 @@ public class McpServerTests
         };
         var input = new LiveInput();
         var sink = new LineSink();
-        var run = new McpServer(stub, services.Redactor, "9.9.9").RunAsync(input, sink, CancellationToken.None);
+        var run = new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(input, sink, CancellationToken.None);
         input.Send(McpRun.Initialize);
         input.Send(McpRun.Call("slow", "list_processes"));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -431,7 +431,7 @@ public class McpServerTests
         };
         var input = new LiveInput();
         var sink = new LineSink();
-        var run = new McpServer(stub, services.Redactor, "9.9.9").RunAsync(input, sink, CancellationToken.None);
+        var run = new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(input, sink, CancellationToken.None);
         input.Send(McpRun.Initialize);
         input.Send(McpRun.Call("slow", "list_processes"));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -459,7 +459,7 @@ public class McpServerTests
         };
         var input = new LiveInput();
         var sink = new LineSink();
-        var run = new McpServer(stub, services.Redactor, "9.9.9").RunAsync(input, sink, CancellationToken.None);
+        var run = new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(input, sink, CancellationToken.None);
         input.Send(McpRun.Initialize);
         input.Send(McpRun.Call("slow", "list_processes"));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -493,7 +493,7 @@ public class McpServerTests
             McpRun.Request("after", "ping"))
             + "\n";
 
-        await new McpServer(stub, services.Redactor, "9.9.9").RunAsync(new StringReader(input), sink, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+        await new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(new StringReader(input), sink, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.NotNull(McpRun.Reply(sink.Messages, "after")["result"]);
         Assert.DoesNotContain(sink.Messages, m => m["id"]?.ToJsonString() == "\"slow\"");
@@ -514,7 +514,7 @@ public class McpServerTests
         var sink = new LineSink();
         var input = string.Join("\n", McpRun.Initialize, McpRun.Call("slow", "list_processes"), McpRun.Request("after", "ping")) + "\n";
 
-        await new McpServer(stub, services.Redactor, "9.9.9", TimeSpan.FromMilliseconds(200))
+        await new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory(), TimeSpan.FromMilliseconds(200))
             .RunAsync(new StringReader(input), sink, CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(15));
 
@@ -543,7 +543,7 @@ public class McpServerTests
         };
         var input = new LiveInput();
         var sink = new LineSink();
-        var run = new McpServer(stub, services.Redactor, "9.9.9", TimeSpan.FromMilliseconds(200)).RunAsync(input, sink, CancellationToken.None);
+        var run = new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory(), TimeSpan.FromMilliseconds(200)).RunAsync(input, sink, CancellationToken.None);
         input.Send(McpRun.Initialize);
         input.Send(McpRun.Call("first", "list_processes"));
         await sink.WaitForLinesAsync(2);
@@ -610,7 +610,7 @@ public class McpServerTests
         using var services = McpRun.Services();
         var stub = new StubInsights(services.Insights) { OnList = (_, _) => Task.FromResult(Samples.List(Samples.Process(9, name))) };
         var sink = new LineSink();
-        await new McpServer(stub, services.Redactor, "9.9.9").RunAsync(
+        await new McpServer(stub, services.Redactor, "9.9.9", McpRun.EmptyHistory()).RunAsync(
             new StringReader(McpRun.Initialize + "\n" + McpRun.Call("c", "list_processes") + "\n"),
             sink,
             CancellationToken.None);

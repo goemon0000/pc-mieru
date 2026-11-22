@@ -1,4 +1,5 @@
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Storage;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Hardware;
@@ -13,6 +14,8 @@ namespace PcMieru.Core.Hardware;
 internal sealed class HelperStorageReader(Func<IHelperClient?> helper) : IElevatedStorageReader
 {
     private const int SectorLength = 512;
+
+    private static readonly ElevatedDriveRead NotRead = new(null, null, null, null);
 
     public async Task<byte[]?> ReadRawAsync(int physicalDriveNumber, StorageHealthKind kind, CancellationToken ct)
     {
@@ -35,12 +38,23 @@ internal sealed class HelperStorageReader(Func<IHelperClient?> helper) : IElevat
 
     public async Task<IReadOnlyDictionary<int, byte[]?>> ReadRawManyAsync(IReadOnlyList<(int PhysicalDriveNumber, StorageHealthKind Kind)> drives, CancellationToken ct)
     {
-        var answers = new Dictionary<int, byte[]?>();
+        var many = await ReadManyAsync(drives, ct).ConfigureAwait(false);
+        return many.ToDictionary(p => p.Key, p => p.Value.Bytes);
+    }
+
+    /// <summary>
+    /// The batch, with what each drive's section says besides its bytes: the identity the Helper re-read on the handle the bytes came
+    /// through, the counts of the NVMe error log and the failure-prediction answer. Anything the Helper did not send (an older Helper
+    /// sends none of the three) is null, which the caller reads as "not delivered", never as "the same" or "zero".
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, ElevatedDriveRead>> ReadManyAsync(IReadOnlyList<(int PhysicalDriveNumber, StorageHealthKind Kind)> drives, CancellationToken ct)
+    {
+        var answers = new Dictionary<int, ElevatedDriveRead>();
         var asked = new List<(int Number, StorageHealthKind Kind)>();
         foreach (var (number, kind) in drives)
         {
             // What the Helper would refuse is never sent: a number outside 0..255, or a drive named twice (the first kind wins).
-            if (number is >= 0 and <= DriveList.MaxNumber && answers.TryAdd(number, null))
+            if (number is >= 0 and <= DriveList.MaxNumber && answers.TryAdd(number, NotRead))
             {
                 asked.Add((number, kind));
             }
@@ -72,16 +86,32 @@ internal sealed class HelperStorageReader(Func<IHelperClient?> helper) : IElevat
             foreach (var (number, kind) in batch)
             {
                 // The exit code only says how the run went; each drive says for itself whether its bytes are good.
-                if (data.TryGetValue(HelperDataKeys.ForDrive(number, HelperDataKeys.DriveCode), out var code)
-                    && code == ((int)OperationCode.Ok).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                if (!data.TryGetValue(HelperDataKeys.ForDrive(number, HelperDataKeys.DriveCode), out var code)
+                    || code != ((int)OperationCode.Ok).ToString(System.Globalization.CultureInfo.InvariantCulture))
                 {
-                    answers[number] = Decode(data, kind, number);
+                    continue;
                 }
+
+                var bytes = Decode(data, kind, number);
+                if (bytes is null)
+                {
+                    continue;
+                }
+
+                // The identity and the counts only mean something next to bytes that were accepted.
+                answers[number] = new ElevatedDriveRead(
+                    bytes,
+                    DiskIdentity.ReadFrom(data, number),
+                    kind == StorageHealthKind.Nvme ? InspectionParsers.ErrorLogFrom(data, number) : null,
+                    PredictFailure(data, number));
             }
         }
 
         return answers;
     }
+
+    private static bool? PredictFailure(Dictionary<string, string> data, int drive) =>
+        data.TryGetValue(HelperDataKeys.ForDrive(drive, HelperDataKeys.PredictFailure), out var text) && bool.TryParse(text, out var value) ? value : null;
 
     /// <summary>The bytes the health parsers read: the NVMe log page, or the SMART table (followed by the thresholds when they are good).</summary>
     private static byte[]? Decode(Dictionary<string, string> data, StorageHealthKind kind, int? drive)

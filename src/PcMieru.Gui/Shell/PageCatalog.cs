@@ -15,6 +15,7 @@ internal static class PageCatalog
         new("services", "gui.nav.services", c => new ServicesPage(c)),
         new("users", "gui.nav.users", c => new UsersPage(c)),
         new("hardware", "gui.nav.hardware", c => new HardwarePage(c)),
+        new("checks", "gui.nav.checks", c => new ChecksPage(c)),
         new("diagnose", "gui.nav.diagnose", c => new DiagnosePage(c)),
         new("settings", "gui.nav.settings", c => new SettingsPage(c)),
     ];

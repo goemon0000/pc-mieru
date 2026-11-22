@@ -11,6 +11,15 @@ internal enum CellTone
 
     /// <summary>High load or something that needs a look (accent colour, always together with its text).</summary>
     Accent,
+
+    /// <summary>A check that came out well (green, always together with its word).</summary>
+    Good,
+
+    /// <summary>A check that wants attention but is not a failure (amber, always together with its word).</summary>
+    Warning,
+
+    /// <summary>A check that needs review (red, always together with its word).</summary>
+    Danger,
 }
 
 internal enum ExpanderGlyph
@@ -86,7 +95,6 @@ internal class GridView : ListView, IThemed
     private readonly ToolTip _tip = new() { ShowAlways = true };
     private readonly Dictionary<int, ListViewItem> _items = [];
     private Palette? _palette;
-    private Color _selectedDim = Color.Gray;
     private int _drawSelected = -1;
     private int _lastTipRow = -2;
     private int _lastTipColumn = -2;
@@ -125,6 +133,32 @@ internal class GridView : ListView, IThemed
 
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal Func<int, RowStyle>? RowStyles { get; set; }
+
+    /// <summary>
+    /// <c>--measure</c> only: told which cells (row, column) one paint of the control drew, after that paint is complete (the native paint of a
+    /// double-buffered list has presented its buffer when the window procedure returns from WM_PAINT). Null in a normal start: no cell is recorded.
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Action<IReadOnlyList<(int Row, int Column)>>? PaintObserver
+    {
+        get => _paintObserver;
+        set
+        {
+            _paintObserver = value;
+            if (value is null)
+            {
+                // Detached: nothing is recorded from here on, and what was recorded is dropped.
+                _paintedCells = null;
+            }
+        }
+    }
+
+    private Action<IReadOnlyList<(int Row, int Column)>>? _paintObserver;
+
+    private List<(int Row, int Column)>? _paintedCells;
+
+    /// <summary>Tests: the drawn-cell list exists only while a paint observer is attached (a normal start never builds it).</summary>
+    internal bool RecordsPaintedCells => _paintedCells is not null;
 
     /// <summary>Why a cell shows what it shows (the reason a value is "-"). Null for no tooltip.</summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -305,7 +339,6 @@ internal class GridView : ListView, IThemed
         _palette = palette;
         BackColor = palette.Surface;
         ForeColor = palette.Text;
-        _selectedDim = Blend(palette.SelectionText, palette.Selection, 0.25);
         Invalidate();
     }
 
@@ -506,10 +539,23 @@ internal class GridView : ListView, IThemed
         if (m.Msg == WmPaint)
         {
             BlankBelowRows();
+            ReportPaint();
         }
 
         // The list raises its own horizontal bar at moments of its choosing (after an item count or a size change): checked after every message.
         HideStaleHorizontalScroll();
+    }
+
+    private void ReportPaint()
+    {
+        if (_paintedCells is not { Count: > 0 } cells)
+        {
+            return;
+        }
+
+        var drawn = cells.ToArray();
+        cells.Clear();
+        PaintObserver?.Invoke(drawn);
     }
 
     /// <summary>
@@ -640,6 +686,11 @@ internal class GridView : ListView, IThemed
             return;
         }
 
+        if (PaintObserver is not null)
+        {
+            (_paintedCells ??= []).Add((e.ItemIndex, e.ColumnIndex));
+        }
+
         var cell = Cells(e.ItemIndex, e.ColumnIndex);
         var selected = e.ItemIndex == _drawSelected;
         var header = RowStyles?.Invoke(e.ItemIndex) == RowStyle.Header;
@@ -687,12 +738,7 @@ internal class GridView : ListView, IThemed
         }
 
         var tone = cell.Link ? CellTone.Accent : cell.Tone;
-        var color = tone switch
-        {
-            CellTone.Dim => selected ? _selectedDim : palette.TextDim,
-            CellTone.Accent => selected ? palette.SelectionText : palette.Accent,
-            _ => selected ? palette.SelectionText : palette.Text,
-        };
+        var color = ToneColor(palette, tone, selected);
         var alignment = Columns[e.ColumnIndex].TextAlign switch
         {
             HorizontalAlignment.Right => TextFormatFlags.Right,
@@ -814,7 +860,17 @@ internal class GridView : ListView, IThemed
     /// <summary>The DPI the window is at now. The form is asked first: it is the first to learn about a change.</summary>
     private int CurrentDpi => FindForm()?.DeviceDpi ?? DeviceDpi;
 
-    private int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
+    /// <summary>A length written in logical pixels, in pixels for the DPI the window is at now (the font size does not enter: it is the room the grid keeps around a text).</summary>
+    internal int Scaled(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0);
+
+    /// <summary>
+    /// The columns were brought to a new DPI or font size (after <see cref="SyncDpi"/> scaled them by the ratio). A grid that sizes a column by
+    /// what its text needs measures again here, in pixels of the scale it is at now.
+    /// </summary>
+    protected virtual void OnColumnsRescaled() => ColumnsRescaled?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Raised after the columns were brought to a new DPI or font size (see <see cref="OnColumnsRescaled"/>).</summary>
+    internal event EventHandler? ColumnsRescaled;
 
     /// <summary>A column width written in logical pixels at the design font size, in pixels for this table's DPI and font.</summary>
     public int ColumnWidth(int logical) => (int)Math.Round(logical * CurrentDpi / 96.0 * Font.SizeInPoints / DesignPoints);
@@ -849,6 +905,7 @@ internal class GridView : ListView, IThemed
         }
 
         UpdateRowHeight();
+        OnColumnsRescaled();
         FitLastColumn();
         Invalidate();
     }
@@ -863,6 +920,266 @@ internal class GridView : ListView, IThemed
             _rowHeight.ImageSize = new Size(1, Math.Min(RowHeight, 256));
         }
     }
+
+    /// <summary>
+    /// True when the text of a cell does not fit its column, so the grid draws it with an ellipsis. It measures what <c>DrawCell</c> draws (the
+    /// font of the cell, the padding on both sides and, in the first column, the indent and the glyph slot), so the smoke run and the tests ask
+    /// the grid itself and never a copy of its arithmetic.
+    /// </summary>
+    internal bool IsCut(int row, int column) =>
+        column >= 0 && column < Columns.Count && NeededWidth(row, column) > Columns[column].Width;
+
+    /// <summary>
+    /// The width the column has to be for the text of this cell to be drawn whole: the text, the padding on both sides and, in the first column,
+    /// the indent and the glyph slot (0 for a cell with no text). Measured in pixels of the scale the grid is at now.
+    /// </summary>
+    internal int NeededWidth(int row, int column)
+    {
+        if (Cells is not { } cells || row < 0 || row >= VirtualListSize || column < 0 || column >= Columns.Count)
+        {
+            return 0;
+        }
+
+        var cell = cells(row, column);
+        if (cell.Text.Length == 0)
+        {
+            return 0;
+        }
+
+        var header = RowStyles?.Invoke(row) == RowStyle.Header;
+        var font = cell.Link ? UnderlineFont : (cell.Bold || header) ? BoldFont : Font;
+        var around = Scaled(8) * 2;
+        if (column == 0)
+        {
+            around += (cell.Indent + 1) * Scaled(16);
+            if (cell.IconSlot)
+            {
+                around += Scaled(16) + Scaled(6);
+            }
+        }
+
+        return around + TextRenderer.MeasureText(
+            cell.Text,
+            font,
+            new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+    }
+
+    /// <summary>The widest <see cref="NeededWidth"/> of the column over every row now on show.</summary>
+    internal int WidestNeed(int column)
+    {
+        var widest = 0;
+        for (var row = 0; row < VirtualListSize; row++)
+        {
+            widest = Math.Max(widest, NeededWidth(row, column));
+        }
+
+        return widest;
+    }
+
+    /// <summary>
+    /// The width the header of the column needs to be read whole: its text, the padding on both sides and, for the sorted column, the room of
+    /// the arrow (<c>OnDrawColumnHeader</c> draws exactly that). Measured at the scale the grid is at now.
+    /// </summary>
+    internal int HeaderNeed(int column)
+    {
+        if (column < 0 || column >= Columns.Count)
+        {
+            return 0;
+        }
+
+        var header = Columns[column];
+        var arrow = column == _sortColumn && header.TextAlign != HorizontalAlignment.Right ? Scaled(14) : 0;
+        return (Scaled(8) * 2) + arrow + TextRenderer.MeasureText(
+            header.Text,
+            Font,
+            new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+    }
+
+    /// <summary>The width a column needs for its header and for every cell on show, whichever is wider (<see cref="WidestNeed"/> and <see cref="HeaderNeed"/>).</summary>
+    internal int ContentNeed(int column) => Math.Max(WidestNeed(column), HeaderNeed(column));
+
+    private const int ListTopIndexMessage = 0x1027;
+
+    /// <summary>
+    /// The height of the header strip as the list has it now, not a guess from the font: at 150% and with other fonts the header is not one row
+    /// high. The rows start where the header ends, so the first row on show says it (a header item's own rectangle is a couple of pixels
+    /// shorter than the strip, and a row would then be cut by that much); with no row on show, the header window's own height; before the
+    /// header exists, the guess the grid draws with.
+    /// </summary>
+    internal int HeaderHeight
+    {
+        get
+        {
+            if (IsHandleCreated && Columns.Count > 0)
+            {
+                if (VirtualListSize > 0)
+                {
+                    var top = (int)SendMessage(Handle, ListTopIndexMessage, IntPtr.Zero, IntPtr.Zero);
+                    if (top >= 0 && top < VirtualListSize && RowRect(top) is { } row && row.Top > 0)
+                    {
+                        return row.Top;
+                    }
+                }
+
+                if (HeaderWindowHeight() is var window and > 0)
+                {
+                    return window;
+                }
+            }
+
+            return HeaderBottom();
+        }
+    }
+
+    /// <summary>The height of the header's own window (0 while there is none).</summary>
+    private int HeaderWindowHeight()
+    {
+        if (_headerWindow is not { Handle: var header } || header == IntPtr.Zero)
+        {
+            return 0;
+        }
+
+        var rect = System.Runtime.InteropServices.Marshal.AllocHGlobal(16);
+        try
+        {
+            return GetWindowRect(header, rect)
+                ? Math.Max(System.Runtime.InteropServices.Marshal.ReadInt32(rect, 12) - System.Runtime.InteropServices.Marshal.ReadInt32(rect, 4), 0)
+                : 0;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(rect);
+        }
+    }
+
+    /// <summary>
+    /// What is wrong with the rows as the native list lays them out now, for a list that is meant to end on a whole row under its header; null
+    /// when they are whole. The first row must start where the header's own window ends (a gap above it is how a list that has lost its place
+    /// looks), the last row on show must end at the bottom of the client area (of a list that holds as many rows as it has room for) and no part of the next one may show under it. The smoke run asks
+    /// this of the lists on the real, shown windows; <paramref name="facts"/> holds the numbers either way.
+    /// </summary>
+    internal string? WholeRowsProblem(out string facts)
+    {
+        facts = "no window or no rows";
+        if (!IsHandleCreated || VirtualListSize == 0)
+        {
+            return "the list has no window or no rows to look at";
+        }
+
+        var header = HeaderWindowHeight();
+        var fit = RowsThatFit(Height);
+        var shown = Math.Min(VirtualListSize, fit);
+        if (header <= 0 || shown <= 0 || RowRect(0) is not { } first || RowRect(shown - 1) is not { } last)
+        {
+            facts = $"header {header} px, {shown} rows on show";
+            return "the list gives no rectangle for its header or its rows";
+        }
+
+        var client = ClientSize.Height;
+        var next = shown < VirtualListSize ? RowRect(shown) : null;
+        facts = $"header {header} px, first row at {first.Top} px, row {first.Height} px, {shown} of {VirtualListSize} rows on show, last row ends at {last.Bottom} px of {client} px" + (next is { } n ? $", next row at {n.Top} px" : string.Empty);
+        if (Math.Abs(first.Top - header) > 3)
+        {
+            return $"the first row starts at {first.Top} px where the header ends at {header} px";
+        }
+
+        // A list with fewer rows than it has room for ends where its rows end; a full one ends at the bottom.
+        if (last.Bottom > client + 1 || (VirtualListSize >= fit && last.Bottom < client - 3))
+        {
+            return $"the last row on show ends at {last.Bottom} px in a client area {client} px high";
+        }
+
+        return next is { } below && below.Top < client - 1 ? $"part of the next row shows under the last (it starts at {below.Top} px of {client} px)" : null;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hwnd, IntPtr rect);
+
+    /// <summary>The rectangle of a row as the native list has it now; null when it answers "none" (no handle yet, or a handle not yet given its rows).</summary>
+    internal Rectangle? RowRect(int row)
+    {
+        var rect = System.Runtime.InteropServices.Marshal.AllocHGlobal(16);
+        try
+        {
+            // The first int is the portion asked for (0: the whole item); the answer is written over it.
+            System.Runtime.InteropServices.Marshal.WriteInt32(rect, 0, 0);
+            if (SendMessage(Handle, ListItemRectMessage, (IntPtr)row, rect) == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            var left = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 0);
+            var top = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 4);
+            var right = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 8);
+            var bottom = System.Runtime.InteropServices.Marshal.ReadInt32(rect, 12);
+            return Rectangle.FromLTRB(left, top, right, bottom);
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(rect);
+        }
+    }
+
+    private const int ListItemRectMessage = 0x100E;
+
+    /// <summary>
+    /// The height of one row as the control has it (the first row's rectangle), or <see cref="RowHeight"/> while there is no row to ask (no handle, no
+    /// row, or a handle that has just been made and has not been given its rows yet: the native list answers "none" then, where
+    /// <see cref="ListView.GetItemRect(int, ItemBoundsPortion)"/> would throw out of the window procedure).
+    /// </summary>
+    internal int MeasuredRowHeight
+    {
+        get
+        {
+            if (IsHandleCreated && VirtualListSize > 0 && RowRect(0) is { Height: > 0 } row)
+            {
+                return row.Height;
+            }
+
+            return Math.Max(RowHeight, 1);
+        }
+    }
+
+    /// <summary>The border and anything else between the control's height and its client area.</summary>
+    private int FrameHeight => Math.Max(Height - ClientSize.Height, 0);
+
+    /// <summary>The control height that shows the header, <paramref name="rows"/> whole rows and the border, and no part of another row.</summary>
+    internal int HeightForRows(int rows) => FrameHeight + HeaderHeight + (Math.Max(rows, 0) * MeasuredRowHeight);
+
+    /// <summary>How many whole rows a control of this height shows below its header (the other side of <see cref="HeightForRows"/>).</summary>
+    internal int RowsThatFit(int height) => Math.Max((height - FrameHeight - HeaderHeight) / MeasuredRowHeight, 0);
+
+    /// <summary>How far the dim text of a selected row goes toward the selection's own text colour (the rest is the selection's background).</summary>
+    internal const double SelectedDimAmount = 0.75;
+
+    /// <summary>
+    /// The colour of a dim cell (a detail, an evidence line) on a selected row: mostly the selection's text colour, so it stays readable on the
+    /// selection's background (a 25% blend, as it was, came out at about 1.6:1 in the light theme). Every grid draws it.
+    /// </summary>
+    internal static Color SelectedDim(Palette palette) => Blend(palette.SelectionText, palette.Selection, SelectedDimAmount);
+
+    /// <summary>How much of its own colour a green, amber or red cell keeps on a selected row (the rest is the selection's text colour).</summary>
+    internal const double SelectedToneAmount = 0.7;
+
+    /// <summary>
+    /// The colour a cell of a tone is drawn in, on a plain row or on the selected one. A green, amber or red cell on the selected row is
+    /// blended toward the selection's text colour, as the dim one is, so each stays readable on the selection's background in both themes
+    /// (the test pins the contrast) while the three still read as three colours.
+    /// </summary>
+    internal static Color ToneColor(Palette palette, CellTone tone, bool selected) => tone switch
+    {
+        CellTone.Dim => selected ? SelectedDim(palette) : palette.TextDim,
+        CellTone.Accent => selected ? palette.SelectionText : palette.Accent,
+        CellTone.Good => selected ? SelectedTone(palette, palette.Good) : palette.Good,
+        CellTone.Warning => selected ? SelectedTone(palette, palette.Warning) : palette.Warning,
+        CellTone.Danger => selected ? SelectedTone(palette, palette.Danger) : palette.Danger,
+        _ => selected ? palette.SelectionText : palette.Text,
+    };
+
+    internal static Color SelectedTone(Palette palette, Color tone) => Blend(tone, palette.SelectionText, SelectedToneAmount);
 
     private static Color Blend(Color a, Color b, double amountOfA) =>
         Color.FromArgb(

@@ -40,6 +40,30 @@ public class ThemeAndPagesTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_disabled_toggle_keeps_its_chosen_side_readable_and_every_other_disabled_label_stays_dim(bool dark)
+    {
+        using var theme = new ThemeService(dark ? ThemeMode.Dark : ThemeMode.Light);
+        var palette = theme.Palette;
+        using var chosen = new ToggleButton { Checked = true, Enabled = false };
+        using var other = new ToggleButton { Enabled = false };
+        using var plain = new Button { Enabled = false };
+
+        // The chosen side is drawn on the selection's colour in the selection's own text colour: readable, as it is while the toggle is enabled.
+        var chosenText = ThemeService.DisabledTextColor(chosen, palette);
+        Assert.Equal(palette.SelectionText, chosenText);
+        Assert.True(BuildCodeUiTests.ContrastRatio(chosenText, palette.Selection) >= 4.5, BuildCodeUiTests.ContrastRatio(chosenText, palette.Selection).ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
+
+        // The side that is not chosen and any other button keep the dim disabled colour.
+        Assert.Equal(palette.TextDisabled, ThemeService.DisabledTextColor(other, palette));
+        Assert.Equal(palette.TextDisabled, ThemeService.DisabledTextColor(plain, palette));
+
+        // A test that nothing can fail proves nothing: the dim grey on the selection's background was under the line in both themes.
+        Assert.True(BuildCodeUiTests.ContrastRatio(palette.TextDisabled, palette.Selection) < 4.5);
+    }
+
     [Fact]
     public void Switching_the_theme_repaints_panels_and_labels_instead_of_freezing_the_first_colour()
     {

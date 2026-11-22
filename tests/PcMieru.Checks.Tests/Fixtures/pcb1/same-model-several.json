@@ -1,0 +1,74 @@
+{
+  "v": 1,
+  "src": "parts-life",
+  "p": {
+    "cpu": [
+      {
+        "n": "AMD Ryzen 9 7950X 16-Core Processor"
+      }
+    ],
+    "gpu": [
+      {
+        "n": "NVIDIA GeForce RTX 3080 Ti",
+        "vram": 12,
+        "q": 2
+      }
+    ],
+    "motherboard": [
+      {
+        "n": "ASUSTeK COMPUTER INC. TUF GAMING X670E-PLUS WIFI",
+        "mfr": "ASUSTeK COMPUTER INC."
+      }
+    ],
+    "ram": [
+      {
+        "n": "CMK64GX5M2B5600Z40",
+        "cap": 32,
+        "spd": 5600,
+        "t": "DDR5",
+        "mfr": "Corsair",
+        "q": 4
+      },
+      {
+        "n": "F4-3200C16-16GVK",
+        "cap": 16,
+        "spd": 3200,
+        "t": "DDR4",
+        "mfr": "G Skill Intl",
+        "q": 2
+      }
+    ],
+    "ssd": [
+      {
+        "n": "Samsung SSD 870 EVO 1TB",
+        "cap": 1000,
+        "t": "sata",
+        "q": 3
+      }
+    ],
+    "hdd": [
+      {
+        "n": "TOSHIBA MG04ACA200E",
+        "cap": 2000,
+        "t": "sata",
+        "q": 2
+      }
+    ],
+    "monitor": [
+      {
+        "n": "UG27PJ",
+        "q": 16
+      },
+      {
+        "n": "PHL 278E1",
+        "q": 2
+      }
+    ],
+    "optical-drive": [
+      {
+        "n": "HL-DT-ST BD-RE WH16NS60",
+        "q": 2
+      }
+    ]
+  }
+}

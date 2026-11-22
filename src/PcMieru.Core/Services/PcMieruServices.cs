@@ -14,6 +14,12 @@ public sealed record PcMieruOptions
     /// <summary>Use Fakes even where a real implementation exists (tests, demos).</summary>
     public bool ForceFakes { get; init; }
 
+    /// <summary>
+    /// The real services read and write none of PC Mieru's own state files (<c>%LOCALAPPDATA%\PCMieru\eco-state.json</c>); what they would remember
+    /// stays in memory. Only the GUI's <c>--measure</c> run sets it, so a measurement neither depends on nor changes what the owner has saved.
+    /// </summary>
+    public bool NoStateFiles { get; init; }
+
     /// <summary>Clock for Fakes and for anything time-stamped in tests. Real code uses it too instead of DateTime.UtcNow.</summary>
     public Func<DateTime> Clock { get; init; } = static () => DateTime.UtcNow;
 
@@ -89,6 +95,8 @@ public sealed class PcMieruServices : IDisposable
     public IHardwareProvider Hardware => _registry.Get<IHardwareProvider>();
 
     public IStorageHealthProvider StorageHealth => _registry.Get<IStorageHealthProvider>();
+
+    public IStorageInspectionSource StorageInspection => _registry.Get<IStorageInspectionSource>();
 
     public ISensorClient Sensors => _registry.Get<ISensorClient>();
 

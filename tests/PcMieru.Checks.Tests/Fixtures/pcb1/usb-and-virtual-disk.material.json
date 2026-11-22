@@ -1,0 +1,82 @@
+{
+  "cpus": [],
+  "board": null,
+  "memory": [],
+  "gpus": [],
+  "disks": [
+    {
+      "name": "PCIe SSD",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 512110190592
+    },
+    {
+      "name": "CSSD-S6L1TMGAX 1TB",
+      "busType": 11,
+      "mediaType": 4,
+      "size": 1024209543168
+    },
+    {
+      "name": "TOSHIBA MG04ACA200E",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "SanDisk Cruzer Blade",
+      "busType": 7,
+      "mediaType": 0,
+      "size": 16005464064
+    },
+    {
+      "name": "External Portable HDD 2TB",
+      "busType": 7,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "Corsair MP600 PRO LPX",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 2000398934016
+    },
+    {
+      "name": "Msft Virtual Disk",
+      "busType": 14,
+      "mediaType": 0,
+      "size": 137438953472
+    },
+    {
+      "name": "Microsoft Storage Space Device",
+      "busType": 16,
+      "mediaType": 0,
+      "size": 4000787030016
+    },
+    {
+      "name": "Samsung SSD 870 EVO 1TB",
+      "busType": 11,
+      "mediaType": 0,
+      "size": 1000204886016
+    },
+    {
+      "name": "WDC WD40EZAZ-00SF3B0",
+      "busType": 11,
+      "mediaType": 0,
+      "size": 4000787030016
+    },
+    {
+      "name": "E823_8FA6_BF53_0001_001B_448B_4A5E_2D11.",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    }
+  ],
+  "monitors": [],
+  "opticals": []
+}

@@ -32,7 +32,9 @@ internal static class GuiStrings
         .. ServiceStrings.All,
         .. UsersStrings.All,
         .. HardwareStrings.All,
+        .. BuildCodeStrings.All,
         .. DiagnoseStrings.All,
+        .. CheckStrings.All,
         .. SettingsStrings.All,
     ];
 }

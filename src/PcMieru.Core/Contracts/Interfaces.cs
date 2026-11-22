@@ -8,7 +8,7 @@ namespace PcMieru.Core;
 // area (or an optional member with a default implementation) and tell the integration owner.
 //
 //   A Collection : ISnapshotSource, IProcessDetailsProvider, IProcessGroupSource, IProcessIconSource
-//   C Hardware   : IHardwareProvider, IStorageHealthProvider, ISensorClient
+//   C Hardware   : IHardwareProvider, IStorageHealthProvider, IStorageInspectionSource, ISensorClient
 //   D Management : IProcessControl, IProtectionPolicy, IServiceManager, IStartupManager, ISessionProvider,
 //                  IHelperClient, ITaskLauncher
 //   E Reporting  : IObservationEngine, IKnownProcessCatalog, IRedactor, IReportBuilder, IReadOnlyInsights
@@ -88,6 +88,20 @@ public interface IStorageHealthProvider
     /// Anything that is not a user action passes false and gets Denied as-is.
     /// </summary>
     Task<IReadOnlyList<DriveHealth>> ReadAsync(bool allowElevation, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Input of the storage check: one fresh enumeration of the physical drives with the identity v0.7.4 keyed its baselines by, and the
+/// health of each one. Never joined to <see cref="IStorageHealthProvider"/>'s answers or to the hardware page's cache by drive number.
+/// </summary>
+public interface IStorageInspectionSource
+{
+    /// <summary>
+    /// Health is tried at normal privilege first, and each drive's identity is read on the handle its health came through. Only when
+    /// <paramref name="allowElevation"/> is true (an explicit user action) are the drives Windows denied handed to the Helper, in one
+    /// request per 16 drives; a drive it could not read stays denied.
+    /// </summary>
+    Task<StorageInspection> InspectAsync(bool allowElevation, CancellationToken ct = default);
 }
 
 public interface ISensorClient : IDisposable

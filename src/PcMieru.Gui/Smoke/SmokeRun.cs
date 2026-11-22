@@ -17,7 +17,9 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// </summary>
 internal static partial class SmokeRun
 {
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(90);
+    // 240 s: the run with --fakes --shots walks the checks page and the two configuration code dialogs (plain and trimmed) in four looks each (about 100 s in all, more at 150%);
+    // the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(240);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
@@ -486,7 +488,55 @@ internal static partial class SmokeRun
                 Check("settings: the startup measuring choice can be turned off again", !context.Settings.NetMeterAutostart);
             }
 
+            await ChecksRun().ConfigureAwait(true);
+            await FakeChecksRun().ConfigureAwait(true);
+            await Pcb1Run().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// Walks the four tabs of the checks page and looks at the history. It never starts a check (a smoke run measures nothing, loads nothing and writes
+        /// nothing under the data folder): it only reads what the tabs show.
+        /// </summary>
+        private async Task ChecksRun()
+        {
+            if (await Open("checks").ConfigureAwait(true) is not ChecksPage checksPage)
+            {
+                Check("checks: the page opens", false, LastOpen);
+                return;
+            }
+
+            string[] order = ["system", "load", "storage", "history"];
+            Check("checks: the tabs are system, load, storage and history, in that order", checksPage.TabIds.SequenceEqual(order), string.Join(",", checksPage.TabIds));
+            Check("checks: opening the page starts no check", !context.Checks.IsBusy && context.Checks.State == CheckRunState.NotRun, context.Checks.State.ToString());
+            foreach (var id in order)
+            {
+                checksPage.SelectTab(id);
+                await Until(() => checksPage.IsReady, 4000).ConfigureAwait(true);
+                await Task.Delay(150).ConfigureAwait(true);
+                var missing = SmokeText.Missing(checksPage).Distinct().Take(5).ToList();
+                Check($"checks: tab {id} has its texts", checksPage.IsReady && missing.Count == 0, string.Join(" | ", missing));
+                var clipped = SmokeClip.Clipped(form).Distinct().Take(6).ToList();
+                Check($"checks: tab {id} has no cut-off text", clipped.Count == 0, string.Join(" | ", clipped));
+            }
+
+            if (checksPage.TabOf("history") is CheckHistoryTab history)
+            {
+                if (context.Services.Options.ForceFakes)
+                {
+                    Check("checks: the history of the sample data lists the sample runs", history.View == HistoryView.List && history.Entries.Count == FakeCheckData.Seed.Count, history.View + " / " + history.Entries.Count);
+                    history.SelectEntry(0);
+                    await Until(() => history.DetailTask.IsCompleted && history.Detail.RowCount > 0, 4000).ConfigureAwait(true);
+                    Check("checks: selecting a run shows its saved values", history.Detail.RowCount > 0, history.Detail.RowCount + " rows");
+                }
+                else
+                {
+                    Check("checks: the history was read", history.View is HistoryView.Empty or HistoryView.List or HistoryView.Failed, history.View.ToString());
+                }
+            }
+
+            Check("checks: walking the tabs started no check", !context.Checks.IsBusy && context.Checks.State == CheckRunState.NotRun, context.Checks.State.ToString());
+            checksPage.SelectTab("system");
         }
 
         /// <summary>Generates a report for the shortest duration, then checks the text, the redaction default and both formats.</summary>
@@ -594,8 +644,14 @@ internal static partial class SmokeRun
         /// A window that was just switched to another page may still be half repainted (an off-screen window is painted
         /// lazily), so the picture is taken again until two takes in a row agree.
         /// </summary>
-        private async Task<string> Capture(string directory, string fileName)
+        /// <param name="target">The window to take. Null: the app's window. A dialog the run shows without activating it (the configuration code) passes itself.</param>
+        /// <param name="regions">
+        /// Parts of the window that must show text (the code box, the parts list). A take in which one of them is flat is not kept as the settled picture
+        /// (it is taken again), and the picture that is kept is checked: each region shows at least <see cref="SmokePixels.MinDistinctColours"/> distinct colours.
+        /// </param>
+        private async Task<string> Capture(string directory, string fileName, Form? target = null, IReadOnlyList<(string Name, Control Region)>? regions = null)
         {
+            var subject = target ?? form;
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, fileName);
 
@@ -605,11 +661,14 @@ internal static partial class SmokeRun
             Rectangle previousCrop = default;
             Bitmap? current = null;
             Rectangle currentCrop = default;
+            Point previousOrigin = default;
+            Point currentOrigin = default;
             for (var attempt = 0; attempt < 12; attempt++)
             {
-                RedrawWindow(form.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
+                RedrawWindow(subject.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
                 await Task.Delay(attempt == 0 ? 120 : 200).ConfigureAwait(true);
-                if (onScreen && !await EnsureUncovered().ConfigureAwait(true))
+                await PaintFully(subject).ConfigureAwait(true);
+                if (onScreen && !await EnsureUncovered(subject).ConfigureAwait(true))
                 {
                     // Something else is drawn over the window (the owner is working on this PC): a picture now would show it.
                     previous?.Dispose();
@@ -617,25 +676,28 @@ internal static partial class SmokeRun
                     continue;
                 }
 
-                GetWindowRect(form.Handle, out var window);
+                GetWindowRect(subject.Handle, out var window);
                 var width = window.Right - window.Left;
                 var height = window.Bottom - window.Top;
 
                 // Windows 10/11 frames carry an invisible resize border; crop to the visible frame.
                 currentCrop = new Rectangle(0, 0, width, height);
-                if (DwmGetWindowAttribute(form.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) == 0 && frame.Right > frame.Left)
+                if (DwmGetWindowAttribute(subject.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) == 0 && frame.Right > frame.Left)
                 {
                     currentCrop = Rectangle.Intersect(currentCrop, new Rectangle(frame.Left - window.Left, frame.Top - window.Top, frame.Right - frame.Left, frame.Bottom - frame.Top));
                 }
 
-                current = Take(window, width, height, fileName);
+                current = Take(subject, window, width, height, fileName);
+                currentOrigin = new Point(window.Left, window.Top);
 
                 // Live numbers move in the sample data, so the whole picture may differ a little between two takes; the
                 // navigation never changes, so its strip must be identical. A list that is caught between "background drawn"
                 // and "items drawn" is a few hundred pixels: far under the whole-picture limit, and the take it is in
                 // would have been kept.
-                var strip = new Rectangle(0, 0, Math.Min(current.Width, form.DeviceDpi * 210 / 96), current.Height);
-                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0)
+                var strip = target is null ? new Rectangle(0, 0, Math.Min(current.Width, form.DeviceDpi * 210 / 96), current.Height) : Rectangle.Empty;
+                // A take in which a region that must show text is flat is never "settled", however well the two takes agree: two blank code boxes agree
+                // perfectly, and the whole-picture limit above is far larger than the code box.
+                if (previous is not null && previousCrop == currentCrop && Differs(previous, current) < 0.015 && Differs(previous, current, strip) == 0 && FlatRegions(current, currentOrigin, regions).Count == 0)
                 {
                     break;
                 }
@@ -643,6 +705,7 @@ internal static partial class SmokeRun
                 previous?.Dispose();
                 previous = current;
                 previousCrop = currentCrop;
+                previousOrigin = currentOrigin;
                 current = null;
             }
 
@@ -650,6 +713,7 @@ internal static partial class SmokeRun
             // Never uncovered: no picture is taken, and the run says so (the PNG is not written, so a stale one cannot pass).
             var kept = current ?? previous;
             var crop = current is not null ? currentCrop : previousCrop;
+            var keptOrigin = current is not null ? currentOrigin : previousOrigin;
             if (kept is null)
             {
                 Check("window capture not covered: " + fileName, false, "another window stayed on top of the app");
@@ -663,37 +727,105 @@ internal static partial class SmokeRun
             }
 
             using var full = kept;
+            if (regions is not null)
+            {
+                foreach (var (name, region) in regions)
+                {
+                    var found = SmokePixels.DistinctColours(full, SmokePixels.TextAreaInPicture(region, keptOrigin));
+                    Check($"window capture: {name} of {fileName} is painted, not flat (at least {SmokePixels.MinDistinctColours} distinct colours in its text area, scroll bar left out)", found >= SmokePixels.MinDistinctColours, found + " distinct colours");
+                }
+            }
+
             using var cropped = full.Clone(crop, PixelFormat.Format32bppArgb);
             cropped.Save(path, ImageFormat.Png);
             return path;
+        }
+
+        /// <summary>The regions of <paramref name="regions"/> that show fewer than <see cref="SmokePixels.MinDistinctColours"/> colours in this take.</summary>
+        private static List<string> FlatRegions(Bitmap take, Point origin, IReadOnlyList<(string Name, Control Region)>? regions)
+        {
+            var flat = new List<string>();
+            if (regions is null)
+            {
+                return flat;
+            }
+
+            foreach (var (name, region) in regions)
+            {
+                if (SmokePixels.DistinctColours(take, SmokePixels.TextAreaInPicture(region, origin)) < SmokePixels.MinDistinctColours)
+                {
+                    flat.Add(name);
+                }
+            }
+
+            return flat;
+        }
+
+        /// <summary>
+        /// Paints the window and every control in it now and waits until nothing in it still has something to paint: a control that was
+        /// shown a moment ago (the code box of a dialog that was just opened) is painted from the message queue, and a picture taken before
+        /// that holds its background only. The window's own redraw above asks for it; this loop is what makes sure it has happened.
+        /// </summary>
+        private static async Task PaintFully(Control subject)
+        {
+            for (var round = 0; round < 8; round++)
+            {
+                RedrawWindow(subject.Handle, IntPtr.Zero, IntPtr.Zero, RedrawAll);
+                foreach (var control in Descendants(subject))
+                {
+                    if (control.IsHandleCreated && control.Visible)
+                    {
+                        control.Update();
+                    }
+                }
+
+                Application.DoEvents();
+                await Task.Delay(40).ConfigureAwait(true);
+                if (!Descendants(subject).Any(static c => c.IsHandleCreated && c.Visible && GetUpdateRect(c.Handle, out _, false)))
+                {
+                    return;
+                }
+            }
+        }
+
+        private static IEnumerable<Control> Descendants(Control root)
+        {
+            yield return root;
+            foreach (Control child in root.Controls)
+            {
+                foreach (var inner in Descendants(child))
+                {
+                    yield return inner;
+                }
+            }
         }
 
         /// <summary>
         /// True when nothing else is drawn over the window. The window is topmost but never activated, and another topmost
         /// window (a chat, an overlay) that was used later sits above it; raise it again (still without activating) and look.
         /// </summary>
-        private async Task<bool> EnsureUncovered()
+        private async Task<bool> EnsureUncovered(Form subject)
         {
             for (var round = 0; round < 3; round++)
             {
-                if (CoveredPoints() == 0)
+                if (CoveredPoints(subject) == 0)
                 {
                     return true;
                 }
 
-                SetWindowPos(form.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // TOPMOST, NOSIZE | NOMOVE | NOACTIVATE
+                SetWindowPos(subject.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // TOPMOST, NOSIZE | NOMOVE | NOACTIVATE
                 await Task.Delay(180).ConfigureAwait(true);
             }
 
-            return CoveredPoints() == 0;
+            return CoveredPoints(subject) == 0;
         }
 
         /// <summary>How many of a 5 x 4 grid of points inside the visible frame belong to some other window.</summary>
-        private int CoveredPoints()
+        private static int CoveredPoints(Form subject)
         {
-            if (DwmGetWindowAttribute(form.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) != 0 || frame.Right <= frame.Left)
+            if (DwmGetWindowAttribute(subject.Handle, 9, out var frame, Marshal.SizeOf<NativeRect>()) != 0 || frame.Right <= frame.Left)
             {
-                GetWindowRect(form.Handle, out frame);
+                GetWindowRect(subject.Handle, out frame);
             }
 
             var covered = 0;
@@ -704,7 +836,7 @@ internal static partial class SmokeRun
                     var x = frame.Left + ((frame.Right - frame.Left) * ((gx * 2) + 1) / 10);
                     var y = frame.Top + ((frame.Bottom - frame.Top) * ((gy * 2) + 1) / 8);
                     var hit = WindowFromPoint(new NativePoint { X = x, Y = y });
-                    if (hit == IntPtr.Zero || GetAncestor(hit, 2) != form.Handle) // GA_ROOT
+                    if (hit == IntPtr.Zero || GetAncestor(hit, 2) != subject.Handle) // GA_ROOT
                     {
                         covered++;
                     }
@@ -714,7 +846,7 @@ internal static partial class SmokeRun
             return covered;
         }
 
-        private Bitmap Take(NativeRect window, int width, int height, string fileName)
+        private Bitmap Take(Form subject, NativeRect window, int width, int height, string fileName)
         {
             var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             using var graphics = Graphics.FromImage(bitmap);
@@ -727,7 +859,7 @@ internal static partial class SmokeRun
             var hdc = graphics.GetHdc();
             try
             {
-                if (!PrintWindow(form.Handle, hdc, 2))
+                if (!PrintWindow(subject.Handle, hdc, 2))
                 {
                     Check("window capture: " + fileName, false, "PrintWindow failed");
                 }
@@ -845,6 +977,10 @@ internal static partial class SmokeRun
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetUpdateRect(IntPtr hwnd, out NativeRect rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);

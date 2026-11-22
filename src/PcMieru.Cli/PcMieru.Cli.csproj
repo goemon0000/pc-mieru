@@ -5,6 +5,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>pcmi</AssemblyName>
+    <ApplicationIcon>..\..\assets\PCMieru.ico</ApplicationIcon>
     <RootNamespace>PcMieru.Cli</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -12,6 +13,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+    <!-- The checks and the configuration code (PCB1): pcmi check (system, storage, history), the code option of pcmi parts and the MCP tool get_check_history. -->
+    <ProjectReference Include="..\PcMieru.Checks\PcMieru.Checks.csproj" />
     <!-- Not linked: only built, so PCMieru.SensorHost.exe lands next to the app (the GPU live values are read by that process). -->
     <ProjectReference Include="..\PcMieru.SensorHost\PcMieru.SensorHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>

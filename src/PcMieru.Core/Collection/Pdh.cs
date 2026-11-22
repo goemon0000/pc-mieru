@@ -150,8 +150,21 @@ internal sealed unsafe class PdhArrayReader
         PdhArray.TryGetItem(_buffer, BaseAddress, index, Count, out name, out value, out cstatus);
 }
 
+/// <summary>
+/// The part of a PDH query a caller that owns one needs, so that a test can stand in for it (a query that fails halfway through its set-up).
+/// </summary>
+internal interface IPdhQuery : IDisposable
+{
+    bool IsOpen { get; }
+
+    /// <summary>Adds a counter by its English path. Zero means it is not available here.</summary>
+    nint Add(string englishPath, out uint status);
+
+    uint Collect();
+}
+
 /// <summary>A PDH query that stays open between ticks (rates need two collections).</summary>
-internal sealed class PdhQuery : IDisposable
+internal sealed class PdhQuery : IPdhQuery
 {
     private nint _query;
 

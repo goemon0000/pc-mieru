@@ -1,0 +1,298 @@
+{
+  "cpus": [
+    "CPU0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+    "CPU7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部"
+  ],
+  "board": {
+    "manufacturer": "Test Maker",
+    "product": "BOARD0 まえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部"
+  },
+  "memory": [
+    {
+      "partNumber": "RAM0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "RAM7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    }
+  ],
+  "gpus": [
+    {
+      "name": "GPU0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 12817793024,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 13891534848,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 14965276672,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 16039018496,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 17112760320,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 18186502144,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 19260243968,
+      "onPciBus": true
+    },
+    {
+      "name": "GPU7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "dedicatedBytes": 20333985792,
+      "onPciBus": true
+    }
+  ],
+  "disks": [
+    {
+      "name": "SSD0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "SSD7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "HDD0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "HDD7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    }
+  ],
+  "monitors": [
+    {
+      "name": "MON0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    },
+    {
+      "name": "MON7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "active": true
+    }
+  ],
+  "opticals": [
+    {
+      "name": "ODD0 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD1 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD2 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD3 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD4 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD5 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD6 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "ODD7 のなまえ試験用部品のなまえ試験用部品のなまえ試験用部品のなまえ試験用部",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    }
+  ]
+}

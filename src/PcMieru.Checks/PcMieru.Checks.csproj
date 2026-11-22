@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- UI-free checks: the pcm-check/1 result format, the item-ID registry and the overall verdict (docs/unify/DESIGN-A.md). No UI, no admin exe, no network. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>PcMieru.Checks</RootNamespace>
+    <!-- For the LibraryImport source generator (MoveFileEx in History/CheckHistoryFileSystem.cs) and for the one unsafe class, Load/RealMemoryTestSession.cs (native blocks for the memory check). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The storage baseline takes the Core inspection types (StorageInspection) as its input (DESIGN-A 5.1). Gui and Cli -> Checks -> Core -> Wire. -->
+    <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WMI questions of the system check, bounded by a deadline (SystemInfo/ManagementWmiExecutor.cs, DESIGN-A 1 and 6.1). -->
+    <PackageReference Include="System.Management" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PcMieru.Checks.Tests" />
+  </ItemGroup>
+
+</Project>

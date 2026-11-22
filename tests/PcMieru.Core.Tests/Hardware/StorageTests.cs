@@ -23,6 +23,43 @@ public class StorageProtocolTests
         Assert.True(q.AsSpan(48).IndexOfAnyExcept((byte)0) < 0);
     }
 
+    [Theory]
+    [InlineData((byte)0x00)]
+    [InlineData((byte)0x03)]
+    [InlineData((byte)0x04)]
+    [InlineData((byte)0x80)]
+    [InlineData((byte)0xC0)]
+    [InlineData((byte)0xFF)]
+    public void NvmeLogQueryRefusesEveryPageButErrorAndHealth(byte page)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => StorageProtocol.BuildNvmeLogQuery(page, 512));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(4097)]
+    [InlineData(int.MaxValue)]
+    [InlineData(int.MinValue)]
+    public void NvmeLogQueryRefusesLengthsOutsideOneToFourThousandNinetySix(int length)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => StorageProtocol.BuildNvmeLogQuery(StorageProtocol.NvmeLogHealthInfo, length));
+        Assert.Throws<ArgumentOutOfRangeException>(() => StorageProtocol.BuildNvmeLogQuery(StorageProtocol.NvmeLogErrorInfo, length));
+    }
+
+    [Fact]
+    public void NvmeLogQueryAcceptsTheTwoPagesAtTheLengthEdgesAndIsTheHelpersBuilder()
+    {
+        foreach (var page in new[] { StorageProtocol.NvmeLogErrorInfo, StorageProtocol.NvmeLogHealthInfo })
+        {
+            foreach (var length in new[] { 1, 512, 1024, 4096 })
+            {
+                // One builder, two callers: the Core bytes are the Helper's bytes for every request that can be built at all.
+                Assert.Equal(PcMieru.Wire.StorageProtocol.BuildNvmeLogQuery(page, length), StorageProtocol.BuildNvmeLogQuery(page, length));
+            }
+        }
+    }
+
     [Fact]
     public void PropertyQueryIsStandardQuery()
     {

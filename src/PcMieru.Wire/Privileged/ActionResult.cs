@@ -127,6 +127,34 @@ public static class HelperDataKeys
     /// <summary>nvme-health: base64 of the first 16 entries of the Error Information log page (0x01), if it could be read.</summary>
     public const string NvmeErrors = "nvme.errors";
 
+    /// <summary>
+    /// nvme-health: how many of the 16 entries of that Error Information page hold an error (a decimal count), counted by the Helper
+    /// from the page it just read. Only present when the whole page was read. No LBA or other field of an entry is carried.
+    /// </summary>
+    public const string NvmeErrorLogEntries = "nvme.errorlog.entries";
+
+    /// <summary>nvme-health: how many of those entries are media / data integrity errors (Status Code Type 2); same rules as the entry count.</summary>
+    public const string NvmeErrorLogMedia = "nvme.errorlog.media";
+
+    /// <summary>
+    /// The identity of the disk as the Helper saw it on the very handle it read the health bytes through, in the same extraction Core
+    /// uses before the read. smart-read / nvme-health / disk-health-all: all six keys or none (an older Helper writes none).
+    /// Core compares them with what it saw before; the Helper never compares or stores anything. The six share this summary.
+    /// </summary>
+    public const string IdentitySerial = "identity.serial";
+
+    public const string IdentityUniqueId = "identity.uniqueId";
+
+    public const string IdentityLocation = "identity.location";
+
+    public const string IdentityModel = "identity.model";
+
+    /// <summary>Decimal long; "0" when the disk size could not be read.</summary>
+    public const string IdentitySizeBytes = "identity.sizeBytes";
+
+    /// <summary>Decimal STORAGE_BUS_TYPE as the descriptor reported it (not the "ata"/"nvme" word of <see cref="Bus"/>).</summary>
+    public const string IdentityBus = "identity.bus";
+
     /// <summary>disk-health-all: what drive N answered (a decimal <see cref="OperationCode"/>); the rest of its keys follow under the same prefix.</summary>
     public const string DriveCode = "code";
 

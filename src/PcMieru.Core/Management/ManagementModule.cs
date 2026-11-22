@@ -16,14 +16,14 @@ public static class ManagementModule
         }
         else
         {
-            RegisterReal(registry);
+            RegisterReal(registry, options);
         }
     }
 
-    private static void RegisterReal(ServiceRegistry registry)
+    private static void RegisterReal(ServiceRegistry registry, PcMieruOptions options)
     {
         var policy = new ProtectionPolicy();
-        var eco = new EcoStateStore();
+        var eco = CreateEcoStore(options);
         var helper = new HelperClient();
         var control = new ProcessControl(policy, eco);
         var startup = new StartupManager(helper);
@@ -40,6 +40,10 @@ public static class ManagementModule
         registry.Set<IHelperClient>(helper);
         registry.Set<ITaskLauncher>(new TaskLauncher());
     }
+
+    /// <summary>The efficiency-mode memory of the real services: the file under <c>%LOCALAPPDATA%\PCMieru</c>, or memory only under <see cref="PcMieruOptions.NoStateFiles"/>.</summary>
+    internal static EcoStateStore CreateEcoStore(PcMieruOptions options, string? path = null) =>
+        new(path, persist: !options.NoStateFiles);
 
     private static void RegisterFakes(ServiceRegistry registry)
     {

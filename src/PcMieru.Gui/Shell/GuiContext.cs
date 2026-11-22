@@ -1,21 +1,48 @@
+using PcMieru.Checks.Build;
+
 namespace PcMieru.Gui;
 
 /// <summary>Everything a page may use. Pages take this in their constructor and never reach for a global.</summary>
 internal sealed class GuiContext
 {
     /// <param name="netMeter">The network meter the pages control. Null: the one in <paramref name="services"/>. A test passes its own.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null)
+    /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
+    /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
+    /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null)
     {
+        Measure = measure;
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
         NetMeter = netMeter ?? services.NetMeter;
+        if (checks is null && services.Options.ForceFakes)
+        {
+            // Only with --fakes: the smoke run may hold one fake load run still to look at it (see FakeCheckHold).
+            FakeHold = new FakeCheckHold();
+            checks = CheckComposition.Create(services, hold: FakeHold);
+        }
+
+        Checks = checks ?? CheckComposition.Create(services);
+        BuildCode = buildCode ?? CheckComposition.CreateBuildCode(services);
     }
 
     public PcMieruServices Services { get; }
 
+    /// <summary>The marks of a <c>--measure</c> run; null in a normal start (DESIGN-A 10, <see cref="MeasureMarks"/>).</summary>
+    public MeasureMarks? Measure { get; }
+
     public INetMeterControl NetMeter { get; }
+
+    /// <summary>The maker of the configuration code (PCB1). The hardware page asks it only when its button is pressed.</summary>
+    public IBuildCodeProvider BuildCode { get; }
+
+    /// <summary>With <c>--fakes</c> and no controller given: the smoke run's way to hold one fake load run still. Null otherwise.</summary>
+    internal FakeCheckHold? FakeHold { get; }
+
+    /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
+    public CheckController Checks { get; }
 
     public SnapshotPump Pump { get; }
 
@@ -152,19 +179,27 @@ internal sealed class GuiContext
         NavigateRequested?.Invoke(pageId, process);
     }
 
-    /// <summary>Text to the clipboard. A busy clipboard is a normal failure on Windows: it goes to the status bar, not a crash.</summary>
+    /// <summary>What puts the text on the clipboard. The system's by default; a test puts one that fails.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Action<string> ClipboardWriter { get; set; } = static text => Clipboard.SetText(text);
+
+    /// <summary>
+    /// Text to the clipboard. A busy clipboard is a normal failure on Windows: it goes to the status bar, not a crash. The failure is said with the
+    /// fixed text and the type and HRESULT of the exception, never its message (the message is the OS's, in its language, and can carry a path or
+    /// a user name; DESIGN-A §7).
+    /// </summary>
     /// <param name="doneKey">The status text for success (default "copied"). Returns false when the clipboard was busy.</param>
     public bool CopyText(string text, string doneKey = "gui.common.copied")
     {
         try
         {
-            Clipboard.SetText(text);
+            ClipboardWriter(text);
             ReportKey(doneKey);
             return true;
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or ThreadStateException)
         {
-            Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+            Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = CheckFormat.ExceptionDetail(ex) }));
             return false;
         }
     }

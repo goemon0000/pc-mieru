@@ -74,4 +74,199 @@ public class CliStringsTests
             }
         }
     }
+
+    // ---- the checks and the configuration code (step 11): one word for every member of every list the library can grow ----
+
+    private static Dictionary<string, StringEntry> Table() =>
+        AllCliEntries().ToDictionary(e => e.Key, e => e, StringComparer.Ordinal);
+
+    private static void AssertHasText(Dictionary<string, StringEntry> table, string key)
+    {
+        Assert.True(table.TryGetValue(key, out var entry), "no text for " + key);
+        Assert.False(string.IsNullOrWhiteSpace(entry.Ja), key + " ja");
+        Assert.False(string.IsNullOrWhiteSpace(entry.En), key + " en");
+    }
+
+    private static string Lower<T>(T value)
+        where T : Enum => value.ToString()!.ToLowerInvariant();
+
+    [Fact]
+    public void Every_member_of_the_check_enums_has_a_word_in_both_languages()
+    {
+        var table = Table();
+        foreach (var verdict in Enum.GetValues<PcMieru.Checks.ItemVerdict>())
+        {
+            AssertHasText(table, "cli.check.verdict." + Lower(verdict));
+        }
+
+        foreach (var verdict in Enum.GetValues<PcMieru.Checks.CheckVerdict>())
+        {
+            AssertHasText(table, "cli.check.verdict." + Lower(verdict));
+        }
+
+        foreach (var kind in Enum.GetValues<PcMieru.Checks.CheckKind>())
+        {
+            AssertHasText(table, "cli.check.kind." + Lower(kind));
+        }
+
+        foreach (var outcome in Enum.GetValues<PcMieru.Checks.CheckOutcome>())
+        {
+            AssertHasText(table, "cli.check.outcome." + Lower(outcome));
+        }
+
+        foreach (var reason in Enum.GetValues<PcMieru.Checks.CheckReason>())
+        {
+            AssertHasText(table, "cli.check.reason." + Lower(reason));
+        }
+
+        foreach (var stage in Enum.GetValues<PcMieru.Checks.CheckStage>())
+        {
+            AssertHasText(table, "cli.check.stage." + Lower(stage));
+        }
+    }
+
+    [Fact]
+    public void Every_known_note_failure_save_failure_and_history_warning_has_a_text()
+    {
+        var table = Table();
+        foreach (var note in PcMieru.Checks.CheckNotes.Known)
+        {
+            AssertHasText(table, "cli.check.note." + note);
+        }
+
+        foreach (var code in PcMieru.Checks.CheckRunFailureCodes.All)
+        {
+            AssertHasText(table, "cli.check.fail." + code);
+        }
+
+        foreach (var code in PcMieru.Checks.CheckSaveFailureCodes.All)
+        {
+            AssertHasText(table, "cli.check.savefail." + code);
+        }
+
+        foreach (var code in PcMieru.Checks.CheckHistoryWarningCodes.All)
+        {
+            AssertHasText(table, "cli.check.warn." + code);
+        }
+
+        // The words for a code this version has not met are there too, and every one carries the code it says.
+        AssertHasText(table, "cli.check.note.unknown");
+        AssertHasText(table, "cli.check.fail.unknown");
+        AssertHasText(table, "cli.check.savefail.unknown");
+        AssertHasText(table, "cli.check.warn.unknown");
+        AssertHasText(table, "cli.check.savefail.notSaved");
+    }
+
+    [Fact]
+    public void Every_note_kind_unread_reason_and_category_of_the_configuration_code_has_a_text()
+    {
+        var table = Table();
+        foreach (var kind in Enum.GetValues<PcMieru.Checks.Build.BuildNoteKind>())
+        {
+            var suffix = Commands.PartsCommand.NoteKey(kind);
+            Assert.NotNull(suffix);
+            AssertHasText(table, "cli.parts.note." + suffix);
+        }
+
+        AssertHasText(table, "cli.parts.note.one_part_left_out_for_length_many");
+        AssertHasText(table, "cli.parts.note.unknown");
+        foreach (var reason in Enum.GetValues<PcMieru.Checks.CheckReason>())
+        {
+            AssertHasText(table, "cli.parts.reason." + Lower(reason));
+        }
+
+        foreach (var category in PcMieru.Checks.Build.BuildConfig.Categories)
+        {
+            AssertHasText(table, "cli.parts.category." + category.Replace('-', '_'));
+        }
+    }
+
+    [Fact]
+    public void The_five_verdict_words_are_the_ones_the_spec_names_in_both_languages()
+    {
+        var table = Table();
+        string[] keys = ["ok", "caution", "check", "unavailable", "info"];
+        Assert.Equal(["OK", "注意", "要確認", "測れず", "参考"], keys.Select(k => table["cli.check.verdict." + k].Ja).ToArray());
+        Assert.Equal(["OK", "Caution", "Needs review", "Not measured", "Info"], keys.Select(k => table["cli.check.verdict." + k].En).ToArray());
+    }
+
+    // ---- the counts line is built from the verdict enum (m6): a verdict added later is a part of it, never a silent omission ----
+
+    private static CliContext ContextOf(Language language) =>
+        new(new CliEnvironment(TextReader.Null, new StringWriter(), new StringWriter(), CliEnvironment.DefaultFactory), language, CancellationToken.None);
+
+    [Theory]
+    [InlineData(Language.En)]
+    [InlineData(Language.Ja)]
+    public void The_counts_line_has_one_part_for_every_verdict_of_the_enum_in_the_enum_order_with_its_own_word_and_count(Language language)
+    {
+        using var context = ContextOf(language);
+        var table = Table();
+        var verdicts = Enum.GetValues<PcMieru.Checks.ItemVerdict>();
+        Assert.Equal(5, verdicts.Length);
+
+        // Every verdict has a distinct count, so a part in the wrong place or with another verdict's number cannot pass.
+        var counts = new PcMieru.Checks.CheckCounts(Ok: 1, Caution: 2, Check: 3, Unavailable: 4, Info: 5);
+        var expectedNumbers = new Dictionary<PcMieru.Checks.ItemVerdict, int>
+        {
+            [PcMieru.Checks.ItemVerdict.Ok] = 1,
+            [PcMieru.Checks.ItemVerdict.Caution] = 2,
+            [PcMieru.Checks.ItemVerdict.Check] = 3,
+            [PcMieru.Checks.ItemVerdict.Unavailable] = 4,
+            [PcMieru.Checks.ItemVerdict.Info] = 5,
+        };
+        Assert.Equal(verdicts.Length, expectedNumbers.Count);
+
+        var expected = string.Join(
+            " / ",
+            verdicts.Select(v =>
+            {
+                var entry = table["cli.check.verdict." + Lower(v)];
+                return (language == Language.Ja ? entry.Ja : entry.En) + " " + expectedNumbers[v];
+            }));
+
+        Assert.Equal(expected, Commands.CheckCommand.CountsFull(context, counts));
+        Assert.Equal(expected.Replace(" / ", " ", StringComparison.Ordinal), Commands.CheckCommand.CountsShort(context, counts));
+        Assert.Equal("-", Commands.CheckCommand.CountsShort(context, PcMieru.Checks.CheckCounts.Zero));
+        Assert.Equal(
+            string.Join(" / ", verdicts.Select(v => (language == Language.Ja ? table["cli.check.verdict." + Lower(v)].Ja : table["cli.check.verdict." + Lower(v)].En) + " 0")),
+            Commands.CheckCommand.CountsFull(context, PcMieru.Checks.CheckCounts.Zero));
+    }
+
+    [Fact]
+    public void The_counts_line_has_no_text_of_its_own_to_fall_out_of_step_with_the_verdict_words()
+    {
+        Assert.DoesNotContain(AllCliEntries(), e => e.Key == "cli.check.counts");
+    }
+
+    [Theory]
+    [InlineData(Language.En, "System and storage checks", "pcmi check", "--elevate", "--code")]
+    [InlineData(Language.Ja, "システム・ストレージの確認", "pcmi check", "--elevate", "--code")]
+    public async Task Help_and_usage_name_the_check_verbs_and_the_code_option(Language language, string checkLine, string usage, string elevate, string code)
+    {
+        var help = await CliRun.RunAsync(["help"], language: language);
+        Assert.Equal(0, help.ExitCode);
+        Assert.Contains(checkLine, help.Out, StringComparison.Ordinal);
+        Assert.Contains("check", help.Out, StringComparison.Ordinal);
+
+        var check = Assert.Single(CliApp.Commands, c => c.Name == "check");
+        Assert.StartsWith(usage, check.Usage, StringComparison.Ordinal);
+        foreach (var verb in new[] { "system", "storage", "history" })
+        {
+            Assert.Contains(verb, check.Usage, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(elevate, check.Usage, StringComparison.Ordinal);
+        Assert.Equal(["json", "elevate"], check.Options.Select(o => o.Name).ToArray());
+
+        var parts = Assert.Single(CliApp.Commands, c => c.Name == "parts");
+        Assert.Contains(code, parts.Usage, StringComparison.Ordinal);
+        Assert.Contains(parts.Options, o => o.Name == "code");
+
+        var shown = await CliRun.RunAsync(["check", "--help"], language: language);
+        Assert.Equal(0, shown.ExitCode);
+        Assert.Contains("pcmi check system", shown.Out, StringComparison.Ordinal);
+        var shownParts = await CliRun.RunAsync(["parts", "--help"], language: language);
+        Assert.Contains("--code", shownParts.Out, StringComparison.Ordinal);
+    }
 }

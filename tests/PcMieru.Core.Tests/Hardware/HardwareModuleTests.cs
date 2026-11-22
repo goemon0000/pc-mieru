@@ -19,6 +19,7 @@ public class HardwareModuleTests
 
         Assert.IsType<RealHardwareProvider>(registry.Get<IHardwareProvider>());
         Assert.IsType<RealStorageHealthProvider>(registry.Get<IStorageHealthProvider>());
+        Assert.IsType<RealStorageInspectionSource>(registry.Get<IStorageInspectionSource>());
         Assert.IsType<SensorHostClient>(registry.Get<ISensorClient>());
         Assert.Empty(registry.All.OfType<IFakeImplementation>());
         Dispose(registry);
@@ -33,8 +34,9 @@ public class HardwareModuleTests
 
         Assert.IsType<FakeHardwareProvider>(registry.Get<IHardwareProvider>());
         Assert.IsType<FakeStorageHealthProvider>(registry.Get<IStorageHealthProvider>());
+        Assert.IsType<FakeStorageInspectionSource>(registry.Get<IStorageInspectionSource>());
         Assert.IsType<FakeSensorClient>(registry.Get<ISensorClient>());
-        Assert.Equal(3, registry.All.OfType<IFakeImplementation>().Count());
+        Assert.Equal(4, registry.All.OfType<IFakeImplementation>().Count());
         Dispose(registry);
     }
 

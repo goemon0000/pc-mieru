@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using PcMieru.Checks;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
 
@@ -16,8 +17,9 @@ internal sealed record McpTool(
     Func<JsonNode?, CancellationToken, Task<JsonNode?>> Run);
 
 /// <summary>
-/// The seven read-only tools. This file and the rest of Mcp/ see <see cref="IReadOnlyInsights"/> and nothing else:
-/// no process control, no services, no Helper (a test greps the sources). Descriptions are fixed text; names found
+/// The eight read-only tools. This file and the rest of Mcp/ see <see cref="IReadOnlyInsights"/> and
+/// <see cref="IReadOnlyCheckHistory"/> and nothing else: no process control, no services, no Helper, nothing that saves or
+/// moves a check result (a test greps the sources and pins the constructor). Descriptions are fixed text; names found
 /// on the PC only ever travel inside the JSON results.
 /// </summary>
 internal sealed class McpTools
@@ -26,7 +28,13 @@ internal sealed class McpTools
     public const int MaxTop = 200;
     public const int MaxDurationSec = 30;
 
-    public McpTools(IReadOnlyInsights insights)
+    /// <param name="insights">What may be asked about the PC.</param>
+    /// <param name="history">The saved checks, for reading only (from <c>CheckHistory.OpenReadOnly</c>).</param>
+    /// <param name="historyRedactor">
+    /// Applied to what <c>get_check_history</c> returns, on top of the server's own redactor. A check result is meant to be shared, so it
+    /// stays redacted even when the server was started with redaction off.
+    /// </param>
+    public McpTools(IReadOnlyInsights insights, IReadOnlyCheckHistory history, IRedactor historyRedactor)
     {
         All =
         [
@@ -119,10 +127,89 @@ internal sealed class McpTools
                     var seconds = (int)(a.Integer("duration", 0, MaxDurationSec, clamp: true) ?? 5);
                     return PcMieruJson.ToNode(await insights.GetReportAsync(new ReportOptions(seconds), ct).ConfigureAwait(false));
                 }),
+            new(
+                "get_check_history",
+                "Check history",
+                "Results of the PC checks (system, cpu, memory, storage) that were run and saved on this PC, newest first. With kind and limit (default 20, 1 to 200) it lists summaries; with runId it returns the saved result of that one run. Reads saved results only: it never starts a check and never shows an elevation prompt.",
+                Schema("""
+                    {"kind":{"type":"string","enum":["system","cpu","memory","storage"],"description":"Only this kind of check"},
+                     "limit":{"type":"integer","minimum":1,"maximum":200,"default":20},
+                     "runId":{"type":"string","description":"The runId of one saved run (use it alone)"}}
+                    """),
+                false,
+                (args, ct) => CheckHistoryAsync(history, historyRedactor, args, ct)),
         ];
     }
 
     public IReadOnlyList<McpTool> All { get; }
+
+    /// <summary>
+    /// The history tool. A list is the same summary the CLI prints (<c>{ "entries": [...], "warnings": [...] }</c>, newest first); a
+    /// <c>runId</c> is the saved <c>pcm-check/1</c> result as <c>{ "result": ... }</c>. A run that is not there and a run whose file cannot be
+    /// read are different tool errors: "not found" is only said when no file carries that ID, and an unreadable file says why
+    /// (its warning code), so a model never takes a locked or damaged result for a missing one. Everything returned, text included, goes
+    /// through <paramref name="redactor"/> whatever the server's own redaction setting is.
+    /// </summary>
+    private static async Task<JsonNode?> CheckHistoryAsync(IReadOnlyCheckHistory history, IRedactor redactor, JsonNode? args, CancellationToken ct)
+    {
+        var a = new ToolArgs(args, "kind", "limit", "runId");
+        var runIdText = a.Text("runId", 64);
+        var kind = a.Enum<CheckKind>("kind");
+        var limit = a.Integer("limit", 1, CheckHistoryQuery.McpMaxLimit);
+        try
+        {
+            if (runIdText is not null)
+            {
+                if (kind is not null || limit is not null)
+                {
+                    throw new ToolException("argument 'runId' is used alone: do not combine it with 'kind' or 'limit'");
+                }
+
+                // Only the two spellings the result files use ("D" with dashes, "N" without), in either case. Guid.TryParse would also take
+                // braces, parentheses and the hexadecimal "X" form, which no file name or listing ever shows.
+                if (!Guid.TryParseExact(runIdText, "D", out var runId) && !Guid.TryParseExact(runIdText, "N", out runId))
+                {
+                    throw new ToolException("argument 'runId' must be the UUID of a saved run (with or without dashes)");
+                }
+
+                var found = await history.GetAsync(runId, ct).ConfigureAwait(false);
+                switch (found.Status)
+                {
+                    case CheckHistoryGetStatus.Found:
+                        return redactor.RedactJson(new JsonObject { ["result"] = JsonNode.Parse(CheckJson.Serialize(found.Result!)) });
+                    case CheckHistoryGetStatus.Unreadable:
+                        throw new ToolException($"the saved result of this run exists but cannot be read now ({found.WarningCode}): {UnreadableHint(found.WarningCode)}; it is not missing");
+                    default:
+                        throw new ToolException("not found: no saved check has this runId");
+                }
+            }
+
+            var page = await history.ListAsync(CheckHistoryQuery.ForMcp(kind, (int?)limit), ct).ConfigureAwait(false);
+            return redactor.RedactJson(JsonNode.Parse(CheckJson.SerializeHistory(page)));
+        }
+        catch (CheckHistoryFolderException ex)
+        {
+            throw new ToolException(redactor.RedactText("the check history folder cannot be read: " + ex.Message));
+        }
+        catch (Exception ex) when (ex is not (ToolException or OperationCanceledException or OutOfMemoryException))
+        {
+            // Anything else from the history (a fault of the reader, an I/O error with a path in its message) would reach the server's catch-all
+            // and be redacted only by the server's own setting. This tool's text is always redacted.
+            throw new ToolException(redactor.RedactText(ex.GetType().Name + ": " + ex.Message));
+        }
+    }
+
+    // What to tell the model about a run whose file exists but cannot be read now, by the reason the history gave. The code stays in the text.
+    private static string UnreadableHint(string? warningCode) => warningCode switch
+    {
+        CheckHistoryWarningCodes.Locked => "in use, try again later",
+        CheckHistoryWarningCodes.Unreadable or CheckHistoryWarningCodes.QuarantineFailed => "the file is damaged; `pcmi check history` moves it aside",
+        CheckHistoryWarningCodes.Quarantined => "the file was damaged and has been moved aside",
+        CheckHistoryWarningCodes.FutureFormat => "written by a newer version",
+        CheckHistoryWarningCodes.AccessDenied => "access to the file is denied",
+        CheckHistoryWarningCodes.ReadFailed => "reading the file failed, try again later",
+        _ => "try again later",
+    };
 
     public McpTool? Find(string name) => All.FirstOrDefault(t => t.Name == name);
 

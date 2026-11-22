@@ -292,6 +292,54 @@ public class EcoStateStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_memory_only_store_neither_reads_nor_creates_nor_changes_the_file()
+    {
+        // The GUI's --measure run: PcMieruOptions.NoStateFiles. A file the owner has is not read (the run does not depend on it) and not changed.
+        var key = new ProcessKey(100, 5000);
+        var other = new ProcessKey(300, 7000);
+        Directory.CreateDirectory(_dir);
+        var seed = new EcoStateStore(File_);
+        seed.SetIfAbsent(other, new EcoRecord(32, 1, 0, true));
+        var bytes = File.ReadAllBytes(File_);
+        var written = File.GetLastWriteTimeUtc(File_);
+
+        var memory = new EcoStateStore(File_, persist: false);
+        Assert.Null(memory.Get(other)); // the file's record is not seen
+        memory.SetIfAbsent(key, new EcoRecord(64, 0, 1, true));
+        Assert.Equal(new EcoRecord(64, 0, 1, true), memory.Get(key)); // it still behaves as a store while the process runs
+        memory.Remove(key);
+        Assert.Null(memory.Get(key));
+
+        Assert.Equal(bytes, File.ReadAllBytes(File_));
+        Assert.Equal(written, File.GetLastWriteTimeUtc(File_));
+
+        // And where there is no file, none is made, nor its folder.
+        var absent = Path.Combine(_dir, "sub", "eco.json");
+        var fresh = new EcoStateStore(absent, persist: false);
+        fresh.SetIfAbsent(key, new EcoRecord(64, 0, 1, true));
+        Assert.NotNull(fresh.Get(key));
+        Assert.False(File.Exists(absent));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(absent)));
+    }
+
+    [Fact]
+    public void The_real_services_keep_the_state_file_unless_asked_not_to()
+    {
+        var key = new ProcessKey(100, 5000);
+
+        var normal = ManagementModule.CreateEcoStore(new PcMieruOptions(), File_);
+        normal.SetIfAbsent(key, new EcoRecord(32, 1, 0, true));
+        Assert.True(File.Exists(File_));
+        Assert.NotNull(new EcoStateStore(File_).Get(key));
+        File.Delete(File_);
+
+        var none = ManagementModule.CreateEcoStore(new PcMieruOptions { NoStateFiles = true }, File_);
+        none.SetIfAbsent(key, new EcoRecord(32, 1, 0, true));
+        Assert.NotNull(none.Get(key));
+        Assert.False(File.Exists(File_));
+    }
+
+    [Fact]
     public void Data_from_a_successful_on_becomes_a_record_and_a_restore()
     {
         var data = new Dictionary<string, string>

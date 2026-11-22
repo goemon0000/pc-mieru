@@ -1,0 +1,76 @@
+{
+  "cpus": [
+    "AMD Ryzen 7 5800X 8-Core Processor",
+    "インテル(R) Core(TM) i7-14700K プロセッサー"
+  ],
+  "board": {
+    "manufacturer": "株式会社テスト製作所",
+    "product": "試験用　マザーボード　Ｚ７９０　（全角空白入り）"
+  },
+  "memory": [
+    {
+      "partNumber": "テスト 16GB DDR4-3200",
+      "manufacturer": "Corsair",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    }
+  ],
+  "gpus": [
+    {
+      "name": "NVIDIA GeForce RTX 5070",
+      "dedicatedBytes": 12817793024,
+      "onPciBus": true
+    },
+    {
+      "name": "ＡＭＤ　Ｒａｄｅｏｎ　テスト用",
+      "dedicatedBytes": 8589934592,
+      "onPciBus": true
+    }
+  ],
+  "disks": [
+    {
+      "name": "Samsung SSD 980 PRO 1TB",
+      "busType": 17,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "東芝 ハードディスク MG04ACA200E",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    }
+  ],
+  "monitors": [
+    {
+      "name": "日本語モニター 27型",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "𠮷野家　Display　＆　<Test>",
+      "active": true
+    }
+  ],
+  "opticals": [
+    {
+      "name": "パイオニア BDR-212 テスト",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    }
+  ]
+}

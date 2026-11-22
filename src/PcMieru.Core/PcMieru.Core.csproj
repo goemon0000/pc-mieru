@@ -14,6 +14,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Core.Tests" />
     <InternalsVisibleTo Include="PcMieru.Cli.Tests" />
+    <InternalsVisibleTo Include="PcMieru.Checks.Tests" />
+    <!-- The CPU check (Checks/Load) reads the logical-processor map and opens its own PDH session, both internal read-only pieces here. -->
+    <InternalsVisibleTo Include="PcMieru.Checks" />
   </ItemGroup>
 
 </Project>

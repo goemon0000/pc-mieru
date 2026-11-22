@@ -13,7 +13,9 @@ namespace PcMieru.Core.Hardware.Collectors;
 internal static class StorageCollector
 {
     private const string Source = "ioctl:StorageDeviceProperty";
-    private const int MaxDisks = 64;
+
+    /// <summary>How many physical drive numbers are tried (0 to MaxDisks - 1); the health reader and the inspection use the same walk.</summary>
+    internal const int MaxDisks = 64;
     private static readonly Guid DiskInterface = new("53f56307-b6bf-11d0-94f2-00a0c91efb8b");
 
     private sealed record VolumeInfo(string Letter, string Label, string FileSystem, Value<long> Total, Value<long> Free, IReadOnlyList<(int Disk, long Start, long Length)> Extents, string? Style);
@@ -41,6 +43,9 @@ internal static class StorageCollector
             return Probe.FromException<IReadOnlyList<StorageDevice>>(ex, "composite:storage");
         }
     }
+
+    /// <summary>The open error of a drive number nobody has: file not found, or path not found.</summary>
+    internal static bool IsAbsent(int error) => error is Probe.ErrorFileNotFound or 3;
 
     /// <summary>Highest-numbered physical drive that exists; the Helper and health reader use the same walk.</summary>
     public static IEnumerable<int> PhysicalDriveNumbers()
@@ -147,13 +152,16 @@ internal static class StorageCollector
         return result;
     }
 
-    private static StorageBus MapBus(int busType) => busType switch
+    internal static StorageBus MapBus(int busType) => busType switch
     {
         17 => StorageBus.Nvme,
         3 or 11 => StorageBus.Sata,
         7 => StorageBus.Usb,
         8 => StorageBus.Raid,
         1 or 10 => StorageBus.Scsi,
+        9 => StorageBus.Iscsi,
+        14 or 15 => StorageBus.Virtual,
+        16 => StorageBus.Spaces,
         0 => StorageBus.Unknown,
         _ => StorageBus.Other,
     };
@@ -165,7 +173,7 @@ internal static class StorageCollector
         if (handle.IsInvalid)
         {
             var err = Marshal.GetLastPInvokeError();
-            if (err is Probe.ErrorFileNotFound or 3)
+            if (IsAbsent(err))
             {
                 return null;
             }

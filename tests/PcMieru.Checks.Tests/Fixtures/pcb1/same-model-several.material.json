@@ -1,0 +1,209 @@
+{
+  "cpus": [
+    "AMD Ryzen 9 7950X 16-Core Processor"
+  ],
+  "board": {
+    "manufacturer": "ASUSTeK COMPUTER INC.",
+    "product": "TUF GAMING X670E-PLUS WIFI"
+  },
+  "memory": [
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "CMK64GX5M2B5600Z40",
+      "manufacturer": "Corsair",
+      "capacity": 34359738368,
+      "speed": 4800,
+      "smbiosType": 34,
+      "memoryType": 0,
+      "configuredSpeed": 5600
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    },
+    {
+      "partNumber": "F4-3200C16-16GVK",
+      "manufacturer": "G Skill Intl",
+      "capacity": 17179869184,
+      "speed": 3200,
+      "smbiosType": 26,
+      "memoryType": 0,
+      "configuredSpeed": 0
+    }
+  ],
+  "gpus": [
+    {
+      "name": "NVIDIA GeForce RTX 3080 Ti",
+      "dedicatedBytes": 12621709312,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce RTX 3080 Ti",
+      "dedicatedBytes": 12621709312,
+      "onPciBus": true
+    }
+  ],
+  "disks": [
+    {
+      "name": "Samsung SSD 870 EVO 1TB",
+      "busType": 11,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "Samsung SSD 870 EVO 1TB",
+      "busType": 11,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "Samsung SSD 870 EVO 1TB",
+      "busType": 11,
+      "mediaType": 4,
+      "size": 1000204886016
+    },
+    {
+      "name": "TOSHIBA MG04ACA200E",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    },
+    {
+      "name": "TOSHIBA MG04ACA200E",
+      "busType": 11,
+      "mediaType": 3,
+      "size": 2000398934016
+    }
+  ],
+  "monitors": [
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "UG27PJ",
+      "active": true
+    },
+    {
+      "name": "PHL 278E1",
+      "active": true
+    },
+    {
+      "name": "PHL 278E1",
+      "active": true
+    }
+  ],
+  "opticals": [
+    {
+      "name": "HL-DT-ST BD-RE WH16NS60",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    },
+    {
+      "name": "HL-DT-ST BD-RE WH16NS60",
+      "pnpDeviceId": "SCSI\\CDROM&VEN_HL-DT-ST&PROD_BD-RE_WH16NS60\\4&1"
+    }
+  ]
+}

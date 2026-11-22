@@ -89,7 +89,10 @@ internal static class BatteryBuilder
                     : Value.Unsupported<int>(StatusSrc, battery is null ? NoInterface : "voltage not reported"),
                 power.LifeSeconds == BatteryNative.Unknown
                     ? Value.Unsupported<int>(PowerSrc, "only known while running on battery")
-                    : Value.Ok((int)((power.LifeSeconds + 30) / 60), PowerSrc)));
+                    : Value.Ok((int)((power.LifeSeconds + 30) / 60), PowerSrc),
+                // True only when a battery-class device that says "system battery" was seen. The battery value above is also Ok for a UPS
+                // (Windows reports a USB UPS as a battery and the power status then says "a battery is present"), so Ok alone is not a laptop.
+                Value.Ok(system.Count > 0, InfoSrc)));
         return Value.Ok(hardware, "composite:battery");
     }
 

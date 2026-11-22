@@ -134,6 +134,15 @@ public enum StorageBus
     Raid,
     Scsi,
     Other,
+
+    /// <summary>A virtual disk: a VHD or VHDX mounted by Windows (file-backed) or a disk a hypervisor presents as virtual.</summary>
+    Virtual,
+
+    /// <summary>A disk reached over iSCSI (a network target, not a part of this PC).</summary>
+    Iscsi,
+
+    /// <summary>A Storage Spaces virtual disk built from other physical disks.</summary>
+    Spaces,
 }
 
 public sealed record StorageDevice(

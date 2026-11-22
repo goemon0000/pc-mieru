@@ -1,0 +1,67 @@
+{
+  "cpus": [
+    "Intel(R) Core(TM) i9-14900K"
+  ],
+  "board": null,
+  "memory": [],
+  "gpus": [
+    {
+      "name": "NVIDIA GeForce RTX 5070",
+      "dedicatedBytes": 12817793024,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce RTX 3080 Ti",
+      "dedicatedBytes": 12621709312,
+      "onPciBus": true
+    },
+    {
+      "name": "AMD Radeon RX 7900 XTX",
+      "dedicatedBytes": 25753026560,
+      "onPciBus": true
+    },
+    {
+      "name": "Intel(R) Arc(TM) A770 Graphics",
+      "dedicatedBytes": 17045651456,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce GTX 1060 6GB",
+      "dedicatedBytes": 6442450944,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce GTX 970",
+      "dedicatedBytes": 4293918720,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce GT 710",
+      "dedicatedBytes": 0,
+      "onPciBus": true
+    },
+    {
+      "name": "NVIDIA GeForce RTX 5070",
+      "dedicatedBytes": 12817793024,
+      "onPciBus": false
+    },
+    {
+      "name": "",
+      "dedicatedBytes": 12621709312,
+      "onPciBus": false
+    },
+    {
+      "name": "AMD Radeon(TM) Graphics",
+      "dedicatedBytes": 536870912,
+      "onPciBus": true
+    },
+    {
+      "name": "Microsoft Basic Display Adapter",
+      "dedicatedBytes": 0,
+      "onPciBus": true
+    }
+  ],
+  "disks": [],
+  "monitors": [],
+  "opticals": []
+}

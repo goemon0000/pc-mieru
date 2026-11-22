@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PcMieru.Gui\PcMieru.Gui.csproj" />
     <ProjectReference Include="..\..\src\PcMieru.Core\PcMieru.Core.csproj" />
+    <ProjectReference Include="..\..\src\PcMieru.Checks\PcMieru.Checks.csproj" />
   </ItemGroup>
 
 </Project>
