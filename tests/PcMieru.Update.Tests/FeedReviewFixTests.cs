@@ -359,12 +359,14 @@ public sealed class FeedReviewFixTests : IDisposable
             UpdateRefusal.RedirectHostNotAllowed, UpdateRefusal.RedirectDowngrade, UpdateRefusal.RedirectTooMany, UpdateRefusal.RedirectCredentials, UpdateRefusal.RedirectMissingLocation,
             UpdateRefusal.HttpError, UpdateRefusal.NetworkFailure,
             UpdateRefusal.StateUnavailable, UpdateRefusal.AnotherCheckRunning, UpdateRefusal.OwnVersionUnknown, UpdateRefusal.GateMissing,
+            UpdateRefusal.StageFailed,
         ];
         UpdateRefusal[] byTheReleasesRules =
         [
             UpdateRefusal.DraftRelease, UpdateRefusal.PrereleaseRelease, UpdateRefusal.TagNotStable, UpdateRefusal.ReleasePageMismatch, UpdateRefusal.BlockedTag,
             UpdateRefusal.AssetMissing, UpdateRefusal.AssetDuplicate, UpdateRefusal.AssetNotReady, UpdateRefusal.AssetUrlMismatch, UpdateRefusal.AssetTooLarge,
             UpdateRefusal.HashListLine, UpdateRefusal.DigestMismatch, UpdateRefusal.ManifestHashMismatch, UpdateRefusal.ManifestInvalid, UpdateRefusal.ManifestVersionMismatch,
+            UpdateRefusal.ZipHashMismatch, UpdateRefusal.BundleInvalid, UpdateRefusal.SignatureInvalid,
         ];
 
         // A new member of the enum fails here until somebody puts it on a side.

@@ -127,6 +127,7 @@ internal static class UpdateStrings
         new("gui.update.refusal.anothercheckrunning", "ほかの確認が動いています", "Another check is running"),
         new("gui.update.refusal.ownversionunknown", "このアプリの版を読み取れません", "This app's own version cannot be read"),
         new("gui.update.refusal.gatemissing", "PCミエルのフォルダーに PCMieru.gate.txt（起動用のファイル）がありません", "PCMieru.gate.txt (the start file) is not in the PC Mieru folder"),
+        new("gui.update.refusal.stagefailed", "新しい版をこのPCに用意できませんでした。あとでもう一度試します", "The new version could not be prepared on this PC. PC Mieru will try again later"),
 
         new("gui.update.refusal.draftrelease", "公開前の下書きの版です", "This version is only a draft"),
         new("gui.update.refusal.prereleaserelease", "試験的に公開された版です", "This version was published only as a trial version"),
@@ -143,6 +144,9 @@ internal static class UpdateStrings
         new("gui.update.refusal.manifesthashmismatch", "ファイルの目録（マニフェスト）が、照合用の一覧にあるものと違います", "The file list (manifest) is not the one the checking list names"),
         new("gui.update.refusal.manifestinvalid", "ファイルの目録（マニフェスト）の形式が正しくありません", "The file list (manifest) is not in a valid form"),
         new("gui.update.refusal.manifestversionmismatch", "ファイルの目録（マニフェスト）の版が、公開された版と違います", "The file list (manifest) is for another version than the one published"),
+        new("gui.update.refusal.ziphashmismatch", "ダウンロードした更新のファイルが、照合用の一覧にあるものと違います", "The downloaded update file is not the one the checking list names"),
+        new("gui.update.refusal.bundleinvalid", "ダウンロードした更新の中身が、ファイルの目録（マニフェスト）と合いません", "The contents of the downloaded update do not match the file list (manifest)"),
+        new("gui.update.refusal.signatureinvalid", "更新に含まれるプログラムの署名が壊れているため、入れません", "A program in the update has a broken signature, so it is not installed"),
     ];
 }
 

@@ -4,6 +4,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using PcMieru.Update.Bundle;
+using PcMieru.Update.Staging;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Feed;
 
@@ -16,8 +18,34 @@ public interface IUpdateService
     /// </summary>
     Task<UpdateCheck> CheckAsync(UpdateMode mode, bool manual, CancellationToken ct);
 
-    /// <summary>What the state file says (last check, wait, last candidate). Reads a local file; asks nobody.</summary>
+    /// <summary>What the state file says (last check, wait, last candidate, the staged update). Reads a local file; asks nobody.</summary>
     UpdateStatus ReadStatus();
+
+    /// <summary>
+    /// Downloads and unpacks the zip of <paramref name="candidate"/> into this install's cache (DESIGN-B 3.3), and checks it in full. It does something ONLY when <paramref name="mode"/> is
+    /// <see cref="UpdateMode.Automatic"/>, this install can take a swap, and the candidate is one <see cref="CheckAsync"/> validated; in every other case it returns
+    /// <see cref="UpdateStageKind.NotAttempted"/> and sends nothing. A fake service never stages.
+    /// </summary>
+    Task<UpdateStageResult> StageAsync(UpdateMode mode, UpdateCheck candidate, CancellationToken ct) =>
+        Task.FromResult(UpdateStageResult.NotAttempted("this service does not stage"));
+
+    /// <summary>
+    /// After a start: forgets what the install has outgrown (a candidate, a stage or a refusal that is not newer than <paramref name="installed"/>) and removes the stage folders that are no longer wanted
+    /// (the one a commit just used, the ones an earlier stage left). Asks nobody; does nothing when another check holds the lock.
+    /// </summary>
+    void Tidy(AppVersion installed)
+    {
+    }
+
+    /// <summary>Remembers that the result with this transaction id (12 hex) has been shown, so that it is shown once.</summary>
+    void MarkResultShown(string tx)
+    {
+    }
+
+    /// <summary>Forgets the staged update and removes its folder (the runner refused it, or it can no longer be trusted): the next check stages it again.</summary>
+    void DiscardStage()
+    {
+    }
 }
 
 /// <summary>What <see cref="UpdateService"/> needs to know.</summary>
@@ -44,6 +72,20 @@ public sealed class UpdateServiceOptions
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
     /// <summary>
+    /// The install folder (<c>I</c>): where installed.json is and what <see cref="UpdateService.StageAsync"/> asks <see cref="PlacementOf"/> about. Null: no stage (nothing can be swapped in).
+    /// </summary>
+    public string? InstallFolder { get; init; }
+
+    /// <summary>Whether <see cref="InstallFolder"/> can take a swap. Null: <see cref="InstallPlacement.Check(string)"/>. A test gives its own answer.</summary>
+    public Func<string, Placement>? PlacementOf { get; init; }
+
+    /// <summary>What looks at the signature of a staged program file. Null: <see cref="WindowsSignatureInspector"/>.</summary>
+    public ISignatureInspector? SignatureInspector { get; init; }
+
+    /// <summary>What says how much room the volume has. Null: the real one.</summary>
+    public IDiskSpace? DiskSpace { get; init; }
+
+    /// <summary>
     /// How long a MANUAL check waits for check.lock when another check holds it (the one that Off just cancelled has not let go yet, or another window is just
     /// finishing). A scheduled tick never waits: it gives way at once. Zero: do not wait.
     /// </summary>
@@ -53,7 +95,7 @@ public sealed class UpdateServiceOptions
 /// <summary>
 /// The check of the feed (DESIGN-B 3.1). Order of the rules: the mode first (nothing else is looked at in Ask / Off), then check.lock, then the wait after a rate limit
 /// (a manual check waits too), then "not due yet" (a scheduled check only), then the one write that says "I looked now", then the requests: the API, SHA256.txt and the
-/// outer manifest. It never asks for the zip.
+/// outer manifest. <see cref="CheckAsync"/> never asks for the zip; <see cref="StageAsync"/> does, in Automatic mode only (DESIGN-B 3.3).
 /// </summary>
 public sealed class UpdateService : IUpdateService
 {
@@ -66,7 +108,7 @@ public sealed class UpdateService : IUpdateService
         _store = new UpdateStateStore(options.StateFolder);
     }
 
-    public UpdateStatus ReadStatus() => _store.Read().ToStatus();
+    public UpdateStatus ReadStatus() => _store.Read().ToStatus(_options.StateFolder);
 
     public async Task<UpdateCheck> CheckAsync(UpdateMode mode, bool manual, CancellationToken ct)
     {
@@ -140,6 +182,14 @@ public sealed class UpdateService : IUpdateService
 
             state.LastRefusal = result.Kind == UpdateCheckKind.Refused ? result.Refusal.ToString() : null;
             state.RefusedVersion = result is { Kind: UpdateCheckKind.Refused, RefusedVersion: { } refusedVersion } ? refusedVersion.ToString() : null;
+
+            // A release that is no longer offered (withdrawn, blocked, replaced by "nothing newer") is not applied: its stage goes. An operational failure learned nothing, so a stage stays.
+            if (!operational && state.Staged is { } stale && !(result.Kind == UpdateCheckKind.Candidate && result.Version is { } offered && stale.Tag == offered.Tag))
+            {
+                state.Staged = null;
+                StageCache.Clear(_options.StateFolder);
+            }
+
             _store.TryWrite(state);
             return result;
         }
@@ -215,8 +265,213 @@ public sealed class UpdateService : IUpdateService
             return RefusedV(UpdateRefusal.ManifestVersionMismatch, $"the manifest is for {manifest.Version}, the tag for {version}");
         }
 
-        return UpdateCheck.Found(release.Version, release.PageUrl, manifest, UpdateEndpoints.AssetUrl(release.Tag, assets.Zip.Name), zipHash);
+        // Everything the stage needs and nothing it must take on trust: the two small files as they were read and the numbers the zip is checked against. Only this code makes one.
+        var validated = new ValidatedRelease
+        {
+            Tag = release.Tag,
+            Version = release.Version,
+            ZipUrl = UpdateEndpoints.AssetUrl(release.Tag, assets.Zip.Name),
+            ZipSha256 = zipHash,
+            ZipDeclaredBytes = assets.Zip.Size,
+            ZipApiDigest = assets.Zip.Digest,
+            HashListBytes = listBytes,
+            HashListSha256 = Hex(listBytes),
+            ManifestBytes = manifestBytes,
+            ManifestSha256 = manifestHash,
+            Manifest = manifest,
+        };
+        return UpdateCheck.FoundValidated(validated, release.PageUrl);
     }
+
+    /// <inheritdoc />
+    public async Task<UpdateStageResult> StageAsync(UpdateMode mode, UpdateCheck candidate, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+
+        // Only Automatic downloads the zip: Notify, Ask and Off never do, whatever the candidate is.
+        if (mode != UpdateMode.Automatic)
+        {
+            return UpdateStageResult.NotAttempted($"the mode is {mode}");
+        }
+
+        if (candidate.Kind != UpdateCheckKind.Candidate || candidate.Validated is not { } release)
+        {
+            return UpdateStageResult.NotAttempted("the candidate is not one a check validated");
+        }
+
+        if (_options.InstallFolder is not { } install)
+        {
+            return UpdateStageResult.NotAttempted("no install folder");
+        }
+
+        var placement = (_options.PlacementOf ?? InstallPlacement.Check)(install);
+        if (!placement.CanSwap)
+        {
+            return UpdateStageResult.NotAttempted($"this install cannot take a swap: {placement.Kind}");
+        }
+
+        ct.ThrowIfCancellationRequested();
+
+        // One stage at a time per install, and not while a check runs: the same lock (check.lock). A stage does not wait for it.
+        var (taken, held) = await _store.TryLockAsync(TimeSpan.Zero, ct).ConfigureAwait(false);
+        switch (taken)
+        {
+            case LockOutcome.Busy:
+                return UpdateStageResult.Refuse(UpdateRefusal.AnotherCheckRunning, "check.lock is held");
+            case LockOutcome.Unavailable:
+                return UpdateStageResult.Refuse(UpdateRefusal.StateUnavailable, "check.lock cannot be taken");
+        }
+
+        using (held)
+        {
+            var state = _store.Read();
+
+            // A stage that is already here is checked again in full (every file, length and hash); if it is whole it is kept and nothing is downloaded.
+            if (state.Staged is { } existing && existing.Tag == release.Tag && existing.BuildId == release.Manifest.BuildId
+                && string.Equals(existing.ManifestSha256, release.ManifestSha256, StringComparison.Ordinal)
+                && await Task.Run(() => StageCache.IsIntact(_options.StateFolder, existing, ct), ct).ConfigureAwait(false))
+            {
+                StageCache.Clear(_options.StateFolder, keep: existing.Folder);
+                return UpdateStageResult.Done(existing, reused: true);
+            }
+
+            // A zip that the release itself published and that is bad (its contents are not its manifest, a program file has a broken signature) is bad every time: it is not downloaded again until
+            // another release, or another zip under the same tag (a changed SHA256.txt), is offered. A zip that is not the one SHA256.txt names may be a transfer that was cut or a release that is still
+            // being uploaded, so that one is asked again at the next check (a day later), and so is every failure of this PC or the network.
+            if (state.StageRefusedTag == release.Tag && state.StageRefusedZipSha256 == release.ZipSha256
+                && Enum.TryParse<UpdateRefusal>(state.StageRefusedReason, ignoreCase: false, out var before) && IsRemembered(before))
+            {
+                return UpdateStageResult.Refuse(before, "refused by an earlier stage of this release");
+            }
+
+            // Old stage folders go before a new one is made (and a stage that is not wanted any more with them).
+            StageCache.Clear(_options.StateFolder);
+            state.Staged = null;
+
+            using var transport = _options.TransportFactory?.Invoke() ?? new UpdateHttp(_options.Running.ToString(), clock: _options.Clock);
+            var stager = new UpdateStager(
+                transport,
+                _options.SignatureInspector ?? new WindowsSignatureInspector(),
+                Limits.Default,
+                _options.DiskSpace ?? SystemDiskSpace.Instance);
+
+            StageRun run;
+            try
+            {
+                run = await stager.RunAsync(release, _options.StateFolder, RunnerHandOff.CurrentRecord(new TxPaths(install)), TxPaths.NewTx(), ct).ConfigureAwait(false);
+            }
+            catch (RateLimitedException limited)
+            {
+                state.BackoffUntilUtc = UpdateSchedule.BackoffUntil(_options.Clock.GetUtcNow(), limited.RetryAfter, limited.Reset);
+                _store.TryWrite(state);
+                return UpdateStageResult.Refuse(UpdateRefusal.HttpError, "rate limited");
+            }
+            catch (UpdateHttpException refused)
+            {
+                run = StageRun.Fail(refused.Reason, refused.Message);
+            }
+
+            if (run.Staged is { } staged)
+            {
+                state.Staged = staged;
+                state.StageRefusedTag = state.StageRefusedReason = state.StageRefusedZipSha256 = null;
+                if (!_store.TryWrite(state))
+                {
+                    StageCache.Remove(staged.Folder);
+                    return UpdateStageResult.Refuse(UpdateRefusal.StateUnavailable, "state.json cannot be written");
+                }
+
+                return UpdateStageResult.Done(staged, reused: false);
+            }
+
+            if (IsRemembered(run.Reason))
+            {
+                state.StageRefusedTag = release.Tag;
+                state.StageRefusedReason = run.Reason.ToString();
+                state.StageRefusedZipSha256 = release.ZipSha256;
+            }
+
+            _store.TryWrite(state);
+            return UpdateStageResult.Refuse(run.Reason, run.Detail);
+        }
+    }
+
+    /// <inheritdoc />
+    public void Tidy(AppVersion installed)
+    {
+        if (_store.TryLock(out var held) != LockOutcome.Acquired)
+        {
+            return; // somebody is checking or staging; the next start tidies
+        }
+
+        using (held)
+        {
+            var state = _store.Read();
+            var changed = false;
+            if (AppVersion.TryParse(state.LatestVersion, out var candidate) && candidate <= installed)
+            {
+                state.LatestVersion = state.LatestPageUrl = null;
+                changed = true;
+            }
+
+            if (state.Staged is { } staged && !(AppVersion.TryParse(staged.Version, out var stagedVersion) && stagedVersion > installed && staged.IsWellFormedFor(_options.StateFolder)))
+            {
+                state.Staged = null;
+                changed = true;
+            }
+
+            if (state.StageRefusedTag is not null && !(AppVersion.TryParse(state.StageRefusedTag, out var refusedVersion) && refusedVersion > installed))
+            {
+                state.StageRefusedTag = state.StageRefusedReason = state.StageRefusedZipSha256 = null;
+                changed = true;
+            }
+
+            StageCache.Clear(_options.StateFolder, keep: state.Staged?.Folder);
+            if (changed)
+            {
+                _store.TryWrite(state);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public void MarkResultShown(string tx)
+    {
+        if (!TxPaths.IsValidTx(tx) || _store.TryLock(out var held) != LockOutcome.Acquired)
+        {
+            return;
+        }
+
+        using (held)
+        {
+            var state = _store.Read();
+            if (state.ShownResultTx != tx)
+            {
+                state.ShownResultTx = tx;
+                _store.TryWrite(state);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public void DiscardStage()
+    {
+        if (_store.TryLock(out var held) != LockOutcome.Acquired)
+        {
+            return;
+        }
+
+        using (held)
+        {
+            var state = _store.Read();
+            state.Staged = null;
+            StageCache.Clear(_options.StateFolder);
+            _store.TryWrite(state);
+        }
+    }
+
+    /// <summary>The stage refusals that are remembered by tag and zip hash: the zip is what was published and is bad in itself.</summary>
+    internal static bool IsRemembered(UpdateRefusal reason) => reason is UpdateRefusal.BundleInvalid or UpdateRefusal.SignatureInvalid;
 
     private static UpdateCheck Refused(UpdateRefusal reason, string detail) => UpdateCheck.Refuse(reason, detail, fetched: true);
 

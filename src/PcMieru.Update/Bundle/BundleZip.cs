@@ -21,10 +21,107 @@ public static class BundleZip
     /// </summary>
     public static BundleResult Validate(Stream zip, string expectedVersion, BundleManifest outer, Limits limits, IReadOnlyCollection<string>? floor = null)
     {
-        ArgumentNullException.ThrowIfNull(zip);
         ArgumentNullException.ThrowIfNull(outer);
         ArgumentNullException.ThrowIfNull(limits);
         floor ??= BundleFloor.Full;
+
+        var refusal = Prepare(zip, expectedVersion, limits, out var entries);
+        return refusal ?? BundleChecker.Check(entries, expectedVersion, outer, limits, floor);
+    }
+
+    /// <summary>
+    /// Judges <paramref name="zip"/> exactly as <see cref="Validate"/> does and, only when it passes, writes every file of it through <paramref name="create"/> (the
+    /// stage of DESIGN-B 3.3: the zip is checked in full first, then extracted). <paramref name="create"/> gets the name below the root folder ("PCMieru.exe",
+    /// "ja/x.json") and returns the stream to write (the caller opens it with CreateNew under a folder it owns); each stream is disposed here.
+    ///
+    /// What is written is counted and hashed on the bytes that really come out of the zip, against the OUTER manifest (which lists every file, the inner manifest
+    /// included): a file that is longer or shorter, or whose hash differs, stops the extraction with <see cref="BundleFault.LengthMismatch"/> or
+    /// <see cref="BundleFault.HashMismatch"/> (the zip is read twice; the second reading is the one that is written, so it is that one that is checked again).
+    /// A read error of the ZIP is <see cref="BundleFault.ReadFailed"/>. An error of the DESTINATION (a full disk, a name that exists, no right) is NOT caught here:
+    /// it is the caller's, who knows what it means (the stage maps it to "could not stage" and removes its folder).
+    /// </summary>
+    public static BundleResult Extract(Stream zip, string expectedVersion, BundleManifest outer, Limits limits, Func<string, Stream> create, IReadOnlyCollection<string>? floor = null)
+    {
+        ArgumentNullException.ThrowIfNull(outer);
+        ArgumentNullException.ThrowIfNull(limits);
+        ArgumentNullException.ThrowIfNull(create);
+        floor ??= BundleFloor.Full;
+
+        var refusal = Prepare(zip, expectedVersion, limits, out var entries);
+        if (refusal is not null)
+        {
+            return refusal.Value;
+        }
+
+        var judged = BundleChecker.Check(entries, expectedVersion, outer, limits, floor);
+        if (!judged.Ok)
+        {
+            return judged;
+        }
+
+        var wanted = outer.Files.ToDictionary(f => f.Path, StringComparer.Ordinal);
+        long total = 0;
+        foreach (var entry in entries.OrderBy(e => e.Name, StringComparer.Ordinal))
+        {
+            var expected = wanted[entry.Name];
+            using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            long written = 0;
+
+            // The destination is opened before the source is read, so that an error of the destination is raised as itself, not as a read error.
+            using var destination = create(entry.Name);
+            try
+            {
+                using var source = entry.Open();
+                var chunk = new byte[80 * 1024];
+                while (true)
+                {
+                    var want = (int)Math.Min(chunk.Length, expected.Bytes - written + 1);
+                    var read = source.Read(chunk, 0, want);
+                    if (read <= 0)
+                    {
+                        break;
+                    }
+
+                    written += read;
+                    if (written > expected.Bytes)
+                    {
+                        return BundleResult.Refuse(BundleFault.LengthMismatch, $"'{entry.Name}': more than the {expected.Bytes} bytes of the manifest were read");
+                    }
+
+                    hash.AppendData(chunk, 0, read);
+                    destination.Write(chunk, 0, read);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or ObjectDisposedException)
+            {
+                return BundleResult.Refuse(BundleFault.ReadFailed, $"'{entry.Name}' could not be read: {ex.Message}");
+            }
+
+            if (written != expected.Bytes)
+            {
+                return BundleResult.Refuse(BundleFault.LengthMismatch, $"'{entry.Name}': {written} bytes were read, the manifest says {expected.Bytes}");
+            }
+
+            if (!string.Equals(Convert.ToHexStringLower(hash.GetHashAndReset()), expected.Sha256, StringComparison.Ordinal))
+            {
+                return BundleResult.Refuse(BundleFault.HashMismatch, $"'{entry.Name}': the SHA-256 is not the manifest's");
+            }
+
+            destination.Flush();
+            total += written;
+        }
+
+        return BundleResult.Pass(entries.Count, total);
+    }
+
+    /// <summary>
+    /// The part of the judgement that comes before the file checks: the version asked for, the zip size, the central directory, every entry, the library's view.
+    /// Returns the refusal, or null and the entries (the files of the bundle, each with a way to read its bytes).
+    /// </summary>
+    private static BundleResult? Prepare(Stream zip, string expectedVersion, Limits limits, out List<BundleEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(zip);
+        entries = [];
 
         if (!AppVersion.TryParse(expectedVersion, out var parsed) || parsed.ToString() != expectedVersion)
         {
@@ -69,7 +166,7 @@ public static class BundleZip
         // The data is read by this validator and not by the zip library: the library stops an entry at the size its header gives, so a deflate stream that
         // goes on past that size would be read as exactly the manifest's bytes and the rest never seen. Read here, the stream is as long as it is, and the
         // check that never takes more than the manifest's length plus one byte (BundleChecker.Hash) sees the excess.
-        var entries = new List<BundleEntry>(classified.Files.Count);
+        entries = new List<BundleEntry>(classified.Files.Count);
         for (var i = 0; i < central.Count; i++)
         {
             if (classified.Files.TryGetValue(i, out var relative))
@@ -79,7 +176,7 @@ public static class BundleZip
             }
         }
 
-        return BundleChecker.Check(entries, expectedVersion, outer, limits, floor);
+        return null;
     }
 
     /// <summary>

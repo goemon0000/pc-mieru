@@ -27,22 +27,27 @@ public sealed class UpdateHttp : IFeedTransport
     /// <summary>How long one small asset may take, all hops together.</summary>
     public static readonly TimeSpan AssetTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>How long the zip may take, all hops together (a few tens of MB on a slow line).</summary>
+    public static readonly TimeSpan ZipTimeout = TimeSpan.FromMinutes(15);
+
     private readonly HttpClient _client;
     private readonly string _userAgent;
     private readonly TimeSpan _apiTimeout;
     private readonly TimeSpan _assetTimeout;
+    private readonly TimeSpan _zipTimeout;
     private readonly TimeProvider _clock;
 
     /// <param name="version">The running version ("0.5.0"): the User-Agent is "PCMieru/0.5.0".</param>
     /// <param name="handler">A handler of the caller's own (a test's fake); null makes <see cref="CreateDefaultHandler"/>. It is disposed with this object.</param>
     /// <param name="clock">What "now" is for the date form of Retry-After (a date minus now). The service passes its own clock; a test passes a fixed one and asserts exactly.</param>
-    public UpdateHttp(string version, HttpMessageHandler? handler = null, TimeSpan? apiTimeout = null, TimeSpan? assetTimeout = null, TimeProvider? clock = null)
+    public UpdateHttp(string version, HttpMessageHandler? handler = null, TimeSpan? apiTimeout = null, TimeSpan? assetTimeout = null, TimeProvider? clock = null, TimeSpan? zipTimeout = null)
     {
         // The timeouts are per request, kept by this class (a linked token); the client's own timeout is off so that a body being read is not cut by it.
         _client = new HttpClient(handler ?? CreateDefaultHandler(), disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         _userAgent = "PCMieru/" + version;
         _apiTimeout = apiTimeout ?? ApiTimeout;
         _assetTimeout = assetTimeout ?? AssetTimeout;
+        _zipTimeout = zipTimeout ?? ZipTimeout;
         _clock = clock ?? TimeProvider.System;
         FeedTraffic.CountClient();
     }
@@ -110,6 +115,79 @@ public sealed class UpdateHttp : IFeedTransport
         catch (Exception ex) when (Translate(ex, ct) is { } translated)
         {
             throw translated;
+        }
+    }
+
+    public async Task<AssetDownload> DownloadAssetAsync(Uri url, long declaredSize, long maxBytes, Stream destination, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        // The same first-address rule as a small asset: this repo's download address of a tag and a name; only the hops after it may go to the release-asset hosts.
+        if (!UpdateEndpoints.IsPlain(url) || !url.AbsoluteUri.StartsWith(UpdateEndpoints.DownloadPrefix, StringComparison.Ordinal))
+        {
+            throw Refusal(url);
+        }
+
+        if (declaredSize > maxBytes)
+        {
+            throw new UpdateHttpException(UpdateRefusal.AssetTooLarge, $"the release says the file is {declaredSize} bytes, over {maxBytes}");
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_zipTimeout);
+        try
+        {
+            using var response = await SendFollowingAsync(url, "application/octet-stream", u => UpdateEndpoints.IsAllowedDownloadHop(u, url), cts.Token).ConfigureAwait(false);
+            if (response.Content.Headers.ContentLength is { } declared && declared > maxBytes)
+            {
+                throw new UpdateHttpException(UpdateRefusal.BodyTooLarge, $"the answer says it is {declared} bytes, over {maxBytes}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+            using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            var chunk = new byte[80 * 1024];
+            long total = 0;
+            int read;
+            while ((read = await stream.ReadAsync(chunk, cts.Token).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > maxBytes)
+                {
+                    throw new UpdateHttpException(UpdateRefusal.BodyTooLarge, $"the answer is longer than {maxBytes} bytes");
+                }
+
+                hash.AppendData(chunk, 0, read);
+                await WriteAsync(destination, chunk.AsMemory(0, read), cts.Token).ConfigureAwait(false);
+            }
+
+            try
+            {
+                await destination.FlushAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new UpdateHttpException(UpdateRefusal.StageFailed, "the downloaded file could not be written: " + ex.Message, ex);
+            }
+
+            return new AssetDownload(total, Convert.ToHexStringLower(hash.GetHashAndReset()));
+        }
+        catch (Exception ex) when (Translate(ex, ct) is { } translated)
+        {
+            throw translated;
+        }
+    }
+
+    /// <summary>A failure to write is the disk's, not the network's: it must not be taken for "no answer".</summary>
+    private static async Task WriteAsync(Stream destination, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    {
+        try
+        {
+            await destination.WriteAsync(bytes, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new UpdateHttpException(UpdateRefusal.StageFailed, "the downloaded file could not be written: " + ex.Message, ex);
         }
     }
 

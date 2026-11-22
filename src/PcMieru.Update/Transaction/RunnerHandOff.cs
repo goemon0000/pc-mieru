@@ -144,7 +144,7 @@ public static class RunnerHandOff
     }
 
     /// <summary>installed.json, or the install's own manifest (a folder unzipped by hand); null when neither can be read.</summary>
-    private static InstalledRecord? CurrentRecord(TxPaths paths)
+    internal static InstalledRecord? CurrentRecord(TxPaths paths)
     {
         if (ManagedSet.Exists(paths.Installed))
         {

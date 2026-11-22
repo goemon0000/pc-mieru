@@ -10,6 +10,8 @@ using System.Text;
 using System.Text.Json.Nodes;
 using PcMieru.Update.Bundle;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Staging;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Tests;
 
@@ -317,6 +319,16 @@ internal sealed class FeedRig : IDisposable
 
     public string[] Blocked { get; set; } = [];
 
+    /// <summary>The install folder the stage reads installed.json from; null: the service has none and never stages.</summary>
+    public string? InstallFolder { get; set; }
+
+    /// <summary>The answer to "can this install take a swap"; null: the real probe (never used by a test that stages).</summary>
+    public Func<string, Placement>? PlacementOf { get; set; }
+
+    public ISignatureInspector? Inspector { get; set; }
+
+    public IDiskSpace? Disk { get; set; }
+
     /// <summary>How many transports (HTTP clients) the service made.</summary>
     public int ClientsMade { get; private set; }
 
@@ -329,6 +341,10 @@ internal sealed class FeedRig : IDisposable
         StateFolder = StateFolder,
         BlockedTags = Blocked,
         Clock = Clock,
+        InstallFolder = InstallFolder,
+        PlacementOf = PlacementOf,
+        SignatureInspector = Inspector,
+        DiskSpace = Disk,
         TransportFactory = () =>
         {
             ClientsMade++;

@@ -61,6 +61,16 @@ public enum UpdateRefusal
     /// <summary>The manifest is for another version than the tag.</summary>
     ManifestVersionMismatch,
 
+    // --- the stage (step 5: the zip, downloaded and unpacked in a folder of this PC; only an Automatic install goes this far) ---
+    /// <summary>The zip that came is not the one SHA256.txt (or the API's digest) names.</summary>
+    ZipHashMismatch,
+
+    /// <summary>The zip is not a valid bundle (a rule of <see cref="Bundle.BundleZip"/> did not hold, or a file differs from the manifest).</summary>
+    BundleInvalid,
+
+    /// <summary>A program file of the zip has a signature that is there and is not valid.</summary>
+    SignatureInvalid,
+
     /// <summary>A body is longer than its limit (counted on the bytes that actually came).</summary>
     BodyTooLarge,
 
@@ -98,6 +108,9 @@ public enum UpdateRefusal
 
     /// <summary>The gate file (PCMieru.gate.txt) is not beside the program, so this install has no id and no state folder (DESIGN-B 4: the id is the gate file's; there is no fallback to the exe).</summary>
     GateMissing,
+
+    /// <summary>The stage folder could not be made or written (no room, no right, a link where a folder should be): the new version is not on this PC yet. Says nothing about the release.</summary>
+    StageFailed,
 }
 
 /// <summary>
@@ -114,7 +127,7 @@ public static class UpdateRefusals
         UpdateRefusal.RedirectHostNotAllowed or UpdateRefusal.RedirectDowngrade or UpdateRefusal.RedirectTooMany or
         UpdateRefusal.RedirectCredentials or UpdateRefusal.RedirectMissingLocation or
         UpdateRefusal.HttpError or UpdateRefusal.NetworkFailure or
-        UpdateRefusal.StateUnavailable or UpdateRefusal.AnotherCheckRunning or UpdateRefusal.OwnVersionUnknown or UpdateRefusal.GateMissing;
+        UpdateRefusal.StateUnavailable or UpdateRefusal.AnotherCheckRunning or UpdateRefusal.OwnVersionUnknown or UpdateRefusal.GateMissing or UpdateRefusal.StageFailed;
 
     /// <summary>The release was read and one of its rules did not hold (a draft, a pre-release, a wrong tag or page, a blocked tag, a missing or wrong file, a hash that differs, a bad manifest). None is not a reason.</summary>
     public static bool JudgedARelease(UpdateRefusal reason) => reason != UpdateRefusal.None && !IsOperational(reason);
@@ -158,8 +171,15 @@ public sealed class UpdateCheck
     /// <summary>Candidate: the outer manifest, read with the strict reader and checked against SHA256.txt.</summary>
     public BundleManifest? Manifest { get; private init; }
 
-    /// <summary>Candidate: where the zip is. Never requested in this step.</summary>
+    /// <summary>Candidate: where the zip is. A check never requests it; only <see cref="IUpdateService.StageAsync"/> does (Automatic mode only).</summary>
     public Uri? ZipUrl { get; private init; }
+
+    /// <summary>
+    /// Candidate: what the check validated and the stage needs (the tag, the held SHA256.txt and manifest, the zip's size and digest). Set only by
+    /// <see cref="UpdateService"/>, never by <see cref="Found"/>: a candidate that a fake made, or that was read from a file, carries none, and
+    /// <see cref="IUpdateService.StageAsync"/> refuses to download for it.
+    /// </summary>
+    internal ValidatedRelease? Validated { get; private init; }
 
     /// <summary>Candidate: the SHA-256 of the zip that SHA256.txt names (lower-case hex), for the download of a later step.</summary>
     public string? ZipSha256 { get; private init; }
@@ -198,6 +218,19 @@ public sealed class UpdateCheck
             Fetched = true,
         };
 
+    /// <summary>A candidate that <see cref="UpdateService"/> validated: the same as <see cref="Found"/>, and it can be staged.</summary>
+    internal static UpdateCheck FoundValidated(ValidatedRelease release, string pageUrl) =>
+        new(UpdateCheckKind.Candidate)
+        {
+            Version = release.Version,
+            PageUrl = pageUrl,
+            Manifest = release.Manifest,
+            ZipUrl = release.ZipUrl,
+            ZipSha256 = release.ZipSha256,
+            Fetched = true,
+            Validated = release,
+        };
+
     public static UpdateCheck Refuse(UpdateRefusal reason, string detail, bool fetched, AppVersion? version = null) =>
         new(UpdateCheckKind.Refused) { Refusal = reason, Detail = detail, Fetched = fetched, RefusedVersion = version };
 
@@ -223,7 +256,9 @@ public sealed record UpdateStatus(
     AppVersion? CandidateVersion,
     string? CandidatePageUrl,
     UpdateRefusal LastRefusal,
-    AppVersion? RefusedVersion = null)
+    AppVersion? RefusedVersion = null,
+    StagedUpdate? Staged = null,
+    string? ShownResultTx = null)
 {
     public static UpdateStatus Empty { get; } = new(null, null, null, null, UpdateRefusal.None);
 }

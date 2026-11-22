@@ -14,7 +14,17 @@ public interface IFeedTransport : IDisposable
     /// before anything is sent. <paramref name="declaredSize"/> is what the release says the file weighs: a larger limit than that is refused early.
     /// </summary>
     Task<byte[]> GetSmallAssetAsync(Uri url, long declaredSize, int maxBytes, CancellationToken ct);
+
+    /// <summary>
+    /// GET the zip into <paramref name="destination"/> (the stage of DESIGN-B 3.3; only <see cref="IUpdateService.StageAsync"/> calls it, and only in Automatic mode). The same rules as a small
+    /// asset for every address (this repo's download address first, hops only to the release-asset hosts, https only, no credential, at most five redirects), and the limit is counted on the
+    /// bytes that really arrive. The bytes are hashed as they are written. A failure of <paramref name="destination"/> (a full disk, no right) is <see cref="UpdateRefusal.StageFailed"/>.
+    /// </summary>
+    Task<AssetDownload> DownloadAssetAsync(Uri url, long declaredSize, long maxBytes, Stream destination, CancellationToken ct);
 }
+
+/// <summary>What <see cref="IFeedTransport.DownloadAssetAsync"/> wrote: how many bytes and their SHA-256 (64 lower-case hex digits).</summary>
+public readonly record struct AssetDownload(long Bytes, string Sha256);
 
 /// <summary>The feed was refused or could not get an answer, with the reason.</summary>
 public sealed class UpdateHttpException : Exception

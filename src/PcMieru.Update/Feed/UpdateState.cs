@@ -3,6 +3,7 @@
 // run, a refusal is remembered, and the comments are in English.
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Feed;
 
@@ -27,18 +28,47 @@ public sealed class UpdateState
     /// <summary>The version ("1.2.3") of the release that a rule of its own refused in the last check, when it was known; null otherwise.</summary>
     public string? RefusedVersion { get; set; }
 
-    internal UpdateStatus ToStatus()
+    /// <summary>The update that is unpacked on this PC and waiting to be handed to the runner (written by the stage). Not trusted: <see cref="ToStatus"/> checks it.</summary>
+    public StagedUpdate? Staged { get; set; }
+
+    /// <summary>The tag ("v1.2.3") whose stage was refused by a rule of the release itself (a bundle that is not its manifest, an invalid signature). Not tried again until another tag, or another zip under it, is offered.</summary>
+    public string? StageRefusedTag { get; set; }
+
+    /// <summary>The name of the <see cref="UpdateRefusal"/> of <see cref="StageRefusedTag"/>.</summary>
+    public string? StageRefusedReason { get; set; }
+
+    /// <summary>The SHA-256 of the zip that was refused: a release whose zip was uploaded again is tried again.</summary>
+    public string? StageRefusedZipSha256 { get; set; }
+
+    /// <summary>The transaction id (12 hex) of the last result (last-result.json) the person has been shown; a result is shown once.</summary>
+    public string? ShownResultTx { get; set; }
+
+    /// <param name="stateFolder">The folder of this install's state (<c>L\update\&lt;id&gt;</c>), to check <see cref="Staged"/> against. Null: a staged update is not reported.</param>
+    internal UpdateStatus ToStatus(string? stateFolder = null)
     {
         AppVersion? candidate = AppVersion.TryParse(LatestVersion, out var v) && LatestVersion == v.ToString() ? v : null;
         var page = candidate is { } c && UpdateEndpoints.IsReleasePage(LatestPageUrl) && LatestPageUrl == UpdateEndpoints.ReleasePageUrl(c.Tag) ? LatestPageUrl : null;
         var refusal = Enum.TryParse<UpdateRefusal>(LastRefusal, ignoreCase: false, out var r) && Enum.IsDefined(r) ? r : UpdateRefusal.None;
         AppVersion? refused = AppVersion.TryParse(RefusedVersion, out var rv) && RefusedVersion == rv.ToString() ? rv : null;
-        return new UpdateStatus(LastCheckUtc, BackoffUntilUtc, candidate, page, refusal, refused);
+
+        // A stage that a rule of the release refused is still the reason the candidate is not used, so the page says it (the check clears LastRefusal on every run).
+        if (candidate is { } now && StageRefusedTag == now.Tag
+            && Enum.TryParse<UpdateRefusal>(StageRefusedReason, ignoreCase: false, out var stageRefusal) && Enum.IsDefined(stageRefusal) && UpdateService.IsRemembered(stageRefusal))
+        {
+            refusal = stageRefusal;
+            refused = now;
+        }
+
+        // A staged update is reported only while the candidate is still that release (a release that is no longer offered is not applied) and the record names a folder of this install.
+        var staged = stateFolder is not null && candidate is { } offered && Staged is { } s && s.Tag == offered.Tag && s.IsWellFormedFor(stateFolder) ? s : null;
+        var shown = ShownResultTx is { } tx && TxPaths.IsValidTx(tx) ? tx : null;
+        return new UpdateStatus(LastCheckUtc, BackoffUntilUtc, candidate, page, refusal, refused, staged, shown);
     }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(UpdateState))]
+[JsonSerializable(typeof(StagedUpdate))]
 internal sealed partial class UpdateStateJson : JsonSerializerContext;
 
 /// <summary>How <see cref="UpdateStateStore.TryLock"/> ended.</summary>

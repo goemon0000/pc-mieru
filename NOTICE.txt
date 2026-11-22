@@ -162,6 +162,11 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Update/Feed/UpdateState.cs
       the state file and its safe write, from the owner's pl-cloud
       src/PartsLife.Update/UpdateState.cs
+  src/PcMieru.Update/Staging/Authenticode.cs
+      the embedded-signature check through WinVerifyTrust (Valid / Unsigned /
+      Invalid, no network), from the owner's pl-cloud
+      src/PartsLife.Update/Authenticode.cs (the identity comparison of its
+      signature policy is not ported)
   src/PcMieru.Update/Transaction/TxFault.cs
   src/PcMieru.Update/Transaction/TxIo.cs
       the file-operation seam that fails at a chosen place, so that every
