@@ -9,7 +9,10 @@ public enum MarkerKind
     StressEnd,
     Mark,
 
-    /// <summary>Written by the recorder itself, never by a caller. Today it says a GPU appeared after the columns were fixed (detail <c>late_gpu:&lt;name&gt;</c>).</summary>
+    /// <summary>
+    /// Written by the recorder itself, never by a caller. It says a GPU appeared after the columns were fixed (detail <c>late_gpu:&lt;name&gt;</c>), that a
+    /// GPU came back under a new id and went on in its old column (<c>gpu_rebound:&lt;name&gt;</c>).
+    /// </summary>
     Warning,
 }
 
@@ -31,6 +34,9 @@ public enum RunStopReason
     IoError,
     ProcessExit,
     Unknown,
+
+    /// <summary>The CSV reached the recorder's own size cap (below the reader's, so a finished run can always be read).</summary>
+    SizeLimit,
 }
 
 /// <summary>How a column's cells are read: a plain number, a 0/1 flag, an unsigned bit mask written as a decimal string (never through a double), or text.</summary>
@@ -149,9 +155,49 @@ public interface IRunRecorder
 
     /// <summary>Ends the run. A second call (or a call during a stop that low space or a write error began) waits for the same result.</summary>
     Task<RunResult> StopAsync(RunHandle run, RunStopReason reason);
+
+    /// <summary>
+    /// Stops whatever run there is and returns its result, or null when none is going. For the window closing and the session ending, where the caller has
+    /// no <see cref="RunHandle"/>. A run that is still being prepared is waited for and then stopped. On the interface (not on <see cref="IRunActivity"/>,
+    /// which the update code only reads) so the GUI can call it through the one thing it holds. From a form's closing handler use
+    /// <see cref="RunRecorderExtensions.StopCurrentBlocking"/>, which is bounded.
+    /// </summary>
+    Task<RunResult?> StopCurrentAsync(RunStopReason reason);
 }
 
-/// <summary>One run in a listing (JSON only: no CSV is read to make a list).</summary>
+/// <summary>The bounded, synchronous stop for places that cannot await (<c>FormClosing</c>, <c>SessionEnding</c>, process exit).</summary>
+public static class RunRecorderExtensions
+{
+    /// <summary>How long exit may wait for a run to close (about 2 s).</summary>
+    public static readonly TimeSpan ExitBound = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Stops the current run and waits for it, but never longer than <paramref name="bound"/> (<see cref="ExitBound"/> by default). Returns the result,
+    /// or null when no run was going or the stop did not finish in time (then the run is left as <c>recording</c> on the disk, with its lock released by
+    /// the process ending: the next start recovers it as interrupted). Never throws and never blocks on a context: the stop runs on the thread pool, so a UI
+    /// thread waiting here cannot deadlock it.
+    /// </summary>
+    public static RunResult? StopCurrentBlocking(this IRunRecorder recorder, RunStopReason reason, TimeSpan? bound = null)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        try
+        {
+            var stop = Task.Run(() => recorder.StopCurrentAsync(reason));
+            return stop.Wait(bound ?? ExitBound) ? stop.Result : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// One run in a listing (JSON only: no CSV is read to make a list). <see cref="Rows"/> and <see cref="DurationUs"/> here are what the JSON said when it was
+/// last saved, which is at most one flush interval (10 s) behind the CSV for a run that was cut off and has not been recovered yet (the next recording
+/// start rewrites them from the CSV). A screen must not present them as exact for such a run: show them as "about", or open the run (the detail is read
+/// from the CSV and is exact).
+/// </summary>
 public sealed record RunInfo(
     Guid RunId,
     string Format,

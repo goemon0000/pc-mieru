@@ -106,7 +106,8 @@ public sealed record RecordedGpu(
     Value<double> ClockMhz,
     Value<double> TemperatureLimitC,
     Value<ulong> LimitReasons,
-    SourceOrigin Vendor);
+    SourceOrigin Vendor,
+    long DedicatedTotalBytes = 0);
 
 /// <summary>
 /// One Core sample for the recorder. Immutable. <see cref="Core"/> says which sampler pass it is (sequence), when the process table was read

@@ -76,6 +76,13 @@ internal sealed class RunSeries
     /// <summary>A normal stop is a terminator: the last value of a column gets at most its P, the rest is missing. Any other end closes at the last observation.</summary>
     public bool NormalEnd { get; init; }
 
+    /// <summary>
+    /// For a run that did not end normally: the time up to which the run is known to have lasted when that is LATER than the last row (a mark whose JSON
+    /// was saved after the last durable row). The values still close at <see cref="EndUs"/>; the seconds between the last row and this time count as
+    /// missing, and the duration reaches it. 0 (or not later than <see cref="EndUs"/>) changes nothing.
+    /// </summary>
+    public long MissingEndUs { get; init; }
+
     public long Rows { get; init; }
 
     public long DroppedTicks { get; init; }

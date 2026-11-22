@@ -157,14 +157,22 @@ internal sealed class PhysicalRunFileSystem : IRunFileSystem
     {
         try
         {
+            // The directory itself, not its drive letter: a UNC share and a folder that is a mounted volume have no letter of their own, and the
+            // free space of a quota-limited folder is what the caller may use (GetDiskFreeSpaceEx answers for the volume the directory is on).
             string? dir = Path.GetFullPath(directory);
             while (dir is not null && !Directory.Exists(dir))
             {
                 dir = Path.GetDirectoryName(dir);
             }
 
-            var root = dir is null ? null : Path.GetPathRoot(dir);
-            return root is null ? null : new DriveInfo(root).AvailableFreeSpace;
+            if (dir is null)
+            {
+                return null;
+            }
+
+            // A trailing backslash: GetDiskFreeSpaceEx wants one on a UNC name, and takes it on every other directory.
+            var name = dir.EndsWith('\\') ? dir : dir + "\\";
+            return PcMieru.Core.Hardware.Native.Kernel32.GetDiskFreeSpaceExW(name, out var freeToCaller, out _, out _) ? (long)freeToCaller : null;
         }
         catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException or NotSupportedException)
         {

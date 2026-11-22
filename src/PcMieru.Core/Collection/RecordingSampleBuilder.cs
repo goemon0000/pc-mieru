@@ -37,7 +37,8 @@ internal static class RecordingSampleBuilder
                 g.ClockMhz,
                 g.TemperatureLimitC,
                 g.LimitReasons,
-                g.VendorOrigin ?? SourceOrigin.Missing(SourceGap.NotStarted));
+                g.VendorOrigin ?? SourceOrigin.Missing(SourceGap.NotStarted),
+                g.DedicatedTotalBytes.GetOr(0));
         }
 
         return new RecordingSample(

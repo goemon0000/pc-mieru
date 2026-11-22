@@ -360,6 +360,7 @@ public class RunRecorderTests
     [InlineData(RunStopReason.User, "user")]
     [InlineData(RunStopReason.WindowClose, "window_close")]
     [InlineData(RunStopReason.ProcessExit, "process_exit")]
+    [InlineData(RunStopReason.SizeLimit, "size_limit")]
     public async Task The_reason_of_a_stop_is_written_to_the_json(RunStopReason reason, string code)
     {
         using var h = new RecHarness();

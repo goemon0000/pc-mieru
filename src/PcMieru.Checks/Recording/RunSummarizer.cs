@@ -52,7 +52,9 @@ public static class RunSummarizer
     internal static RunSummary Summarize(RunSeries s)
     {
         var notes = new List<RunNote>();
-        var end = Math.Max(0, s.EndUs);
+        // The values close at the last observation; the missing seconds and the duration go as far as the run is known to have lasted (a durable mark can be later).
+        var valuesEnd = Math.Max(0, s.EndUs);
+        var end = Math.Max(valuesEnd, s.MissingEndUs);
         var duration = end / Us;
         if (s.Legacy)
         {
@@ -65,7 +67,7 @@ public static class RunSummarizer
         {
             if (track.Kind != RunMetricKind.Text)
             {
-                intervals[track.Key] = IntervalSeries.Build(track, end, s.NormalEnd);
+                intervals[track.Key] = IntervalSeries.Build(track, valuesEnd, s.NormalEnd);
             }
         }
 

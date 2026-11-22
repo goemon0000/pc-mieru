@@ -37,6 +37,7 @@ public static class RunCodes
         RunStopReason.LowSpace => "low_space",
         RunStopReason.IoError => "io_error",
         RunStopReason.ProcessExit => "process_exit",
+        RunStopReason.SizeLimit => "size_limit",
         _ => "unknown",
     };
 
@@ -49,6 +50,7 @@ public static class RunCodes
             case "low_space": reason = RunStopReason.LowSpace; return true;
             case "io_error": reason = RunStopReason.IoError; return true;
             case "process_exit": reason = RunStopReason.ProcessExit; return true;
+            case "size_limit": reason = RunStopReason.SizeLimit; return true;
             case "unknown": reason = RunStopReason.Unknown; return true;
             default: reason = RunStopReason.Unknown; return false;
         }

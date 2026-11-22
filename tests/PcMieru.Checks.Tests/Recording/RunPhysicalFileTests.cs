@@ -109,6 +109,54 @@ public class RunPhysicalFileTests
     }
 
     [Fact]
+    public void The_free_space_of_a_folder_is_the_same_with_or_without_a_trailing_separator()
+    {
+        using var temp = new TempRoot();
+        var plain = PhysicalRunFileSystem.Instance.GetFreeBytes(temp.Path.TrimEnd(Path.DirectorySeparatorChar));
+        var trailing = PhysicalRunFileSystem.Instance.GetFreeBytes(temp.Path.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar);
+        Assert.NotNull(plain);
+        Assert.NotNull(trailing);
+        Assert.True(plain > 0);
+        Assert.True(trailing > 0);
+
+        // Another process may write between the two calls: the numbers are of one disk, not equal to the byte.
+        var drive = new DriveInfo(Path.GetPathRoot(temp.Path)!);
+        Assert.InRange(Math.Abs(plain.Value - trailing.Value), 0, 64L * 1024 * 1024);
+        Assert.InRange(Math.Abs(plain.Value - drive.AvailableFreeSpace), 0, 256L * 1024 * 1024);
+    }
+
+    [Fact]
+    public void The_free_space_of_a_folder_that_is_not_there_yet_is_that_of_the_nearest_folder_that_is()
+    {
+        using var temp = new TempRoot();
+        var below = Path.Combine(temp.Path, "not", "created", "yet");
+        var free = PhysicalRunFileSystem.Instance.GetFreeBytes(below);
+        Assert.NotNull(free);
+        Assert.True(free > 0);
+        Assert.False(Directory.Exists(below)); // asking never creates anything
+    }
+
+    /// <summary>
+    /// The administrative share of the system drive, over the loopback name: a UNC path has no drive letter, and the free space of it must still be
+    /// answered (the call is on the directory itself, which is also what a mounted folder needs). A machine that has no such share is skipped.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "RealMachine")]
+    public void The_free_space_of_a_network_path_is_answered_through_the_folder_itself()
+    {
+        var systemRoot = Path.GetPathRoot(Environment.SystemDirectory)!;
+        var unc = @"\\localhost\" + systemRoot[0] + "$" + @"\Windows";
+        if (!Directory.Exists(unc))
+        {
+            return; // no administrative share here: nothing to check
+        }
+
+        var free = PhysicalRunFileSystem.Instance.GetFreeBytes(unc);
+        Assert.NotNull(free);
+        Assert.True(free > 0);
+    }
+
+    [Fact]
     public void Two_locks_on_the_same_name_are_never_held_at_once_and_the_second_is_free_again_after_the_first_is_disposed()
     {
         using var temp = new TempRoot();

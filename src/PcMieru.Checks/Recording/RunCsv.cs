@@ -13,6 +13,12 @@ internal sealed class LayoutSource(string name, string? deviceId, string deviceN
 
     public string DeviceName { get; } = deviceName;
 
+    /// <summary>The adapter id whose readings fill this column now: <see cref="DeviceId"/> at the start, a new one after the column was rebound (a driver restart gives a GPU a new id).</summary>
+    public string? CurrentId { get; set; } = deviceId;
+
+    /// <summary>The dedicated memory of the adapter in bytes (0 when unknown); with the name it says which adapter came back under a new id.</summary>
+    public long DedicatedBytes { get; set; }
+
     /// <summary>The value columns after the meta columns, in order, as full keys (<c>core.cpu_usage_pct</c>, <c>core.gpu1_util_pct</c>, <c>gpu1.temp_c</c>).</summary>
     public List<(string Key, RunMetricDef Def)> Values { get; } = [];
 }
@@ -26,8 +32,6 @@ internal sealed class RunLayout
 {
     public const string OffsetColumn = "offsetUs";
     public const string UtcColumn = "utc";
-
-    private readonly Dictionary<string, int> _gpuIndex = new(StringComparer.Ordinal);
 
     private RunLayout()
     {
@@ -61,13 +65,12 @@ internal sealed class RunLayout
         layout.Sources.Add(core);
         for (var i = 0; i < ordered.Count; i++)
         {
-            var source = new LayoutSource(RunMetrics.GpuSource(i + 1), ordered[i].Id, ordered[i].Name);
+            var source = new LayoutSource(RunMetrics.GpuSource(i + 1), ordered[i].Id, ordered[i].Name) { DedicatedBytes = ordered[i].DedicatedTotalBytes };
             foreach (var def in RunMetrics.GpuVendor)
             {
                 source.Values.Add((RunMetrics.GpuKey(i + 1, def), def));
             }
 
-            layout._gpuIndex[ordered[i].Id] = i + 1;
             layout.Sources.Add(source);
         }
 
@@ -89,8 +92,66 @@ internal sealed class RunLayout
         return layout;
     }
 
-    /// <summary>The index in <see cref="Sources"/> of the GPU with this id, or -1 when it was not there at the start.</summary>
-    public int SourceOfGpu(string id) => _gpuIndex.TryGetValue(id, out var index) ? index : -1;
+    /// <summary>The index in <see cref="Sources"/> of the GPU with this id (the id the column is filled from now), or -1 when no column has it.</summary>
+    public int SourceOfGpu(string id)
+    {
+        for (var i = 1; i < Sources.Count; i++)
+        {
+            if (string.Equals(Sources[i].CurrentId, id, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// A graphics driver restart gives an adapter a new id (its LUID). A GPU in <paramref name="gpus"/> that has no column is bound to the column of a GPU
+    /// that is NOT in this sample when its name and its dedicated memory are the same, so the column goes on instead of ending in "gone" rows with the
+    /// adapter showing up as a late one. It is bound only when the match is unambiguous both ways: one column for that GPU and one GPU for that column
+    /// (identical twin cards that both went away cannot be told apart, and are left as they are). A column whose adapter is in the sample is alive and is
+    /// never taken. Returns the bindings made (column index in <see cref="Sources"/> and the GPU).
+    /// </summary>
+    public List<(int Index, RecordedGpu Gpu)> RebindLate(IReadOnlyList<RecordedGpu> gpus)
+    {
+        var bound = new List<(int Index, RecordedGpu Gpu)>();
+        var late = gpus.Where(g => SourceOfGpu(g.Id) < 0).ToList();
+        if (late.Count == 0)
+        {
+            return bound;
+        }
+
+        var present = gpus.Select(static g => g.Id).ToHashSet(StringComparer.Ordinal);
+        var pairs = new List<(int Index, RecordedGpu Gpu)>();
+        for (var i = 1; i < Sources.Count; i++)
+        {
+            if (Sources[i].CurrentId is { } id && present.Contains(id))
+            {
+                continue;
+            }
+
+            foreach (var gpu in late)
+            {
+                if (string.Equals(Sources[i].DeviceName, gpu.Name, StringComparison.Ordinal) && Sources[i].DedicatedBytes == gpu.DedicatedTotalBytes)
+                {
+                    pairs.Add((i, gpu));
+                }
+            }
+        }
+
+        foreach (var (index, gpu) in pairs)
+        {
+            if (pairs.Count(p => p.Index == index) == 1 && pairs.Count(p => ReferenceEquals(p.Gpu, gpu)) == 1)
+            {
+                Sources[index].CurrentId = gpu.Id;
+                Sources[index].DedicatedBytes = gpu.DedicatedTotalBytes;
+                bound.Add((index, gpu));
+            }
+        }
+
+        return bound;
+    }
 
     public string HeaderLine() => string.Join(',', Header) + "\n";
 }
@@ -119,7 +180,7 @@ internal sealed class RunRowFormatter(RunLayout layout)
         // gpu1..gpuN
         for (var i = 1; i < layout.Sources.Count; i++)
         {
-            var gpu = FindGpu(sample, layout.Sources[i].DeviceId);
+            var gpu = FindGpu(sample, layout.Sources[i].CurrentId);
             if (gpu is null)
             {
                 // The adapter is not in this sample: gone for now.
@@ -212,7 +273,7 @@ internal sealed class RunRowFormatter(RunLayout layout)
         // The GPUs' PDH values (their frame is the core frame), in the layout's order.
         for (var i = 1; i < layout.Sources.Count; i++)
         {
-            var gpu = FindGpu(sample, layout.Sources[i].DeviceId);
+            var gpu = FindGpu(sample, layout.Sources[i].CurrentId);
             if (gpu is null)
             {
                 AppendEmpty(row, 2);

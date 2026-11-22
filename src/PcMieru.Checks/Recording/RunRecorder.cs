@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PcMieru.Core;
 
 namespace PcMieru.Checks;
@@ -24,6 +25,24 @@ internal sealed record RunRecorderOptions
     public int QueueCapacity { get; init; } = 256;
 
     public Func<Guid> NewId { get; init; } = Guid.NewGuid;
+
+    /// <summary>The wait between two tries of a JSON replace that met a sharing violation (null: a real sleep). A test passes one that only records the delay.</summary>
+    public Action<TimeSpan>? Pause { get; init; }
+
+    /// <summary>The process-exit hook (registered only while a run is active).</summary>
+    public IProcessExit ProcessExit { get; init; } = AppDomainProcessExit.Instance;
+
+    /// <summary>The longest the process-exit hook waits for the run to close (2 s): exit is never held longer than this.</summary>
+    public TimeSpan ExitWait { get; init; } = RunRecorderExtensions.ExitBound;
+
+    /// <summary>The CSV stops here, below the size the reader accepts (240 MB against 256 MB), with the stop reason <c>size_limit</c>.</summary>
+    public long MaxCsvBytes { get; init; } = RunRecorder.DefaultMaxCsvBytes;
+
+    /// <summary>How long the writer waits for the next item before it looks at a flush that is due (so rows reach the disk even when the samples stop); 0 or less waits for ever.</summary>
+    public int IdleWaitMs { get; init; } = 1000;
+
+    /// <summary>Called by a start right after its files are ready and before it takes the recorder's lock again. For tests of the race with a stop that already began.</summary>
+    public Action? AfterPrepare { get; init; }
 }
 
 /// <summary>
@@ -37,6 +56,9 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
 {
     /// <summary>200 MB.</summary>
     public const long DefaultMinFreeBytes = 200L * 1024 * 1024;
+
+    /// <summary>240 MB: the CSV a run may grow to, 16 MB below what the reader reads (<see cref="RunFiles.MaxCsvBytes"/>), so a finished run can always be opened.</summary>
+    public const long DefaultMaxCsvBytes = RunFiles.MaxCsvBytes - (16L * 1024 * 1024);
 
     private readonly IRecordingSamples _samples;
     private readonly string _root;
@@ -172,16 +194,27 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
             lock (_gate)
             {
                 _state = RunActivityState.Idle;
-                _starting = null;
+
+                // Only this call's own marker is cleared: a later start may already have put its own there (see below).
+                if (ReferenceEquals(_starting, starting))
+                {
+                    _starting = null;
+                }
             }
 
             starting.TrySetResult(null);
             throw;
         }
 
+        _options.AfterPrepare?.Invoke();
         lock (_gate)
         {
-            _starting = null;
+            // The run may already have stopped by itself (the writer ran into low space at once) and a second start may have begun in the meantime:
+            // its "starting" marker is not ours to clear, or a stop asking for the run being prepared would find nothing and leave it recording.
+            if (ReferenceEquals(_starting, starting))
+            {
+                _starting = null;
+            }
 
             // A stop that began before this point (the writer ran into low space at once) already took the state to Stopping; do not undo it.
             if (session.StopTask is null)
@@ -213,11 +246,13 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
         try
         {
             // A run that was cut off earlier becomes "interrupted" before we add another (best effort: a file that cannot be fixed now is shown as it is).
-            RunRecovery.Recover(fs, _root);
+            RunRecovery.Recover(fs, _root, _options.Pause);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is not (OutOfMemoryException or AccessViolationException))
         {
-            // Not a reason to refuse a new recording.
+            // Recovery never blocks a start: whatever it ran into (a file too long or malformed, one in use, a folder that cannot be listed), the person
+            // who pressed "record" gets a recording, and the file that could not be fixed is listed as it is.
+            Trace.TraceWarning("PCMieru: recovering earlier runs failed ({0}: {1}); recording anyway.", ex.GetType().Name, ex.Message);
         }
 
         if (fs.GetFreeBytes(_root) is { } free && free < _options.MinFreeBytes)
@@ -238,6 +273,7 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
         IRunFile? csv = null;
         RunWriter? writer = null;
         Action<RecordingSample>? handler = null;
+        IDisposable? exit = null;
         var filesCreated = false;
         try
         {
@@ -271,13 +307,22 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
                 _options.FlushIntervalUs,
                 _options.MinFreeBytes,
                 _options.QueueCapacity,
-                reason => _ = StopSession(session, reason)));
+                reason => _ = StopSession(session, reason),
+                _options.NowUs,
+                _options.Pause,
+                _options.MaxCsvBytes,
+                _options.IdleWaitMs > 0 ? _options.IdleWaitMs : Timeout.Infinite));
             csv = null; // the writer owns it now
             session.Writer = writer;
 
             // The first JSON (status recording, no columns yet) is on the disk before any sample can arrive.
             writer.SaveJson(RunStatus.Recording, null, null, 0);
             ct.ThrowIfCancellationRequested();
+
+            // The exit hook exists only while the run does: a window that closes or a session that ends stops the run through the GUI, and this is the
+            // last net for a process that exits some other way. It waits for the stop for the bound and not a moment longer.
+            exit = _options.ProcessExit.Register(() => ((IRunRecorder)this).StopCurrentBlocking(RunStopReason.ProcessExit, _options.ExitWait));
+            session.ExitRegistration = exit;
 
             handler = sample => writer.EnqueueSample(sample, _options.NowUs());
             session.Handler = handler;
@@ -287,6 +332,7 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
         }
         catch (Exception ex)
         {
+            DisposeQuietly(exit);
             if (handler is not null)
             {
                 try
@@ -369,6 +415,8 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
         }
         finally
         {
+            // The exit hook goes when the stop has finished (not when it begins): a process that exits in the middle of the stop still waits for it, within the bound.
+            DisposeQuietly(session.ExitRegistration);
             DisposeQuietly(session.Lock);
             lock (_gate)
             {
@@ -434,8 +482,9 @@ public sealed class RunRecorder : IRunRecorder, IRunActivity
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // The JSON on the disk still says "recording": the next start recovers it as interrupted.
+            // The JSON on the disk still says "recording" (the save was tried again and still failed): the next start recovers it as interrupted.
             status = RunStatus.Failed;
+            reason = RunStopReason.IoError;
             error ??= ex.Message;
         }
 

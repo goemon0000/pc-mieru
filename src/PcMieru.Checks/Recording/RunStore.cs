@@ -185,6 +185,7 @@ public sealed class RunStore : IRunStore
             Markers = info.Markers,
             NormalEnd = normal,
             EndUs = normal ? Math.Max(info.DurationUs, data.LastOffsetUs) : data.LastOffsetUs,
+            MissingEndUs = normal || info.Markers.Count == 0 ? 0 : info.Markers.Max(m => m.OffsetUs),
             Rows = data.Rows,
             DroppedTicks = info.DroppedTicks,
             Status = info.Status,
@@ -251,7 +252,9 @@ public sealed class RunStore : IRunStore
         try
         {
             // The lock is the answer to "is it being recorded?": a recorder holds it for the whole run. Taking it here also keeps one from starting on this run.
-            using var held = _fs.TryLock(Path.Combine(_root, RunFiles.LockName(runId)));
+            // One more try before "recording": a holder that is not a recorder (a recovery pass, another delete of this process) lets go within moments.
+            var lockPath = Path.Combine(_root, RunFiles.LockName(runId));
+            using var held = _fs.TryLock(lockPath) ?? _fs.TryLock(lockPath);
             if (held is null)
             {
                 return new RunDeleteResult(RunDeleteOutcome.Recording);

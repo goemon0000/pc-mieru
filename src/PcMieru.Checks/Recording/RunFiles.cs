@@ -37,8 +37,46 @@ internal static class RunFiles
         return Guid.TryParseExact(middle, "D", out id) && RunCodes.IdText(id) == middle;
     }
 
-    /// <summary>Writes the bytes to <paramref name="temp"/>, forces them to the disk and renames the file over <paramref name="destination"/>: a reader sees the old file or the new one, never half of one.</summary>
-    public static void SaveAtomic(IRunFileSystem fs, string temp, string destination, byte[] bytes)
+    /// <summary>
+    /// The waits between the tries of a save (about 50 to 100 ms, five retries): the rename of a file that was just written can meet a sharing violation
+    /// or an access denied for a moment (a virus scanner or an indexer still holding it). Only these two are retried; a full disk is not.
+    /// </summary>
+    internal static readonly TimeSpan[] SaveRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(75),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(100),
+    ];
+
+    /// <summary>A failure that may pass in a moment (sharing violation 32 or access denied 5): <see cref="SaveAtomic"/> retries it, and a periodic flush may put the save off.</summary>
+    internal static bool IsTransientFailure(Exception ex) => CheckHistoryStore.IsTransientMoveFailure(ex);
+
+    /// <summary>
+    /// Writes the bytes to <paramref name="temp"/>, forces them to the disk and renames the file over <paramref name="destination"/>: a reader sees the old
+    /// file or the new one, never half of one. A transient failure (<see cref="IsTransientFailure"/>) is tried again after each of <see cref="SaveRetryDelays"/>,
+    /// the wait going through <paramref name="pause"/> (a test passes one that does not sleep); the last failure, and any other, goes to the caller.
+    /// </summary>
+    public static void SaveAtomic(IRunFileSystem fs, string temp, string destination, byte[] bytes, Action<TimeSpan>? pause = null)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                SaveOnce(fs, temp, destination, bytes);
+                return;
+            }
+            catch (Exception ex) when (attempt < SaveRetryDelays.Length && IsTransientFailure(ex))
+            {
+                (pause ?? DefaultPause)(SaveRetryDelays[attempt]);
+            }
+        }
+    }
+
+    private static void DefaultPause(TimeSpan delay) => Thread.Sleep(delay);
+
+    private static void SaveOnce(IRunFileSystem fs, string temp, string destination, byte[] bytes)
     {
         try
         {
@@ -73,8 +111,8 @@ internal static class RunFiles
 /// </summary>
 internal static class RunRecovery
 {
-    /// <summary>Recovers every such run in <paramref name="root"/> and returns how many. A file that cannot be read or written is skipped (it is shown as it is).</summary>
-    public static int Recover(IRunFileSystem fs, string root)
+    /// <summary>Recovers every such run in <paramref name="root"/> and returns how many. A file that cannot be read or written (too long, malformed, in use) is skipped (it is shown as it is): recovery never stops anything else.</summary>
+    public static int Recover(IRunFileSystem fs, string root, Action<TimeSpan>? pause = null)
     {
         var recovered = 0;
         foreach (var name in fs.ListFiles(root, "run-*.json"))
@@ -86,12 +124,12 @@ internal static class RunRecovery
 
             try
             {
-                if (RecoverOne(fs, root, id))
+                if (RecoverOne(fs, root, id, pause))
                 {
                     recovered++;
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidDataException)
             {
                 // Not ours to fix now; the store lists it as interrupted or unreadable.
             }
@@ -118,7 +156,7 @@ internal static class RunRecovery
         return recovered;
     }
 
-    private static bool RecoverOne(IRunFileSystem fs, string root, Guid id)
+    private static bool RecoverOne(IRunFileSystem fs, string root, Guid id, Action<TimeSpan>? pause)
     {
         var jsonPath = Path.Combine(root, RunFiles.JsonName(id));
         if (RunJson.Read(fs.ReadAllBytes(jsonPath, RunJson.MaxBytes)).Status != RunStatus.Recording)
@@ -165,7 +203,7 @@ internal static class RunRecovery
             DurationUs = duration,
             Rows = rows,
         };
-        RunFiles.SaveAtomic(fs, Path.Combine(root, RunFiles.TempName(id)), jsonPath, RunJson.Write(fixedHeader));
+        RunFiles.SaveAtomic(fs, Path.Combine(root, RunFiles.TempName(id)), jsonPath, RunJson.Write(fixedHeader), pause);
         return true;
     }
 }

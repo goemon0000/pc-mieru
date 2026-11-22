@@ -182,6 +182,7 @@ internal sealed class GpuSampler : IDisposable
     private nint _engine;
     private nint _dedicated;
     private nint _shared;
+    private readonly GpuAdapterCatalog _catalog = new(GpuAdapters.Enumerate, static () => Environment.TickCount64);
     private IReadOnlyList<GpuAdapter>? _adapters;
     private long _lastCollect;
     private long _idleSince;
@@ -202,7 +203,7 @@ internal sealed class GpuSampler : IDisposable
         }
 
         _idleSince = 0;
-        _adapters ??= GpuAdapters.Enumerate();
+        _adapters = _catalog.Adapters;
         if (!EnsureQuery())
         {
             var detail = _unsupported ?? "GPU counters could not be opened";
@@ -235,6 +236,12 @@ internal sealed class GpuSampler : IDisposable
         _ = ReadInto(_dedicated, (n, v, s) => _aggregator.AddAdapterMemory(n, v, s, dedicated: true));
         _ = ReadInto(_shared, (n, v, s) => _aggregator.AddAdapterMemory(n, v, s, dedicated: false));
         _aggregator.Finish();
+
+        // A driver restart gives an adapter a new LUID: PDH reports it at once, DXGI has to be asked again (at most every 10 s, see the catalog).
+        if (_catalog.Observe(_aggregator.Adapters.Keys.ToArray()))
+        {
+            _adapters = _catalog.Adapters;
+        }
 
         if (!engineOk)
         {
@@ -576,6 +583,9 @@ internal static class GpuSensorMerge
     /// <summary>
     /// Which reading belongs to which adapter, each reading to at most one. By id first (the LUID is what the reading was made for); then, only for an
     /// adapter no reading named by id, by name among the readings still free. An adapter left with nothing says "no sensor reading".
+    /// The name fallback has a limit with identical cards: two adapters with the same name and no reading named by id are paired with the free readings in
+    /// list order, so their readings can be swapped. It never drops one (each reading goes to at most one adapter and an adapter is never left without
+    /// one while a free reading of its name exists), and the id match above is what makes the pairing right in the normal case.
     /// </summary>
     internal static GpuSensorReading?[] MatchAll(IReadOnlyList<GpuSensorReading> readings, IReadOnlyList<GpuInfo> gpus)
     {

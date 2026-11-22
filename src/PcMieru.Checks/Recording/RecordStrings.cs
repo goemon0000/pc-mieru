@@ -199,6 +199,7 @@ public static class RecordStrings
         new(StopPrefix + "low_space", "空き容量が少なくなった", "Free space ran low"),
         new(StopPrefix + "io_error", "書き込みに失敗した", "Writing failed"),
         new(StopPrefix + "process_exit", "アプリが終了した", "The app exited"),
+        new(StopPrefix + "size_limit", "記録のサイズが上限に達した", "The recording reached its size limit"),
         new(StopPrefix + "unknown", "不明", "Unknown"),
 
         // Marks.

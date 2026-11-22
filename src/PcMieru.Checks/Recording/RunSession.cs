@@ -33,6 +33,9 @@ internal sealed class RunSession(object owner, Guid runId, DateTime startedAtUtc
 
     public Action<RecordingSample>? Handler { get; set; }
 
+    /// <summary>The process-exit hook, registered while the run is active and disposed when the run has ended (the stop path does it).</summary>
+    public IDisposable? ExitRegistration { get; set; }
+
     /// <summary>Set once by the recorder under its lock; null while the run is recording.</summary>
     public Task<RunResult>? StopTask { get; set; }
 

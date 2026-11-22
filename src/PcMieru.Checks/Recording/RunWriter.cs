@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using PcMieru.Core;
 
@@ -17,19 +18,29 @@ internal sealed record RunWriterInit(
     long FlushIntervalUs,
     long MinFreeBytes,
     int QueueCapacity,
-    Action<RunStopReason> RequestStop);
+    Action<RunStopReason> RequestStop,
+    Func<long> NowUs,
+    Action<TimeSpan>? Pause,
+    long MaxCsvBytes,
+    int IdleWaitMs);
 
 /// <summary>What the writer did, read after it has stopped.</summary>
 internal sealed record WriterOutcome(bool Ok, Exception? Failure, long Rows, long DroppedTicks, long LastRowOffsetUs, long LastMarkerOffsetUs);
 
 /// <summary>
 /// The one thread that touches a run's files while it is recording (DESIGN-B §7.1). The sampler's handler only enqueues (never blocks, never does I/O);
-/// this thread writes the CSV rows, flushes every <see cref="RunWriterInit.FlushIntervalUs"/> and at the end (a flush and then a force to the disk),
-/// saves the JSON atomically (a <c>.tmp</c> written, forced and renamed over it) at every flush and every mark, and checks the free space at every flush.
-/// Any I/O failure ends the writing, asks the recorder for an <c>io_error</c> stop and leaves what was already saved readable.
+/// this thread writes the CSV rows, flushes every <see cref="RunWriterInit.FlushIntervalUs"/> (also when no sample comes: the wait for the next item is
+/// bounded by <see cref="RunWriterInit.IdleWaitMs"/>, so rows reach the disk within about one interval even if the samples stop) and at the end (a flush and
+/// then a force to the disk), saves the JSON atomically (a <c>.tmp</c> written, forced and renamed over it) at every flush and every mark, and checks the free
+/// space at every flush. A write error ends the writing, asks the recorder for an <c>io_error</c> stop and leaves what was already saved readable. A JSON
+/// replace that meets a sharing violation or an access denied is tried again (<see cref="RunFiles.SaveAtomic"/>); if a periodic flush's save still fails
+/// it is put off to the next flush (the CSV is the truth, the JSON is rebuilt from it by the recovery), while a mark's save and the last save fail the run.
 /// </summary>
 internal sealed class RunWriter
 {
+    /// <summary>The CSV waits at most this many accepted samples for a sample whose GPU stage completed, then its columns are fixed with the GPUs it has.</summary>
+    internal const int LayoutWaitTicks = 3;
+
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly RunWriterInit _init;
@@ -39,24 +50,32 @@ internal sealed class RunWriter
     private readonly TaskCompletionSource<WriterOutcome> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<RunMarker> _markers = [];
     private readonly HashSet<string> _warnedGpus = new(StringComparer.Ordinal);
+    private readonly List<Accepted> _pending = [];
     private readonly Thread _thread;
 
     private int _sampleCount;
     private bool _finishing;
     private bool _started;
+    private int _deferredSaves;
 
     // The state below belongs to the writer thread while it runs; it is read by others only before Start or after the thread has ended.
     private IRunFile? _csv;
     private RunLayout? _layout;
     private RunRowFormatter? _formatter;
     private long _rows;
+    private long _rowsFlushed;
+    private long _csvBytes;
     private long _dropped;
     // No row yet: below every offset, so the backlog rule (a sample acquired before the start) is the one thing that keeps a pre-start sample out.
     private long _lastOffsetUs = long.MinValue;
+    // The offset of the last ACCEPTED sample (a sample waiting for the columns is accepted but not yet a row): the order rule is checked against this one.
+    private long _lastAcceptedUs = long.MinValue;
     private long? _lastSequence;
     private long? _lastFlushStampUs;
     private Exception? _failure;
     private bool _stopRequested;
+    private bool _sizeCapReached;
+    private bool _jsonDeferred;
 
     public RunWriter(RunWriterInit init)
     {
@@ -73,6 +92,12 @@ internal sealed class RunWriter
     private sealed record MarkerItem(MarkerKind Kind, long OffsetUs, DateTime Utc, string? Detail, TaskCompletionSource<RunMarker> Done) : Item;
 
     private sealed record FinishItem : Item;
+
+    /// <summary>A sample that passed the order and backlog rules: its row time, and the time it was queued (the flush clock).</summary>
+    private sealed record Accepted(RecordingSample Sample, long OffsetUs, long NowUs);
+
+    /// <summary>How many periodic JSON saves were put off to the next flush because the replace kept failing for a moment (a count for tests and the trace).</summary>
+    public int DeferredSaves => Volatile.Read(ref _deferredSaves);
 
     public void Start()
     {
@@ -161,8 +186,8 @@ internal sealed class RunWriter
     }
 
     /// <summary>
-    /// Saves the JSON atomically. Call it before <see cref="Start"/> (the first one) or after <see cref="FinishAsync"/> has finished (the last one); in
-    /// between only the writer thread saves.
+    /// Saves the JSON atomically (a sharing violation or access denied on the replace is tried again, see <see cref="RunFiles.SaveAtomic"/>). Call it
+    /// before <see cref="Start"/> (the first one) or after <see cref="FinishAsync"/> has finished (the last one); in between only the writer thread saves.
     /// </summary>
     public void SaveJson(RunStatus status, RunStopReason? reason, DateTime? endedAtUtc, long durationUs)
     {
@@ -180,7 +205,8 @@ internal sealed class RunWriter
             _layout?.Metrics ?? [],
             _layout?.SourceInfos ?? [],
             _markers.ToArray());
-        RunFiles.SaveAtomic(_init.FileSystem, _init.TempPath, _init.JsonPath, RunJson.Write(header));
+        RunFiles.SaveAtomic(_init.FileSystem, _init.TempPath, _init.JsonPath, RunJson.Write(header), _init.Pause);
+        _jsonDeferred = false;
     }
 
     private void Loop()
@@ -189,20 +215,33 @@ internal sealed class RunWriter
         {
             while (true)
             {
-                Item item;
+                Item? item = null;
                 lock (_gate)
                 {
                     while (_queue.Count == 0)
                     {
-                        Monitor.Wait(_gate);
+                        // A wait that ran out with nothing queued is an idle moment: the writer flushes what is due instead of waiting for a sample that may never come.
+                        if (!Monitor.Wait(_gate, _init.IdleWaitMs))
+                        {
+                            break;
+                        }
                     }
 
-                    item = _queue.First!.Value;
-                    _queue.RemoveFirst();
-                    if (item is SampleItem)
+                    if (_queue.Count > 0)
                     {
-                        _sampleCount--;
+                        item = _queue.First!.Value;
+                        _queue.RemoveFirst();
+                        if (item is SampleItem)
+                        {
+                            _sampleCount--;
+                        }
                     }
+                }
+
+                if (item is null)
+                {
+                    Idle();
+                    continue;
                 }
 
                 if (item is FinishItem)
@@ -271,9 +310,41 @@ internal sealed class RunWriter
         }
     }
 
-    private void HandleSample(SampleItem item)
+    /// <summary>Nothing came for a while: samples that are still waiting for the columns are written with what there is, and a flush that is due is done.</summary>
+    private void Idle()
     {
         if (_failure is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            var now = _init.NowUs();
+            if (_layout is null)
+            {
+                if (_pending.Count > 0 && now - _pending[0].NowUs >= _init.FlushIntervalUs)
+                {
+                    CommitLayout(UnionOfPendingGpus());
+                }
+
+                return;
+            }
+
+            if ((_rows != _rowsFlushed || _jsonDeferred) && now - (_lastFlushStampUs ?? now) >= _init.FlushIntervalUs)
+            {
+                Flush(now);
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail(ex);
+        }
+    }
+
+    private void HandleSample(SampleItem item)
+    {
+        if (_failure is not null || _sizeCapReached)
         {
             return;
         }
@@ -290,7 +361,7 @@ internal sealed class RunWriter
             }
 
             offsetUs = sample.Core.AcquiredUs - _init.StartUs;
-            if (offsetUs <= _lastOffsetUs)
+            if (offsetUs <= _lastAcceptedUs)
             {
                 return;
             }
@@ -315,40 +386,104 @@ internal sealed class RunWriter
         else
         {
             // No Core frame at all (not expected from the real sampler): the row gets the time it was queued.
-            offsetUs = Math.Max(Math.Max(0, item.NowUs - _init.StartUs), _lastOffsetUs + 1);
+            offsetUs = Math.Max(Math.Max(0, item.NowUs - _init.StartUs), _lastAcceptedUs + 1);
         }
 
-        // The first row fixes the columns (DESIGN-B §7.1); the header, the JSON's metrics and sources are written with it, so a run that dies a second
-        // later is still readable. A flush is also due when a warning was added, so the JSON carries it.
-        var urgent = _layout is null;
+        _lastAcceptedUs = offsetUs;
+        var accepted = new Accepted(sample, offsetUs, item.NowUs);
+
+        // The columns are fixed at the first accepted sample whose GPU stage completed (DESIGN-B §7.1): a sample whose GPU stage timed out or has not
+        // started yet has no GPUs in it, and fixing the columns from it would leave every adapter without a column for the whole run. It waits for the
+        // next sample, at most LayoutWaitTicks accepted samples in all, then the columns are fixed with the GPUs there are. The samples that waited are
+        // written first, in order: none is lost.
         if (_layout is null)
         {
-            _layout = RunLayout.Create(sample.Gpus);
-            _formatter = new RunRowFormatter(_layout);
-            Write(_layout.HeaderLine());
-        }
-        else
-        {
-            // A GPU that appears after the columns were fixed gets none; the run says so once.
-            foreach (var gpu in sample.Gpus)
+            _pending.Add(accepted);
+            if (sample.Stages.GpuCounterUs != 0)
             {
-                if (_layout.SourceOfGpu(gpu.Id) < 0 && _warnedGpus.Add(gpu.Id))
-                {
-                    _markers.Add(new RunMarker(MarkerKind.Warning, offsetUs, sample.TakenAtUtc, "late_gpu:" + gpu.Name));
-                    urgent = true;
-                }
+                CommitLayout(sample.Gpus);
             }
+            else if (_pending.Count >= LayoutWaitTicks)
+            {
+                CommitLayout(UnionOfPendingGpus());
+            }
+
+            return;
         }
 
-        Write(_formatter!.Format(sample, offsetUs, _init.StartUs) + "\n");
-        _rows++;
-        _lastOffsetUs = offsetUs;
+        var urgent = WriteRow(accepted);
+        CheckSizeCap();
 
         // The flush clock is the time the sample was queued (not the time it was acquired), so a stalled thread cannot hide a due flush and a test
         // moves it by moving the fake clock: nothing here polls or sleeps.
         if (urgent || item.NowUs - (_lastFlushStampUs ?? item.NowUs) >= _init.FlushIntervalUs)
         {
             Flush(item.NowUs);
+        }
+    }
+
+    private IReadOnlyList<RecordedGpu> UnionOfPendingGpus() =>
+        _pending.SelectMany(static p => p.Sample.Gpus).DistinctBy(static g => g.Id, StringComparer.Ordinal).ToList();
+
+    /// <summary>Fixes the columns, writes the header and the samples that waited, and flushes at once (the header, the JSON's metrics and sources go out together, so a run that dies a second later is still readable).</summary>
+    private void CommitLayout(IReadOnlyList<RecordedGpu> gpus)
+    {
+        _layout = RunLayout.Create(gpus);
+        _formatter = new RunRowFormatter(_layout);
+        Write(_layout.HeaderLine());
+        foreach (var waiting in _pending)
+        {
+            WriteRow(waiting);
+        }
+
+        var stamp = _pending[^1].NowUs;
+        _pending.Clear();
+        CheckSizeCap();
+        Flush(stamp);
+    }
+
+    /// <summary>Writes one row. Returns true when a warning was added (the JSON should carry it soon).</summary>
+    private bool WriteRow(Accepted accepted)
+    {
+        var sample = accepted.Sample;
+        var urgent = false;
+
+        // A graphics driver restart gives an adapter a new id: the column of the adapter that went away goes on with it (only when the match is unambiguous).
+        foreach (var (_, gpu) in _layout!.RebindLate(sample.Gpus))
+        {
+            _markers.Add(new RunMarker(MarkerKind.Warning, accepted.OffsetUs, sample.TakenAtUtc, "gpu_rebound:" + gpu.Name));
+            urgent = true;
+        }
+
+        // A GPU that appears after the columns were fixed gets none; the run says so once.
+        foreach (var gpu in sample.Gpus)
+        {
+            if (_layout.SourceOfGpu(gpu.Id) < 0 && _warnedGpus.Add(gpu.Id))
+            {
+                _markers.Add(new RunMarker(MarkerKind.Warning, accepted.OffsetUs, sample.TakenAtUtc, "late_gpu:" + gpu.Name));
+                urgent = true;
+            }
+        }
+
+        Write(_formatter!.Format(sample, accepted.OffsetUs, _init.StartUs) + "\n");
+        _rows++;
+        _lastOffsetUs = accepted.OffsetUs;
+        return urgent;
+    }
+
+    /// <summary>The CSV stops growing at the recorder's own cap, below the size the reader accepts: the run ends with <c>size_limit</c> and stays readable.</summary>
+    private void CheckSizeCap()
+    {
+        if (_sizeCapReached || _csvBytes < _init.MaxCsvBytes)
+        {
+            return;
+        }
+
+        _sizeCapReached = true;
+        if (!_stopRequested)
+        {
+            _stopRequested = true;
+            _init.RequestStop(RunStopReason.SizeLimit);
         }
     }
 
@@ -378,15 +513,32 @@ internal sealed class RunWriter
     private void Write(string text)
     {
         var csv = _csv ?? throw new ObjectDisposedException(nameof(RunWriter));
-        csv.Write(Utf8.GetBytes(text));
+        var bytes = Utf8.GetBytes(text);
+        csv.Write(bytes);
+        _csvBytes += bytes.Length;
     }
 
-    /// <summary>The CSV is written and forced to the disk, the JSON is saved, and the free space is checked (below the limit asks for a <c>low_space</c> stop).</summary>
+    /// <summary>
+    /// The CSV is written and forced to the disk, the JSON is saved, and the free space is checked (below the limit asks for a <c>low_space</c> stop).
+    /// A JSON replace that still meets a sharing violation or an access denied after its retries is put off to the next flush: the CSV is on the disk and is
+    /// the truth, so the run goes on. Any other failure of the save ends the run.
+    /// </summary>
     private void Flush(long stampUs)
     {
         var csv = _csv ?? throw new ObjectDisposedException(nameof(RunWriter));
         csv.FlushToDisk();
-        SaveJson(RunStatus.Recording, null, null, Math.Max(0, _lastOffsetUs));
+        _rowsFlushed = _rows;
+        try
+        {
+            SaveJson(RunStatus.Recording, null, null, Math.Max(0, _lastOffsetUs));
+        }
+        catch (Exception ex) when (RunFiles.IsTransientFailure(ex))
+        {
+            _jsonDeferred = true;
+            Interlocked.Increment(ref _deferredSaves);
+            Trace.TraceWarning("PCMieru: the run's JSON could not be replaced ({0}); it is saved again at the next flush.", ex.Message);
+        }
+
         _lastFlushStampUs = stampUs;
 
         if (_init.FileSystem.GetFreeBytes(_directory) is { } free && free < _init.MinFreeBytes && !_stopRequested)
@@ -405,6 +557,12 @@ internal sealed class RunWriter
 
         try
         {
+            if (_layout is null && _pending.Count > 0)
+            {
+                // The samples stopped before the columns were fixed: they are written with the GPUs they have.
+                CommitLayout(UnionOfPendingGpus());
+            }
+
             csv.FlushToDisk();
         }
         catch (Exception ex)

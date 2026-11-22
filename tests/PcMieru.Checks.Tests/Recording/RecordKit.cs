@@ -493,7 +493,8 @@ internal static class SampleKit
         double? clock = 2000,
         double? limitC = 83,
         ulong? bits = 0,
-        SourceOrigin? vendor = null) =>
+        SourceOrigin? vendor = null,
+        long dedicatedBytes = 0) =>
         new(
             id,
             name,
@@ -505,7 +506,8 @@ internal static class SampleKit
             D(clock),
             D(limitC),
             Bits(bits),
-            vendor ?? new SourceOrigin(new FrameId(generation, sequence), acquiredUs, periodMs));
+            vendor ?? new SourceOrigin(new FrameId(generation, sequence), acquiredUs, periodMs),
+            dedicatedBytes);
 
     /// <summary>A Core sample: frame <c>c-seq</c> acquired at <paramref name="acquiredUs"/> on the monotonic clock.</summary>
     public static RecordingSample Sample(
@@ -516,12 +518,13 @@ internal static class SampleKit
         int periodMs = 1000,
         SourceOrigin? core = null,
         DateTime? taken = null,
-        string? batteryState = null)
+        string? batteryState = null,
+        bool gpuStage = true)
     {
         var origin = core ?? new SourceOrigin(new FrameId(0, sequence), acquiredUs, periodMs);
         return new RecordingSample(
             origin,
-            new CoreStageTimes(acquiredUs, acquiredUs, acquiredUs, acquiredUs),
+            new CoreStageTimes(acquiredUs, acquiredUs, acquiredUs, gpuStage ? acquiredUs : 0),
             taken ?? Wall.AddTicks(acquiredUs * 10),
             periodMs,
             D(cpu),
@@ -551,10 +554,19 @@ internal sealed class RecHarness : IDisposable
     /// <summary>The monotonic time a run starts at (5 s since "boot" in the fake clock).</summary>
     public const long StartUs = 5_000_000;
 
+    private readonly System.Collections.Concurrent.ConcurrentQueue<TimeSpan> _pauses = new();
     private int _ids;
 
     /// <summary>The files, the clocks and the ids are replaced by the fakes; the other options (flush interval, free-space floor, queue size) are the caller's.</summary>
-    public RecHarness(long flushIntervalUs = 10_000_000, long minFreeBytes = RunRecorder.DefaultMinFreeBytes, int queueCapacity = 256, int firstId = 1)
+    public RecHarness(
+        long flushIntervalUs = 10_000_000,
+        long minFreeBytes = RunRecorder.DefaultMinFreeBytes,
+        int queueCapacity = 256,
+        int firstId = 1,
+        long maxCsvBytes = RunRecorder.DefaultMaxCsvBytes,
+        int idleWaitMs = 0,
+        int exitWaitMs = 5000,
+        Action? afterPrepare = null)
     {
         _ids = firstId - 1;
         Clock = new FakeClock(StartUs);
@@ -569,11 +581,23 @@ internal sealed class RecHarness : IDisposable
             MinFreeBytes = minFreeBytes,
             QueueCapacity = queueCapacity,
             NewId = () => IdOf(Interlocked.Increment(ref _ids)),
+            Pause = delay => _pauses.Enqueue(delay),
+            ProcessExit = Exit,
+            ExitWait = TimeSpan.FromMilliseconds(exitWaitMs),
+            MaxCsvBytes = maxCsvBytes,
+            IdleWaitMs = idleWaitMs,
+            AfterPrepare = afterPrepare,
         };
         Recorder = new RunRecorder(Samples, Root, options);
     }
 
     public MemRunFs Fs { get; } = new();
+
+    /// <summary>The process-exit hook of the recorder: a test fires it by hand.</summary>
+    public FakeProcessExit Exit { get; } = new();
+
+    /// <summary>Every wait the JSON save asked for between its tries (nothing sleeps).</summary>
+    public IReadOnlyList<TimeSpan> Pauses => [.. _pauses];
 
     public FakeSamples Samples { get; } = new();
 
@@ -786,4 +810,67 @@ internal sealed class FsGate(Func<string, string, bool> match, Func<Exception>? 
 
     /// <summary>A test that ends early lets the blocked call go, so no thread is left waiting.</summary>
     public void Dispose() => _release.Set();
+}
+
+/// <summary>
+/// A fake <see cref="IProcessExit"/>: counts the registrations that are live (a recorder that is not recording must have none), and the test "exits" by
+/// calling <see cref="Fire"/>, which runs the handlers like the runtime does on the exiting thread.
+/// </summary>
+internal sealed class FakeProcessExit : IProcessExit
+{
+    private readonly object _gate = new();
+    private readonly List<Action> _handlers = [];
+    private int _registered;
+
+    /// <summary>Registrations made over the life of the test.</summary>
+    public int Registered => Volatile.Read(ref _registered);
+
+    /// <summary>Registrations that have not been disposed.</summary>
+    public int Live
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _handlers.Count;
+            }
+        }
+    }
+
+    public IDisposable Register(Action onExit)
+    {
+        lock (_gate)
+        {
+            _handlers.Add(onExit);
+        }
+
+        Interlocked.Increment(ref _registered);
+        return new Registration(this, onExit);
+    }
+
+    /// <summary>The process is exiting: every live handler runs, here, to the end.</summary>
+    public void Fire()
+    {
+        Action[] copy;
+        lock (_gate)
+        {
+            copy = [.. _handlers];
+        }
+
+        foreach (var handler in copy)
+        {
+            handler();
+        }
+    }
+
+    private sealed class Registration(FakeProcessExit owner, Action handler) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (owner._gate)
+            {
+                owner._handlers.Remove(handler);
+            }
+        }
+    }
 }
