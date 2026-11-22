@@ -127,6 +127,7 @@ Value<T> = { value?: T, status: "ok"|"unsupported"|"denied"|"timeout"|"error"|"g
 6. **ユーザー**: セッションの一覧（ユーザー名・状態は WTS）。CPU・メモリは Snapshot の SessionId で集計。行を開くとそのセッションのプロセス。他ユーザーのプロセスが見えない場合は「一部だけ」と書く。切断・サインアウトは v1.x。
 7. **PCの構成**（旧称「PCの部品」。画面の名前は 2026-11 に変えた）: §7。左に部品の木、右に表。上に「型番・容量・接続・今の値」、下に専門項目を折り畳み。各項目に取得元。コピー（テキスト／JSON）。
 8. **診断レポート**: 観測時間（10 秒既定）を選んで「作る」→ Markdown（AI に貼る用）と JSON。伏せ字の切替（既定オン、§9）。コピー・保存。AI への送信機能は持たない。
+9. **点検**（0.4.0 から。パーツぐらしの点検を移して作り直した物。詳細は `docs/unify/DESIGN-A.md`）: 「システム」「負荷」「記憶媒体」「履歴」のタブ。システム＝Windows の状態・イベントログ・ドライバ等の確認。負荷＝CPU とメモリに決めた時間だけ負荷をかけて、止まらず計算が合うかを見る（いつでも止められる）。記憶媒体＝Windows が報告する健康状態と、前回の記録からの増え方。履歴＝保存した結果の一覧（読むだけ）。結果は `pcm-check/1` の JSON で `%LOCALAPPDATA%\PCMieru\checks\` に保存し、外へは送らない。「PC の構成」に構成コード（PCB1）の表示・コピー・保存を置く。
 
 - テーマ: ライト／ダーク／Windows に従う。高 DPI（PerMonitorV2）。キーボードだけで全部操作できる（Del＝終了の確認、Ctrl+F＝検索、F5＝今すぐ更新、Space＝一時停止）。
 - 色だけに頼らない（「高負荷」「取得できません」を文字でも出す）。ゲーム中の GPU 100% を異常扱いしない。「高負荷」と「故障の兆候」を分ける。
@@ -196,6 +197,8 @@ pcmi perf    [--sample 1s] [--json]              全体の値
 pcmi watch   [--interval 1s] [--top N] [--ndjson]
 pcmi report  [--duration 10s] [--format markdown|json] [--no-redact] [-o file]
 pcmi parts   --share [--include-usb] [-o file]   部品の型番だけの JSON（pcm-parts/1、9.1）
+pcmi parts   --code [-o file]                   構成コード（PCB1）
+pcmi check   system [--json] | storage [--elevate] [--json] | history [--json]   点検（§5 の 9）
 pcmi kill    --pid N [--started-at T] [--tree] | --name X [--all]
 pcmi priority --pid N <idle|below|normal|above|high>   （realtime は出さない）
 pcmi eco     --pid N on|off                      効率モード
@@ -222,7 +225,7 @@ web-autoai.com の、ブラウザの中だけで動く道具（電力・互換�
 ```
 {
   "format": "pcm-parts/1",
-  "app": "PCMieru 0.2.0",
+  "app": "PCMieru 0.4.0",
   "cpu":      [ { "name", "vendor", "cpuid": "ファミリ-モデル-ステッピング（10 進）" } ],
   "board":    { "manufacturer", "product" },
   "memory":   [ { "manufacturer", "partNumber", "type", "capacityBytes", "count" } ],
@@ -261,6 +264,7 @@ web-autoai.com の、ブラウザの中だけで動く道具（電力・互換�
   - `get_storage_health` — ドライブごとの健康
   - `diagnose` — duration（最大 30 秒）観測して観察と上位を返す
   - `get_report` — §5 の 8 と同じ物（伏せ字つき）
+  - `get_check_history` — 保存済みの点検結果を読む（点検は始めない。`docs/MCP.md`）
 - 返す文字列の中のプロセス名・ファイル名は**データ**として JSON に入れ、説明文に埋め込まない（指示の紛れ込み対策）。制御文字は escape。
 - MCP の dispatcher は **読み取り専用のインターフェース（`IReadOnlyInsights`）だけ** を参照する。CLI のサブコマンドを名前で実行する作りにしない。readOnlyHint は注釈であって権限の境界ではない。
 - 読み取りの裏で UAC を出さない（storage health の denied はそのまま返す）。
