@@ -710,7 +710,7 @@ Check 'record: a path inside one of the user''s folders is found; a sibling, a p
     Assert-That (-not (Test-InsideFolder '' 'C:\a')) 'an empty root'
     Assert-That (-not (Test-InsideFolder 'C:\a' '')) 'an empty path'
     $roots = @(Get-UserDataFolders)
-    Assert-That ($roots.Count -eq 4) ('folders: ' + $roots.Count)
+    Assert-That ($roots.Count -ge 7) ('folders: ' + $roots.Count)
     Assert-That (@($roots | Where-Object { $_ -match 'PCMieru$' }).Count -eq 1) 'the PCMieru folder under LocalAppData is not listed'
     foreach ($r in $roots) { Assert-That (-not [string]::IsNullOrWhiteSpace($r)) 'an empty user folder' }
     $profileDocuments = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Documents'
@@ -761,6 +761,74 @@ Check 'record: the same folder under another spelling is the same folder (short 
         }
     }
     Assert-That ((Test-Path -LiteralPath $documents) -and (Test-Path -LiteralPath $elsewhere)) 'removing the links removed what they led to'
+}
+
+Check 'record: only a drive letter, a colon and a backslash with no other colon is a plain local path' {
+    foreach ($plain in @('C:\a', 'c:\a\b\c', 'E:\MovedFromC\Documents\x', 'C:\')) { Assert-That (Test-PlainLocalPath $plain) ('plain: ' + $plain) }
+    $notPlain = @('\\.\C:\a', '\\?\C:\a', '\\?\UNC\localhost\C$\a', '\\localhost\C$\a', '\\127.0.0.1\E$\a', '\\server\share\a', 'C:a', 'C:', 'C:/a', '1:\a',
+        'C:\a::$INDEX_ALLOCATION\x', 'C:\a\b:stream', 'C:\a:b', '')
+    foreach ($bad in $notPlain) { Assert-That (-not (Test-PlainLocalPath $bad)) ('not plain: ' + $bad) }
+}
+
+Check 'record: a device path, a loopback admin share and a stream spelling that lead into a user folder are refused, and so is any spelling that is not a drive letter' {
+    $base = Join-Path $WorkDir 'spelling'
+    $documents = Join-Path $base 'Documents'
+    $elsewhere = Join-Path $base 'Elsewhere'
+    New-Item -ItemType Directory -Path $documents -Force | Out-Null
+    New-Item -ItemType Directory -Path $elsewhere -Force | Out-Null
+    $roots = @($documents)
+    function Share([string]$HostName, [string]$Path) { return ('\\' + $HostName + '\' + $Path.Substring(0, 1) + '$' + $Path.Substring(2)) }
+    $into = @(
+        ('\\.\' + (Join-Path $documents 'x'))
+        ('\\.\' + $documents)
+        ('\\?\' + (Join-Path $documents 'x'))
+        (Share 'localhost' (Join-Path $documents 'x'))
+        (Share '127.0.0.1' (Join-Path $documents 'x'))
+        (Share '127.0.0.1' $documents)
+        (Share $env:COMPUTERNAME (Join-Path $documents 'x'))
+    )
+    foreach ($spelling in $into) {
+        $why = Get-RecordFolderProblem $spelling $roots
+        Assert-That ($null -ne $why -and $why -match 'local drive') ('not refused as a spelling: ' + $spelling + ' -> ' + $why)
+    }
+    # A folder outside the user's own ones is refused as well when it is not spelled with a letter: where it leads cannot be told from its words.
+    foreach ($spelling in @(('\\.\' + (Join-Path $elsewhere 'x')), (Share 'localhost' (Join-Path $elsewhere 'x')), '\\server\share\runs')) {
+        $why = Get-RecordFolderProblem $spelling $roots
+        Assert-That ($null -ne $why -and $why -match 'local drive') ('not refused as a spelling: ' + $spelling + ' -> ' + $why)
+    }
+    # A stream spelling of the folder.
+    foreach ($spelling in @((Join-Path $base 'Documents::$INDEX_ALLOCATION\x'), (Join-Path $base 'Documents::$INDEX_ALLOCATION'), (Join-Path $base 'Documents:name\x'), (Join-Path $documents 'x:stream'))) {
+        $why = Get-RecordFolderProblem $spelling $roots
+        Assert-That ($null -ne $why) ('not refused as a stream spelling: ' + $spelling)
+    }
+    # The same folders with their letter: the user's own one is refused as before, a harmless one is allowed.
+    Assert-That ($null -ne (Get-RecordFolderProblem (Join-Path $documents 'x') $roots)) 'a folder inside the user''s folder'
+    Assert-That ($null -eq (Get-RecordFolderProblem (Join-Path $elsewhere 'x') $roots)) ('a plain folder outside them: ' + (Get-RecordFolderProblem (Join-Path $elsewhere 'x') $roots))
+}
+
+Check 'record: the Desktop, the Downloads and the install folder are among the user''s folders and a record folder under each is refused' {
+    $profileFolder = [Environment]::GetFolderPath('UserProfile')
+    $downloads = [PcmRealPath]::KnownDownloads()
+    Assert-That (-not [string]::IsNullOrWhiteSpace($downloads)) 'Windows does not say where Downloads is'
+    Assert-That (Test-PlainLocalPath $downloads) ('Downloads is not a plain local path: ' + $downloads)
+    $install = Join-Path $WorkDir 'install-folder'
+    $roots = @(Get-UserDataFolders $install)
+    $expected = @(
+        [Environment]::GetFolderPath('DesktopDirectory'), (Join-Path $profileFolder 'Desktop'),
+        $downloads, (Join-Path $profileFolder 'Downloads'), $install
+    )
+    foreach ($e in $expected) { Assert-That ($roots -contains $e) ('not among the folders: ' + $e) }
+    $oldExe = $script:ExePath
+    try {
+        $script:ExePath = Join-Path $install 'PCMieru.exe'
+        foreach ($e in $expected) {
+            foreach ($inside in @($e, (Join-Path $e 'runs'), (Join-Path $e 'a\b'))) {
+                $why = Get-RecordFolderProblem $inside
+                Assert-That ($null -ne $why -and $why -match 'outside the user') ('not refused: ' + $inside + ' -> ' + $why)
+            }
+        }
+    }
+    finally { $script:ExePath = $oldExe }
 }
 
 Check 'record: the app start info has the --measure-record switches only with a plan, and the interval only when it was asked for' {

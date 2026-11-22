@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using PcMieru.Checks;
 
 namespace PcMieru.Gui;
@@ -71,6 +72,7 @@ internal sealed class RecordingHub : IDisposable
     private RecordingRun? _run;
     private RecordingPhase _phase;
     private System.Windows.Forms.Timer? _timer;
+    private Task? _stopTask;
     private bool _closing;
     private bool _stopGaveUp;
     private bool _disposed;
@@ -104,6 +106,13 @@ internal sealed class RecordingHub : IDisposable
     /// <summary>Time since the run began (the recorder's start time on the system clock), never negative; zero when nothing is recording.</summary>
     public TimeSpan Elapsed => _run is { } run ? Max(_utcNow() - run.StartedAtUtc) : TimeSpan.Zero;
 
+    /// <summary>
+    /// The clock as it was when <see cref="Changed"/> was last raised: one value for everything that shows it (the state line, the list's row, the head of
+    /// the summary, the status bar). Each of them reading <see cref="Elapsed"/> for itself, at its own moment, showed a second apart when the read crossed
+    /// a second; this is read once per tick and every part of the window shows that.
+    /// </summary>
+    public TimeSpan ShownElapsed { get; private set; }
+
     public IReadOnlyList<RunMarker> Marks => _marks;
 
     /// <summary>How the last run ended (null before the first one ends in this window).</summary>
@@ -128,13 +137,27 @@ internal sealed class RecordingHub : IDisposable
     /// <summary>The temp folder an old-app CSV is copied into before it is opened. Replaced by a test.</summary>
     internal Func<string> TempFolder { get; set; } = Path.GetTempPath;
 
-    /// <summary>Copies a file over another (the old-app CSV into the temp folder). Replaced by a test that must not touch the disk.</summary>
-    internal Action<string, string> CopyFile { get; set; } = static (from, to) => File.Copy(from, to, overwrite: true);
+    /// <summary>
+    /// Copies a file to a name that is not there (the old-app CSV into the temp folder): a name that is there is an error and is never written over (a link left
+    /// at it would be followed, and a file another program holds cannot be written). The earlier app's files are read only for this one and a copy keeps that,
+    /// so the copy is made writable: the program that opens it may save. Replaced by a test that must not touch the disk.
+    /// </summary>
+    internal Action<string, string> CopyFile { get; set; } = static (from, to) =>
+    {
+        File.Copy(from, to, overwrite: false);
+        var attributes = File.GetAttributes(to);
+        if (attributes.HasFlag(FileAttributes.ReadOnly))
+        {
+            File.SetAttributes(to, attributes & ~FileAttributes.ReadOnly);
+        }
+    };
 
     /// <summary>
     /// The file to hand to the shell for a run's "open CSV". The app's own recordings are opened themselves; an old-app record never is (a program that
-    /// opens a file can write to it, and the earlier app's files are read only for this one): a copy in the temp folder, <c>PCMieru-legacy-&lt;id&gt;.csv</c>,
-    /// replaced each time, is. Does disk work: call it off the UI thread.
+    /// opens a file can write to it, and the earlier app's files are read only for this one): a copy in the temp folder, <c>PCMieru-legacy-&lt;id&gt;-&lt;8 hex&gt;.csv</c>,
+    /// under a new name for every click (the last copy may be held open by the program that showed it, and a name that is there is never written over), is.
+    /// The older copies of the same run are cleared away afterwards, as far as they can be (one that is held stays; a link is removed as a name, never followed).
+    /// Does disk work: call it off the UI thread.
     /// </summary>
     internal string CsvToOpen(RunInfo info)
     {
@@ -144,9 +167,54 @@ internal sealed class RecordingHub : IDisposable
         }
 
         var id = new string((info.LegacyId ?? info.RunId.ToString("N")).Where(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
-        var copy = Path.Combine(TempFolder(), "PCMieru-legacy-" + id + ".csv");
+        var folder = TempFolder();
+        var copy = Path.Combine(folder, "PCMieru-legacy-" + id + "-" + RandomNumberGenerator.GetHexString(8, lowercase: true) + ".csv");
         CopyFile(info.CsvPath, copy);
+        ClearOlderCopies(folder, id, copy);
         return copy;
+    }
+
+    /// <summary>Removes the earlier copies of a run's CSV from the temp folder, best effort: what is held or cannot be removed stays, and nothing is an error.</summary>
+    private static void ClearOlderCopies(string folder, string id, string keep)
+    {
+        var head = "PCMieru-legacy-" + id;
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, head + "*.csv"))
+            {
+                var name = Path.GetFileName(path);
+                if (string.Equals(path, keep, StringComparison.OrdinalIgnoreCase) || !IsCopyName(name, head))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Deletes the name (a link too: the data it led to is never touched).
+                    File.Delete(path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Held by the program that opened it: left for the next click.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            // No folder to look in, or one that cannot be listed: nothing to clear.
+        }
+    }
+
+    /// <summary>Whether a file name is a copy of this run (the form of now, <c>head-8hex.csv</c>, or the one before it, <c>head.csv</c>) and no other run's whose id starts the same.</summary>
+    private static bool IsCopyName(string name, string head)
+    {
+        if (name.Length < head.Length + 4 || !name.StartsWith(head, StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var middle = name.AsSpan(head.Length, name.Length - head.Length - 4);
+        return middle.Length == 0 || (middle.Length == 9 && middle[0] == '-' && middle[1..].IndexOfAnyExcept("0123456789abcdefABCDEF") < 0);
     }
 
     /// <summary>True once the recorder was made (a recording was started in this window). A test reads it to show nothing is made at the start.</summary>
@@ -244,7 +312,9 @@ internal sealed class RecordingHub : IDisposable
         Exception? failure = null;
         try
         {
-            result = await _backend.StopCurrentAsync(reason).ConfigureAwait(true);
+            var stop = _backend.StopCurrentAsync(reason);
+            _stopTask = stop;
+            result = await stop.ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -298,6 +368,38 @@ internal sealed class RecordingHub : IDisposable
         // The window's own thread, the one this is called on (it is the UI thread's context only once a window exists, so it is not asked for before).
         SynchronizationContext.Current?.Post(static state => ((RecordingHub)state!).Raise(), this);
         return result;
+    }
+
+    /// <summary>How long the process waits for a recording that is still being saved once the window is gone (the same bound as the stop of the close).</summary>
+    public static readonly TimeSpan SavedWait = RunRecorderExtensions.ExitBound;
+
+    /// <summary>
+    /// For after the message loop ended (<c>Program</c>): waits, for at most <paramref name="bound"/>, for a stop that is still writing its result (the person
+    /// pressed Stop and the window went away before it finished). True when nothing is being saved or it was saved in time. False when it is not saved yet,
+    /// and when the close already waited out its own bound for it (a second wait would hold the exit for twice the limit). Never throws, blocks no screen: the
+    /// message loop is gone.
+    /// </summary>
+    public bool WaitUntilSaved(TimeSpan bound)
+    {
+        if (_stopGaveUp)
+        {
+            return false;
+        }
+
+        var stop = _stopTask;
+        if (stop is null || stop.IsCompleted)
+        {
+            return true;
+        }
+
+        try
+        {
+            return stop.Wait(bound);
+        }
+        catch (Exception)
+        {
+            return true;
+        }
     }
 
     /// <summary>One second went by: the elapsed time is drawn again. The timer calls this; a test calls it with its own clock.</summary>
@@ -384,6 +486,7 @@ internal sealed class RecordingHub : IDisposable
     {
         if (!_disposed && !_closing)
         {
+            ShownElapsed = Elapsed;
             Changed?.Invoke();
         }
     }

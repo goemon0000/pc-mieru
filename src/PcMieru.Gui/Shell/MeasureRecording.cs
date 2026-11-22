@@ -56,16 +56,62 @@ internal sealed record MeasureRecordPlan(string Folder, int LeadSeconds, int Rec
 
     /// <summary>
     /// The folders a measurement must never write into: the user's Documents (where Windows has it, which is another drive when it is redirected, and
-    /// the plain <c>Documents</c> of the profile, which is the same place or a link to it), PC Mieru's own settings and the roaming data of the apps.
+    /// the plain <c>Documents</c> of the profile, which is the same place or a link to it), PC Mieru's own settings, the roaming data of the apps, the
+    /// Desktop and the Downloads (each as Windows says it and as the plain folder of the profile: both move) and the folder the program is installed in.
     /// Asked only when a <c>--measure-record</c> switch is given: an ordinary start never asks Windows for these.
     /// </summary>
-    public static string[] UserDataFolders() =>
-    [
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Documents"),
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru"),
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-    ];
+    public static string[] UserDataFolders()
+    {
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return
+        [
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Path.Combine(profile, "Documents"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru"),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Path.Combine(profile, "Desktop"),
+            KnownFolders.Downloads() ?? string.Empty,
+            Path.Combine(profile, "Downloads"),
+            AppContext.BaseDirectory,
+        ];
+    }
+
+    /// <summary>
+    /// Why a measurement may not write into this folder (one sentence naming the switch), or null when it may. The folder is a full path. Asked when the switches are
+    /// read and again before each recording of the run: the folder is a place on a disk that anyone can change in between (a plain folder that became a link).
+    /// The spelling comes first: a path that is not a drive letter, a colon and a backslash with no other colon (a device path <c>\\.\C:\...</c>, an administrative
+    /// share of this machine <c>\\localhost\C$\...</c>, a mapped drive that leads to one, a stream name) is refused as written and as it really is, because it
+    /// leads into the user's folders in a spelling no list of them can match. Then where it really leads, then the user's own folders in either spelling.
+    /// </summary>
+    internal static string? FolderProblem(string full, IEnumerable<string> userFolders)
+    {
+        if (!FolderGuard.IsPlainLocalPath(full))
+        {
+            return FolderSwitch + " must be a folder on a local drive named by its letter (C:\\...); a device path, a network or admin-share path and a stream name are not accepted (" + full + ")";
+        }
+
+        // The folder as it really is: through links, junctions and short names (a folder under the scratch directory can lead into Documents).
+        if (!FolderGuard.TryResolve(full, out var real))
+        {
+            return FolderSwitch + " goes through a link that cannot be followed, so where it leads is not known (" + full + "); name a folder without one";
+        }
+
+        if (!FolderGuard.IsPlainLocalPath(real))
+        {
+            return FolderSwitch + " must lead to a folder on a local drive named by its letter, and it leads to " + real + " (" + full + ")";
+        }
+
+        foreach (var root in userFolders)
+        {
+            if (FolderGuard.IsInside(root, full) || FolderGuard.IsInside(root, real))
+            {
+                return FolderSwitch + " must be outside the user's own folders (" + root + ")";
+            }
+        }
+
+        return null;
+    }
 
     public static bool TryRead(IReadOnlyDictionary<string, string> given, bool measureRun, out MeasureRecordPlan? plan, out string problem) =>
         TryRead(given, measureRun, UserDataFolders, out plan, out problem);
@@ -116,20 +162,11 @@ internal sealed record MeasureRecordPlan(string Folder, int LeadSeconds, int Rec
             return false;
         }
 
-        // The folder as it really is: through links, junctions and short names (a folder under the scratch directory can lead into Documents).
-        if (!FolderGuard.TryResolve(full, out var real))
+        var folderProblem = FolderProblem(full, userFolders());
+        if (folderProblem is not null)
         {
-            problem = FolderSwitch + " goes through a link that cannot be followed, so where it leads is not known (" + full + "); name a folder without one";
+            problem = folderProblem;
             return false;
-        }
-
-        foreach (var root in userFolders())
-        {
-            if (FolderGuard.IsInside(root, full) || FolderGuard.IsInside(root, real))
-            {
-                problem = FolderSwitch + " must be outside the user's own folders (" + root + ")";
-                return false;
-            }
         }
 
         if (!TryNumber(given, LeadSwitch, DefaultLeadSeconds, 0, MaxLeadSeconds, out var lead, out problem)
@@ -208,6 +245,7 @@ internal sealed class MeasureRecording : IDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<MemoryReading> _readMemory;
     private readonly Action _compact;
+    private readonly Func<IEnumerable<string>> _userFolders;
     private readonly CancellationTokenSource _cancel = new();
     private FileStream? _events;
     private string _phase = PhaseBefore;
@@ -223,7 +261,8 @@ internal sealed class MeasureRecording : IDisposable
         Func<DateTime>? utcNow = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
         Func<MemoryReading>? readMemory = null,
-        Action? compact = null)
+        Action? compact = null,
+        Func<IEnumerable<string>>? userFolders = null)
     {
         _plan = plan;
         _hub = hub;
@@ -233,6 +272,7 @@ internal sealed class MeasureRecording : IDisposable
         _delay = delay ?? Task.Delay;
         _readMemory = readMemory ?? ReadProcessMemory;
         _compact = compact ?? CompactingCollection;
+        _userFolders = userFolders ?? MeasureRecordPlan.UserDataFolders;
     }
 
     /// <summary>The two numbers of a memory reading: the process's private bytes (what Task Manager calls "memory") and the managed heap.</summary>
@@ -395,6 +435,22 @@ internal sealed class MeasureRecording : IDisposable
     /// <summary>One recording: the start, the record time, the stop. False when it could not start (the run ends there).</summary>
     private async Task<bool> RecordOnceAsync(int number, CancellationToken token)
     {
+        // The guard that read the switches looked at the folder long ago, and a folder is a place on a disk that anyone can change meanwhile (a plain folder that
+        // became a link into Documents): it is asked again before every recording, before the recorder makes the folder.
+        var folderProblem = MeasureRecordPlan.FolderProblem(_plan.Folder, _userFolders());
+        if (folderProblem is not null)
+        {
+            Line("start", json =>
+            {
+                json.WriteBoolean("ok", false);
+                json.WriteNumber("run", number);
+                json.WriteNumber("startMs", 0);
+                json.WriteString("problem", "folder");
+                json.WriteString("detail", folderProblem);
+            });
+            return false;
+        }
+
         var startAt = _utcNow();
         var started = await _hub.StartAsync().ConfigureAwait(true);
         var startMs = Milliseconds(_utcNow() - startAt);

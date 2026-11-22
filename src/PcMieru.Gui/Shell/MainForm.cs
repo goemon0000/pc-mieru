@@ -374,7 +374,7 @@ internal sealed class MainForm : Form
 
         _recording.Text = phase == RecordingPhase.Stopping
             ? Strings.Get("gui.rtab.saving")
-            : Strings.Format("gui.rtab.indicator", Fmt.Dict(("time", RecordFormat.Elapsed(hub.Elapsed))));
+            : Strings.Format("gui.rtab.indicator", Fmt.Dict(("time", RecordFormat.Elapsed(hub.ShownElapsed))));
         _recording.ForeColor = _context.Theme.Palette.Accent;
         _recording.Width = IndicatorWidth();
         _tips.SetToolTip(_recording, Strings.Get("gui.rtab.indicator.tip"));

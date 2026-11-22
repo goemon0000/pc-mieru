@@ -443,8 +443,11 @@ public class MeasureRecordTests
             Kit = new FakeRecordingKit(Path.Combine(Temp.Path, "runs"), () => Now);
             Hub = Kit.CreateHub();
             Plan = new MeasureRecordPlan(Path.Combine(Temp.Path, "runs"), leadSeconds, recordSeconds, 0, times, gapSeconds, gcSeconds);
-            Recording = new MeasureRecording(Plan, Hub, Pump, Lines.Add, () => Now, Delay, () => Memory, Compact);
+            Recording = new MeasureRecording(Plan, Hub, Pump, Lines.Add, () => Now, Delay, () => Memory, Compact, () => Roots());
         }
+
+        /// <summary>The user's own folders the driver asks the guard about before each recording (none, unless a test names some).</summary>
+        public Func<IEnumerable<string>> Roots { get; set; } = () => [];
 
         public Ui.TempRoot Temp { get; }
 
@@ -697,6 +700,50 @@ public class MeasureRecordTests
             Assert.Single(rig.Asked);
             Assert.Equal(0, rig.Compactions);
             Assert.DoesNotContain("gc", rig.Events());
+        });
+    }
+
+    [Fact]
+    public void The_folder_is_asked_of_the_guard_again_before_each_recording_and_one_that_became_a_link_into_a_users_folder_ends_the_series()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new Rig(leadSeconds: 1, recordSeconds: 5, times: 3, gapSeconds: 2);
+            var documents = Path.Combine(rig.Temp.Path, "Documents");
+            Directory.CreateDirectory(documents);
+            rig.Roots = () => [documents];
+            rig.Recording.Begin();
+
+            // The first recording: the folder is a plain one (nothing is there yet), so it starts.
+            rig.Asked[0].Gate.SetResult();
+            Assert.True(ui.Until(() => rig.Asked.Count == 2), "the first recording never started");
+            Assert.Equal(1, rig.Kit.Backend.StartCalls);
+            rig.Asked[1].Gate.SetResult();
+            Assert.True(ui.Until(() => rig.Asked.Count == 3 && rig.Events().Contains("stopped")), "the first recording never ended");
+
+            // In the gap the plan's folder becomes a link into Documents: the second recording must not start (the plan was read long before this).
+            var link = Junction(rig.Plan.Folder, documents);
+            try
+            {
+                rig.Asked[2].Gate.SetResult();
+                Assert.True(ui.Until(() => rig.Events().Count(e => e == "start") == 2), "the second start was never answered");
+                var start = rig.Last("start");
+                Assert.False(start.GetProperty("ok").GetBoolean());
+                Assert.Equal(2, start.GetProperty("run").GetInt32());
+                Assert.Equal("folder", start.GetProperty("problem").GetString());
+                Assert.Contains("outside the user's own folders", start.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                Assert.Equal(1, rig.Kit.Backend.StartCalls);
+                Assert.Empty(Directory.GetFileSystemEntries(documents));
+
+                // The series ends there: no record time, no third recording.
+                ui.Pump();
+                Assert.Equal(3, rig.Asked.Count);
+                Assert.Equal(RecordingPhase.Idle, rig.Hub.Phase);
+            }
+            finally
+            {
+                Directory.Delete(link);
+            }
         });
     }
 
@@ -1186,6 +1233,129 @@ public class MeasureRecordTests
         Assert.True(Directory.Exists(harmless));
     }
 
+    /// <summary>The same local path as a machine reaches it through its own administrative share: <c>C:\a\b</c> is <c>\\host\C$\a\b</c>.</summary>
+    private static string ThroughShare(string host, string path) => @"\\" + host + @"\" + path[0] + "$" + path[2..];
+
+    [Fact]
+    public void A_device_path_or_a_loopback_share_that_leads_into_a_users_folder_is_refused_and_so_is_any_spelling_that_is_not_a_drive_letter()
+    {
+        using var temp = new Ui.TempRoot();
+        var documents = Path.Combine(temp.Path, "Documents");
+        var harmless = Path.Combine(temp.Path, "Elsewhere");
+        Directory.CreateDirectory(documents);
+        Directory.CreateDirectory(harmless);
+        string[] roots = [documents];
+
+        var spellings = new List<string>
+        {
+            @"\\.\" + Path.Combine(documents, "x"),
+            @"\\.\" + documents,
+            @"\\?\" + Path.Combine(documents, "x"),
+            ThroughShare("localhost", Path.Combine(documents, "x")),
+            ThroughShare("127.0.0.1", Path.Combine(documents, "x")),
+            ThroughShare("127.0.0.1", documents),
+            ThroughShare(Environment.MachineName, Path.Combine(documents, "x")),
+        };
+        foreach (var through in spellings)
+        {
+            Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", through), true, roots, out var plan, out var problem), through);
+            Assert.Null(plan);
+            Assert.Contains("local drive", problem, StringComparison.Ordinal);
+        }
+
+        // A folder outside the user's own ones is refused as well when it is not spelled with a drive letter: where it leads cannot be told from its words.
+        foreach (var through in new[] { @"\\.\" + Path.Combine(harmless, "x"), ThroughShare("localhost", Path.Combine(harmless, "x")), @"\\server\share\runs" })
+        {
+            Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", through), true, roots, out var plan, out var problem), through);
+            Assert.Null(plan);
+            Assert.Contains("local drive", problem, StringComparison.Ordinal);
+        }
+
+        // The same folder with its letter is a plain one and is as allowed as before.
+        Assert.True(MeasureRecordPlan.TryRead(Given("--measure-record", Path.Combine(harmless, "x")), true, roots, out var ok, out var why), why);
+        Assert.Equal(Path.Combine(harmless, "x"), ok!.Folder);
+    }
+
+    [Fact]
+    public void A_stream_spelling_of_a_users_folder_is_refused()
+    {
+        using var temp = new Ui.TempRoot();
+        var documents = Path.Combine(temp.Path, "Documents");
+        Directory.CreateDirectory(documents);
+        string[] roots = [documents];
+
+        foreach (var through in new[]
+        {
+            Path.Combine(temp.Path, "Documents::$INDEX_ALLOCATION", "x"),
+            Path.Combine(temp.Path, "Documents::$INDEX_ALLOCATION"),
+            Path.Combine(temp.Path, "Documents:name", "x"),
+            Path.Combine(documents, "x:stream"),
+        })
+        {
+            Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", through), true, roots, out var plan, out var problem), through);
+            Assert.Null(plan);
+            Assert.NotEqual(string.Empty, problem);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"C:\a", true)]
+    [InlineData(@"c:\a\b\c", true)]
+    [InlineData(@"E:\MovedFromC\Documents\x", true)]
+    [InlineData(@"C:\", true)]
+    [InlineData(@"\\.\C:\a", false)]
+    [InlineData(@"\\?\C:\a", false)]
+    [InlineData(@"\\?\UNC\localhost\C$\a", false)]
+    [InlineData(@"\\localhost\C$\a", false)]
+    [InlineData(@"\\127.0.0.1\E$\a", false)]
+    [InlineData(@"\\server\share\a", false)]
+    [InlineData(@"C:a", false)]
+    [InlineData("C:", false)]
+    [InlineData(@"C:/a", false)]
+    [InlineData(@"1:\a", false)]
+    [InlineData(@"C:\a::$INDEX_ALLOCATION\x", false)]
+    [InlineData(@"C:\a\b:stream", false)]
+    [InlineData(@"C:\a:b", false)]
+    [InlineData("", false)]
+    public void Only_a_drive_letter_a_colon_a_backslash_and_no_other_colon_is_a_plain_local_path(string path, bool plain)
+    {
+        Assert.Equal(plain, FolderGuard.IsPlainLocalPath(path));
+    }
+
+    [Fact]
+    public void The_users_folders_include_the_desktop_the_downloads_and_the_install_folder()
+    {
+        var roots = MeasureRecordPlan.UserDataFolders();
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var downloads = KnownFolders.Downloads();
+
+        // Downloads is a folder Windows moves like Documents, and only Windows can say where it went.
+        Assert.False(string.IsNullOrWhiteSpace(downloads));
+        Assert.True(FolderGuard.IsPlainLocalPath(downloads!), downloads);
+        Assert.Contains(downloads, roots);
+        Assert.Contains(Path.Combine(profile, "Downloads"), roots);
+        Assert.Contains(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), roots);
+        Assert.Contains(Path.Combine(profile, "Desktop"), roots);
+        Assert.Contains(AppContext.BaseDirectory, roots);
+
+        foreach (var root in new[]
+        {
+            downloads,
+            Path.Combine(profile, "Downloads"),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Path.Combine(profile, "Desktop"),
+            AppContext.BaseDirectory,
+        })
+        {
+            foreach (var inside in new[] { root, Path.Combine(root, "runs"), Path.Combine(root, "a", "b") })
+            {
+                Assert.False(MeasureRecordPlan.TryRead(Given("--measure-record", inside), true, out var plan, out var problem), inside);
+                Assert.Null(plan);
+                Assert.Contains("outside the user's own folders", problem, StringComparison.Ordinal);
+            }
+        }
+    }
+
     [Fact]
     public void A_link_that_leads_nowhere_is_refused_because_where_it_goes_is_not_known()
     {
@@ -1293,13 +1463,22 @@ public class MeasureRecordTests
         }
 
         // The output folder is checked against the user's own folders before the first folder is made or probed.
-        var refuse = script.IndexOf("Test-InsideFolder $root $Output", StringComparison.Ordinal);
+        var refuse = script.IndexOf("Get-RecordFolderProblem $Output", StringComparison.Ordinal);
         var probe = script.IndexOf("Assert-WritableFolder $Output", StringComparison.Ordinal);
         Assert.True(refuse > 0 && probe > refuse, "the user-folder refusal comes before the first write");
-        foreach (var folder in new[] { "MyDocuments", "LocalApplicationData", "ApplicationData" })
+        foreach (var folder in new[] { "MyDocuments", "LocalApplicationData", "ApplicationData", "DesktopDirectory", "KnownDownloads" })
         {
             Assert.Contains(folder, script, StringComparison.Ordinal);
         }
+
+        // The guard function names the same three rules as the GUI: a plain drive-letter path, as written and as resolved, and the roots against both.
+        var guard = script.IndexOf("function Get-RecordFolderProblem", StringComparison.Ordinal);
+        Assert.True(guard > 0, "the folder guard function");
+        var guardText = script.Substring(guard, Math.Min(2500, script.Length - guard));
+        Assert.Contains("Test-PlainLocalPath $full", guardText, StringComparison.Ordinal);
+        Assert.Contains("Test-PlainLocalPath $real", guardText, StringComparison.Ordinal);
+        Assert.Contains("Test-InsideFolder $root $full", guardText, StringComparison.Ordinal);
+        Assert.Contains("Test-InsideFolder $root $real", guardText, StringComparison.Ordinal);
 
         // Both scripts stay ASCII (Windows PowerShell 5.1 reads a file without a BOM as ANSI) and CRLF (what the other scripts of the tool use).
         foreach (var name in new[] { "measure.ps1", "measure.selftest.ps1" })

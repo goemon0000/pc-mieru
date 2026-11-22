@@ -60,7 +60,12 @@ internal static class RunSummaryRows
     // The summary's own notes that the table says in its columns instead (the per-reading time cells, the not-measured rows, the facts).
     private static readonly HashSet<string> NotesInColumns = new(StringComparer.Ordinal) { "no-data", "gaps", "sparse", "dropped-ticks", "legacy-estimated" };
 
-    public static IReadOnlyList<SummaryRow> Build(RunDetail detail)
+    /// <summary>True when the table has the line about the sustained value (some reading has a measured second); the "How this is calculated" switch only means something then.</summary>
+    public static bool HasSustainedNote(RunDetail detail) => detail.Summary.Metrics.Any(static m => m.ObservedSeconds > 0);
+
+    /// <param name="detail">The run.</param>
+    /// <param name="showCalculation">The exact conditions of the sustained value, as a line of their own under the short sentence. Off until the person asks for them.</param>
+    public static IReadOnlyList<SummaryRow> Build(RunDetail detail, bool showCalculation = false)
     {
         ArgumentNullException.ThrowIfNull(detail);
         var info = detail.Info;
@@ -86,10 +91,15 @@ internal static class RunSummaryRows
             rows.Add(NeverMeasured(Strings.Get("gui.rtab.sum.cputemp"), Strings.Get("gui.chk.note.cpu.temperature_not_measured"), wholeNote: true));
         }
 
-        // How the sustained value is made: a row of the table, right under the readings (it was a label under the table, which took a third of the room at 200 %).
-        if (sum.Metrics.Any(static m => m.ObservedSeconds > 0))
+        // What the sustained value is: one short sentence, a row of the table right under the readings (it was a label under the table, which took a third of
+        // the room at 200 %). The exact conditions are a row of their own that the "How this is calculated" switch adds: they were in the sentence, and the row was too dense to read.
+        if (HasSustainedNote(detail))
         {
             rows.Add(new SummaryRow(SummaryRowKind.Note, string.Empty, Time: Strings.Get("gui.rtab.sum.sustained.note"), Tone: CellTone.Dim));
+            if (showCalculation)
+            {
+                rows.Add(new SummaryRow(SummaryRowKind.Note, string.Empty, Time: Strings.Get("gui.rtab.sum.sustained.rule"), Tone: CellTone.Dim));
+            }
         }
 
         // This recording, after the readings (a person comes for the readings; what it is, is on the head above the table): one line (the length of the data that is left, for a run that ended some other way than the user's stop).
@@ -334,6 +344,7 @@ internal sealed class RunSummaryGrid : GridView
     private IReadOnlyList<SummaryRow> _rows = [];
     private List<Line> _lines = [];
     private RunDetail? _detail;
+    private bool _showCalculation;
     private int _readingItemNeed;
     private int _readingTimeNeed;
     private int _itemWordNeed;
@@ -356,6 +367,26 @@ internal sealed class RunSummaryGrid : GridView
     private readonly record struct Line(int Row, int Part, string Item, string Time, bool Span);
 
     public RunDetail? Detail => _detail;
+
+    /// <summary>Whether the table has the sustained value's note (so the "How this is calculated" switch has something to open).</summary>
+    public bool HasSustainedNote => _detail is not null && RunSummaryRows.HasSustainedNote(_detail);
+
+    /// <summary>Whether the exact conditions of the sustained value are in the table. Off for a new window; the tab's switch sets it.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowCalculation
+    {
+        get => _showCalculation;
+        set
+        {
+            if (_showCalculation == value)
+            {
+                return;
+            }
+
+            _showCalculation = value;
+            Rebuild();
+        }
+    }
 
     /// <summary>The rows of the summary (a long sentence is one row; see <see cref="LineCount"/> for the lines it is drawn on).</summary>
     public int RowCount => _rows.Count;
@@ -490,7 +521,7 @@ internal sealed class RunSummaryGrid : GridView
         // The native list keeps its place when the rows change: a table scrolled down for a long run would show nothing at all for a short one.
         // It goes back to its first row while it still has the rows it was scrolled in.
         ScrollToFirstRow();
-        _rows = _detail is null ? [] : RunSummaryRows.Build(_detail);
+        _rows = _detail is null ? [] : RunSummaryRows.Build(_detail, _showCalculation);
 
         // The lines say which row they belong to: the lines of the old run mean nothing to the rows of the new one. Between here and the new lines (the
         // columns change width, and the native list may ask for a line then) the grid has none, so it answers with empty cells and never with the rows

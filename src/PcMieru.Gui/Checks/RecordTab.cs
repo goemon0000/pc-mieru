@@ -61,6 +61,7 @@ internal sealed class RecordTab : CheckTab
     private readonly WrapLabel _detailHead = new() { Name = "recordDetailHead" };
     private readonly RecordDetailHeader _detailHeader;
     private readonly RunSummaryGrid _summary = new() { Name = "recordSummary" };
+    private readonly ToggleButton _how = new() { Name = "recordHow" };
     private readonly Button _csv = new() { AutoSize = true, Name = "recordCsv" };
     private readonly Button _delete = new() { AutoSize = true, Name = "recordDelete" };
     private readonly Label _count = new() { AutoSize = true, Name = "recordCount" };
@@ -112,6 +113,8 @@ internal sealed class RecordTab : CheckTab
         _openFolder.MinimumSize = new Size(Px(88), Px(30));
         _legacy.MinimumSize = new Size(Px(88), Px(30));
         _legacy.AccessibleRole = AccessibleRole.CheckButton;
+        _how.MinimumSize = new Size(Px(88), Px(30));
+        _how.AccessibleRole = AccessibleRole.CheckButton;
         _csv.MinimumSize = new Size(Px(88), Px(30));
         _delete.MinimumSize = new Size(Px(88), Px(30));
         _start.TabIndex = 0;
@@ -121,6 +124,7 @@ internal sealed class RecordTab : CheckTab
         _legacy.TabIndex = 4;
         _list.TabIndex = 5;
         _split.TabIndex = 6;
+        _how.TabIndex = 6;
         _csv.TabIndex = 7;
         _delete.TabIndex = 8;
         _summary.TabIndex = 9;
@@ -130,6 +134,7 @@ internal sealed class RecordTab : CheckTab
         _mark.Click += (_, _) => ShowMarkMenu();
         _openFolder.Click += (_, _) => _ = PressOpenFolder();
         _legacy.Click += (_, _) => ToggleLegacy();
+        _how.Click += (_, _) => ToggleHow();
         _csv.Click += (_, _) => _ = PressOpenCsv();
         _delete.Click += (_, _) => _ = PressDelete();
 
@@ -148,7 +153,13 @@ internal sealed class RecordTab : CheckTab
         _list.ScrollsBackWhenWhole = true;
         _list.CellTip = ListTip;
         _list.FillColumn = NoteColumn;
-        _list.SizeChanged += (_, _) => _list.FitLastColumn();
+        _list.SizeChanged += (_, _) =>
+        {
+            _list.FitLastColumn();
+
+            // A list that got shorter (the window, the bar) must not scroll the selected record out of sight: the person chose it and is looking for it.
+            _list.EnsureSelectedVisible();
+        };
         _list.SelectedIndexChanged += (_, _) => OnListSelection();
         _summary.PrepareColumns(Px, Strings.Get("gui.rtab.sum.name"));
 
@@ -159,7 +170,7 @@ internal sealed class RecordTab : CheckTab
 
         // The line above the summary (what the run is, the buttons) is one block that is as tall as it needs; the summary fills the rest (the note on the
         // sustained value is a row of its table). The list and the summary are divided by a bar the person can move: the list ends on a whole row, as the history's does.
-        _detailHeader = new RecordDetailHeader(_detailHead, pad, _csv, _delete);
+        _detailHeader = new RecordDetailHeader(_detailHead, pad, _how, _csv, _delete);
         _detailPanel.Dock = DockStyle.Fill;
         _detailPanel.Margin = new Padding(0);
         _detailPanel.Controls.Add(_summary);
@@ -213,6 +224,8 @@ internal sealed class RecordTab : CheckTab
     internal Button OpenFolderButton => _openFolder;
 
     internal ToggleButton LegacyToggle => _legacy;
+
+    internal ToggleButton HowToggle => _how;
 
     internal Button CsvButton => _csv;
 
@@ -301,6 +314,7 @@ internal sealed class RecordTab : CheckTab
         _mark.Text = Strings.Get("gui.rtab.mark") + " ▾";
         _openFolder.Text = Strings.Get("gui.rtab.openfolder");
         _legacy.Text = Strings.Get("gui.rtab.legacy");
+        _how.Text = Strings.Get("gui.rtab.sum.sustained.how");
         _csv.Text = Strings.Get("gui.rtab.csv");
         _delete.Text = Strings.Get("gui.rtab.delete");
         _tips.SetToolTip(_mark, Strings.Get("gui.rtab.mark.tip"));
@@ -529,6 +543,16 @@ internal sealed class RecordTab : CheckTab
         }
     }
 
+    /// <summary>
+    /// The "How this is calculated" button: the exact conditions of the sustained value are a line of the summary, or not. A button, not a tip, so Tab reaches it
+    /// and Space or Enter presses it. It stays as it is while the person goes from one recording to another.
+    /// </summary>
+    internal void ToggleHow()
+    {
+        _how.Checked = !_how.Checked;
+        _summary.ShowCalculation = _how.Checked;
+    }
+
     /// <summary>The delete button: asks first, then deletes the selected run's files through the store. Never the run that is being recorded.</summary>
     internal Task PressDelete() => Track(DeleteAsync);
 
@@ -652,7 +676,7 @@ internal sealed class RecordTab : CheckTab
         if (phase == RecordingPhase.Stopping && _lastPhase != RecordingPhase.Stopping)
         {
             // The clock stops where the stop was pressed; the row says the run is being saved until the list has read it again.
-            _frozenElapsed = _hub.Elapsed;
+            _frozenElapsed = _hub.ShownElapsed;
         }
 
         var phaseChanged = phase != _lastPhase;
@@ -805,6 +829,8 @@ internal sealed class RecordTab : CheckTab
             }
         }
 
+        // The row that was chosen from outside the list (the run that has just ended) is on show, whatever the list's height came to.
+        _list.EnsureSelectedVisible();
         RenderAll();
     }
 
@@ -864,6 +890,8 @@ internal sealed class RecordTab : CheckTab
             _list.Height = height;
         }
 
+        // The list has its final height now; the selected record is on show in it (it was scrolled into view for the height the list had before this).
+        _list.EnsureSelectedVisible();
         _split.KeyStep = Math.Max(_list.MeasuredRowHeight, 1);
     }
 
@@ -946,7 +974,7 @@ internal sealed class RecordTab : CheckTab
             return column switch
             {
                 StartColumn => new GridCell(RecordFormat.StartText(run.StartedAtUtc)),
-                LengthColumn => new GridCell(RecordFormat.Elapsed(stopping ? _frozenElapsed : _hub.Elapsed)),
+                LengthColumn => new GridCell(RecordFormat.Elapsed(stopping ? _frozenElapsed : _hub.ShownElapsed)),
                 StatusColumn => new GridCell(Strings.Get(stopping ? "gui.rtab.status.stopping" : "gui.rtab.status.recording"), CellTone.Accent),
                 _ => new GridCell(string.Empty, CellTone.Dim),
             };
@@ -1125,7 +1153,7 @@ internal sealed class RecordTab : CheckTab
             case RecordingPhase.Recording:
                 text = Strings.Format(
                     "gui.rtab.state.recording",
-                    Fmt.Dict(("time", RecordFormat.Elapsed(_hub.Elapsed)), ("marks", _hub.Marks.Count.ToString(Inv))));
+                    Fmt.Dict(("time", RecordFormat.Elapsed(_hub.ShownElapsed)), ("marks", _hub.Marks.Count.ToString(Inv))));
                 tone = CellTone.Accent;
                 break;
             case RecordingPhase.Stopping:
@@ -1243,7 +1271,7 @@ internal sealed class RecordTab : CheckTab
         {
             RecordDetailState.Opening => Strings.Get("gui.rtab.detail.opening"),
             RecordDetailState.Running => _hub.Phase == RecordingPhase.Recording
-                ? Strings.Format("gui.rtab.detail.running", Fmt.Dict(("time", RecordFormat.Elapsed(_hub.Elapsed))))
+                ? Strings.Format("gui.rtab.detail.running", Fmt.Dict(("time", RecordFormat.Elapsed(_hub.ShownElapsed))))
                 : Strings.Get("gui.rtab.detail.stopping"),
             RecordDetailState.NotFound => Strings.Get("gui.rtab.detail.notfound"),
             RecordDetailState.Unreadable => Strings.Format("gui.rtab.detail.unreadable", Fmt.Dict(("error", _detailError ?? string.Empty))),
@@ -1285,6 +1313,9 @@ internal sealed class RecordTab : CheckTab
         var hasRun = SelectedInfo() is not null;
         _csv.Enabled = hasRun && _detailState is not (RecordDetailState.Running or RecordDetailState.Opening);
         _delete.Enabled = CanDelete(out _);
+
+        // The switch for the sustained value's conditions is there while the summary has that value's sentence, and nowhere else.
+        _detailHeader.SetShown(_how, _summary.HasSustainedNote);
         var pick = hasRun ? string.Empty : Strings.Get("gui.rtab.pickfirst");
         _tips.SetToolTip(_csv, pick);
         _tips.SetToolTip(_delete, pick);

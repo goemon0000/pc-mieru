@@ -10,6 +10,7 @@ internal sealed class RecordDetailHeader : Panel
     private readonly WrapLabel _head;
     private readonly Button[] _buttons;
     private readonly int _pad;
+    private readonly HashSet<Button> _off = [];
     private bool _fitting;
 
     public RecordDetailHeader(WrapLabel head, int pad, params Button[] buttons)
@@ -30,6 +31,18 @@ internal sealed class RecordDetailHeader : Panel
     /// <summary>True when the buttons sit under the text (the window is too narrow for them beside it).</summary>
     public bool ButtonsBelow { get; private set; }
 
+    /// <summary>Shows or hides one of the buttons (one that only means something for some recordings). A hidden button takes no room and is not reached by Tab.</summary>
+    public void SetShown(Button button, bool shown)
+    {
+        if (shown ? !_off.Remove(button) : !_off.Add(button))
+        {
+            return;
+        }
+
+        button.Visible = shown;
+        PerformLayout();
+    }
+
     protected override void OnLayout(LayoutEventArgs levent)
     {
         base.OnLayout(levent);
@@ -49,7 +62,8 @@ internal sealed class RecordDetailHeader : Panel
             var gap = _pad * 2 / 3;
             var buttonsWidth = 0;
             var buttonsHeight = 0;
-            foreach (var button in _buttons)
+            var shown = _buttons.Where(button => !_off.Contains(button)).ToArray();
+            foreach (var button in shown)
             {
                 button.Size = button.GetPreferredSize(Size.Empty);
                 buttonsWidth += button.Width + gap;
@@ -71,7 +85,7 @@ internal sealed class RecordDetailHeader : Panel
             {
                 var y = top + headHeight + (headHeight > 0 ? _pad / 3 : 0);
                 var x = _pad;
-                foreach (var button in _buttons)
+                foreach (var button in shown)
                 {
                     button.Location = new Point(x, y);
                     x += button.Width + gap;
@@ -82,9 +96,9 @@ internal sealed class RecordDetailHeader : Panel
             else
             {
                 var x = Width - _pad;
-                for (var i = _buttons.Length - 1; i >= 0; i--)
+                for (var i = shown.Length - 1; i >= 0; i--)
                 {
-                    var button = _buttons[i];
+                    var button = shown[i];
                     x -= button.Width;
                     button.Location = new Point(x, top);
                     x -= gap;

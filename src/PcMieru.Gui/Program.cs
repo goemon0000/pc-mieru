@@ -95,8 +95,18 @@ internal static class Program
         // A window closed by Windows ending (or the task manager) did not wait for a check that was told to stop. The message loop is gone, so
         // waiting here blocks no screen: the stopped run gets a few seconds to write its result, and what is not saved by then is left to the
         // folder's own .tmp clean-up (DESIGN-A §7).
-        context.Checks.WaitUntilIdle(CheckController.ExitWait);
+        WaitForWork(context);
         return 0;
+    }
+
+    /// <summary>
+    /// After the message loop: a check that was told to stop, and a recording whose stop is still writing its result, each get their own bounded wait (3 s and
+    /// 2 s). A recording the close already waited for and gave up on is not waited for again.
+    /// </summary>
+    internal static void WaitForWork(GuiContext context)
+    {
+        context.Checks.WaitUntilIdle(CheckController.ExitWait);
+        context.Recording.WaitUntilSaved(RecordingHub.SavedWait);
     }
 
     /// <summary>The command line asks for a measurement run (<c>--measure</c> or one of the <c>--measure-record</c> switches is on it, however well the rest parses).</summary>

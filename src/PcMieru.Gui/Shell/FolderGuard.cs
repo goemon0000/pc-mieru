@@ -90,6 +90,15 @@ internal static class FolderGuard
         return TryResolve(full, out var real) && !real.Equals(full, StringComparison.OrdinalIgnoreCase) ? [full, real] : [full];
     }
 
+    /// <summary>
+    /// Whether the path is a plain local one: a drive letter, a colon and a backslash, and no other colon anywhere after them. Nothing else is a place the guard can
+    /// speak for: a device path (<c>\\.\C:\...</c>), a long-path form, a network path, an administrative share of this very machine (<c>\\localhost\C$\...</c>,
+    /// <c>\\127.0.0.1\E$\...</c>), a mapped drive that resolves to one of those, and a stream spelling (<c>Documents::$INDEX_ALLOCATION\x</c>) each lead into the
+    /// same folders as a letter does but are spelled so that no list of folders matches them. Asked of the path as it was written and of the real one.
+    /// </summary>
+    public static bool IsPlainLocalPath(string path) =>
+        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == '\\' && path.IndexOf(':', 2) < 0;
+
     /// <summary>Whether <paramref name="path"/> is <paramref name="root"/> or under it, in any spelling of either.</summary>
     public static bool IsInside(string root, string path)
     {

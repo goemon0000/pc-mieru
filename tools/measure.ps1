@@ -1450,15 +1450,38 @@ function Split-CsvLine([string]$Line) {
 }
 
 # The folders a measured run must never write into (the GUI refuses a --measure-record folder inside any of them; so does this script, before it starts anything).
-function Get-UserDataFolders {
-    # The same four as the GUI's MeasureRecordPlan.UserDataFolders: the Documents folder as Windows says it (E:\MovedFromC\Documents when it is redirected),
-    # the plain Documents of the profile (a redirected one leaves it behind), the app's own data folder and Roaming.
-    return @(
+function Get-UserDataFolders([string]$InstallFolder = '') {
+    # The same as the GUI's MeasureRecordPlan.UserDataFolders: the Documents folder as Windows says it (E:\MovedFromC\Documents when it is redirected),
+    # the plain Documents of the profile (a redirected one leaves it behind), the app's own data folder, Roaming, the Desktop and the Downloads folder
+    # (each as Windows says it and as the plain folder of the profile), and the install folder (the folder of -Exe: a measurement never writes beside the program).
+    Initialize-RealPath
+    $profileFolder = [Environment]::GetFolderPath('UserProfile')
+    $roots = @(
         [Environment]::GetFolderPath('MyDocuments')
-        (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Documents')
+        (Join-Path $profileFolder 'Documents')
         (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PCMieru')
         [Environment]::GetFolderPath('ApplicationData')
+        [Environment]::GetFolderPath('DesktopDirectory')
+        (Join-Path $profileFolder 'Desktop')
+        [PcmRealPath]::KnownDownloads()
+        (Join-Path $profileFolder 'Downloads')
+        $InstallFolder
     )
+    return @($roots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+# The folder of the published program: where -Exe is (empty when no program is known).
+function Get-InstallFolder {
+    if ([string]::IsNullOrEmpty($script:ExePath)) { return '' }
+    return [IO.Path]::GetDirectoryName($script:ExePath)
+}
+
+# Whether a path is a plain local one: a drive letter, a colon and a backslash, and no other colon after them (the GUI's FolderGuard.IsPlainLocalPath). A device
+# path (\\.\C:\...), a network or admin-share path (\\localhost\C$\...) and a stream spelling (Documents::$INDEX_ALLOCATION\x) lead into the same folders as a
+# letter does but are spelled so that no list of folders matches them.
+function Test-PlainLocalPath([string]$Path) {
+    if ([string]::IsNullOrEmpty($Path)) { return $false }
+    return (($Path -cmatch '^[A-Za-z]:\\') -and ($Path.IndexOf(':', 2) -lt 0))
 }
 
 # The real place a path leads to (the GUI's FolderGuard): the nearest part that exists is opened and asked for its final path, which follows every link
@@ -1484,7 +1507,24 @@ public static class PcmRealPath
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+
     private static readonly IntPtr Invalid = new IntPtr(-1);
+
+    // The user's Downloads folder as Windows has it (it is moved like Documents: E:\MovedFromC\Downloads here), or null when it cannot be told.
+    public static string KnownDownloads()
+    {
+        Guid id = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        IntPtr text = IntPtr.Zero;
+        try
+        {
+            int result = SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out text);
+            return (result == 0 && text != IntPtr.Zero) ? Marshal.PtrToStringUni(text) : null;
+        }
+        catch (Exception) { return null; }
+        finally { if (text != IntPtr.Zero) { Marshal.FreeCoTaskMem(text); } }
+    }
 
     private static string TrimEnd(string path)
     {
@@ -1591,6 +1631,32 @@ function Test-InsideFolder([string]$Root, [string]$Path) {
 function Test-PathResolvable([string]$Path) {
     Initialize-RealPath
     return ($null -ne [PcmRealPath]::Resolve($Path))
+}
+
+# Why the recordings of a record run may not go under this folder (the GUI's MeasureRecordPlan.FolderProblem says the same): one sentence, or $null when they may.
+# The order is the GUI's: the spelling first (a drive letter, nothing else), then where it really leads (a link that cannot be followed, a real place that is not
+# a plain local path either), then the user's own folders in either spelling.
+function Get-RecordFolderProblem([string]$Output, [string[]]$Roots = $null) {
+    if ($null -eq $Roots) { $Roots = @(Get-UserDataFolders (Get-InstallFolder)) }
+    # A name Windows cannot make a full path of (a stream name such as Documents::$INDEX_ALLOCATION) is refused as it is, not an exception.
+    $full = $null
+    try { $full = [IO.Path]::GetFullPath($Output) }
+    catch { return ('-Output is not a path this tool can accept (a stream name, or a name Windows cannot read as a path): ' + $Output) }
+    if (-not (Test-PlainLocalPath $full)) {
+        return ('-Output must be a folder on a local drive named by its letter (C:\...); a device path, a network or admin-share path and a stream name are not accepted: ' + $full)
+    }
+    Initialize-RealPath
+    $real = [PcmRealPath]::Resolve($full)
+    if ($null -eq $real) { return ('-Output goes through a link that cannot be followed, so where the recordings would go is not known: ' + $full) }
+    if (-not (Test-PlainLocalPath $real)) {
+        return ('-Output must lead to a folder on a local drive named by its letter, and it leads to ' + $real + ' (' + $full + ')')
+    }
+    foreach ($root in $Roots) {
+        if ((Test-InsideFolder $root $full) -or (Test-InsideFolder $root $real)) {
+            return ('-Output must be outside the user''s own folders in record mode (' + $root + '): the recordings are written under it')
+        }
+    }
+    return $null
 }
 
 # Where the GUI puts the record events of the run with this marks file: next to it, <marks name>.record.jsonl (MeasureRecording.EventsPathFor).
@@ -2943,15 +3009,14 @@ function Invoke-Main {
         $script:FakesOn = [bool]$Fakes
 
         if ([string]::IsNullOrEmpty($Output)) { $Output = Join-Path ([IO.Path]::GetTempPath()) ('pcmieru-measure-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss')) }
-        $Output = [IO.Path]::GetFullPath($Output)
-        $summaryPath = Join-Path $Output 'summary.json'
+        try { $Output = [IO.Path]::GetFullPath($Output) }
+        catch { throw "-Output is not a path this tool can accept (a stream name, or a name Windows cannot read as a path): $Output" }
+        $summaryPath =Join-Path $Output 'summary.json'
         if (Test-Path -LiteralPath $summaryPath) { throw "the output folder already holds a summary.json; use a new folder: $Output" }
         if ($Mode -eq 'record') {
             # The recordings go under <Output>: the GUI refuses a folder inside the user's own folders, so say it here before anything is made or started.
-            if (-not (Test-PathResolvable $Output)) { throw ('-Output goes through a link that cannot be followed, so where the recordings would go is not known: ' + $Output) }
-            foreach ($root in (Get-UserDataFolders)) {
-                if (Test-InsideFolder $root $Output) { throw ('-Output must be outside the user''s own folders in record mode (' + $root + '): the recordings are written under it') }
-            }
+            $problem = Get-RecordFolderProblem $Output
+            if ($null -ne $problem) { throw $problem }
         }
         # Before anything is started: a folder that cannot be written is one line and nothing else (not a run that fails after the app is up).
         Assert-WritableFolder $Output

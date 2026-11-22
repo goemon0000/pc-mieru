@@ -36,12 +36,14 @@ internal static class RecordTabStrings
         new("gui.rtab.state.recording", "記録中 {time}　印 {marks} 個", "Recording {time}   Marks: {marks}"),
         new("gui.rtab.state.stopping", "停止して保存中です…", "Stopping and saving…"),
         new("gui.rtab.status.stopping", "停止して保存中", "Stopping and saving"),
-        new("gui.rtab.state.saved", "保存しました（{length}）", "Saved ({length})"),
-        new("gui.rtab.state.ended", "{reason}ため、記録を止めて保存しました（{length}）", "Stopped and saved: {reason} ({length})"),
-        new("gui.rtab.state.failed", "保存に失敗しました。残った記録は確認できます。保存先の空き容量や書き込みの許可を確かめて、もう一度試してください。", "Saving failed. You can view the data that was saved. Check the folder's free space and write permission, then try again."),
+        // The three that speak about the run that has just ended say "the last recording": the list below can have an interrupted or a failed one selected, and
+        // the line must not be read as being about that one.
+        new("gui.rtab.state.saved", "直前の記録を保存しました（{length}）", "Last recording saved ({length})"),
+        new("gui.rtab.state.ended", "直前の記録は、{reason}ため、止めて保存しました（{length}）", "Last recording stopped and saved: {reason} ({length})"),
+        new("gui.rtab.state.failed", "直前の記録の保存に失敗しました。保存先の空き容量と、書き込みできるフォルダーかを確かめてください。残ったデータは下で確認できます。", "Saving the last recording failed. Check the free space of the save folder and that it can be written to. You can see the data that was kept below."),
         new("gui.rtab.problem.start", "記録を始められませんでした（{error}）", "The recording could not be started ({error})"),
         new("gui.rtab.problem.mark", "印をつけられませんでした（{error}）", "The mark could not be set ({error})"),
-        new("gui.rtab.problem.stop", "記録の終わりを確かめられませんでした（{error}）。一覧で確かめてください", "The end of the recording could not be confirmed ({error}). Check the list"),
+        new("gui.rtab.problem.stop", "直前の記録の終わりを確かめられませんでした（{error}）。一覧で確かめてください", "The end of the last recording could not be confirmed ({error}). Check the list"),
 
         // Where it is saved.
         new("gui.rtab.folder", "保存先: {path}", "Saved in: {path}"),
@@ -74,7 +76,7 @@ internal static class RecordTabStrings
         new("gui.rtab.footer.count.one", "{count} 件の記録", "{count} recording"),
         new("gui.rtab.footer.loading", "記録の一覧を読んでいます…", "Reading the list…"),
         new("gui.rtab.footer.empty", "まだ記録がありません", "No recordings yet"),
-        new("gui.rtab.footer.approx", "『約』は目安です。中断・失敗した記録は、開くと残っているデータの長さを確認できます。", "Lengths marked 'about' are estimates. Open an interrupted or failed recording to see the length of the data saved."),
+        new("gui.rtab.footer.approx", "『約』は目安です。中断・失敗した記録を一覧で選ぶと、残ったデータの長さを確認できます。", "Lengths marked 'about' are estimates. Select an interrupted or failed recording to see how much data was saved."),
         new("gui.rtab.notice.problems", "読めなかったファイルが {count} 個あります（一覧には出していません）", "{count} files could not be read and are not in the list"),
         new("gui.rtab.notice.listfail", "記録の一覧を読めませんでした（{error}）", "The list of recordings could not be read ({error})"),
 
@@ -101,8 +103,12 @@ internal static class RecordTabStrings
         new("gui.rtab.sum.col.avg", "平均", "Average"),
         new("gui.rtab.sum.col.max", "最大", "Max"),
         new("gui.rtab.sum.col.sustained", "持続値", "Sustained"),
-        new("gui.rtab.sum.sustained.tip", "負荷がかかっている間の、中央値です（下の説明を見てください）", "The median while the device was under load (see the note below the table)"),
-        new("gui.rtab.sum.sustained.note", "持続値: 使用率が 50 % 以上だった時間だけを、最後に負荷が終わった所から 30〜300 秒（記録の長さの 3 分の 1）さかのぼって集め、その中央値を取った値です。60 秒未満の記録や、負荷の時間が 10 秒に満たないときは「-」です。", "Sustained: the median of the readings taken while usage was 50 % or more, over the last 30 to 300 s (a third of the recording) back from where the load ended. It is \"-\" for a recording under 60 s or when the load lasted under 10 s."),
+        new("gui.rtab.sum.sustained.tip", "負荷が続いていたときの中央値です。条件は「計算のしかた」で見られます", "The median while the PC was under sustained load. Press \"How this is calculated\" for the conditions"),
+
+        // The short sentence is shown; the exact conditions are behind the "how" switch (a button next to Open CSV, so the keyboard reaches it).
+        new("gui.rtab.sum.sustained.note", "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases."),
+        new("gui.rtab.sum.sustained.how", "計算のしかた", "How this is calculated"),
+        new("gui.rtab.sum.sustained.rule", "持続値: 使用率が 50 % 以上だった時間だけを、最後に負荷が終わった所から 30〜300 秒（記録の長さの 3 分の 1）さかのぼって集め、その中央値を取った値です。60 秒未満の記録や、負荷の時間が 10 秒に満たないときは「-」です。", "Sustained: the median of the readings taken while usage was 50 % or more, over the last 30 to 300 s (a third of the recording) back from where the load ended. It is \"-\" for a recording under 60 s or when the load lasted under 10 s."),
         new("gui.rtab.sum.col.time", "時間・補足", "Time and notes"),
         new("gui.rtab.sum.head.record", "この記録", "This recording"),
         new("gui.rtab.sum.head.metrics", "測定値ごとの集計", "By reading"),

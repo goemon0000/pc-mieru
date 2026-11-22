@@ -363,7 +363,7 @@ public class RecordTabTests(ITestOutputHelper output)
 
             Assert.Equal(RecordingPhase.Idle, rig.Hub.Phase);
             Assert.Equal(RunStopReason.User, rig.Kit.Backend.LastStopReason);
-            Assert.Contains("Saved", tab.StateLabel.Text, StringComparison.Ordinal);
+            Assert.StartsWith("Last recording saved (", tab.StateLabel.Text, StringComparison.Ordinal);
             Assert.True(tab.StartButton.Enabled);
             Assert.False(tab.StopButton.Enabled);
             Assert.False(tab.MarkButton.Enabled);
@@ -431,7 +431,7 @@ public class RecordTabTests(ITestOutputHelper output)
             rig.Kit.Backend.EndByItself(RunStopReason.LowSpace);
 
             Assert.True(ui.Until(() => rig.Hub.Phase == RecordingPhase.Idle && tab.Runs.Count == 1 && tab.View == HistoryView.List));
-            Assert.StartsWith("Stopped and saved: ", tab.StateLabel.Text, StringComparison.Ordinal);
+            Assert.StartsWith("Last recording stopped and saved: ", tab.StateLabel.Text, StringComparison.Ordinal);
             Assert.Equal(RunStopReason.LowSpace, tab.Runs[0].StopReason);
             Assert.True(tab.StartButton.Enabled);
         });
@@ -840,14 +840,14 @@ public class RecordTabTests(ITestOutputHelper output)
             using (var rig = new TabRig(Language.En, seed: true))
             {
                 var tab = rig.Show(ui);
-                Assert.Equal("Lengths marked 'about' are estimates. Open an interrupted or failed recording to see the length of the data saved.", tab.HintLabel.Text);
+                Assert.Equal("Lengths marked 'about' are estimates. Select an interrupted or failed recording to see how much data was saved.", tab.HintLabel.Text);
                 Assert.Equal("3 recordings", tab.CountLabel.Text);
             }
 
             using (var rig = new TabRig(Language.Ja, seed: true))
             {
                 var tab = rig.Show(ui);
-                Assert.Equal("『約』は目安です。中断・失敗した記録は、開くと残っているデータの長さを確認できます。", tab.HintLabel.Text);
+                Assert.Equal("『約』は目安です。中断・失敗した記録を一覧で選ぶと、残ったデータの長さを確認できます。", tab.HintLabel.Text);
             }
         });
     }
@@ -955,8 +955,8 @@ public class RecordTabTests(ITestOutputHelper output)
         {
             foreach (var (language, expected) in new[]
             {
-                (Language.En, "Saving failed. You can view the data that was saved. Check the folder's free space and write permission, then try again."),
-                (Language.Ja, "保存に失敗しました。残った記録は確認できます。保存先の空き容量や書き込みの許可を確かめて、もう一度試してください。"),
+                (Language.En, "Saving the last recording failed. Check the free space of the save folder and that it can be written to. You can see the data that was kept below."),
+                (Language.Ja, "直前の記録の保存に失敗しました。保存先の空き容量と、書き込みできるフォルダーかを確かめてください。残ったデータは下で確認できます。"),
             })
             {
                 using var rig = new TabRig(language);
@@ -977,8 +977,8 @@ public class RecordTabTests(ITestOutputHelper output)
         {
             foreach (var (language, saved, length, sustained, name) in new[]
             {
-                (Language.En, "Length of the saved data", "Length: ", "Sustained:", "Speed limited by temperature"),
-                (Language.Ja, "残っているデータの長さ", "記録の長さ: ", "持続値:", "温度による速度の制限"),
+                (Language.En, "Length of the saved data", "Length: ", "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases.", "Speed limited by temperature"),
+                (Language.Ja, "残っているデータの長さ", "記録の長さ: ", "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "温度による速度の制限"),
             })
             {
                 using var rig = new TabRig(language, seed: true);
@@ -997,7 +997,7 @@ public class RecordTabTests(ITestOutputHelper output)
                 Assert.DoesNotContain("Software thermal slowdown", all, StringComparison.Ordinal);
 
                 // The sustained value: a note in the table, right under the readings, says how it is made (it is there only where a run has readings), and the column's header has a tip.
-                Assert.Contains(tab.Summary.Rows, row => row.Kind == SummaryRowKind.Note && row.Time.StartsWith(sustained, StringComparison.Ordinal));
+                Assert.Contains(tab.Summary.Rows, row => row.Kind == SummaryRowKind.Note && row.Time == sustained);
                 Assert.Equal(Strings.Get("gui.rtab.sum.sustained.tip"), tab.Summary.HeaderTip!(4));
                 Assert.Null(tab.Summary.HeaderTip!(1));
             }
@@ -1250,7 +1250,7 @@ public class RecordTabTests(ITestOutputHelper output)
     {
         Ui.Run(ui =>
         {
-            foreach (var (language, sustained, record) in new[] { (Language.En, "Sustained:", "This recording"), (Language.Ja, "持続値:", "この記録") })
+            foreach (var (language, sustained, record) in new[] { (Language.En, "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases.", "This recording"), (Language.Ja, "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "この記録") })
             {
                 using var rig = new TabRig(language, seed: true);
                 var tab = rig.Show(ui);
@@ -1268,7 +1268,7 @@ public class RecordTabTests(ITestOutputHelper output)
 
                     // The note on the sustained value is a row, there only where there are readings with values, and it is the row under the last reading.
                     var hasMetric = rows.Any(static r => r.Kind == SummaryRowKind.Metric);
-                    var noteAt = rows.FindIndex(r => r.Kind == SummaryRowKind.Note && r.Item.Length == 0 && r.Time.StartsWith(sustained, StringComparison.Ordinal));
+                    var noteAt = rows.FindIndex(r => r.Kind == SummaryRowKind.Note && r.Item.Length == 0 && r.Time == sustained);
                     Assert.Equal(hasMetric, noteAt >= 0);
                     if (hasMetric)
                     {
@@ -1509,6 +1509,264 @@ public class RecordTabTests(ITestOutputHelper output)
 
             Assert.Equal("記録中 12:34", rig.Form.RecordingIndicator.Text);
         });
+    }
+
+    // ---- the second fix round: one clock, the selected record on show, the words of the last recording, the sustained value, the wait at the end ----
+
+    private static void AssertOneClock(RecordTab tab, string time)
+    {
+        Assert.Equal("Recording " + time + "   Marks: 0", tab.StateLabel.Text);
+        Assert.Equal(time, tab.ListText(0, 1));
+        Assert.Contains(time, tab.DetailHead.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void While_recording_the_state_line_the_list_and_the_summary_head_show_the_time_of_the_same_tick()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new TabRig(Language.En);
+            var tab = rig.Show(ui);
+            Wait(ui, tab.PressStart());
+            Assert.True(ui.Until(() => tab.View == HistoryView.List && tab.Runs.Count == 1));
+            tab.SelectRun(0);
+            Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Running));
+
+            rig.Advance(TimeSpan.FromSeconds(65));
+            AssertOneClock(tab, "1:05");
+            Assert.Equal(TimeSpan.FromSeconds(65), rig.Hub.ShownElapsed);
+
+            // The second boundary comes between two reads (the state line was drawn, the list is drawn a moment later): no part reads the clock for itself,
+            // so none of them is a second ahead of the others before the tick has come.
+            rig.Now += TimeSpan.FromSeconds(1);
+            AssertOneClock(tab, "1:05");
+            Assert.Equal(TimeSpan.FromSeconds(65), rig.Hub.ShownElapsed);
+
+            rig.Hub.Tick();
+            AssertOneClock(tab, "1:06");
+        });
+    }
+
+    [Fact]
+    public void The_status_bar_and_the_tab_say_the_same_time_whatever_the_clock_does_between_two_ticks()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new WindowRig();
+            rig.StartRecording(ui);
+            Assert.True(rig.Form.ShowPage("checks"));
+            var page = Assert.IsType<ChecksPage>(rig.Form.CurrentPage);
+            page.SelectTab("record");
+            var tab = (RecordTab)page.TabOf("record");
+            Assert.True(ui.Until(() => tab.View == HistoryView.List && tab.Runs.Count == 1));
+
+            rig.Now += TimeSpan.FromSeconds(65);
+            rig.Hub.Tick();
+            Assert.Equal("Recording 1:05", rig.Form.RecordingIndicator.Text);
+            Assert.Equal("Recording 1:05   Marks: 0", tab.StateLabel.Text);
+
+            rig.Now += TimeSpan.FromSeconds(1);
+            Assert.Equal("Recording 1:05", rig.Form.RecordingIndicator.Text);
+            Assert.Equal("Recording 1:05   Marks: 0", tab.StateLabel.Text);
+            Assert.Equal("1:05", tab.ListText(0, 1));
+        });
+    }
+
+    [Fact]
+    public void The_selected_record_stays_inside_the_rows_on_show_when_the_list_gets_shorter()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new TabRig(seed: true, shown: true, size: new Size(900, 760));
+            var tab = rig.Show(ui);
+            Assert.True(Ui.PumpUntil(() => tab.List.RowRect(0) is not null), "the native list never laid its first row out");
+            tab.ToggleLegacy();
+            Assert.Equal(4, tab.Runs.Count);
+
+            // Room for all four rows, and the last one chosen.
+            tab.Splitter.MoveBy(tab.List.HeightForRows(4) - tab.List.Height);
+            Ui.Settle(() => tab.List.Height + "/" + tab.List.RowsThatFit(tab.List.Height));
+            Assert.True(tab.List.RowsThatFit(tab.List.Height) >= 4, "the test needs room for 4 rows");
+            tab.SelectRun(3);
+            Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found));
+            Assert.True(Ui.PumpUntil(() => tab.List.IsRowVisible(3)), "the last row was not on show with room for four");
+
+            // The bar is moved up to two rows: the chosen row is still on show (the list scrolled to keep it).
+            tab.Splitter.MoveBy(tab.List.HeightForRows(2) - tab.List.Height);
+            Ui.Settle(() => tab.List.Height + "/" + tab.List.RowsThatFit(tab.List.Height) + "/" + tab.List.TopRow);
+            Assert.True(tab.List.RowsThatFit(tab.List.Height) < 4, "the list did not get shorter");
+            Assert.Equal(3, tab.List.SelectedRow);
+            Assert.True(Ui.PumpUntil(() => tab.List.IsRowVisible(3)), $"the selected row 3 is not on show: top row {tab.List.TopRow}, {tab.List.RowsThatFit(tab.List.Height)} rows fit");
+        });
+    }
+
+    [Fact]
+    public void A_record_chosen_while_the_list_is_scrolled_and_one_that_ends_from_outside_the_list_are_on_show()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new TabRig(seed: true, shown: true, size: new Size(900, 760));
+            var tab = rig.Show(ui);
+            Assert.True(Ui.PumpUntil(() => tab.List.RowRect(0) is not null), "the native list never laid its first row out");
+            tab.ToggleLegacy();
+            Assert.Equal(4, tab.Runs.Count);
+            tab.Splitter.MoveBy(tab.List.HeightForRows(2) - tab.List.Height);
+            Ui.Settle(() => tab.List.Height + "/" + tab.List.RowsThatFit(tab.List.Height));
+            Assert.True(tab.List.RowsThatFit(tab.List.Height) is >= 2 and < 4);
+
+            // Every row in turn: chosen from the list, it is on show.
+            for (var row = 3; row >= 0; row--)
+            {
+                tab.SelectRun(row);
+                Assert.True(Ui.PumpUntil(() => tab.List.IsRowVisible(row)), $"row {row} chosen but not on show (top row {tab.List.TopRow})");
+            }
+
+            // The list is scrolled to the end and a recording is made and stopped: the new run is chosen from outside the list, and it is on show.
+            tab.SelectRun(3);
+            Assert.True(Ui.PumpUntil(() => tab.List.IsRowVisible(3)));
+            Wait(ui, tab.PressStart());
+            rig.Advance(TimeSpan.FromSeconds(20));
+            Wait(ui, tab.PressStop());
+            Assert.True(ui.Until(() => tab.Runs.Count == 5 && tab.SelectedRunId == rig.Hub.LastResult?.RunId));
+            var selected = tab.List.SelectedRow;
+            Assert.True(selected >= 0);
+            Assert.True(Ui.PumpUntil(() => tab.List.IsRowVisible(selected)), $"the new run (row {selected}) is not on show: top row {tab.List.TopRow}");
+        });
+    }
+
+    [Fact]
+    public void The_words_about_the_last_recording_say_so_and_the_footer_tells_what_to_do_in_each_language()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, saved, ended, failedWords, stopWords, footer) in new[]
+            {
+                (Language.En, "Last recording saved (", "Last recording stopped and saved: ", "Saving the last recording failed. Check the free space of the save folder and that it can be written to. You can see the data that was kept below.", "The end of the last recording could not be confirmed (x). Check the list", "Select an interrupted or failed recording to see how much data was saved."),
+                (Language.Ja, "直前の記録を保存しました（", "直前の記録は、", "直前の記録の保存に失敗しました。保存先の空き容量と、書き込みできるフォルダーかを確かめてください。残ったデータは下で確認できます。", "直前の記録の終わりを確かめられませんでした（x）。一覧で確かめてください", "中断・失敗した記録を一覧で選ぶと、残ったデータの長さを確認できます。"),
+            })
+            {
+                using var rig = new TabRig(language);
+                var tab = rig.Show(ui);
+                Wait(ui, tab.PressStart());
+                rig.Advance(TimeSpan.FromSeconds(18));
+                Wait(ui, tab.PressStop());
+                Assert.StartsWith(saved, tab.StateLabel.Text, StringComparison.Ordinal);
+                Assert.Contains("18", tab.StateLabel.Text, StringComparison.Ordinal);
+
+                Wait(ui, tab.PressStart());
+                rig.Advance(TimeSpan.FromSeconds(20));
+                rig.Kit.Backend.EndByItself(RunStopReason.LowSpace);
+                Assert.True(ui.Until(() => rig.Hub.Phase == RecordingPhase.Idle && rig.Hub.LastResult is { StopReason: RunStopReason.LowSpace }));
+                Assert.StartsWith(ended, tab.StateLabel.Text, StringComparison.Ordinal);
+
+                Assert.Equal(stopWords, Strings.Format("gui.rtab.problem.stop", Fmt.Dict(("error", "x"))));
+                Assert.Equal(failedWords, Strings.Get("gui.rtab.state.failed"));
+                Assert.Contains(footer, Strings.Get("gui.rtab.footer.approx"), StringComparison.Ordinal);
+            }
+        });
+    }
+
+    [Fact]
+    public void The_sustained_value_is_one_short_sentence_and_the_conditions_are_a_row_only_while_the_how_button_is_on()
+    {
+        Ui.Run(ui =>
+        {
+            foreach (var (language, sentence, how, rule) in new[]
+            {
+                (Language.En, "A typical value while the PC was under sustained load. Not shown for short recordings and some other cases.", "How this is calculated", "Sustained: the median of the readings taken while usage was 50 % or more, over the last 30 to 300 s (a third of the recording) back from where the load ended. It is \"-\" for a recording under 60 s or when the load lasted under 10 s."),
+                (Language.Ja, "負荷が続いていたときの代表的な値です。短い記録などでは出ません。", "計算のしかた", "持続値: 使用率が 50 % 以上だった時間だけを、最後に負荷が終わった所から 30〜300 秒（記録の長さの 3 分の 1）さかのぼって集め、その中央値を取った値です。60 秒未満の記録や、負荷の時間が 10 秒に満たないときは「-」です。"),
+            })
+            {
+                using var rig = new TabRig(language, seed: true, shown: true, size: new Size(900, 760));
+                var tab = rig.Show(ui);
+                Assert.False(tab.HowToggle.Visible, $"{language}: the button is there with no record chosen");
+
+                tab.SelectRun(RowOf(tab, FakeRunData.CompletedId));
+                Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == FakeRunData.CompletedId));
+                Assert.True(tab.Summary.HasSustainedNote);
+                Assert.True(tab.HowToggle.Visible);
+                Assert.Equal(how, tab.HowToggle.Text);
+                Assert.False(tab.HowToggle.Checked);
+
+                // The short sentence is first and has no condition in it; the conditions are not in the table yet.
+                var notes = () => tab.Summary.Rows.Where(r => r.Kind == SummaryRowKind.Note && r.Item.Length == 0).Select(r => r.Time).ToList();
+                Assert.Contains(sentence, notes());
+                Assert.DoesNotContain(rule, notes());
+                Assert.DoesNotContain(notes(), n => n.Contains("50 %", StringComparison.Ordinal) || n.Contains("300", StringComparison.Ordinal));
+
+                // A button a keyboard reaches: it takes Tab, is a real button, and the screen reader's default action presses it.
+                Assert.True(tab.HowToggle.TabStop);
+                Assert.True(tab.HowToggle.CanSelect);
+                tab.HowToggle.AccessibilityObject.DoDefaultAction();
+                Assert.True(tab.HowToggle.Checked);
+                var at = tab.Summary.Rows.ToList().FindIndex(r => r.Kind == SummaryRowKind.Note && r.Item.Length == 0 && r.Time == sentence);
+                Assert.True(at >= 0);
+                Assert.Equal(rule, tab.Summary.Rows[at + 1].Time);
+
+                // It stays on while another record is chosen, and goes where the summary has no such value.
+                foreach (var id in new[] { FakeRunData.FailedId, FakeRunData.InterruptedId, FakeRunData.CompletedId })
+                {
+                    tab.SelectRun(RowOf(tab, id));
+                    Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found && tab.SelectedRunId == id));
+                    Assert.Equal(tab.Summary.HasSustainedNote, tab.HowToggle.Visible);
+                    Assert.Equal(tab.Summary.HasSustainedNote, notes().Contains(rule));
+                }
+
+                tab.HowToggle.PerformClick();
+                Assert.False(tab.HowToggle.Checked);
+                Assert.DoesNotContain(rule, notes());
+                Assert.Contains(sentence, notes());
+            }
+        });
+    }
+
+    [Fact]
+    public void The_hub_waits_a_bounded_time_for_a_stop_that_is_still_saving_and_the_program_does_it_after_the_message_loop()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new TabRig();
+            var tab = rig.Show(ui);
+
+            // Nothing is being saved: nothing to wait for.
+            Assert.True(rig.Hub.WaitUntilSaved(TimeSpan.FromSeconds(5)));
+
+            Wait(ui, tab.PressStart());
+            rig.Kit.Backend.HangStop = true;
+            var stopping = rig.Hub.StopAsync();
+            Assert.True(ui.Until(() => rig.Hub.Phase == RecordingPhase.Stopping));
+
+            // Still saving: the wait ends at its bound and says so.
+            var clock = Stopwatch.StartNew();
+            Assert.False(rig.Hub.WaitUntilSaved(TimeSpan.FromMilliseconds(100)));
+            Assert.InRange(clock.Elapsed, TimeSpan.FromMilliseconds(60), TimeSpan.FromSeconds(3));
+
+            // The process has left its message loop: nothing is pumped while it waits, and what finishes the save is another thread.
+            var released = false;
+            var release = Task.Run(() =>
+            {
+                Thread.Sleep(300);
+                Volatile.Write(ref released, true);
+                rig.Kit.Backend.ReleaseStop();
+            });
+            Program.WaitForWork(rig.Context);
+            Assert.True(Volatile.Read(ref released), "the program went on while the stop was still being saved");
+            release.Wait();
+            Wait(ui, stopping);
+            Assert.True(rig.Hub.WaitUntilSaved(TimeSpan.FromSeconds(5)));
+            Assert.Equal(RecordingPhase.Idle, rig.Hub.Phase);
+        });
+    }
+
+    [Fact]
+    public void Main_waits_for_the_saving_recording_after_Application_Run_and_nowhere_before()
+    {
+        var source = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+        var run = source.IndexOf("Application.Run(form);", StringComparison.Ordinal);
+        var call = source.IndexOf("WaitForWork(context);", StringComparison.Ordinal);
+        Assert.True(run > 0 && call > run, "WaitForWork(context) must come after Application.Run(form)");
+        Assert.Equal(source.IndexOf("WaitUntilSaved", StringComparison.Ordinal), source.LastIndexOf("WaitUntilSaved", StringComparison.Ordinal));
+        Assert.Equal(TimeSpan.FromSeconds(2), RecordingHub.SavedWait);
     }
 
     // ---- closing the window and ending the session ----
@@ -1811,22 +2069,23 @@ public class RecordTabTests(ITestOutputHelper output)
                 tab.SelectRun(row);
                 Assert.True(ui.Until(() => tab.DetailState == RecordDetailState.Found));
                 var old = rig.Kit.Store.Info(FakeRunData.LegacyId)!;
-                var expected = Path.Combine(temp, "PCMieru-legacy-" + old.LegacyId + ".csv");
+                var named = new Regex("^" + Regex.Escape(Path.Combine(temp, "PCMieru-legacy-" + old.LegacyId + "-")) + "[0-9a-f]{8}" + Regex.Escape(".csv") + "$");
 
                 Assert.True(tab.CsvButton.Enabled);
                 Wait(ui, tab.PressOpenCsv());
                 var copy = Assert.Single(copies);
                 Assert.Equal(old.CsvPath, copy.From);
-                Assert.Equal(expected, copy.To);
+                Assert.Matches(named, copy.To);
                 var shell = Assert.Single(started);
-                Assert.Equal(expected, shell.FileName);
+                Assert.Equal(copy.To, shell.FileName);
                 Assert.NotEqual(old.CsvPath, shell.FileName);
 
-                // The second time the same copy is made again (it is replaced, never a pile of files).
+                // The second click makes a copy under a name of its own (a name that is there is never written over: another program may hold it), and opens that one.
                 Wait(ui, tab.PressOpenCsv());
                 Assert.Equal(2, copies.Count);
-                Assert.Equal(expected, copies[1].To);
-                Assert.All(started, one => Assert.Equal(expected, one.FileName));
+                Assert.Matches(named, copies[1].To);
+                Assert.NotEqual(copies[0].To, copies[1].To);
+                Assert.Equal([copies[0].To, copies[1].To], started.Select(one => one.FileName).ToArray());
 
                 // The app's own recording is opened itself, with no copy.
                 tab.ToggleLegacy();
@@ -1872,20 +2131,111 @@ public class RecordTabTests(ITestOutputHelper output)
 
             var path = hub.CsvToOpen(old with { CsvPath = original });
 
-            Assert.Equal(Path.Combine(temp, "PCMieru-legacy-" + old.LegacyId + ".csv"), path);
+            Assert.Matches("^PCMieru-legacy-" + Regex.Escape(old.LegacyId!) + "-[0-9a-f]{8}\\.csv$", Path.GetFileName(path));
+            Assert.Equal(temp, Path.GetDirectoryName(path));
             Assert.Equal(bytes, File.ReadAllBytes(path));
 
-            // The program that opened it changed it: the next open puts the original's content back, and the original never changed.
+            // The program that opened it changed it: the next click makes a fresh copy of the original's content, and the older one is cleared away.
             File.WriteAllText(path, "edited");
-            Assert.Equal(path, hub.CsvToOpen(old with { CsvPath = original }));
-            Assert.Equal(bytes, File.ReadAllBytes(path));
+            var next = hub.CsvToOpen(old with { CsvPath = original });
+            Assert.NotEqual(path, next);
+            Assert.Equal(bytes, File.ReadAllBytes(next));
+            Assert.False(File.Exists(path));
             Assert.Equal(bytes, File.ReadAllBytes(original));
             Assert.Equal(written, File.GetLastWriteTimeUtc(original));
-            Assert.Single(Directory.GetFiles(temp));
+            Assert.Equal([next], Directory.GetFiles(temp));
 
             // The app's own file is the file itself.
             var own = rig.Kit.Store.Info(FakeRunData.CompletedId)!;
             Assert.Equal(own.CsvPath, hub.CsvToOpen(own));
+            hub.Dispose();
+        });
+    }
+
+    [Fact]
+    public void A_copy_another_program_holds_does_not_stop_the_next_open_and_a_read_only_original_gives_a_copy_that_can_be_written()
+    {
+        Ui.Run(_ =>
+        {
+            using var rig = new TabRig(seed: true);
+            var old = rig.Kit.Store.Info(FakeRunData.LegacyId)!;
+            var original = Path.Combine(rig.Temp.Path, "old", "sensors.csv");
+            Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+            File.WriteAllText(original, "t,v\n1,2\n");
+            File.SetAttributes(original, FileAttributes.ReadOnly);
+            var temp = Path.Combine(rig.Temp.Path, "tmp");
+            Directory.CreateDirectory(temp);
+            var hub = new RecordingHub(() => rig.Kit.Backend, () => rig.Kit.Store, () => rig.Folder, () => rig.Now) { TempFolder = () => temp };
+            var other = Path.Combine(temp, "PCMieru-legacy-other-0123abcd.csv");
+            File.WriteAllText(other, "another run's copy");
+            try
+            {
+                var first = hub.CsvToOpen(old with { CsvPath = original });
+                Assert.False(File.GetAttributes(first).HasFlag(FileAttributes.ReadOnly), "a program that opens the copy must be able to save it");
+
+                // Excel holds the last copy (open, nothing may be done to it): the next click still works, with a name of its own.
+                string second;
+                using (new FileStream(first, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    second = hub.CsvToOpen(old with { CsvPath = original });
+                }
+
+                Assert.NotEqual(first, second);
+                Assert.Equal(File.ReadAllBytes(original), File.ReadAllBytes(second));
+                Assert.True(File.Exists(first), "a file that is held cannot be cleared away; that is no error");
+
+                // The next click clears what is no longer held, and never the copy of another run.
+                var third = hub.CsvToOpen(old with { CsvPath = original });
+                Assert.Equal(new[] { other, third }.OrderBy(p => p, StringComparer.Ordinal).ToArray(), Directory.GetFiles(temp).OrderBy(p => p, StringComparer.Ordinal).ToArray());
+                Assert.Equal("another run's copy", File.ReadAllText(other));
+            }
+            finally
+            {
+                File.SetAttributes(original, FileAttributes.Normal);
+                hub.Dispose();
+            }
+        });
+    }
+
+    [Fact]
+    public void A_link_left_at_a_copys_name_is_never_written_through_and_is_cleared_away_as_a_name()
+    {
+        Ui.Run(_ =>
+        {
+            using var rig = new TabRig(seed: true);
+            var old = rig.Kit.Store.Info(FakeRunData.LegacyId)!;
+            var original = Path.Combine(rig.Temp.Path, "old", "sensors.csv");
+            Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+            File.WriteAllText(original, "t,v\n1,2\n");
+            var temp = Path.Combine(rig.Temp.Path, "tmp");
+            Directory.CreateDirectory(temp);
+            var victim = Path.Combine(rig.Temp.Path, "victim.txt");
+            File.WriteAllText(victim, "the user's own file");
+
+            // A hard link needs no privilege and is a name for the victim's data: whatever is written through it is written to the victim.
+            var link = Path.Combine(temp, "PCMieru-legacy-" + old.LegacyId + ".csv");
+            var start = new ProcessStartInfo("cmd.exe", "/c mklink /H \"" + link + "\" \"" + victim + "\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using (var process = Process.Start(start)!)
+            {
+                var said = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                Assert.True(process.ExitCode == 0, "mklink failed: " + said);
+            }
+
+            var hub = new RecordingHub(() => rig.Kit.Backend, () => rig.Kit.Store, () => rig.Folder, () => rig.Now) { TempFolder = () => temp };
+            var path = hub.CsvToOpen(old with { CsvPath = original });
+
+            Assert.Equal("the user's own file", File.ReadAllText(victim));
+            Assert.Equal(File.ReadAllBytes(original), File.ReadAllBytes(path));
+            Assert.NotEqual(link, path);
+            Assert.False(File.Exists(link), "the name that was a link is cleared away");
+            Assert.True(File.Exists(victim), "clearing the name must not take the data it led to");
             hub.Dispose();
         });
     }

@@ -8,7 +8,7 @@ internal static partial class SmokeRun
     {
         /// <summary>
         /// One look of the recording tab in every language and theme: the texts are all there, nothing is cut off without a tooltip that holds it, the
-        /// list ends on a whole row; and the picture (the three looks the scale is checked on take it again at 200%).
+        /// list ends on a whole row; and the picture (the looks the scale is checked on take it again at 200%: the empty tab, a recording, a summary, a failed run, a cut-off run and an old record).
         /// </summary>
         private async Task ShootRecord(ChecksPage page, RecordTab tab, string name, bool atScale, Func<Task>? settle = null)
         {
@@ -73,6 +73,15 @@ internal static partial class SmokeRun
                 // A list with no run in it (the empty tab, the first recording not yet made) has no row to end on; its words are checked above.
                 var whole = tab.List.VirtualListSize == 0 ? null : tab.List.WholeRowsProblem(out facts);
                 Check($"record: the list in {name} ends on a whole row ({look})", whole is null, whole is null ? string.Empty : whole + " " + facts);
+
+                // The record that is chosen is among the rows on show: a list that is a few rows high had it scrolled out of sight (the picture of an interrupted run
+                // showed the third row of four, and the chosen one was the fourth).
+                var selectedRow = tab.List.SelectedRow;
+                if (selectedRow >= 0)
+                {
+                    Check($"record: the selected record in {name} is inside the rows on show ({look})", tab.List.IsRowVisible(selectedRow), $"row {selectedRow} of {tab.List.VirtualListSize}, first row on show {tab.List.TopRow}, {tab.List.RowsThatFit(tab.List.Height)} rows fit in {tab.List.Height} px");
+                }
+
                 if (shotsDirectory is not null && (dpiPercent == 0 || atScale))
                 {
                     _shots.Add(await Capture(shotsDirectory, $"{look}-record-{name}{ScaleSuffix}.png").ConfigureAwait(true));
@@ -211,12 +220,12 @@ internal static partial class SmokeRun
             await Until(() => tab.SelectedRunId == FakeRunData.FailedId && tab.DetailState == RecordDetailState.Found && tab.DetailTask.IsCompleted, 3000).ConfigureAwait(true);
             var summaryTop = tab.Summary.RowRect(0)?.Top ?? -1;
             Check("record: a short summary opened after a long one starts at its first row, under its header", tab.Summary.RowCount > 0 && tab.Summary.TopRow == 0 && summaryTop >= 0 && summaryTop <= tab.Summary.HeaderHeight + 3, "rows " + tab.Summary.RowCount + ", first on show " + tab.Summary.TopRow + ", first row at " + summaryTop + " px, header " + tab.Summary.HeaderHeight + " px");
-            await ShootRecord(page, tab, "failed", false).ConfigureAwait(true);
+            await ShootRecord(page, tab, "failed", true).ConfigureAwait(true);
             var interruptedRow = RowOf(tab, FakeRunData.InterruptedId);
             tab.SelectRun(interruptedRow);
             await Until(() => tab.SelectedRunId == FakeRunData.InterruptedId && tab.DetailState == RecordDetailState.Found && tab.DetailTask.IsCompleted, 3000).ConfigureAwait(true);
             Check("record: the length of a run that was cut off is about, not exact", interruptedRow >= 0 && RecordFormat.IsApproximate(tab.Runs[interruptedRow]) && tab.ListText(interruptedRow, 1) != RecordFormat.ExactLength(735), interruptedRow >= 0 ? tab.ListText(interruptedRow, 1) : "no row");
-            await ShootRecord(page, tab, "interrupted", false).ConfigureAwait(true);
+            await ShootRecord(page, tab, "interrupted", true).ConfigureAwait(true);
 
             // ---- an old record: read only ----
             tab.ToggleLegacy();

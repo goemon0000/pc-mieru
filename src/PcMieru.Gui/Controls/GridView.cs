@@ -1218,6 +1218,32 @@ internal class GridView : ListView, IThemed
     /// <summary>The index of the first row on show: 0 for a list that is not scrolled (and for one that has no window or no rows yet).</summary>
     internal int TopRow => IsHandleCreated && VirtualListSize > 0 ? Math.Max((int)SendMessage(Handle, ListTopIndexMessage, IntPtr.Zero, IntPtr.Zero), 0) : 0;
 
+    /// <summary>
+    /// True when a row is whole inside the rows on show: not scrolled out above or below, and not cut by the bottom edge. A list with no window, or a row it
+    /// gives no rectangle for, answers false. The recording tab's list is a few rows high, and the smoke run asks this of the selected row.
+    /// </summary>
+    internal bool IsRowVisible(int row)
+    {
+        if (!IsHandleCreated || row < 0 || row >= VirtualListSize || RowRect(row) is not { } rect)
+        {
+            return false;
+        }
+
+        return rect.Top >= HeaderHeight - 1 && rect.Bottom <= ClientSize.Height + 1;
+    }
+
+    /// <summary>
+    /// Scrolls the list so that the selected row is whole on show, when it is not (the list got shorter, or the row was chosen before the list had its height).
+    /// Nothing is selected, no window, or the row is already on show: nothing happens (a list the person scrolled away from a row they are not on is left alone).
+    /// </summary>
+    internal void EnsureSelectedVisible()
+    {
+        if (IsHandleCreated && SelectedRow is >= 0 and var row && row < VirtualListSize && !IsRowVisible(row))
+        {
+            EnsureVisible(row);
+        }
+    }
+
     /// <summary>Puts a scrolled list back at its first row (a list with no window or no rows is already there).</summary>
     internal void ScrollToFirstRow()
     {
