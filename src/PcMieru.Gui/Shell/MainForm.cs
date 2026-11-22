@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcMieru.Update.Feed;
 
 namespace PcMieru.Gui;
 
@@ -21,6 +22,7 @@ internal sealed class MainForm : Form
     private readonly CheckCloseGuard _closeGuard;
     private int _current = -1;
     private bool _rebuildingNav;
+    private bool _updatesStarted;
 
     /// <summary>
     /// The pause button and the interval box are the same height and centred in the bar. A docked combo box would stay at
@@ -261,6 +263,27 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>
+    /// Real runs only (Program.cs calls this after the window is shown; a smoke run and a measurement never do): starts the update check's timers when the
+    /// mode allows the network, and while the mode is still "not chosen" (Ask) shows the first-run choice. The timer starts only after 「決定」 saved the
+    /// choice (<see cref="UpdateController.ChooseMode"/>); in Ask and Off nothing is created.
+    /// </summary>
+    internal void StartUpdates()
+    {
+        if (IsDisposed || _updatesStarted)
+        {
+            return;
+        }
+
+        _updatesStarted = true;
+        var updates = _context.Updates;
+        updates.Start();
+        if (updates.Mode == UpdateMode.Ask)
+        {
+            UpdateChoiceDialog.Open(this, _context.Theme, updates);
+        }
+    }
+
+    /// <summary>
     /// The "start measuring when the app opens" setting: asks for administrator permission once, off the UI thread, so the
     /// window is already up (and never waits on the prompt). The state the meter reaches shows on the Processes page's button.
     /// </summary>
@@ -326,6 +349,7 @@ internal sealed class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _context.Pump.Stop();
+        _context.Updates.Dispose();
         _context.Checks.Dispose();
         base.OnFormClosed(e);
     }

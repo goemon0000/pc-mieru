@@ -17,6 +17,10 @@ internal static class ShellActions
     public static void ShowProperties(string path) =>
         Start(new ProcessStartInfo(path) { Verb = "properties", UseShellExecute = true });
 
+    /// <summary>Opens a web page in the default browser. The caller has checked the address (the update page opens only a Release page of this project).</summary>
+    public static void OpenUrl(string url) =>
+        Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
     /// <summary>Search in the default browser. Only the process name is passed on, nothing else about this PC.</summary>
     public static void SearchWeb(string processName) =>
         Start(new ProcessStartInfo("https://www.bing.com/search?q=" + Uri.EscapeDataString(processName)) { UseShellExecute = true });

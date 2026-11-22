@@ -1,4 +1,5 @@
 using PcMieru.Checks.Build;
+using PcMieru.Update.Feed;
 
 namespace PcMieru.Gui;
 
@@ -9,7 +10,8 @@ internal sealed class GuiContext
     /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
     /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
     /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null)
+    /// <param name="updates">The window's update check. Null: the real one, or the fake one with <c>--fakes</c> (making either reads nothing, starts no timer and makes no HTTP client, see <see cref="UpdateComposition"/>). A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null, UpdateController? updates = null)
     {
         Measure = measure;
         Services = services;
@@ -26,6 +28,22 @@ internal sealed class GuiContext
 
         Checks = checks ?? CheckComposition.Create(services);
         BuildCode = buildCode ?? CheckComposition.CreateBuildCode(services);
+        if (updates is null)
+        {
+            var wiring = UpdateComposition.Create(
+                services.Options.ForceFakes,
+                settings,
+                AppInfo.Version,
+                Path.GetDirectoryName(GuiSettings.DefaultPath) ?? string.Empty,
+                Environment.ProcessPath ?? string.Empty);
+            updates = wiring.Controller;
+            FakeUpdates = wiring.Fake;
+        }
+
+        Updates = updates;
+        // Quiet by design: the status bar says it once per version per run. No dialog, no balloon, nothing that takes the focus.
+        Updates.CandidateFound += (version, _) => Report("gui.update.notice", ("version", version.ToString()));
+        Updates.Failed += ex => Report("gui.status.failed", ("error", CheckFormat.ExceptionDetail(ex)));
     }
 
     public PcMieruServices Services { get; }
@@ -43,6 +61,30 @@ internal sealed class GuiContext
 
     /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
     public CheckController Checks { get; }
+
+    /// <summary>
+    /// The update check of this window: the mode, the two timers, the one check that may run. In Ask and Off it does nothing at all. Owned here, not by the
+    /// settings page: the page comes and goes while a check runs.
+    /// </summary>
+    internal UpdateController Updates { get; }
+
+    /// <summary>With <c>--fakes</c> and no controller given: the fake service the smoke run drives (a scripted answer, never a request). Null otherwise.</summary>
+    internal FakeUpdateService? FakeUpdates { get; }
+
+    /// <summary>
+    /// "Open the notes" of a candidate: the Release page of this project in the default browser. Only the address the feed handed over and only when it is
+    /// a page of this project's releases (<see cref="UpdateEndpoints.IsReleasePage"/>); anything else is not opened. Returns whether a page was opened.
+    /// </summary>
+    internal bool OpenReleaseNotes(string? url)
+    {
+        if (url is null || !UpdateEndpoints.IsReleasePage(url))
+        {
+            return false;
+        }
+
+        ShellActions.OpenUrl(url);
+        return true;
+    }
 
     public SnapshotPump Pump { get; }
 

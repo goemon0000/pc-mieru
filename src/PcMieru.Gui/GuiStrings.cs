@@ -36,5 +36,6 @@ internal static class GuiStrings
         .. DiagnoseStrings.All,
         .. CheckStrings.All,
         .. SettingsStrings.All,
+        .. UpdateStrings.All,
     ];
 }

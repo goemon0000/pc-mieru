@@ -25,8 +25,9 @@
     <!--
       GHSA-p3jp-9v83-76w9: Brotli decoder out-of-bounds write in the 10.0.9 runtime/ILCompiler packages.
       PC Mieru never decompresses Brotli.
-      PcMieru.Update reads ZIP archives (Deflate and Stored only, via System.IO.Compression); no HttpClient in step 1.
-      Step 2: HttpClient must not enable Brotli in AutomaticDecompression while this suppression stands.
+      PcMieru.Update reads ZIP archives (Deflate and Stored only, via System.IO.Compression). Its one HttpClient (src/PcMieru.Update/Feed/UpdateHttp.cs, step 2) keeps
+      AutomaticDecompression at None, so it never asks for Brotli and never decodes it; a test (NoNetworkTests) reads that file and fails if Brotli, DecompressionMethods.All
+      or a BrotliStream shows up in code anywhere under src/. This suppression stands on that. Do not enable any automatic decompression while it stands.
       Remove this line once the SDK pinned in global.json ships the fixed runtime.
     -->
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-p3jp-9v83-76w9" />

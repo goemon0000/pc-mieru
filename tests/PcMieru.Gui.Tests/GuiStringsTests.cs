@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using PcMieru.Update.Feed;
 
 namespace PcMieru.Gui.Tests;
 
@@ -84,6 +85,10 @@ public partial class GuiStringsTests
         Check("gui.svc.start.", Enum.GetValues<ServiceStartType>());
         Check("gui.startup.state.", Enum.GetValues<StartupState>());
         Check("gui.overview.certainty.", Enum.GetValues<ObservationCertainty>());
+        Check("gui.update.mode.", Enum.GetValues<UpdateMode>());
+        Check("gui.update.placement.", Enum.GetValues<PlacementKind>());
+        // None means "no refusal" and has no text; every other reason has one (ja and en), because the settings page says it to the owner.
+        Check("gui.update.refusal.", Enum.GetValues<UpdateRefusal>().Where(reason => reason != UpdateRefusal.None).ToArray());
     }
 
     [Fact]

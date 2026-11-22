@@ -17,9 +17,9 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// </summary>
 internal static partial class SmokeRun
 {
-    // 240 s: the run with --fakes --shots walks the checks page and the two configuration code dialogs (plain and trimmed) in four looks each (about 100 s in all, more at 150%);
-    // the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(240);
+    // 300 s: the run with --fakes --shots walks the checks page, the two configuration code dialogs (plain and trimmed) and the update check (the first-run dialog and four
+    // states of the settings section) in four looks each (about 130 s in all, more at 150%); the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(300);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
@@ -491,6 +491,7 @@ internal static partial class SmokeRun
             await ChecksRun().ConfigureAwait(true);
             await FakeChecksRun().ConfigureAwait(true);
             await Pcb1Run().ConfigureAwait(true);
+            await UpdateRun().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
         }
 

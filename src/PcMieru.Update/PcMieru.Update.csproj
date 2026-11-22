@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The distribution contract of the auto update (docs/unify/DESIGN-B.md 3): the version type, the pcm-bundle/1 manifest, the name rules and the bundle validator.
-       Step 1 only: no network code, no file replacement. No reference to Gui, Cli or Core, so tools/BundleCheck can load it on its own. -->
+  <!-- The distribution contract of the auto update (docs/unify/DESIGN-B.md 3): the version type, the pcm-bundle/1 manifest, the name rules and the bundle validator
+       (step 1), and the release feed with its schedule and state (step 2: Feed/UpdateHttp.cs is the only file that names System.Net.Http; no file replacement yet).
+       No reference to Gui, Cli or Core, so tools/BundleCheck can load it on its own. -->
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>PcMieru.Update</RootNamespace>

@@ -81,6 +81,13 @@ internal static class Program
             return SmokeRun.Run(form, context, output, options.ScreenshotDirectory, options.OnScreen, options.Dpi, startedAt, options.NetMeter);
         }
 
+        // The update check starts only in a real run, once the window is up: never in a smoke run (it drives the fake service itself) and never in a
+        // measurement. With the mode still "not chosen" the first-run choice comes first; nothing is asked of the network before 「決定」 saved it.
+        if (options.MeasureOutput is null)
+        {
+            form.Shown += (_, _) => form.BeginInvoke(form.StartUpdates);
+        }
+
         Application.Run(form);
 
         // A window closed by Windows ending (or the task manager) did not wait for a check that was told to stop. The message loop is gone, so

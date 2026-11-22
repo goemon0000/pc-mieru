@@ -3,8 +3,9 @@ namespace PcMieru.Gui;
 /// <summary>
 /// The few settings there are: update interval and pause, theme, language, always on top. Each takes effect at once and is
 /// written to gui.ini; there is no Apply button. The same pause switch is in the status bar and the two stay in step.
+/// The "Updates" section (what the check of new versions does and whether it may run) is in <c>SettingsPage.Update.cs</c>.
 /// </summary>
-internal sealed class SettingsPage : PageBase
+internal sealed partial class SettingsPage : PageBase
 {
     private readonly Label _intervalLabel = new() { AutoSize = true };
     private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsInterval" };
@@ -53,15 +54,18 @@ internal sealed class SettingsPage : PageBase
         AddRow(grid, _netUnitLabel, _netUnit, 5);
         AddWide(grid, _onTop, 6);
         AddWide(grid, _netAutostart, 7);
+        var next = BuildUpdateSection(grid, 8);
         _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
         _privacy.MaximumSize = new Size(Px(640), 0);
-        grid.Controls.Add(_about, 0, 8);
+        grid.Controls.Add(_about, 0, next);
         grid.SetColumnSpan(_about, 2);
-        grid.Controls.Add(_privacy, 0, 9);
+        grid.Controls.Add(_privacy, 0, next + 1);
         grid.SetColumnSpan(_privacy, 2);
         Controls.Add(grid);
+        // The update section made the page taller than a small window: it scrolls instead of cutting rows off.
+        AutoScroll = true;
 
         _interval.TabIndex = 0;
         _pause.TabIndex = 1;
@@ -129,6 +133,7 @@ internal sealed class SettingsPage : PageBase
         };
         context.NetworkUnitChanged += Sync;
         context.Pump.StateChanged += OnPumpState;
+        ConnectUpdateSection();
         ApplyLanguage();
     }
 
@@ -178,6 +183,7 @@ internal sealed class SettingsPage : PageBase
             _netUnit.Items.Clear();
             _netUnit.Items.AddRange([.. NetworkUnits.All.Select(NetworkUnits.Label).Cast<object>()]);
             _netAutostart.Text = Strings.Get("gui.settings.netmeter.autostart");
+            ApplyUpdateLanguage();
             ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
             _privacy.Text = Strings.Get("gui.settings.privacy");
@@ -204,6 +210,7 @@ internal sealed class SettingsPage : PageBase
         {
             Context.Pump.StateChanged -= OnPumpState;
             Context.NetworkUnitChanged -= Sync;
+            DisconnectUpdateSection();
             _tips.Dispose();
         }
 
@@ -234,6 +241,7 @@ internal sealed class SettingsPage : PageBase
         _onTop.Checked = Context.Settings.AlwaysOnTop;
         _netUnit.SelectedIndex = Math.Max(0, Array.IndexOf(NetworkUnits.All, Context.Settings.NetworkUnit));
         _netAutostart.Checked = Context.Settings.NetMeterAutostart;
+        ShowUpdate();
     }
 
     private void OnPumpState()
@@ -291,6 +299,10 @@ internal static class SettingsStrings
         new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
-        new("gui.settings.privacy", "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。", "This app sends nothing anywhere. A diagnostic report leaves the app only when you copy or save it."),
+        // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
+        new(
+            "gui.settings.privacy",
+            "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。ただし、更新の確認を「自動」か「知らせるだけ」にしたときは、新しい版が出ていないかを GitHub に問い合わせます。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。",
+            "This app sends the information it collects nowhere. A diagnostic report leaves the app only when you copy or save it. The one exception is the update check: when it is set to Automatic or Notify only, the app asks GitHub whether a new version is out. That question carries only the app name and its version, nothing about this PC and no measurements."),
     ];
 }

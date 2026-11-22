@@ -142,12 +142,42 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Update/Feed/Sha256List.cs
       the SHA256.txt reader (name match to the letter, a name with two values
       is not used), from the owner's pl-cloud src/PartsLife.Update/Sha256List.cs
+  src/PcMieru.Update/Feed/ReleaseInfo.cs
+      the shape of the release JSON as read, from the owner's pl-cloud
+      src/PartsLife.Update/ReleaseInfo.cs
+  src/PcMieru.Update/Feed/UpdateEndpoints.cs
+      the release and asset addresses (the exact-match rule), from the owner's
+      pl-cloud src/PartsLife.Update/UpdateEndpoints.cs
+  src/PcMieru.Update/Feed/UpdateHttp.cs
+      the hand-followed redirects and the capped body reads, from the owner's
+      pl-cloud src/PartsLife.Update/UpdateHttp.cs
+  src/PcMieru.Update/Feed/UpdateSchedule.cs
+      the first delay, the hourly look and the 24 hour interval, from the
+      owner's pl-cloud src/PartsLife.Update/UpdateSchedule.cs
+  src/PcMieru.Update/Feed/UpdateService.cs
+      the flow of one check (the code is rebuilt), from Updater.CheckAsync in
+      the owner's pl-cloud src/PartsLife.Update/Updater.cs
+  src/PcMieru.Update/Feed/UpdateState.cs
+      the state file and its safe write, from the owner's pl-cloud
+      src/PartsLife.Update/UpdateState.cs
   tests/PcMieru.Update.Tests/VersionAndHashListTests.cs
       the cases of the two tests above, from the owner's pl-cloud
       tests/PartsLife.Update.Tests/RulesTests.cs
   tests/PcMieru.Update.Tests/TestBundle.cs
       the idea of a release made in memory with knobs to break it (the code is
       new), from FakeRelease.Zip in the owner's pl-cloud
+      tests/PartsLife.Update.Tests/UpdaterTests.cs
+  tests/PcMieru.Update.Tests/FeedHttpTests.cs
+  tests/PcMieru.Update.Tests/FeedParserTests.cs
+  tests/PcMieru.Update.Tests/FeedServiceTests.cs
+  tests/PcMieru.Update.Tests/FeedStateTests.cs
+  tests/PcMieru.Update.Tests/FeedZeroHttpTests.cs
+      several cases ported from RulesTests, UpdaterTests, StateTests and
+      SwapperTests of the owner's pl-cloud tests/PartsLife.Update.Tests (each
+      names its old test in a comment); the rest are new
+  tests/PcMieru.Update.Tests/FeedTestKit.cs
+      the fake GitHub and the fake release (the code is new), from FakeGitHub
+      and FakeRelease in the owner's pl-cloud
       tests/PartsLife.Update.Tests/UpdaterTests.cs
 
 Public specifications used (no code copied)
