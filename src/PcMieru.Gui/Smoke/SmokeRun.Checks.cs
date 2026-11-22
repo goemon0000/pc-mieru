@@ -209,11 +209,14 @@ internal static partial class SmokeRun
             Check("checks: two disks that look the same say they cannot be compared (no before and after)", twinDelta > 0 && twinDelta2 > 0 && twinText.Length > 0 && !twinText.Contains('→', StringComparison.Ordinal) && !SmokeText.IsPlaceholder(twinText) && storage.Grid.TextAt(twinDelta2, 3) == twinText, twinText);
             // At the normal scale the counter, its change and the twin disk's row are on one screen. The same window at a denser scale is the same
             // number of pixels, so it holds fewer rows (a 1080-line screen at 150% shows about a dozen): there the rule is the part that still
-            // matters, the counter and its change sit together on the screen, the change directly under the counter.
+            // matters, the counter and its change sit together on the screen, the change directly under the counter. A window that a small screen
+            // made lower than its 800-line start size (a CI runner's 1024 x 768 desktop) holds fewer rows in the same way and gets the same rule.
             var onShow = RowsOnShow(storage.Grid);
             var denser = dpiPercent > 100;
-            var fits = denser ? hoursDelta == hoursRow + 1 && hoursDelta - hoursRow < onShow : twinDelta - hoursRow < onShow;
-            Check("checks: the counter's change and the twin disk's row are on one screen when the table starts at the counter" + (denser ? " (at a denser scale: the counter and its change)" : string.Empty), hoursRow >= 0 && twinDelta > hoursRow && fits, "rows " + hoursRow + ".." + twinDelta + " of " + onShow + " on show" + (denser ? ", " + dpiPercent + "%: the counter and its change only" : string.Empty));
+            var lower = form.ClientSize.Height < form.LogicalToDeviceUnits(800);
+            var why = denser ? ", " + dpiPercent + "%: the counter and its change only" : lower ? ", window " + form.ClientSize.Height + " high: the counter and its change only" : string.Empty;
+            var fits = denser || lower ? hoursDelta == hoursRow + 1 && hoursDelta - hoursRow < onShow : twinDelta - hoursRow < onShow;
+            Check("checks: the counter's change and the twin disk's row are on one screen when the table starts at the counter" + (denser || lower ? " (at a denser scale or in a lower window: the counter and its change)" : string.Empty), hoursRow >= 0 && twinDelta > hoursRow && fits, "rows " + hoursRow + ".." + twinDelta + " of " + onShow + " on show" + why);
             await ShootChecksTab(page, "storage", () =>
             {
                 ScrollToTop(storage.Grid, hoursRow);
