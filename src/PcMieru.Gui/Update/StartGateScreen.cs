@@ -209,7 +209,8 @@ internal sealed class StartGateWindow : Form
     internal static string ReasonFor(GateEntry entry, bool recoverOffered, bool recoveryFailedToStart, bool elevated = false) => entry.Outcome switch
     {
         GateOutcome.Busy => Strings.Get("gui.gate.busy"),
-        GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed when elevated => Strings.Get("gui.gate.recover.elevated"),
+        GateOutcome.RecoveryPending when elevated => Strings.Get("gui.gate.recover.elevated"),
+        GateOutcome.RecoveryFailed when elevated => Strings.Get("gui.gate.recoveryfailed.elevated"),
         GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed when recoveryFailedToStart => Strings.Get("gui.gate.recover.failed"),
         GateOutcome.RecoveryPending => Strings.Get(recoverOffered ? "gui.gate.recoverypending.button" : "gui.gate.recoverypending"),
         GateOutcome.RecoveryFailed => Strings.Get(recoverOffered ? "gui.gate.recoveryfailed.button" : "gui.gate.recoveryfailed"),
@@ -377,6 +378,11 @@ internal static class GateStrings
             "gui.gate.recover.elevated",
             "前回の更新が途中で止まっています。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。いったん閉じて、「管理者として実行」を使わずに開き直し、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
             "The last update did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close it, open PC Mieru again without \"Run as administrator\", and press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
+        // The same for a recovery that did not finish (the outcome is RecoveryFailed): its own first sentence, the same advice. "Stopped halfway" is true of an update; of a failed recovery the true thing is that the recovery did not end.
+        new(
+            "gui.gate.recoveryfailed.elevated",
+            "前回の回復が終わっていません。PCミエルを「管理者として実行」で開いているため、ここでは回復できません。いったん閉じて、「管理者として実行」を使わずに開き直し、「回復する」を押してください。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。",
+            "The last recovery did not finish. PC Mieru is running as administrator, so it cannot recover from here. Close it, open PC Mieru again without \"Run as administrator\", and press \"Recover\". If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there."),
         // The one dim line under an interrupted update: which folder this is. {path} is the last thing in it (the line is broken after the words and at backslashes, never inside a name).
         new("gui.gate.folder", "このフォルダー: {path}", "This folder: {path}"),
 

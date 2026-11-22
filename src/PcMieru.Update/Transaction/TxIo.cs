@@ -41,6 +41,9 @@ internal sealed class TxIo(IFaultInjector fault)
 
     public IFaultInjector Fault { get; } = fault;
 
+    /// <summary>Null in the product. A test sets it to act between the steps of the tree walk of <see cref="DeleteTree"/> (see <see cref="TxNative.RemoveTree"/>): "open" before a node is opened, "opened" after it was looked at.</summary>
+    internal Action<string, string>? TreeHook { get; init; }
+
     /// <summary>Calls the injector (a step with no file change of its own: the seams).</summary>
     public void Reach(TxStep step, TxEdge edge, string? item = null) => Fault.Reach(step, edge, item);
 
@@ -242,8 +245,9 @@ internal sealed class TxIo(IFaultInjector fault)
     }
 
     /// <summary>
-    /// Deletes a folder and everything in it (a folder that is not there is not an error), and then its parent when that is work/ or prev-&lt;old&gt;/ and is left empty. The tree is walked HERE and no link is ever
-    /// entered: a reparse point (a junction or a symbolic link, to a folder or to a file) is removed as itself, one level at a time, so what it points to is never touched. When the folder's own parent (work/ or
+    /// Deletes a folder and everything in it (a folder that is not there is not an error), and then its parent when that is work/ or prev-&lt;old&gt;/ and is left empty. The tree is walked ON HANDLES (a folder is opened
+    /// once, without sharing delete, and its children are opened relative to that handle, so a name that is swapped for a link after it was looked at is never followed) and no link is ever entered: a reparse point
+    /// (a junction or a symbolic link, to a folder or to a file) is removed as itself, so what it points to is never touched. When the folder's own parent (work/ or
     /// prev-&lt;old&gt;/) has become a link, that link is what is unlinked and nothing is deleted through it. A <paramref name="directory"/> that is a plain file is left alone.
     /// </summary>
     public void DeleteTree(TxStep step, string directory)
@@ -258,7 +262,7 @@ internal sealed class TxIo(IFaultInjector fault)
         }
         else
         {
-            RemoveTree(full, top: true);
+            RemoveTree(full);
             if (parentIsContainer && Directory.Exists(parent!) && ManagedSet.Look(parent!) == Presence.Other && !Directory.EnumerateFileSystemEntries(parent!).Any())
             {
                 Directory.Delete(parent!, recursive: false);
@@ -268,52 +272,8 @@ internal sealed class TxIo(IFaultInjector fault)
         Reach(step, TxEdge.After, directory);
     }
 
-    private static void RemoveTree(string path, bool top)
-    {
-        FileAttributes attributes;
-        try
-        {
-            attributes = File.GetAttributes(path);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return;
-        }
+    private void RemoveTree(string path) => TxNative.RemoveTree(path, linkOnly: false, TreeHook);
 
-        if (attributes.HasFlag(FileAttributes.ReparsePoint))
-        {
-            RemoveLink(path);
-            return;
-        }
-
-        if (!attributes.HasFlag(FileAttributes.Directory))
-        {
-            if (!top)
-            {
-                File.Delete(path);
-            }
-
-            return;
-        }
-
-        foreach (var entry in Directory.GetFileSystemEntries(path))
-        {
-            RemoveTree(entry, top: false);
-        }
-
-        Directory.Delete(path, recursive: false);
-    }
-
-    /// <summary>Removes the link itself (a directory link with a non-recursive rmdir, a file link with a delete) and nothing it points to.</summary>
-    private static void RemoveLink(string path)
-    {
-        if (File.GetAttributes(path).HasFlag(FileAttributes.Directory))
-        {
-            Directory.Delete(path, recursive: false);
-        }
-        else
-        {
-            File.Delete(path);
-        }
-    }
+    /// <summary>Removes the link itself (a directory link with a non-recursive rmdir, a file link with a delete) and nothing it points to. A path that is not a link when it is opened is left alone.</summary>
+    private void RemoveLink(string path) => TxNative.RemoveTree(path, linkOnly: true, TreeHook);
 }

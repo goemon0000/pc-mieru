@@ -41,17 +41,27 @@ public interface IVolumeFormat
     string? FormatOf(string folder);
 }
 
-/// <summary>The real one (<see cref="DriveInfo.DriveFormat"/> of the drive the folder is on).</summary>
+/// <summary>
+/// The real one: the format of the volume the folder REALLY lives on, asked of an open handle to the folder (GetVolumeInformationByHandle). The drive letter of the path is not asked: a volume mounted in a folder, or a
+/// folder reached through a junction to another disk, is on the file system of the disk it is on, and not on the one of the root of its path (review of step 4, S5 gap). A network share answers null.
+/// </summary>
 public sealed class SystemVolumeFormat : IVolumeFormat
 {
+    private readonly Func<string, VolumeFacts?> _read;
+
+    private SystemVolumeFormat() => _read = TxNative.ReadVolume;
+
+    /// <summary>A test answers for the volume (what the file system would say about the folder).</summary>
+    internal SystemVolumeFormat(Func<string, VolumeFacts?> read) => _read = read;
+
     public static SystemVolumeFormat Instance { get; } = new();
 
     public string? FormatOf(string folder)
     {
         try
         {
-            var root = Path.GetPathRoot(Path.GetFullPath(folder));
-            return string.IsNullOrEmpty(root) || root.StartsWith(@"\\", StringComparison.Ordinal) ? null : new DriveInfo(root).DriveFormat;
+            var facts = _read(Path.GetFullPath(folder));
+            return facts is null || facts.Value.IsNetwork || string.IsNullOrEmpty(facts.Value.Format) ? null : facts.Value.Format;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {

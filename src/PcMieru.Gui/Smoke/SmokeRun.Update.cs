@@ -310,7 +310,7 @@ internal static partial class SmokeRun
                         }
                         else if (recoveryMode == "elevated")
                         {
-                            Check($"gate: the {name} window offers no 「回復する」 and says to open PC Mieru again with normal rights ({look})", window.RecoverElevated && !window.RecoverOffered && !window.RecoverButton.Visible && window.ReasonText == Strings.Get("gui.gate.recover.elevated") && window.AcceptButton == window.CloseButton, window.ReasonText);
+                            Check($"gate: the {name} window offers no 「回復する」 and says to open PC Mieru again with normal rights ({look})", window.RecoverElevated && !window.RecoverOffered && !window.RecoverButton.Visible && window.ReasonText == Strings.Get(outcome == GateOutcome.RecoveryFailed ? "gui.gate.recoveryfailed.elevated" : "gui.gate.recover.elevated") && window.AcceptButton == window.CloseButton, window.ReasonText);
                         }
                         else
                         {

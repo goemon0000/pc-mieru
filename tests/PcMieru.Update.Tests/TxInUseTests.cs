@@ -1,3 +1,4 @@
+using Xunit.Abstractions;
 using PcMieru.Update.Transaction;
 using PcMieru.Wire.Gate;
 using static PcMieru.Update.Tests.TxSwapTests;
@@ -11,6 +12,10 @@ namespace PcMieru.Update.Tests;
 /// </summary>
 public sealed class TxInUseTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public TxInUseTests(ITestOutputHelper output) => _output = output;
+
     private static CutPoint At(TxStep step, TxEdge edge, int nth = 1) => new(step, edge, nth);
 
     private static void Cut(Rig rig, CutPoint at)
@@ -23,17 +28,21 @@ public sealed class TxInUseTests
     /// <summary>
     /// A recovery that runs after the test let go of a file it held. Something outside the test (a virus scanner, the indexer) can still have a file that was closed a moment ago for a few milliseconds, and that is
     /// "busy" by design (the journal stays and the same recovery runs again), so a busy result is asked again, up to two seconds. A recovery that is still busy then (nothing in this process holds anything) is returned
-    /// as it is, and the test fails with the detail of the result.
+    /// as it is, and the test fails with the detail of the result. How many Busy answers it took is written to the test output, so a machine whose scanner is slow shows it (and a test that began to need more
+    /// than a few is seen before it fails).
     /// </summary>
-    private static TxResult RecoverWhenLetGo(Rig rig, bool automatic = false)
+    private TxResult RecoverWhenLetGo(Rig rig, bool automatic = false)
     {
         var result = rig.Recover(automatic: automatic);
+        var busy = 0;
         for (var again = 0; again < 20 && result.Outcome == TxOutcome.Busy; again++)
         {
+            busy++;
             Thread.Sleep(100);
             result = rig.Recover(automatic: automatic);
         }
 
+        _output.WriteLine($"RecoverWhenLetGo: {busy} Busy answer(s) before it was let go (limit 20, 100 ms apart); the result: {result.Outcome}");
         return result;
     }
 

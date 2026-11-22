@@ -238,7 +238,7 @@ public sealed class StartGateScreenTests : IDisposable
     public void A_missing_gate_does_not_say_that_the_person_deleted_or_moved_anything_and_the_unreadable_text_is_not_the_denied_text(Language language)
     {
         using var _ = Harness.Locale(language);
-        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed", "gui.gate.recoverypending.button", "gui.gate.recoveryfailed.button", "gui.gate.recover.failed", "gui.gate.recover.elevated" })
+        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed", "gui.gate.recoverypending.button", "gui.gate.recoveryfailed.button", "gui.gate.recover.failed", "gui.gate.recover.elevated", "gui.gate.recoveryfailed.elevated" })
         {
             var text = Strings.Get(key, language);
             foreach (var blame in language == Language.Ja ? new[] { "削除", "移動", "消し", "動かし" } : new[] { "deleted", "moved", "you deleted", "your fault" })
@@ -657,8 +657,17 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.False(window.RecoverOffered);
         Assert.False(window.RecoverButton.Visible);
         Assert.Same(window.CloseButton, window.AcceptButton);
-        Assert.Equal(Strings.Get("gui.gate.recover.elevated", language), window.ReasonText);
+        var key = outcome == GateOutcome.RecoveryFailed ? "gui.gate.recoveryfailed.elevated" : "gui.gate.recover.elevated";
+        Assert.Equal(Strings.Get(key, language), window.ReasonText);
         Assert.Contains(language == Language.Ja ? "管理者として実行" : "Run as administrator", window.ReasonText, StringComparison.Ordinal);
+        // A failed recovery does not say "the update stopped halfway": its first sentence is that the recovery did not end. A pending one keeps the update's sentence. Both keep the same advice after it.
+        var firstSentence = language == Language.Ja
+            ? (outcome == GateOutcome.RecoveryFailed ? "前回の回復が終わっていません。" : "前回の更新が途中で止まっています。")
+            : (outcome == GateOutcome.RecoveryFailed ? "The last recovery did not finish." : "The last update did not finish.");
+        Assert.StartsWith(firstSentence, window.ReasonText, StringComparison.Ordinal);
+        Assert.NotEqual(Strings.Get("gui.gate.recover.elevated", language), Strings.Get("gui.gate.recoveryfailed.elevated", language));
+        Assert.EndsWith(Strings.Get("gui.gate.recover.elevated", language)[(language == Language.Ja ? "前回の更新が途中で止まっています。" : "The last update did not finish.").Length..],
+            Strings.Get("gui.gate.recoveryfailed.elevated", language), StringComparison.Ordinal);
         // The new folder stays as the way on, and the text still names no file and no path.
         Assert.Contains(language == Language.Ja ? "新しいフォルダーに展開" : "into a new folder", window.ReasonText, StringComparison.Ordinal);
         Assert.DoesNotContain("\\", window.ReasonText, StringComparison.Ordinal);
