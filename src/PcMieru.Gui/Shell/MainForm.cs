@@ -54,6 +54,7 @@ internal sealed class MainForm : Form
         ApplyFont();
         AutoScaleMode = AutoScaleMode.Dpi;
         Name = "MainForm";
+        Icon = AppIcon.Load() ?? Icon;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(LogicalToDeviceUnits(760), LogicalToDeviceUnits(480));
         ClientSize = StartSize();

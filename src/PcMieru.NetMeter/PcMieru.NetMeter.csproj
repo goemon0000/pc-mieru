@@ -10,6 +10,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>PCMieru.NetMeter</AssemblyName>
+    <ApplicationIcon>..\..\assets\PCMieru.ico</ApplicationIcon>
     <RootNamespace>PcMieru.NetMeter</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
