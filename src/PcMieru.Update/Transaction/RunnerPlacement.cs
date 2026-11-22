@@ -1,4 +1,5 @@
 using System.Text;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Update.Transaction;
 
@@ -63,6 +64,18 @@ internal sealed class RealRunnerPlacement : IRunnerPlacement
             throw new RunnerUnavailableException($"the installed record has no {SwapName}");
         }
 
+        EnsureRecoverExe(io, paths, line);
+        io.WriteReplace(TxSteps.RecoverNote, paths.Note, RecoverNote.Bytes(context.Current.Version, context.Next?.Version));
+        io.Reach(TxSteps.RunnerPlace, TxEdge.After);
+    }
+
+    /// <summary>
+    /// <c>I\update\recover.exe</c> is the recorded Swap.exe, byte for byte: nothing is done when it already is; otherwise the installed <c>I\PCMieru.Swap.exe</c> (which must be the recorded file itself) is copied to
+    /// "recover.exe.new", read back and renamed over it. Shared by the transaction (before its first change) and by <see cref="RunnerHandOff.Prepare"/> (the hand-off of the installed Swap.exe).
+    /// Throws <see cref="RunnerUnavailableException"/> when the source is not the recorded file or the result does not read back as recorded.
+    /// </summary>
+    internal static void EnsureRecoverExe(TxIo io, TxPaths paths, InstalledFile line)
+    {
         var target = paths.Recover;
         if (!IsRecorded(target, line))
         {
@@ -88,9 +101,6 @@ internal sealed class RealRunnerPlacement : IRunnerPlacement
         {
             throw new RunnerUnavailableException("recover.exe is not the recorded file after it was placed");
         }
-
-        io.WriteReplace(TxSteps.RecoverNote, paths.Note, RecoverNote.Bytes(context.Current.Version, context.Next?.Version));
-        io.Reach(TxSteps.RunnerPlace, TxEdge.After);
     }
 
     /// <summary>Whether the file at <paramref name="path"/> is the recorded one (length and SHA-256 of its real bytes).</summary>
@@ -127,4 +137,25 @@ public static class RunnerRules
 
         return string.Equals(self, paths.InInstall(RealRunnerPlacement.SwapName), StringComparison.OrdinalIgnoreCase) ? RunnerRole.Launcher : RunnerRole.Refused;
     }
+
+    /// <summary>
+    /// The role of the process whose exe is at <paramref name="selfFinalPath"/> (its FINAL path: <c>InstallGate.InstallFolderOf</c> of the process path, plus the file name) and the install folder it would work on:
+    /// the parent of <c>update</c> for a file called recover.exe in a folder called update, the folder itself for anything else. A file anywhere else is <see cref="RunnerRole.Refused"/>.
+    /// </summary>
+    public static RunnerSite Locate(string selfFinalPath)
+    {
+        var self = Path.GetFullPath(selfFinalPath);
+        var folder = Path.GetDirectoryName(self) ?? string.Empty;
+        if (string.Equals(Path.GetFileName(self), RecoverFileName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(folder), GateFile.UpdateFolderName, StringComparison.OrdinalIgnoreCase)
+            && Path.GetDirectoryName(folder) is { Length: > 0 } install)
+        {
+            return new RunnerSite(Decide(self, install), install);
+        }
+
+        return folder.Length == 0 ? new RunnerSite(RunnerRole.Refused, string.Empty) : new RunnerSite(Decide(self, folder), folder);
+    }
 }
+
+/// <summary>Where a Swap.exe process is: its role and the install folder (empty when it is nowhere it may be).</summary>
+public readonly record struct RunnerSite(RunnerRole Role, string InstallFolder);

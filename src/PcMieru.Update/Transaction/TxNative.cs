@@ -70,6 +70,26 @@ internal static partial class TxNative
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileInformationByHandle(SafeFileHandle file, out ByHandleInformation information);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [LibraryImport("kernel32.dll", EntryPoint = "GetConsoleProcessList")]
+    private static partial uint GetConsoleProcessList(ref uint processIds, uint count);
+
+    /// <summary>
+    /// True when this process is the only one on its console: a console program started by a double-click owns a window of its own that goes away when it ends. False when it shares the console with a shell (it was
+    /// started from a terminal) or has no console at all (nothing to keep open). The buffer holds one id, so only the count is read (the API returns the number needed when the buffer is too small).
+    /// </summary>
+    internal static bool ConsoleIsOwnedByThisProcess()
+    {
+        uint slot = 0;
+        return GetConsoleProcessList(ref slot, 1) == 1;
+    }
+
+    /// <summary>
+    /// TEST ONLY (the kill entry of PCMieru.Swap.exe, see <see cref="SwapCli"/>): writes the marker file that tells the test where the process stands before it is killed. The marker is a file the TEST named, outside the
+    /// install; it is here, with the other native calls, because nothing outside this file and TxIo.cs may change a file (TxFaultMatrixTests checks that), and it is not a step: a cut here would test nothing.
+    /// </summary>
+    internal static void WriteTestMarker(string path, string text) => File.WriteAllText(path, text);
+
     /// <summary>Renames <paramref name="source"/> to <paramref name="target"/> and returns when it is on the disk. An existing target is replaced only when <paramref name="replace"/> is true (else it is an <see cref="IOException"/>).</summary>
     /// <exception cref="IOException">The rename failed (a sharing violation is one, with the HRESULT of ERROR_SHARING_VIOLATION).</exception>
     /// <exception cref="UnauthorizedAccessException">Access was denied.</exception>

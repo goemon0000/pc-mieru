@@ -90,9 +90,15 @@ public class BundleFolderTests
     public void The_default_floor_is_the_full_floor()
     {
         var bundle = new TestBundle();
-        using var disk = new Disk(bundle);
-        var result = BundleFolder.Validate(disk.Path, bundle.Version, null, Limits.Default);
-        Assert.Equal(BundleFault.FloorMissing, result.Fault);
+        using (var disk = new Disk(bundle))
+        {
+            var result = BundleFolder.Validate(disk.Path, bundle.Version, null, Limits.Default);
+            Assert.True(result.Ok, result.ToString());
+        }
+
+        bundle.Files.Remove("PCMieru.Swap.exe");
+        using var without = new Disk(bundle);
+        Assert.Equal(BundleFault.FloorMissing, BundleFolder.Validate(without.Path, bundle.Version, null, Limits.Default).Fault);
     }
 
     [Fact]

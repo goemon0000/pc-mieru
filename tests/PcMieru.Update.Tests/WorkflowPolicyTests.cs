@@ -65,7 +65,7 @@ public partial class WorkflowPolicyTests
     }
 
     [Fact]
-    public void Ci_publishes_twice_once_in_pwsh_and_once_in_windows_powershell_5_1_each_into_its_own_folder_with_the_partial_floor()
+    public void Ci_publishes_twice_once_in_pwsh_and_once_in_windows_powershell_5_1_each_into_its_own_folder_against_the_full_floor()
     {
         var steps = PublishSteps(Read(".github", "workflows", "ci.yml"));
         Assert.Equal(2, steps.Length);
@@ -78,7 +78,7 @@ public partial class WorkflowPolicyTests
         {
             var code = CodeOf(step);
             Assert.Contains("-Verify", code, StringComparison.Ordinal);
-            Assert.Contains("-PartialFloor", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("-PartialFloor", code, StringComparison.Ordinal); // the swapper ships: the full floor is the only floor
             Assert.Contains("-Output", code, StringComparison.Ordinal);
         }
 
@@ -111,17 +111,21 @@ public partial class WorkflowPolicyTests
     }
 
     [Fact]
-    public void Ci_says_where_the_partial_floor_ends()
+    public void Neither_a_workflow_nor_the_publish_script_has_a_partial_floor_any_more()
     {
-        var yaml = Read(".github", "workflows", "ci.yml");
-        Assert.Contains("-PartialFloor", yaml, StringComparison.Ordinal);
-        Assert.Contains("BundleFloor.NotYetBuilt", yaml, StringComparison.Ordinal);
+        // Step 4 shipped PCMieru.Swap.exe, BundleFloor.NotYetBuilt is empty, and -PartialFloor is gone from the two workflows and from the script (not even a comment that still offers it).
+        foreach (var name in new[] { "ci.yml", "release.yml" })
+        {
+            Assert.DoesNotContain("PartialFloor", Read(".github", "workflows", name), StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("PartialFloor", Read("tools", "publish.ps1"), StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------- release.yml
 
     [Fact]
-    public void Release_publishes_against_the_full_floor_a_tag_of_this_build_fails_until_the_swapper_exists()
+    public void Release_publishes_against_the_full_floor()
     {
         var yaml = Read(".github", "workflows", "release.yml");
         var steps = PublishSteps(yaml);
@@ -134,20 +138,28 @@ public partial class WorkflowPolicyTests
     // ------------------------------------------------------------------------------------------------------------------------- publish.ps1
 
     [Fact]
-    public void Publish_has_a_partial_floor_switch_and_names_this_build_only_where_the_switch_is_tested()
+    public void Publish_always_asks_the_validator_for_the_full_floor_and_has_no_switch_for_a_smaller_one()
     {
         var script = Read("tools", "publish.ps1");
-        Assert.Matches(@"\[switch\]\s*\$PartialFloor", script);
+        Assert.DoesNotMatch(@"\[switch\]\s*\$PartialFloor", script);
 
-        var mentions = Lines(script).Where(l => l.Contains("this-build", StringComparison.Ordinal) && !l.TrimStart().StartsWith('#')).ToArray();
-        Assert.NotEmpty(mentions);
-        foreach (var line in mentions)
-        {
-            Assert.True(line.Contains("$PartialFloor", StringComparison.Ordinal), "'this-build' is named without the switch: " + line.Trim());
-        }
+        var code = Lines(script).Where(l => !l.TrimStart().StartsWith('#')).ToArray();
+        Assert.DoesNotContain(code, l => l.Contains("this-build", StringComparison.Ordinal)); // the smaller floor is not named by any line of code
+        Assert.Contains(code, l => l.Trim() == "$floorName = 'full'");
 
         // The floor is always spelled out for the validator, never left to its own default.
         Assert.Contains("'--floor'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Publish_builds_the_swapper_checks_it_for_network_code_and_expects_it_in_the_folder()
+    {
+        var script = Read("tools", "publish.ps1");
+        Assert.Contains("PCMieru.Swap.exe", script, StringComparison.Ordinal);
+        Assert.Contains("PcMieru.Swap.csproj", script, StringComparison.Ordinal);
+        Assert.Contains("Test-SwapExe", script, StringComparison.Ordinal);       // the check on the built exe: imports, type names, manifest
+        Assert.Contains("Find-NetworkMarkers", script, StringComparison.Ordinal); // and the scan it uses
+        Assert.Contains("System.Net.Http", script, StringComparison.Ordinal);     // which is first proved on PcMieru.Update.dll, where the names are
     }
 
     [Fact]
@@ -188,13 +200,13 @@ public partial class WorkflowPolicyTests
     // ------------------------------------------------------------------------------------------------------------------------- the floor
 
     [Fact]
-    public void The_floor_names_the_step_that_ends_the_partial_floor()
+    public void The_floor_has_nothing_left_that_is_not_built()
     {
         var source = Read("src", "PcMieru.Update", "Bundle", "BundleFloor.cs");
         var at = source.IndexOf("public static IReadOnlyList<string> NotYetBuilt", StringComparison.Ordinal);
         Assert.True(at > 0);
-        var before = source[Math.Max(0, at - 600)..at];
-        Assert.Contains("step 4 empties this list; then remove -PartialFloor from ci.yml", before, StringComparison.Ordinal);
+        Assert.Contains("= [];", source[at..Math.Min(source.Length, at + 160)], StringComparison.Ordinal); // empty: the swapper is on the floor and in every publish
+        Assert.Contains("\"PCMieru.Swap.exe\"", source, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------- helpers

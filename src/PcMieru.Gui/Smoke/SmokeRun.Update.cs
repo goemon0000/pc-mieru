@@ -210,6 +210,9 @@ internal static partial class SmokeRun
         /// that is refused (access denied). Each state is made for real (a small install folder under the temporary folder, the gate opened the way every start opens it), then shown without taking the
         /// focus in every look, at every scale the run is made at (all five states at 200 percent too). This run's own gate is not touched. The folder line under an interrupted update is also checked
         /// for what it must be: broken only after backslashes, and every line of it inside the label.
+        ///
+        /// An interrupted update is shown in three more ways, with 「回復する」 (a recovery that is available: the walk gives the window one that starts nothing) and, for the third, after the button was pressed
+        /// and recover.exe could not be started (the window says so and the button is gone). The five plain states have no recover.exe in their folder, so they show no button, as in a real folder that has none.
         /// </summary>
         private async Task ShootStartGate()
         {
@@ -263,21 +266,26 @@ internal static partial class SmokeRun
                 });
                 Check("gate: the busy state is held by a swapper of its own for the walk", holder.IsOpen, holder.Detail);
 
-                var states = new (string Name, GateOutcome Outcome, string Exe)[]
+                // Recovery: "" = the real one (these folders have no recover.exe: no button), "button" = one that is available, "startfails" = available, and the button is pressed: it cannot be started.
+                var states = new (string Name, GateOutcome Outcome, string Exe, string Recovery)[]
                 {
-                    ("busy", GateOutcome.Busy, busy),
-                    ("recoverypending", GateOutcome.RecoveryPending, pending),
-                    ("recoveryfailed", GateOutcome.RecoveryFailed, failed),
-                    ("missinggate", GateOutcome.MissingGate, missing),
-                    ("denied", GateOutcome.Denied, denied),
+                    ("busy", GateOutcome.Busy, busy, string.Empty),
+                    ("recoverypending", GateOutcome.RecoveryPending, pending, string.Empty),
+                    ("recoveryfailed", GateOutcome.RecoveryFailed, failed, string.Empty),
+                    ("missinggate", GateOutcome.MissingGate, missing, string.Empty),
+                    ("denied", GateOutcome.Denied, denied, string.Empty),
+                    ("recoverypending-button", GateOutcome.RecoveryPending, pending, "button"),
+                    ("recoveryfailed-button", GateOutcome.RecoveryFailed, failed, "button"),
+                    ("recoverypending-startfailed", GateOutcome.RecoveryPending, pending, "startfails"),
                 };
-                foreach (var (name, outcome, exe) in states)
+                foreach (var (name, outcome, exe, recoveryMode) in states)
                 {
                     await ForEachLook(async look =>
                     {
                         var entry = InstallGate.EnterStartup(exe);
                         Check($"gate: the {name} state is the real outcome of the gate ({look})", entry.Outcome == outcome, entry.Outcome + ": " + entry.Detail);
-                        using var window = new StartGateWindow(context.Theme, entry, () => InstallGate.EnterStartup(exe));
+                        IGateRecovery? recovery = recoveryMode.Length == 0 ? null : new ShotRecovery(starts: recoveryMode != "startfails");
+                        using var window = new StartGateWindow(context.Theme, entry, () => InstallGate.EnterStartup(exe), recovery);
                         window.PreventActivation();
                         window.StartPosition = FormStartPosition.Manual;
                         window.Location = onScreen ? new Point(work.Left + 40, work.Top + 40) : new Point(-24000, -24000);
@@ -291,6 +299,19 @@ internal static partial class SmokeRun
 
                         var busyOne = outcome == GateOutcome.Busy;
                         var folderOne = outcome is GateOutcome.RecoveryPending or GateOutcome.RecoveryFailed;
+                        if (recoveryMode == "startfails")
+                        {
+                            // The person pressed 「回復する」 and recover.exe could not be started: the window says so, gives the new folder as the way on, and the button is gone.
+                            var pressed = window.RecoverNow();
+                            await Task.Delay(300).ConfigureAwait(true);
+                            Check($"gate: the {name} window, after the press, is still open, shows the plain failure text and no button ({look})", !pressed && !window.RecoveryStarted && !window.RecoverOffered && !window.RecoverButton.Visible && window.ReasonText == Strings.Get("gui.gate.recover.failed") && window.AcceptButton == window.CloseButton, window.ReasonText);
+                        }
+                        else
+                        {
+                            var expectButton = recoveryMode == "button";
+                            Check($"gate: the {name} window has 「回復する」 exactly when a recovery is available ({look})", window.RecoverOffered == expectButton && window.RecoverButton.Visible == expectButton && (!expectButton || (window.AcceptButton == window.RecoverButton && window.RecoverButton.Text == Strings.Get("gui.gate.recover"))), "offered " + window.RecoverOffered + ", visible " + window.RecoverButton.Visible + ", text " + window.RecoverButton.Text);
+                        }
+
                         Check($"gate: the {name} window has one reason text{(folderOne ? " and the dim folder line" : string.Empty)} in this language, no missing strings ({look})", window.ReasonText.Length > 0 && (folderOne == window.HintText.Length > 0) && !SmokeText.IsPlaceholder(window.ReasonText) && !SmokeText.IsPlaceholder(window.HintText) && SmokeText.Missing(window).Distinct().Take(5).Count() == 0, window.ReasonText + " | " + window.HintText);
                         Check($"gate: the {name} window names no file, no path and no tool in its reason ({look})", !window.ReasonText.Contains(GateFile.RecoverNoteName, StringComparison.Ordinal) && !window.ReasonText.Contains('\\', StringComparison.Ordinal), window.ReasonText);
                         if (folderOne)
@@ -335,6 +356,18 @@ internal static partial class SmokeRun
                 {
                     // a folder in the temporary folder that stays is not a failure of the screens
                 }
+            }
+        }
+
+        /// <summary>The recovery of the start gate walk: always available, starts nothing (<paramref name="starts"/> false: the start is refused, as when recover.exe cannot be run).</summary>
+        private sealed class ShotRecovery(bool starts) : IGateRecovery
+        {
+            public bool IsAvailable(GateEntry entry) => true;
+
+            public bool Start(GateEntry entry, out string detail)
+            {
+                detail = "the walk starts nothing";
+                return starts;
             }
         }
     }

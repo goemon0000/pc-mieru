@@ -10,8 +10,7 @@ namespace PcMieru.Update.Tests;
 //   A  = the published folder (copied to an install, with the owner's own files planted)
 //   B  = A with another version and buildId, a changed file (PCMieru.exe, NOTICE.txt), an added root file, an added file in a new folder (en/), a removed satellite, and the manifest written again
 //
-// A publish made before the swapper ships (-PartialFloor, no PCMieru.Swap.exe in it) gets a stand-in for the swapper (a copy of PCMieru.Helper.exe, a NativeAOT exe): the transaction needs a runner to place and only
-// compares bytes; the stand-in is listed in both manifests. A publish that has the real PCMieru.Swap.exe is used as it is.
+// The publish has the real PCMieru.Swap.exe (step 4); the transaction places it as recover.exe and compares bytes. A folder without it is refused here (it is not a publish of this build).
 
 [Trait("Category", "RealMachine")]
 public sealed class TxRealPublishTests
@@ -46,11 +45,7 @@ public sealed class TxRealPublishTests
                 A[line.Path] = data;
             }
 
-            if (!A.ContainsKey(RealRunnerPlacement.SwapName))
-            {
-                A[RealRunnerPlacement.SwapName] = File.ReadAllBytes(Path.Combine(published, "PCMieru.Helper.exe")); // the stand-in, see above
-                StandIn = true;
-            }
+            Assert.True(A.ContainsKey(RealRunnerPlacement.SwapName), "the published folder has no " + RealRunnerPlacement.SwapName + ": it is not a publish of this build");
 
             // B: another build.
             foreach (var (name, data) in A)
@@ -87,8 +82,6 @@ public sealed class TxRealPublishTests
         public string NextVersion { get; }
 
         public string NextBuildId { get; }
-
-        public bool StandIn { get; }
 
         public SortedDictionary<string, byte[]> A { get; } = new(StringComparer.Ordinal);
 

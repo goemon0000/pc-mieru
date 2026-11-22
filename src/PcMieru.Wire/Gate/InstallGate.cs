@@ -17,7 +17,7 @@ public enum GateOutcome
     /// <summary>The gate was free but <c>I\update\journal.json</c> or <c>journal.json.tmp</c> is there, or one of them cannot be looked at: an update was left open and has to be recovered before anything runs.</summary>
     RecoveryPending,
 
-    /// <summary>As <see cref="RecoveryPending"/>, and the sentinel file <c>I\update\recovery-failed</c> (<see cref="GateFile.RecoveryFailedName"/>) is there: an earlier recovery was tried and failed. Written by step 4; before it nothing produces this.</summary>
+    /// <summary>As <see cref="RecoveryPending"/>, and the sentinel file <c>I\update\recovery-failed</c> (<see cref="GateFile.RecoveryFailedName"/>) is there: an earlier recovery was tried and failed. Written by the recovery of the swapper when it could not put the earlier version back.</summary>
     RecoveryFailed,
 
     /// <summary>There is no <c>PCMieru.gate.txt</c> beside the exe (a file copied out of its folder, a gate that was deleted).</summary>
@@ -38,7 +38,7 @@ public enum GateOutcome
 
 /// <summary>
 /// The answer of <see cref="InstallGate"/>: an outcome and, for <see cref="GateOutcome.Open"/>, the open gate file. Dispose it when the process's work ends (the file is then free for the
-/// swapper). Every other outcome holds nothing: the handle was already closed, so a caller that goes on to recover (step 4) is not in its own way.
+/// swapper). Every other outcome holds nothing: the handle was already closed, so a caller that goes on to recover (the swapper) is not in its own way.
 /// </summary>
 public sealed class GateEntry : IDisposable
 {
@@ -71,7 +71,7 @@ public sealed class GateEntry : IDisposable
     /// <summary>What exactly was seen (which file, which error), for a log line. English, may name a file.</summary>
     public string Detail { get; }
 
-    /// <summary><c>I\update\RECOVER.txt</c> for <see cref="GateOutcome.RecoveryPending"/> and <see cref="GateOutcome.RecoveryFailed"/>, else null. The note itself comes in step 4: until then the file does not exist.</summary>
+    /// <summary><c>I\update\RECOVER.txt</c> for <see cref="GateOutcome.RecoveryPending"/> and <see cref="GateOutcome.RecoveryFailed"/>, else null. The swapper writes the note before its first change; the path is given whether or not the file is there.</summary>
     public string? RecoveryNotePath { get; }
 
     /// <summary>
@@ -155,7 +155,7 @@ public static class InstallGate
     public static GateEntry EnterStartup(string executablePath) => Enter(InstallFolderOf(executablePath), FileShare.Read);
 
     /// <summary>
-    /// For the swapper of step 4: the same gate taken exclusively (<c>FileShare.None</c>). <see cref="GateOutcome.Busy"/> while any program of the install holds it. It does not look at the journal.
+    /// For the swapper (PCMieru.Swap.exe, which also runs as recover.exe): the same gate taken exclusively (<c>FileShare.None</c>). <see cref="GateOutcome.Busy"/> while any program of the install holds it. It does not look at the journal.
     /// </summary>
     public static GateEntry EnterExclusive(string executablePath) => Enter(InstallFolderOf(executablePath), FileShare.None);
 
@@ -302,7 +302,7 @@ public static class InstallGate
         }
 
         // The sentinel of a failed recovery comes first, and is only looked at (nothing in it is read). Present: failed. A link: refused. Cannot be looked at: undecidable, so "pending" (the start stops either
-        // way; whoever recovers, step 4, sees the sentinel itself). Not there: go on to the journal.
+        // way; whoever recovers sees the sentinel itself). Not there: go on to the journal.
         string? pendingReason = null;
         switch (Look(Path.Combine(update, GateFile.RecoveryFailedName), out _, out problem))
         {
@@ -349,7 +349,7 @@ public static class InstallGate
 
     private static GateEntry Refuse(GateOutcome outcome, string gate, string detail) => new(outcome, gate, detail, null, null);
 
-    /// <summary>Recovery pending or failed: the shared handle is closed first, so whoever recovers (step 4) can take the gate itself. Failed only when the sentinel was seen.</summary>
+    /// <summary>Recovery pending or failed: the shared handle is closed first, so whoever recovers (the swapper) can take the gate itself. Failed only when the sentinel was seen.</summary>
     private static GateEntry Recovery(SafeFileHandle handle, string gate, string update, string detail, bool failed)
     {
         handle.Dispose();

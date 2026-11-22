@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
+using PcMieru.Update.Transaction;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui.Tests;
@@ -188,7 +190,7 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.Equal(theme.Palette.Window, window.BackColor);
         Assert.Equal(theme.Palette.Text, window.ForeColor);
 
-        // No text of a window names a file or a path, and none promises the recovery tool or its note (they come in step 4).
+        // No text of a window names a file or a path (not even the recovery note's name; the note is named in the unattended stderr line only).
         Assert.DoesNotContain(GateFile.RecoverNoteName, window.ReasonText, StringComparison.Ordinal);
         Assert.DoesNotContain("\\", window.ReasonText, StringComparison.Ordinal);
         Assert.Null(window.HintProblem());
@@ -210,12 +212,12 @@ public sealed class StartGateScreenTests : IDisposable
         { GateOutcome.RecoveryFailed, Language.En, "PC Mieru could not undo the last update, so it cannot open from this folder. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
         { GateOutcome.MissingGate, Language.Ja, "起動に必要なファイルが見つからないため、PCミエルを開けません。ダウンロードした ZIP をもう一度新しいフォルダーに展開し、そこから開いてください。" },
         { GateOutcome.MissingGate, Language.En, "PC Mieru cannot open because a required file is missing. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
-        { GateOutcome.Denied, Language.Ja, "必要なファイルを開けないため、PCミエルを起動できません。ダウンロードした ZIP をもう一度、自分の使える新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
-        { GateOutcome.Denied, Language.En, "PC Mieru cannot open a required file. Unzip the downloaded ZIP file into a new folder you can use and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
-        { GateOutcome.Busy, Language.Ja, "PCミエルの更新などでファイルが使われています。しばらく待ってから、もう一度試してください。" },
-        { GateOutcome.Busy, Language.En, "PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again." },
-        { GateOutcome.Unreadable, Language.Ja, "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。ダウンロードした ZIP をもう一度、パスの短い新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
-        { GateOutcome.Unreadable, Language.En, "The state of PCMieru.gate.txt, which is needed to start, could not be checked. Unzip the downloaded ZIP file into a new folder with a short path and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
+        { GateOutcome.Denied, Language.Ja, "必要なファイルを開けないため、PCミエルを起動できません。ダウンロードした ZIP をもう一度、デスクトップなど、自分が使える場所の新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
+        { GateOutcome.Denied, Language.En, "PC Mieru cannot open a required file. Unzip the downloaded ZIP file into a new folder in a place you can use, such as the Desktop, and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
+        { GateOutcome.Busy, Language.Ja, "PCミエルのファイルが使用中です。しばらく待ってから、もう一度試してください。" },
+        { GateOutcome.Busy, Language.En, "PC Mieru's files are in use right now. Wait a moment and try again." },
+        { GateOutcome.Unreadable, Language.Ja, "起動に必要なファイル PCMieru.gate.txt の状態を確かめられませんでした。ダウンロードした ZIP をもう一度、デスクトップなど、自分が使える場所の、パスの短い新しいフォルダーに展開して開いてください。それでも開けないときは、PC の管理者に相談してください。" },
+        { GateOutcome.Unreadable, Language.En, "The state of PCMieru.gate.txt, which is needed to start, could not be checked. Unzip the downloaded ZIP file into a new folder with a short path in a place you can use, such as the Desktop, and open PC Mieru from there. If it still cannot open, contact the person who manages this PC." },
     };
 
     [Theory]
@@ -236,7 +238,7 @@ public sealed class StartGateScreenTests : IDisposable
     public void A_missing_gate_does_not_say_that_the_person_deleted_or_moved_anything_and_the_unreadable_text_is_not_the_denied_text(Language language)
     {
         using var _ = Harness.Locale(language);
-        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed" })
+        foreach (var key in new[] { "gui.gate.missinggate", "gui.gate.denied", "gui.gate.unreadable", "gui.gate.recoverypending", "gui.gate.recoveryfailed", "gui.gate.recoverypending.button", "gui.gate.recoveryfailed.button", "gui.gate.recover.failed" })
         {
             var text = Strings.Get(key, language);
             foreach (var blame in language == Language.Ja ? new[] { "削除", "移動", "消し", "動かし" } : new[] { "deleted", "moved", "you deleted", "your fault" })
@@ -361,8 +363,8 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.Null(window.Opened);
         Assert.Equal(Strings.Get("gui.gate.busy"), window.ReasonText);
         Assert.True(window.RetryOffered);
-        // Not only an update holds the gate (any program that has it exclusively does), so the words say "perhaps", not that an update is running.
-        Assert.Equal("PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again.", window.ReasonText);
+        // Not only an update holds the gate (any program that has it exclusively does), so the words do not say who is using the files.
+        Assert.Equal("PC Mieru's files are in use right now. Wait a moment and try again.", window.ReasonText);
 
         holder.Dispose();
         Assert.True(window.RetryNow());
@@ -395,9 +397,9 @@ public sealed class StartGateScreenTests : IDisposable
     }
 
     [Theory]
-    [InlineData(Language.Ja, "PCミエルの更新などでファイルが使われています。しばらく待ってから、もう一度試してください。")]
-    [InlineData(Language.En, "PC Mieru's files are in use, perhaps because an update is being installed. Wait a moment, then try again.")]
-    public void The_busy_window_says_that_the_files_are_in_use_perhaps_because_of_an_update_and_keeps_its_button(Language language, string expected)
+    [InlineData(Language.Ja, "PCミエルのファイルが使用中です。しばらく待ってから、もう一度試してください。")]
+    [InlineData(Language.En, "PC Mieru's files are in use right now. Wait a moment and try again.")]
+    public void The_busy_window_says_that_the_files_are_in_use_right_now_and_keeps_its_button(Language language, string expected)
     {
         using var _ = Harness.Locale(language);
         using var theme = new ThemeService(ThemeMode.Light);
@@ -464,7 +466,9 @@ public sealed class StartGateScreenTests : IDisposable
         Assert.StartsWith("PCMieru: " + InstallGate.ReasonOf(outcome), error.ToString(), StringComparison.Ordinal);
         if (outcome == GateOutcome.RecoveryPending)
         {
+            // The note is the one the runner writes (I\update\RECOVER.txt, see RecoverNote): this is the path of it, as the gate reports it.
             Assert.Contains(GateFile.RecoverNoteName, error.ToString(), StringComparison.Ordinal);
+            Assert.EndsWith(" (see " + Path.Combine(Path.GetDirectoryName(refused.GatePath)!, GateFile.UpdateFolderName, GateFile.RecoverNoteName) + ")" + Environment.NewLine, error.ToString(), StringComparison.Ordinal);
         }
     }
 
@@ -487,6 +491,273 @@ public sealed class StartGateScreenTests : IDisposable
         {
             Dialogs.AutoAnswer = null;
         }
+    }
+
+    // ---- 「回復する」 ----
+
+    /// <summary>A recovery that is told what to answer and counts what it is asked; nothing is started.</summary>
+    private sealed class FakeRecovery(bool available, bool starts = true) : IGateRecovery
+    {
+        public int Asked { get; private set; }
+
+        public List<GateOutcome> Started { get; } = [];
+
+        public bool IsAvailable(GateEntry entry)
+        {
+            Asked++;
+            return available;
+        }
+
+        public bool Start(GateEntry entry, out string detail)
+        {
+            Started.Add(entry.Outcome);
+            detail = starts ? "started" : "refused by the test";
+            return starts;
+        }
+    }
+
+    public static TheoryData<GateOutcome, Language, bool, string> TheWordsWithTheButton() => new()
+    {
+        { GateOutcome.RecoveryPending, Language.Ja, false, "前回の更新が途中で止まったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、途中の更新を片づけてから PCミエルを開きます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.RecoveryPending, Language.En, false, "The last update did not finish, so PC Mieru cannot open from this folder. Press \"Recover\" to clear up the unfinished update and then open PC Mieru. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+        { GateOutcome.RecoveryFailed, Language.Ja, true, "前回の更新を元に戻せなかったため、このフォルダーからは PCミエルを開けません。「回復する」を押すと、もう一度元に戻してみます。うまくいかないときは、ダウンロードした ZIP を新しいフォルダーに展開し、そこから開いてください。" },
+        { GateOutcome.RecoveryFailed, Language.En, true, "PC Mieru could not undo the last update, so it cannot open from this folder. Press \"Recover\" to try putting the earlier version back once more. If that does not work, unzip the downloaded ZIP file into a new folder and open PC Mieru from there." },
+    };
+
+    [Theory]
+    [MemberData(nameof(TheWordsWithTheButton))]
+    public void An_interrupted_update_that_can_be_recovered_has_the_recover_button_its_words_and_the_new_folder_as_the_way_on(GateOutcome outcome, Language language, bool dark, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        using var theme = new ThemeService(dark ? ThemeMode.Dark : ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true);
+        var entry = Refused(outcome);
+
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.Equal(expected, window.ReasonText);
+        Assert.True(window.RecoverOffered);
+        Assert.Equal(language == Language.Ja ? "回復する" : "Recover", window.RecoverButton.Text);
+        Assert.Same(window.RecoverButton, window.AcceptButton); // Enter does what the window offers
+        Assert.False(window.RetryOffered);
+        Assert.Equal(1, recovery.Asked);
+        Assert.Empty(recovery.Started); // looking at the window starts nothing
+        Assert.StartsWith(language == Language.Ja ? "このフォルダー:" : "This folder:", window.HintText, StringComparison.Ordinal); // the folder line is as it was
+        Assert.DoesNotContain("\\", window.ReasonText, StringComparison.Ordinal);
+        Assert.DoesNotContain(GateFile.RecoverNoteName, window.ReasonText, StringComparison.Ordinal);
+        Assert.Equal(theme.Palette.Window, window.BackColor);
+    }
+
+    [Theory]
+    [InlineData(GateOutcome.RecoveryPending)]
+    [InlineData(GateOutcome.RecoveryFailed)]
+    public void Without_a_recover_exe_that_the_records_vouch_for_there_is_no_button_and_the_text_is_the_plain_one(GateOutcome outcome)
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+
+        // The default recovery looks at the real folder: no I\update\recover.exe there, so nothing is offered.
+        var entry = Refused(outcome);
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"));
+
+        Assert.False(window.RecoverOffered);
+        Assert.False(window.RecoverButton.Visible);
+        Assert.Equal(StartGateWindow.ReasonFor(entry), window.ReasonText);
+        Assert.Same(window.CloseButton, window.AcceptButton);
+        Assert.Contains("Unzip the downloaded ZIP file into a new folder", window.ReasonText, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(GateOutcome.Busy)]
+    [InlineData(GateOutcome.MissingGate)]
+    [InlineData(GateOutcome.Denied)]
+    [InlineData(GateOutcome.ReparseRefused)]
+    [InlineData(GateOutcome.Unreadable)]
+    public void Only_an_interrupted_update_can_be_recovered_no_other_refusal_asks_or_offers_it(GateOutcome outcome)
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true);
+
+        using var window = new StartGateWindow(theme, Refused(outcome), () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.False(window.RecoverOffered);
+        Assert.False(window.RecoverButton.Visible);
+        Assert.Equal(0, recovery.Asked);
+        Assert.False(window.RecoverNow()); // the call without a button does nothing
+        Assert.Empty(recovery.Started);
+    }
+
+    [Fact]
+    public void A_recovery_that_says_it_is_not_available_gives_no_button()
+    {
+        using var _ = Harness.Locale(Language.Ja);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: false);
+        var entry = Refused(GateOutcome.RecoveryPending);
+
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.False(window.RecoverOffered);
+        Assert.Equal(StartGateWindow.ReasonFor(entry), window.ReasonText);
+        Assert.Equal(1, recovery.Asked);
+    }
+
+    [Fact]
+    public void Pressing_recover_hands_over_once_closes_the_window_and_does_not_open_the_gate()
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true);
+        using var window = new StartGateWindow(theme, Refused(GateOutcome.RecoveryFailed), () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.True(window.RecoverNow());
+
+        Assert.Equal([GateOutcome.RecoveryFailed], recovery.Started);
+        Assert.True(window.RecoveryStarted);
+        Assert.Null(window.Opened); // the app does not start from this window: recover.exe starts it once the install is in order
+        Assert.Equal(DialogResult.Cancel, window.DialogResult);
+    }
+
+    [Fact]
+    public void A_recovery_that_cannot_be_started_says_so_offers_the_new_folder_and_takes_the_button_away()
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true, starts: false);
+        using var window = new StartGateWindow(theme, Refused(GateOutcome.RecoveryPending), () => throw new InvalidOperationException("no retry here"), recovery);
+
+        Assert.False(window.RecoverNow());
+
+        Assert.Equal("The recovery program could not be started. Unzip the downloaded ZIP file into a new folder and open PC Mieru from there.", window.ReasonText);
+        Assert.False(window.RecoverOffered);
+        Assert.False(window.RecoverButton.Visible);
+        Assert.Same(window.CloseButton, window.AcceptButton);
+        Assert.False(window.RecoveryStarted);
+        Assert.False(window.RecoverNow()); // once is all: there is no button to press again
+        Assert.Single(recovery.Started);
+    }
+
+    [Fact]
+    public void The_recovery_is_asked_once_per_entry_and_again_when_a_retry_brings_another_one()
+    {
+        using var _ = Harness.Locale(Language.En);
+        using var theme = new ThemeService(ThemeMode.Light);
+        var recovery = new FakeRecovery(available: true);
+        GateEntry? latest = null;
+        var exe = Install();
+        var busy = InstallGate.EnterExclusive(exe);
+        using var window = new StartGateWindow(theme, InstallGate.EnterStartup(exe), () => latest = InstallGate.EnterStartup(exe), recovery);
+        Assert.Equal(0, recovery.Asked); // busy: nothing to recover
+
+        busy.Dispose();
+        Directory.CreateDirectory(Update(exe));
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
+        Assert.False(window.RetryNow()); // the retry meets an interrupted update
+
+        Assert.Equal(GateOutcome.RecoveryPending, latest!.Outcome);
+        Assert.True(window.RecoverOffered);
+        Assert.False(window.RetryOffered);
+        Assert.Equal(1, recovery.Asked);
+    }
+
+    // The real recovery, on a real folder: it vouches for recover.exe by the records, and starts it with the options the runner understands.
+
+    private sealed class RecordingStarter(bool starts = true) : IRunnerStarter
+    {
+        public List<(string Exe, string Folder, string[] Arguments)> Calls { get; } = [];
+
+        public bool TryStart(string exePath, string workingFolder, IReadOnlyList<string> arguments, out string detail)
+        {
+            Calls.Add((exePath, workingFolder, [.. arguments]));
+            detail = starts ? "started" : "refused by the test";
+            return starts;
+        }
+    }
+
+    /// <summary>An interrupted install (a journal in I\update) whose installed.json records a Swap.exe of these bytes; recover.exe is a file of <paramref name="onDisk"/> (null: there is none).</summary>
+    private GateEntry InterruptedInstallWithRunner(byte[] recorded, byte[]? onDisk, string name = "runner")
+    {
+        var exe = Install(name);
+        Directory.CreateDirectory(Update(exe));
+        File.WriteAllText(Path.Combine(Update(exe), GateFile.JournalName), "{}");
+        var record = new InstalledRecord("0.1.0", Guid.NewGuid().ToString("D"), [new InstalledFile("PCMieru.Swap.exe", recorded.Length, Convert.ToHexStringLower(SHA256.HashData(recorded)))]);
+        File.WriteAllBytes(Path.Combine(Update(exe), "installed.json"), record.ToUtf8Bytes());
+        if (onDisk is not null)
+        {
+            File.WriteAllBytes(Path.Combine(Update(exe), "recover.exe"), onDisk);
+        }
+
+        var entry = InstallGate.EnterStartup(exe);
+        Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
+        return entry;
+    }
+
+    [Fact]
+    public void The_real_recovery_is_available_only_for_the_recorded_recover_exe_and_starts_it_with_the_hand_over_options()
+    {
+        byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
+        var entry = InterruptedInstallWithRunner(swap, swap);
+        var install = Path.GetDirectoryName(entry.GatePath)!;
+        var starter = new RecordingStarter();
+        var recovery = new RunnerGateRecovery(starter, processId: 4242);
+
+        Assert.True(recovery.IsAvailable(entry));
+        Assert.True(recovery.Start(entry, out _));
+
+        var call = Assert.Single(starter.Calls);
+        Assert.Equal(Path.Combine(install, "update", "recover.exe"), call.Exe);
+        Assert.Equal(install, call.Folder);
+        Assert.Equal(["--recover", "--after-pid", "4242", "--then-start"], call.Arguments);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("other")]
+    public void The_real_recovery_refuses_a_recover_exe_that_is_missing_or_is_not_the_recorded_file_and_starts_nothing(string what)
+    {
+        byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
+        var entry = InterruptedInstallWithRunner(swap, what == "missing" ? null : [9, 9, 9, 9, 9, 9, 9, 9]);
+        var starter = new RecordingStarter();
+        var recovery = new RunnerGateRecovery(starter, processId: 1);
+
+        Assert.False(recovery.IsAvailable(entry));
+        Assert.False(recovery.Start(entry, out var detail));
+        Assert.Empty(starter.Calls);
+        Assert.False(string.IsNullOrEmpty(detail));
+    }
+
+    [Fact]
+    public void The_real_recovery_checks_again_when_it_starts_a_recover_exe_that_was_swapped_after_the_window_was_built()
+    {
+        byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
+        var entry = InterruptedInstallWithRunner(swap, swap);
+        var starter = new RecordingStarter();
+        var recovery = new RunnerGateRecovery(starter, processId: 1);
+        Assert.True(recovery.IsAvailable(entry));
+
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(entry.GatePath)!, "update", "recover.exe"), [7, 7, 7]);
+
+        Assert.False(recovery.Start(entry, out _));
+        Assert.Empty(starter.Calls);
+    }
+
+    [Fact]
+    public void The_real_recovery_reports_a_start_that_failed_and_the_window_then_offers_the_new_folder()
+    {
+        using var _ = Harness.Locale(Language.Ja);
+        using var theme = new ThemeService(ThemeMode.Light);
+        byte[] swap = [1, 2, 3, 4, 5, 6, 7, 8];
+        var entry = InterruptedInstallWithRunner(swap, swap);
+        var starter = new RecordingStarter(starts: false);
+        using var window = new StartGateWindow(theme, entry, () => throw new InvalidOperationException("no retry here"), new RunnerGateRecovery(starter, processId: 1));
+        Assert.True(window.RecoverOffered);
+
+        Assert.False(window.RecoverNow());
+
+        Assert.Single(starter.Calls);
+        Assert.Equal(Strings.Get("gui.gate.recover.failed"), window.ReasonText);
+        Assert.False(window.RecoverOffered);
     }
 
     // ---- the words ----

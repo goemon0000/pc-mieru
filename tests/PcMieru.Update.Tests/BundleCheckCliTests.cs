@@ -113,9 +113,11 @@ public sealed class BundleCheckCliTests : IDisposable
     }
 
     [Fact]
-    public void The_full_floor_refuses_a_bundle_of_this_build_and_names_what_is_missing()
+    public void The_full_floor_refuses_a_bundle_without_the_swapper_and_names_what_is_missing()
     {
-        var (zip, manifest, folder) = Lay(new TestBundle());
+        var withoutSwapper = new TestBundle();
+        withoutSwapper.Files.Remove("PCMieru.Swap.exe");
+        var (zip, manifest, folder) = Lay(withoutSwapper);
 
         var zipRan = Run("zip", zip, manifest, "0.5.0", "--floor", "full");
         Assert.Equal(1, zipRan.Exit);
@@ -128,7 +130,7 @@ public sealed class BundleCheckCliTests : IDisposable
     }
 
     [Fact]
-    public void The_full_floor_passes_a_bundle_that_has_the_file_of_the_later_step()
+    public void The_full_floor_passes_a_bundle_of_this_build()
     {
         var bundle = new TestBundle();
         foreach (var name in BundleFloor.NotYetBuilt)

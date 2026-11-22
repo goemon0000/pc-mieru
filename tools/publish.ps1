@@ -6,8 +6,11 @@
   1. Publishes Gui, Cli and SensorHost one by one (self-contained, ReadyToRun) into separate work folders.
   2. Merges them into one folder. A file that exists in more than one work folder must be byte-identical
      (SHA256); if it is not, the script stops. Nothing is overwritten silently.
-  3. Publishes the Helper and the network meter (PCMieru.NetMeter.exe) with NativeAOT and checks each exe itself:
+  3. Publishes the Helper, the network meter (PCMieru.NetMeter.exe) and the swapper (PCMieru.Swap.exe) with NativeAOT and checks each exe itself:
      DependentLoadFlags must contain LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) and the static imports must be system DLLs only.
+     The swapper is held to more (Test-SwapExe): a narrower import list (no ws2_32, crypt32, rpcrt4, ...), no network type or DLL name anywhere in
+     its bytes (the scan is first proved on PcMieru.Update.dll, which does contain them, so a scan that cannot see them stops the publish), no network code
+     among the methods the compiler kept (its ILC map, which is trusted only when it names the swap code), and a manifest that says asInvoker and not requireAdministrator.
      Then writes the start gate file PCMieru.gate.txt (a byte for byte copy of assets\PCMieru.gate.txt; every exe refuses to start without it, and
      the validator checks its exact SHA-256, which is fixed in src/PcMieru.Wire/Gate/GateFile.cs).
   4. Writes the inner manifest PCMieru.bundle.json into the folder: format, version, rid, a new buildId (a GUID, per publish),
@@ -22,10 +25,8 @@
   7. With -Verify, the validator judges the zip against the outer manifest and SHA256.txt. With -SkipZip there is no zip:
      the folder is judged against its own inner manifest. (CI no longer uses -SkipZip: it makes the zip in pwsh and in 5.1.)
 
-  The one file of the later steps that is not built yet is PCMieru.Swap.exe (step 4; the gate file and PcMieru.Update.dll ship since step 3). The validator is
-  always asked for the FULL floor (--floor full) unless -PartialFloor is given, which asks for the floor of this build
-  (BundleFloor.ForThisBuild). CI passes -PartialFloor; a release does not, so a tag fails until that
-  file exists. Remove -PartialFloor from ci.yml when BundleFloor.NotYetBuilt is empty.
+  Every file of the required floor is built now (the gate file and PcMieru.Update.dll since step 3, PCMieru.Swap.exe since step 4), so the validator is always asked for the FULL floor
+  (--floor full), by CI and by a release alike. There is no partial-floor switch any more: BundleFloor.NotYetBuilt is empty.
 
   A published folder may hold no Hidden or System file (the zip would carry it and the validator would refuse the name or the
   attributes on the client); the script lists with -Force and stops on one.
@@ -42,10 +43,10 @@ param(
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
     [switch]$SkipZip,
-    [switch]$PartialFloor,
     [switch]$SmokeFakes,
     [int]$HelperMaxKB = 8192,
-    [int]$NetMeterMaxKB = 8192
+    [int]$NetMeterMaxKB = 8192,
+    [int]$SwapMaxKB = 8192
 )
 
 Set-StrictMode -Version Latest
@@ -60,9 +61,8 @@ $Output = [IO.Path]::GetFullPath($Output)
 if ($Version -notmatch '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\z') { throw "Version must look like 1.2.3 (each part 0 to 999999), with no suffix and no leading zero (got '$Version')" }
 if ($Runtime -ne 'win-x64') { throw "pcm-bundle/1 is win-x64 only (got '$Runtime')" }
 
-# The floor the validator is asked for, always spelled out (BundleCheck has no default): the full one, which a release needs, unless -PartialFloor
-# says that this build cannot meet it yet (ci.yml passes it, release.yml does not).
-$floorName = if ($PartialFloor) { 'this-build' } else { 'full' }
+# The floor the validator is asked for, always spelled out (BundleCheck has no default): the full one, for CI and for a release.
+$floorName = 'full'
 
 $InnerManifestName = 'PCMieru.bundle.json'
 
@@ -75,6 +75,23 @@ $AllowedHelperImports = @(
     'version.dll', 'wtsapi32.dll', 'setupapi.dll', 'cfgmgr32.dll'
 )
 $AllowedHelperImportPatterns = @('^api-ms-win-[a-z0-9-]+-l\d+-\d+-\d+\.dll$', '^ext-ms-win-[a-z0-9-]+-l\d+-\d+-\d+\.dll$')
+
+# The swapper (PCMieru.Swap.exe) replaces files and talks to nobody: a narrower list than the Helper's. ws2_32 (sockets) is not in it, and neither are the DLLs
+# that only a network or RPC or COM user needs (crypt32, rpcrt4, oleaut32, sechost, wtsapi32, setupapi, cfgmgr32, version, shell32, user32). ole32.dll IS in it: the first AOT publish showed that the NativeAOT runtime itself
+# imports it (the CoTaskMem allocator of the marshalling stubs), as the Helper and the network meter show too; it is not a network or RPC library and the swap uses none of its COM. Extend it only for a
+# System32 DLL the swapper truly needs, and say why in the commit.
+$AllowedSwapImports = @('kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'advapi32.dll', 'bcrypt.dll', 'ucrtbase.dll', 'ole32.dll')
+
+# Names that mean network code. NativeAOT keeps the names of the types it reaches and of the DLLs it imports, so one of these in the bytes of the swapper means it can
+# reach a network type (or has a socket or HTTP DLL imported). Test-SwapExe proves on PcMieru.Update.dll that the scan can see them.
+$NetworkMarkers = @('System.Net.Http', 'System.Net.Sockets', 'System.Net.Security', 'System.Net.NameResolution', 'HttpClient', 'HttpMessageHandler', 'SocketsHttpHandler', 'UpdateHttp', 'WebRequest', 'WebClient', 'winhttp', 'wininet', 'ws2_32', 'WSAStartup', 'mswsock', 'dnsapi')
+
+# Text that every NativeAOT exe carries and that contains a marker without being network code: the list of the runtime's feature switches (the first AOT publish showed it in the Helper and in the network
+# meter too, which have no network code). It is cut out of the bytes before they are scanned. A real reference to SocketsHttpHandler would show elsewhere, and in the ILC map (Test-SwapMap).
+$KnownRuntimeSwitchNames = @('System.Net.SocketsHttpHandler.Http3Support')
+
+# Parts of method names in the ILC map that mean network code, in the map's spelling (dots are underscores). Case-sensitive on purpose.
+$NetworkMapFragments = @('System_Net', 'Http', 'Socket', 'WinInet', 'Dns', 'NetworkInformation', 'Feed_Update', 'Feed_Release')
 
 function Write-Step([string]$Text) { Write-Host ('== ' + $Text) -ForegroundColor Cyan }
 
@@ -214,7 +231,7 @@ namespace PcMieru.Build
 '@
 }
 
-function Test-AotExe([string]$Path, [string]$Label) {
+function Test-AotExe([string]$Path, [string]$Label, [string[]]$AllowedImports = $AllowedHelperImports) {
     $pe = [PcMieru.Build.PeInfo]::Read($Path)
     $problems = New-Object System.Collections.Generic.List[string]
     if ($pe.IsManaged) { $problems.Add('the exe has a CLR header: it is not a NativeAOT image') }
@@ -226,9 +243,9 @@ function Test-AotExe([string]$Path, [string]$Label) {
     $all = @($pe.Imports) + @($pe.DelayImports)
     foreach ($name in $all) {
         $lower = $name.ToLowerInvariant()
-        $ok = $AllowedHelperImports -contains $lower
+        $ok = $AllowedImports -contains $lower
         if (-not $ok) { foreach ($p in $AllowedHelperImportPatterns) { if ($lower -match $p) { $ok = $true; break } } }
-        if (-not $ok) { $problems.Add("unexpected import: $name (extend `$AllowedHelperImports only if it is a System32 DLL the $Label truly needs)") }
+        if (-not $ok) { $problems.Add("unexpected import: $name (the list for the $Label is short on purpose; extend it only if it is a System32 DLL the $Label truly needs)") }
     }
     Write-Host ($Label + ' imports : ' + ((@($pe.Imports) | Sort-Object) -join ', '))
     if (@($pe.DelayImports).Count -gt 0) { Write-Host ($Label + ' delay   : ' + ((@($pe.DelayImports) | Sort-Object) -join ', ')) }
@@ -236,8 +253,61 @@ function Test-AotExe([string]$Path, [string]$Label) {
     if ($problems.Count -gt 0) { throw ($Label + " check failed:`n  " + ($problems -join "`n  ")) }
 }
 
+# Which of $NetworkMarkers are in the file (as ASCII or as UTF-16 text, whatever the case). One char per byte (Latin-1) so that every byte pattern is found as it is.
+function Find-NetworkMarkers([string]$Path) {
+    $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Path))
+    foreach ($known in $KnownRuntimeSwitchNames) { $text = $text.Replace($known, '') }
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($marker in $NetworkMarkers) {
+        $wide = (($marker.ToCharArray() | ForEach-Object { [string]$_ }) -join [string][char]0)
+        if ($text.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $text.IndexOf($wide, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $found.Add($marker) }
+    }
+    return ,$found
+}
+
+# The strong evidence that no network code is in the swapper: the ILC map (IlcGenerateMapFile in PcMieru.Swap.csproj) lists every method the compiler kept, by its full name. The bytes of the exe only
+# hold the names of the types that reflection can see, so a method that is compiled in can have no name there; the map has them all. The map is trusted only when it names the swap's own code (a control),
+# and the names are then searched for the fragments of $NetworkMapFragments. Update.Feed has two harmless users in the swapper (AppVersion, Sha256List) and nothing else from the update client.
+function Test-SwapMap {
+    $maps = @(Get-ChildItem -LiteralPath (Join-Path $root 'src\PcMieru.Swap\obj') -Recurse -Filter 'PCMieru.Swap.map.xml' -File -Force | Sort-Object LastWriteTime -Descending)
+    if ($maps.Count -eq 0) { throw 'the ILC map of PCMieru.Swap (PCMieru.Swap.map.xml) was not found under src\PcMieru.Swap\obj; the network check of the swapper cannot run' }
+    $text = [IO.File]::ReadAllText($maps[0].FullName)
+    $names = @([regex]::Matches($text, '<MethodCode Name="([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+    if ($names.Count -lt 1000) { throw ('the ILC map lists only ' + $names.Count + ' methods; it cannot vouch for the swapper') }
+    $control = @($names | Where-Object { $_.StartsWith('PcMieru_Update_PcMieru_Update_Transaction_', [StringComparison]::Ordinal) })
+    if ($control.Count -lt 50) { throw ('the ILC map names only ' + $control.Count + ' methods of the swap code (PcMieru.Update.Transaction); it cannot vouch for the swapper') }
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $names) {
+        foreach ($fragment in $NetworkMapFragments) {
+            if ($name.IndexOf($fragment, [StringComparison]::Ordinal) -ge 0) { $hits.Add($name); break }
+        }
+    }
+    if ($hits.Count -gt 0) { throw ('PCMieru.Swap.exe has network code compiled in (ILC map): ' + ((@($hits) | Select-Object -First 5) -join ', ')) }
+    Write-Host ('Swap network code: none of ' + $NetworkMapFragments.Count + ' name fragments in ' + $names.Count + ' compiled methods (' + $control.Count + ' of them the swap code)')
+}
+
+# What only the swapper is held to (the import list is Test-AotExe's, with $AllowedSwapImports): no network names in its bytes and in its ILC map, and the manifest of an asInvoker program.
+# The scan is proved first: PcMieru.Update.dll (in $folder from the Gui publish) holds the update client, so it must show System.Net.Http and UpdateHttp. A scan that finds
+# nothing there cannot be trusted to find nothing in the swapper.
+function Test-SwapExe([string]$Path) {
+    $control = Find-NetworkMarkers (Join-Path $folder 'PcMieru.Update.dll')
+    foreach ($needed in @('System.Net.Http', 'UpdateHttp')) {
+        if ($control -notcontains $needed) { throw "the network name scan cannot see '$needed' in PcMieru.Update.dll, where it is; it cannot vouch for the swapper" }
+    }
+    Write-Host ('Swap scan control: PcMieru.Update.dll shows ' + ((@($control) | Sort-Object) -join ', '))
+    $found = Find-NetworkMarkers $Path
+    if ($found.Count -gt 0) { throw ('PCMieru.Swap.exe has network names in it: ' + (@($found) -join ', ') + ' (it must not be able to reach network code)') }
+    Write-Host ('Swap network names: none of ' + $NetworkMarkers.Count + ' in the exe')
+    Test-SwapMap
+    $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Path))
+    if ($text.IndexOf('asInvoker', [StringComparison]::Ordinal) -lt 0) { throw 'PCMieru.Swap.exe has no asInvoker manifest' }
+    if ($text.IndexOf('requireAdministrator', [StringComparison]::OrdinalIgnoreCase) -ge 0) { throw 'PCMieru.Swap.exe asks for administrator rights; it must run as the invoker' }
+    Write-Host 'Swap manifest   : asInvoker'
+}
+
 # Publishes one NativeAOT exe into $work, holds it to its size limit and the exe checks, and copies it into the release folder.
-function Publish-AotExe([string]$Label, [string]$Project, [string]$ExeName, [int]$MaxKB) {
+# $AllowedImports is the list of static imports it may have; $AlsoCheck (a script block taking the exe path) is run on it after the generic checks.
+function Publish-AotExe([string]$Label, [string]$Project, [string]$ExeName, [int]$MaxKB, [string[]]$AllowedImports = $AllowedHelperImports, [scriptblock]$AlsoCheck = $null) {
     Write-Step ("Publish $Label (NativeAOT)")
     Add-VswhereToPath
     $out = Join-Path $work $Label
@@ -247,7 +317,8 @@ function Publish-AotExe([string]$Label, [string]$Project, [string]$ExeName, [int
     $kb = [int]((Get-Item -LiteralPath $exe).Length / 1KB)
     Write-Host ("{0} size    : {1} KB" -f $Label, $kb)
     if ($kb -gt $MaxKB) { throw "$Label is $kb KB, over the $MaxKB KB limit: something large got linked in" }
-    Test-AotExe $exe $Label
+    Test-AotExe $exe $Label $AllowedImports
+    if ($null -ne $AlsoCheck) { & $AlsoCheck $exe }
     Copy-Item -LiteralPath $exe -Destination (Join-Path $folder $ExeName)
 }
 
@@ -465,6 +536,15 @@ function Invoke-VerifyRun([string]$Folder) {
     if ($meterRun.ExitCode -ne 2) { throw "PCMieru.NetMeter.exe with no arguments exited with $($meterRun.ExitCode), expected 2 (invalid arguments)" }
     Write-Host 'NetMeter       : starts, refuses no arguments (exit 2)'
 
+    # The swapper: --help prints its usage and exit codes (exit 0), a command line it does not understand is refused before anything is looked at (exit 2). Neither touches the folder;
+    # a run with no argument would place recover.exe in it, so that one is not made here (the unit tests and the trial do it on a copy).
+    $swap = Join-Path $Folder 'PCMieru.Swap.exe'
+    $swapHelp = (& $swap --help) -join "$([char]10)"
+    if ($LASTEXITCODE -ne 0 -or $swapHelp -notmatch 'exit codes') { throw "PCMieru.Swap.exe --help exited with $LASTEXITCODE or printed no usage" }
+    $swapBad = Start-Process -FilePath $swap -ArgumentList @('--no-such-option') -PassThru -Wait
+    if ($swapBad.ExitCode -ne 2) { throw "PCMieru.Swap.exe with an unknown option exited with $($swapBad.ExitCode), expected 2 (bad command line)" }
+    Write-Host 'Swap           : starts, --help exit 0, an unknown option exit 2'
+
     $smoke = Join-Path $Folder 'smoke-verify.json'
     # -SmokeFakes walks every page on sample data: a headless CI runner has no interactive desktop (no windowed app,
     # no program icons, no real GPU), so the real-data smoke's desktop checks only hold on a real workstation. The
@@ -531,6 +611,8 @@ Write-Host ("merged $count files from $($apps.Count) publishes")
 
 Publish-AotExe 'Helper' 'src\PcMieru.Helper\PcMieru.Helper.csproj' 'PCMieru.Helper.exe' $HelperMaxKB
 Publish-AotExe 'NetMeter' 'src\PcMieru.NetMeter\PcMieru.NetMeter.csproj' 'PCMieru.NetMeter.exe' $NetMeterMaxKB
+# The swapper: after the merge, so that PcMieru.Update.dll (the scan control of Test-SwapExe) is in the folder.
+Publish-AotExe 'Swap' 'src\PcMieru.Swap\PcMieru.Swap.csproj' 'PCMieru.Swap.exe' $SwapMaxKB $AllowedSwapImports { param($exe) Test-SwapExe $exe }
 
 foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     $source = Join-Path $root $extra
@@ -543,11 +625,14 @@ Copy-Item -LiteralPath (Join-Path $root 'assets\PCMieru.gate.txt') -Destination 
 
 # System.Management.dll and System.CodeDom.dll are the Checks' dependencies (WMI for the hardware checks). A publish that drops
 # them would start fine and fail on the first check, so a release folder without them is not a release.
-$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Core.dll', 'PCMieru.gate.txt', 'PcMieru.Update.dll', 'System.Management.dll', 'System.CodeDom.dll')
+$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Swap.exe', 'PCMieru.Core.dll', 'PCMieru.gate.txt', 'PcMieru.Update.dll', 'System.Management.dll', 'System.CodeDom.dll')
 foreach ($file in $expected) {
     if (-not (Test-Path -LiteralPath (Join-Path $folder $file))) { throw "missing from the release folder: $file" }
 }
 if (Test-Path -LiteralPath (Join-Path $folder 'PCMieru.Helper.dll')) { throw 'the Helper must not ship as a managed dll' }
+foreach ($stray in @('PCMieru.Swap.dll', 'PCMieru.Swap.runtimeconfig.json', 'PCMieru.Swap.deps.json')) {
+    if (Test-Path -LiteralPath (Join-Path $folder $stray)) { throw "the swapper ships as one NativeAOT exe, but $stray is in the release folder (a managed build leaked in)" }
+}
 foreach ($stray in @('PCMieru.NetMeter.dll', 'PCMieru.NetMeter.runtimeconfig.json', 'PCMieru.NetMeter.deps.json')) {
     if (Test-Path -LiteralPath (Join-Path $folder $stray)) { throw "the network meter ships as one NativeAOT exe, but $stray is in the release folder (a managed build leaked in)" }
 }

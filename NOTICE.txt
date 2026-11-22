@@ -136,6 +136,8 @@ goemon0000/parts-life and the owner's pl-sensors helper
       src/PartsLife.Check/PartsLife.Check.csproj
   src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
       the same post-link check, copied for the network meter
+  src/PcMieru.Swap/PcMieru.Swap.csproj
+      the same post-link check, copied for the swap runner (PCMieru.Swap.exe)
   src/PcMieru.Update/Feed/AppVersion.cs
       the X.Y.Z version number, its parse and its ordering, from the owner's
       pl-cloud src/PartsLife.Update/AppVersion.cs

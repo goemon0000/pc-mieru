@@ -88,9 +88,12 @@ public partial class NoNetworkTests
     }
 
     [Fact]
-    public void Only_the_gui_and_the_update_project_itself_reference_the_update_project()
+    public void Only_the_gui_the_swapper_and_the_update_project_itself_reference_the_update_project()
     {
         // The Cli (so the MCP server), Core, Checks, the Helper, the NetMeter, the SensorHost and the Wire cannot reach the feed: the reference does not exist.
+        // PcMieru.Swap (step 4) is the one addition: the swapper's program is the transaction, and the transaction is in the Update project (it is tested in-process there). That puts the feed's
+        // HTTP code into the assembly the swapper compiles, so "does not reference" cannot be the proof for it; the proof is the next test (the swapper's own code and the part of the Update
+        // project it reaches name no network type) and, on the built exe, tools/publish.ps1 (Test-SwapExe: a narrow import list and no network name in the bytes of PCMieru.Swap.exe).
         var src = Path.Combine(RepoRoot(), "src");
         var projects = Directory.GetFiles(src, "*.csproj", SearchOption.AllDirectories);
         Assert.True(projects.Length >= 8, $"only {projects.Length} projects found");
@@ -101,7 +104,36 @@ public partial class NoNetworkTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["PcMieru.Gui", "PcMieru.Update"], referencing);
+        Assert.Equal(["PcMieru.Gui", "PcMieru.Swap", "PcMieru.Update"], referencing);
+    }
+
+    [Fact]
+    public void The_swapper_has_no_package_references_only_the_update_and_wire_projects_and_neither_it_nor_its_transaction_names_a_network_type()
+    {
+        var swap = Path.Combine(RepoRoot(), "src", "PcMieru.Swap");
+        var project = File.ReadAllText(Path.Combine(swap, "PcMieru.Swap.csproj"));
+        Assert.DoesNotContain("<PackageReference", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("<FrameworkReference", project, StringComparison.Ordinal);
+        var references = Regex.Matches(project, @"<ProjectReference\s+Include=""([^""]+)""").Select(m => m.Groups[1].Value.Replace('\\', '/')).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(["../PcMieru.Update/PcMieru.Update.csproj", "../PcMieru.Wire/PcMieru.Wire.csproj"], references);
+
+        // The program (Program.cs) and everything in the Update project's Transaction folder (the transaction, the recovery, the runner, the command line): no HTTP library, no socket, no web type.
+        var files = Directory.GetFiles(swap, "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(Path.Combine(RepoRoot(), "src", "PcMieru.Update", "Transaction"), "*.cs", SearchOption.AllDirectories))
+            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.True(files.Length > 10, "the swapper's sources were not found");
+        Assert.Contains(files, f => Path.GetFileName(f) == "SwapCli.cs");
+        foreach (var file in files)
+        {
+            var code = string.Join('\n', File.ReadAllLines(file).Select(WithoutComments));
+            Assert.DoesNotMatch(HttpWords(), code);
+            Assert.DoesNotMatch(NeverWords(), code);
+            Assert.DoesNotMatch(SocketWords(), code);
+            Assert.DoesNotContain("System.Net", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("UpdateHttp", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("UpdateService", code, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

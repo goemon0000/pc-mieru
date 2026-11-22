@@ -31,7 +31,7 @@ public sealed class GateJournalTests : IDisposable
         Assert.Equal(GateOutcome.RecoveryPending, entry.Outcome);
         Assert.False(entry.IsOpen);
         Assert.Equal(Path.Combine(Scratch.UpdateOf(exe), GateFile.RecoverNoteName), entry.RecoveryNotePath);
-        Assert.False(File.Exists(entry.RecoveryNotePath)); // step 4 writes the note; this step only says where it will be
+        Assert.False(File.Exists(entry.RecoveryNotePath)); // the swapper writes the note, not the gate: the gate only says where it is
         using var recovery = InstallGate.EnterExclusive(exe);
         Assert.True(recovery.IsOpen, "the handle of the refused entry was closed: " + recovery.Detail);
     }

@@ -105,7 +105,7 @@ internal sealed partial class TxEngine
     private void WriteJournal(TxJournal journal, TxStep step) => _io.WriteReplace(step, _paths.Journal, journal.ToUtf8Bytes());
 
     /// <summary>A small file that is an ordinary file (never a link), or null when it is missing, too long, a link or cannot be read.</summary>
-    private static byte[]? ReadSmall(string path, int maxBytes)
+    internal static byte[]? ReadSmall(string path, int maxBytes)
     {
         try
         {

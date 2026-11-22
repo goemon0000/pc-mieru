@@ -105,13 +105,20 @@ public class BundleZipTests
     // ------------------------------------------------------------------------------------------------------------------------ the floor
 
     [Fact]
-    public void The_client_default_is_the_full_floor_and_a_publish_of_this_build_does_not_meet_it()
+    public void The_client_default_is_the_full_floor_a_publish_of_this_build_meets_it_and_a_bundle_without_the_swapper_does_not()
     {
         var bundle = new TestBundle();
-        using var stream = new MemoryStream(bundle.Zip());
-        var result = BundleZip.Validate(stream, bundle.Version, bundle.Outer(), Limits.Default);
-        Assert.Equal(BundleFault.FloorMissing, result.Fault);
-        Assert.Contains("PCMieru.Swap.exe", result.Detail);
+        using (var stream = new MemoryStream(bundle.Zip()))
+        {
+            var result = BundleZip.Validate(stream, bundle.Version, bundle.Outer(), Limits.Default);
+            Assert.True(result.Ok, result.ToString());
+        }
+
+        bundle.Files.Remove("PCMieru.Swap.exe");
+        using var without = new MemoryStream(bundle.Zip());
+        var refused = BundleZip.Validate(without, bundle.Version, bundle.Outer(), Limits.Default);
+        Assert.Equal(BundleFault.FloorMissing, refused.Fault);
+        Assert.Contains("PCMieru.Swap.exe", refused.Detail);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------ the gate file (DESIGN-B 4)

@@ -119,6 +119,18 @@ public sealed class GateAssetTests
             var program = Path.Combine(Path.GetDirectoryName(project)!, "Program.cs");
             Assert.True(File.Exists(program), "no Program.cs next to " + project);
             var code = File.ReadAllText(program);
+
+            // PCMieru.Swap.exe is the one exe that is not a program of the install: it is the swapper. It must NOT ask the start gate (the shared gate refuses it while a recovery is pending, which is
+            // exactly when it has to work; and the Runner lives in I\update, where no gate file is beside it). What it does with the gate instead is the exclusive entry, which is asserted next.
+            if (Path.GetFileName(Path.GetDirectoryName(project)) == "PcMieru.Swap")
+            {
+                Assert.DoesNotContain("InstallGate.EnterStartup()", code, StringComparison.Ordinal);
+                var cli = Repo.FileText("src/PcMieru.Update/Transaction/SwapCli.cs");
+                Assert.Contains("InstallGate.EnterExclusive(", cli, StringComparison.Ordinal);
+                Assert.DoesNotContain("InstallGate.EnterStartup()", cli, StringComparison.Ordinal);
+                continue;
+            }
+
             Assert.True(
                 code.Contains("InstallGate.EnterStartup()", StringComparison.Ordinal) || code.Contains("StartGateScreen.Enter(", StringComparison.Ordinal),
                 project + " has an entry point that never calls the start gate");
