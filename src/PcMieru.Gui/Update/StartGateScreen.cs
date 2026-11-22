@@ -224,7 +224,7 @@ internal static class GateStrings
         new(
             "gui.gate.recovery.hint",
             "分からないときは、配布の ZIP をもう一度展開した新しいフォルダーから開いてください。",
-            "If in doubt, unzip the release again into a new folder and open it from there."),
+            "If in doubt, unzip the downloaded ZIP file again into a new folder and open it from there."),
 
         new(
             "gui.gate.missinggate",
@@ -233,7 +233,7 @@ internal static class GateStrings
         new(
             "gui.gate.missinggate.hint",
             "削除や移動をしていないか確かめてください。配布の ZIP をもう一度展開すると直ります。",
-            "Check that it was not deleted or moved. Unzipping the release again repairs it."),
+            "Check that it was not deleted or moved. Unzipping the downloaded ZIP file again repairs it."),
 
         new(
             "gui.gate.denied",
@@ -251,6 +251,6 @@ internal static class GateStrings
         new(
             "gui.gate.reparserefused.hint",
             "配布の ZIP をもう一度展開した、ふつうのフォルダーから開いてください。",
-            "Open it from an ordinary folder made by unzipping the release again."),
+            "Open it from an ordinary folder made by unzipping the downloaded ZIP file again."),
     ];
 }

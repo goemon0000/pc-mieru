@@ -122,7 +122,7 @@ public static class InstallGate
         GateOutcome.Busy => "an update is being installed (or the start gate is held exclusively), try again in a moment",
         GateOutcome.RecoveryPending => "an interrupted update has to be recovered before PC Mieru can start",
         GateOutcome.RecoveryFailed => "recovering an interrupted update failed, PC Mieru cannot start until it is repaired",
-        GateOutcome.MissingGate => "PCMieru.gate.txt is missing from the install folder, unzip the release again",
+        GateOutcome.MissingGate => "PCMieru.gate.txt is missing from the install folder, unzip the downloaded ZIP file again",
         GateOutcome.Denied => "the start gate file cannot be read (access denied or an I/O error)",
         GateOutcome.ReparseRefused => "the start gate or the update records are behind a link, which is not accepted",
         _ => "the start gate did not open",

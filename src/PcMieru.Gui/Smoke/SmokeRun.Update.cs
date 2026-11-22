@@ -108,8 +108,8 @@ internal static partial class SmokeRun
             fake.Answer = (_, _) => UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true);
             settings.UpdateCheckNowButton.PerformClick();
             await Until(() => updates.Pending.IsCompleted && fake.Calls == 3, 4000).ConfigureAwait(true);
-            var failure = Strings.Format("gui.update.state.failed", Fmt.Dict(("reason", UpdateText.RefusalText(UpdateRefusal.NetworkFailure))));
-            Check("update: a failed check says so, keeps the candidate, its notes button and the notice", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == failure && settings.UpdateStatusTone == CellTone.Warning && settings.UpdateCandidateText == found.ToString() && settings.UpdateNotesButton.Enabled && context.UpdateNotice == notice && noticeLabel is { Visible: true }, settings.UpdateStatusText + " / " + settings.UpdateCandidateText);
+            var failure = Strings.Format("gui.update.state.failedcandidate", Fmt.Dict(("version", found.ToString())));
+            Check("update: a failed check says so and that the version shown is the one found earlier, and keeps the candidate, its notes button and the notice", updates.Last is { Kind: UpdateCheckKind.Refused } && settings.UpdateStatusText == failure && settings.UpdateStatusTone == CellTone.Warning && settings.UpdateCandidateText == found.ToString() && settings.UpdateNotesButton.Enabled && context.UpdateNotice == notice && noticeLabel is { Visible: true }, settings.UpdateStatusText + " / " + settings.UpdateCandidateText);
             await ShootUpdateSettings(settings, "failure").ConfigureAwait(true);
 
             // --- a release whose own rules did not hold: the reason is said in words, the candidate and the notice go ---
@@ -184,7 +184,7 @@ internal static partial class SmokeRun
                 }
 
                 Check($"update: the first-run dialog preselects 知らせるだけ ({look})", dialog.NotifyChoice.Checked && !dialog.AutomaticChoice.Checked && !dialog.OffChoice.Checked && dialog.SelectedMode == UpdateMode.Notify, dialog.SelectedMode.ToString());
-                var unsigned = Strings.Current == Language.Ja ? "電子署名のない版" : "without a digital signature";
+                var unsigned = Strings.Current == Language.Ja ? "電子署名（発行元の証明）がない版も入れ替えます" : "without a Windows digital signature (proof of the publisher)";
                 Check($"update: the 自動 line says that unsigned versions are installed without asking ({look})", dialog.AutomaticLine.Contains(unsigned, StringComparison.Ordinal) && dialog.AutomaticChoice.Text == UpdateText.ModeName(UpdateMode.Automatic), dialog.AutomaticLine);
                 var missing = SmokeText.Missing(dialog).Distinct().Take(5).ToList();
                 Check($"update: the first-run dialog has no missing strings ({look})", missing.Count == 0 && !SmokeText.IsPlaceholder(dialog.AutomaticLine) && !SmokeText.IsPlaceholder(dialog.OkButton.Text), string.Join(" | ", missing));

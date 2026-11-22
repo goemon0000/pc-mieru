@@ -270,8 +270,8 @@ public sealed class UpdateUiTests
         var fromThisRun = Describe(UpdateMode.Notify, last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true, version));
         Assert.Equal(expected, fromThisRun.Text);
         Assert.Equal(CellTone.Warning, fromThisRun.Tone);
-        Assert.Contains("A required file is missing from the release", fromThisRun.Text);
-        Assert.Contains("will not be used", fromThisRun.Text);
+        Assert.Equal("Version 0.5.0 could not be verified and will not be used: A required file is missing from the update.", fromThisRun.Text);
+        Assert.DoesNotContain("release", fromThisRun.Text, StringComparison.OrdinalIgnoreCase);
 
         var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.AssetMissing, RefusedVersion = version });
         Assert.Equal(expected, fromState.Text);
@@ -296,6 +296,40 @@ public sealed class UpdateUiTests
 
         var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.HttpError });
         Assert.Equal(Say("gui.update.state.failed", "reason", UpdateText.RefusalText(UpdateRefusal.HttpError)), fromState.Text);
+    }
+
+    [Theory]
+    [InlineData(Language.En, "The latest check failed. Showing the version 0.5.0 found earlier.")]
+    [InlineData(Language.Ja, "今回の確認はできませんでした。以前見つかった版 0.5.0 の情報を表示しています。")]
+    public void A_check_that_did_not_finish_while_an_earlier_candidate_is_on_file_says_that_the_version_shown_was_found_earlier(Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        var earlier = new AppVersion(0, 5, 0);
+
+        // This run's answer is the failure, state.json still holds the candidate: the candidate row, the notes and the notice show it, so the line names it.
+        var fromThisRun = Describe(
+            UpdateMode.Notify,
+            last: UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true),
+            status: UpdateStatus.Empty with { CandidateVersion = earlier });
+        Assert.Equal(expected, fromThisRun.Text);
+        Assert.Equal(CellTone.Warning, fromThisRun.Tone);
+
+        // The same after a restart: nothing from this run, the failure and the candidate both come from state.json.
+        var fromState = Describe(UpdateMode.Notify, status: UpdateStatus.Empty with { LastRefusal = UpdateRefusal.HttpError, CandidateVersion = earlier });
+        Assert.Equal(expected, fromState.Text);
+
+        // Only a failure: the reason of a refused release (its version is not usable) and a candidate that is not newer than this app do not turn into this sentence.
+        var refused = Describe(
+            UpdateMode.Notify,
+            last: UpdateCheck.Refuse(UpdateRefusal.AssetMissing, "SHA256.txt", fetched: true, earlier),
+            status: UpdateStatus.Empty with { CandidateVersion = earlier });
+        Assert.NotEqual(expected, refused.Text);
+        var notNewer = Describe(
+            UpdateMode.Notify,
+            last: UpdateCheck.Refuse(UpdateRefusal.NetworkFailure, "no answer", fetched: true),
+            status: UpdateStatus.Empty with { CandidateVersion = earlier },
+            running: new AppVersion(0, 5, 0));
+        Assert.Equal(Say("gui.update.state.failed", "reason", UpdateText.RefusalText(UpdateRefusal.NetworkFailure)), notNewer.Text);
     }
 
     [Fact]
@@ -339,7 +373,7 @@ public sealed class UpdateUiTests
     }
 
     [Theory]
-    [InlineData(Language.En, "Version 0.5.0 is available. Open the release notes in your browser to see what changed and how to get it.")]
+    [InlineData(Language.En, "Version 0.5.0 is available. Open the update notes in your browser to see what changed and how to get it.")]
     [InlineData(Language.Ja, "新しい版 0.5.0 があります。更新内容と入手のしかたはブラウザーで開けます。")]
     public void A_candidate_says_what_it_is_and_where_the_notes_are_without_sounding_like_a_link(Language language, string expected)
     {
@@ -402,8 +436,8 @@ public sealed class UpdateUiTests
     // ---- the first-run dialog ----
 
     [Theory]
-    [InlineData(Language.En, "Automatic", "Notify only (recommended)", "Off", "without a digital signature", "Confirm")]
-    [InlineData(Language.Ja, "自動", "知らせるだけ（おすすめ）", "切る", "電子署名のない版", "決定")]
+    [InlineData(Language.En, "Automatic", "Notify only (recommended)", "Off", "without a Windows digital signature (proof of the publisher)", "Confirm")]
+    [InlineData(Language.Ja, "自動", "知らせるだけ（おすすめ）", "切る", "Windows の電子署名（発行元の証明）がない版も入れ替えます", "決定")]
     public void The_first_run_dialog_has_three_choices_with_Notify_selected_and_says_unsigned_versions_are_installed_unattended(
         Language language, string automatic, string notify, string off, string unsigned, string ok)
     {
@@ -429,12 +463,12 @@ public sealed class UpdateUiTests
     [Theory]
     [InlineData(
         Language.Ja,
-        "新しい版を確認なしで入れ替えます。発行元を示す電子署名のない版も、確認なしで入れ替えます。",
+        "新しい版を確認なしで入れ替えます。Windows の電子署名（発行元の証明）がない版も入れ替えます。",
         "新しい版が出たらお知らせします。入れ替えは自動ではしません。",
         "『決定』を押さずに閉じると、確認はせず、次の起動でもう一度お聞きします。")]
     [InlineData(
         Language.En,
-        "Installs new versions without asking, including versions without a digital signature showing who published them.",
+        "Installs new versions without asking, including versions without a Windows digital signature (proof of the publisher).",
         "Tells you when a new version is out. It does not install it by itself.",
         "If you close this window without choosing Confirm, nothing is checked and you will be asked again at the next start.")]
     public void The_first_run_dialog_says_what_each_choice_does_and_what_closing_it_does_in_the_words_of_the_review(Language language, string automatic, string notify, string later)
@@ -720,7 +754,7 @@ public sealed class UpdateUiTests
         Assert.Equal(UpdateEndpoints.ReleasePageUrl("v0.5.0"), page.NotesUrl);
         Assert.True(page.UpdateNotesButton.Enabled);
         Assert.Equal(string.Empty, page.UpdateNotesReasonText);
-        Assert.Equal("Open release notes in browser", page.UpdateNotesButton.Text);
+        Assert.Equal("Open the update notes in browser", page.UpdateNotesButton.Text);
         Assert.Equal(Say("gui.update.state.candidate", "version", "0.5.0"), page.UpdateStatusText);
         Assert.Equal(CellTone.Normal, page.UpdateStatusTone);
         var checkedAt = rig.Controller.Status().LastCheckUtc;
@@ -769,17 +803,19 @@ public sealed class UpdateUiTests
         Finish(rig.Controller.Pending);
 
         Assert.Equal(
-            "Version 0.5.0 could not be verified, so it will not be used: A required file is missing from the release. Please wait for the next version.",
+            "Version 0.5.0 could not be verified and will not be used: A required file is missing from the update.",
             page.UpdateStatusText);
         Assert.Equal(CellTone.Warning, page.UpdateStatusTone);
         Assert.False(page.UpdateNotesButton.Enabled);
         Assert.Equal("No newer version found, so there is nothing to open", page.UpdateNotesReasonText);
         Assert.Equal("None", page.UpdateCandidateText);
+        Assert.Equal("Available version", page.UpdateCandidateLabelText);
 
         Strings.Current = Language.Ja;
         page.ApplyLanguage();
 
-        Assert.Equal("新しい版 0.5.0 は、確かめられなかったので使いません: 必要なファイルが、リリースに足りません。次の版をお待ちください。", page.UpdateStatusText);
+        Assert.Equal("版 0.5.0 は確かめられなかったため使いません: 公開された更新に必要なファイルがありません。", page.UpdateStatusText);
+        Assert.Equal("利用できる新しい版", page.UpdateCandidateLabelText);
         Assert.Equal(new[] { "自動", "知らせるだけ（おすすめ）", "切る", "あとで選ぶ（確認しません）" }, page.UpdateModeBox.Items.Cast<string>().ToArray());
         Assert.Equal(1, page.UpdateModeBox.SelectedIndex);
         Assert.Equal("今すぐ確認", page.UpdateCheckNowButton.Text);
@@ -805,7 +841,46 @@ public sealed class UpdateUiTests
         Assert.Contains(time, page.UpdateStatusText);
         Assert.False(page.UpdateCheckNowButton.Enabled);
         Assert.Equal(Say("gui.update.reason.backoff", "time", time), page.UpdateCheckNowReasonText);
-        Assert.Equal("Available again from " + time, page.UpdateCheckNowReasonText);
+        Assert.Equal("Checks resume " + time, page.UpdateCheckNowReasonText);
+    }
+
+    [Fact]
+    public void No_text_of_the_update_screens_or_the_start_gate_says_release_in_either_language()
+    {
+        // The person has not heard of a "release" (GitHub's word): the texts say the update, the version or the downloaded ZIP file. A new text that brings the word back fails here.
+        var shown = GuiStrings.All
+            .Where(entry => entry.Key.StartsWith("gui.update.", StringComparison.Ordinal) || entry.Key.StartsWith("gui.gate.", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Contains(shown, entry => entry.Key == "gui.update.refusal.assetmissing");
+        Assert.Contains(shown, entry => entry.Key == "gui.gate.missinggate.hint");
+        var offenders = shown
+            .Where(entry => entry.Ja.Contains("リリース", StringComparison.Ordinal) || entry.En.Contains("release", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Key)
+            .ToArray();
+        Assert.Empty(offenders);
+
+        // The one sentence per outcome that the console programs write to stderr says the same.
+        foreach (var outcome in Enum.GetValues<PcMieru.Wire.Gate.GateOutcome>())
+        {
+            Assert.DoesNotContain("release", PcMieru.Wire.Gate.InstallGate.ReasonOf(outcome), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
+    [InlineData(Language.En, "Checks resume Nov 25, 09:00")]
+    [InlineData(Language.Ja, "11月25日 9:00 まで確認できません")]
+    public void The_line_under_Check_now_for_a_wait_is_short_and_has_the_time_in_the_language_of_the_screen(Language language, string expected)
+    {
+        using var _ = Harness.Locale(language);
+        var until = new DateTimeOffset(new DateTime(2026, 11, 25, 9, 0, 0, DateTimeKind.Local));
+        var now = new DateTimeOffset(new DateTime(2026, 11, 22, 9, 0, 0, DateTimeKind.Local));
+        var status = UpdateStatus.Empty with { BackoffUntilUtc = until };
+
+        var line = UpdateText.CheckNowReason(UpdateMode.Notify, allowed: true, checking: false, last: null, status, now);
+
+        Assert.Equal(expected, line);
+        Assert.DoesNotContain("{", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -968,15 +1043,23 @@ public sealed class UpdateUiTests
 
         rig.Activate();
 
+        // The sentence is about the folder, never about the mode the person chose (it stays Notify only): a folder that cannot be written says so, the others say the app cannot update itself.
         var reason = Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant());
-        Assert.Equal("Cannot write here, so updates can only be announced (" + reason + ")", rig.Page.UpdatePlacementText);
+        var expected = kind == PlacementKind.ReadOnly
+            ? "This folder cannot be written, so the app cannot update itself (" + reason + ")"
+            : "The app cannot update itself in this folder (" + reason + ")";
+        Assert.Equal(expected, rig.Page.UpdatePlacementText);
         Assert.Equal(CellTone.Warning, rig.Page.UpdatePlacementTone);
         Assert.True(rig.Page.UpdateCheckNowButton.Enabled); // a read-only folder still hears about new versions
+        Assert.Equal(1, rig.Page.UpdateModeBox.SelectedIndex);
+        Assert.DoesNotContain("announce", rig.Page.UpdatePlacementText, StringComparison.OrdinalIgnoreCase);
 
         Strings.Current = Language.Ja;
         rig.Page.ApplyLanguage();
-        Assert.StartsWith("書き込めないため、お知らせだけになります（", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        Assert.StartsWith(kind == PlacementKind.ReadOnly ? "この場所には書き込めないため、自動で入れ替えることはできません（" : "この場所では、自動で入れ替えることはできません（", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
         Assert.EndsWith(Strings.Get("gui.update.placement." + kind.ToString().ToLowerInvariant()) + "）", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        Assert.DoesNotContain("お知らせだけ", rig.Page.UpdatePlacementText, StringComparison.Ordinal);
+        Assert.Equal(1, rig.Page.UpdateModeBox.SelectedIndex);
     }
 
     /// <summary>Takes the right to create files and folders from the current user on a folder (a read-only manual unzip, as far as this process can tell); give the rights back on dispose.</summary>
@@ -1034,7 +1117,7 @@ public sealed class UpdateUiTests
             rig.Activate();
 
             var reason = Strings.Get("gui.update.placement.readonly");
-            Assert.Equal("Cannot write here, so updates can only be announced (" + reason + ")", rig.Page.UpdatePlacementText);
+            Assert.Equal("This folder cannot be written, so the app cannot update itself (" + reason + ")", rig.Page.UpdatePlacementText);
             Assert.Equal(CellTone.Warning, rig.Page.UpdatePlacementTone);
             Assert.True(rig.Page.UpdateCheckNowButton.Enabled);
         }
@@ -1056,7 +1139,7 @@ public sealed class UpdateUiTests
         rig.Fake.Placement = new Placement(PlacementKind.ReadOnly, "test");
         Assert.Equal("Writable", rig.Page.UpdatePlacementText);
         rig.Page.UpdateModeBox.SelectedIndex = 0; // another mode: the probe is made again
-        WaitUntil(() => rig.Probes == 2 && rig.Page.UpdatePlacementText.StartsWith("Cannot write here", StringComparison.Ordinal));
+        WaitUntil(() => rig.Probes == 2 && rig.Page.UpdatePlacementText.StartsWith("This folder cannot be written", StringComparison.Ordinal));
 
         rig.Fake.Placement = new Placement(PlacementKind.CanSwap, "test");
         rig.Page.OnDeactivated();

@@ -53,6 +53,7 @@ internal sealed partial class SettingsPage
     internal CellTone UpdatePlacementTone => _updatePlacement.Tone;
 
     internal string UpdateCandidateText => _updateCandidate.Text;
+    internal string UpdateCandidateLabelText => _updateCandidateLabel.Text;
 
     internal string UpdateStatusText => _updateStatus.Text;
 

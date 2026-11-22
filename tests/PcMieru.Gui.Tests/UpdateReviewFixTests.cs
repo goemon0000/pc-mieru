@@ -344,7 +344,7 @@ public sealed class UpdateReviewFixTests
         Assert.True(changes > 0);   // the page shows the mode that is now in force
     }
 
-    // ---- item 7: a time without the year, in the person's own culture ----
+    // ---- item 7 (and the second review, item 9): a time without the year, in the language of the screen ----
 
     private static string When(DateTimeOffset moment, DateTimeOffset now) =>
 #if BEFORE_TREE
@@ -353,26 +353,49 @@ public sealed class UpdateReviewFixTests
         UpdateText.When(moment, now);
 #endif
 
-    [Fact]
-    public void A_time_of_this_year_is_written_without_the_year_in_the_culture_of_the_person_and_one_of_another_year_with_it()
+    [Theory]
+    [InlineData("ja-JP")]
+    [InlineData("en-US")]
+    [InlineData("de-DE")]
+    [InlineData("")]
+    public void A_time_follows_the_language_of_the_screen_and_not_the_culture_of_the_thread(string threadCulture)
     {
-        using var _ = Harness.Locale();
         var now = new DateTimeOffset(new DateTime(2026, 11, 22, 12, 0, 0, DateTimeKind.Local));
-        var sameYear = new DateTimeOffset(new DateTime(2026, 12, 24, 14, 30, 0, DateTimeKind.Local));
+        var sameYear = new DateTimeOffset(new DateTime(2026, 11, 22, 15, 44, 0, DateTimeKind.Local));
+        var morning = new DateTimeOffset(new DateTime(2026, 12, 24, 9, 5, 0, DateTimeKind.Local));
         var nextYear = new DateTimeOffset(new DateTime(2027, 1, 5, 14, 30, 0, DateTimeKind.Local));
 
-        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("ja-JP");
-        var ja = When(sameYear, now);
-        Assert.Equal("12月24日 14:30", ja);
-        Assert.DoesNotContain("2026", ja);
-        Assert.Contains("2027", When(nextYear, now));
+        // The English screen of a Japanese Windows (thread culture ja-JP): English words and an English order, 24-hour clock.
+        using (Harness.Locale(Language.En))
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(threadCulture);
+            Assert.Equal("Nov 22, 15:44", When(sameYear, now));
+            Assert.Equal("Dec 24, 09:05", When(morning, now));
+            Assert.Equal("Jan 5, 2027, 14:30", When(nextYear, now));
+        }
 
-        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
-        var en = When(sameYear, now);
-        Assert.DoesNotContain("2026", en);
-        Assert.Contains("December", en);
-        Assert.Contains("2:30", en);
-        Assert.Contains("2027", When(nextYear, now));
+        // The Japanese screen of an English Windows (thread culture en-US): Japanese words, never "November".
+        using (Harness.Locale(Language.Ja))
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(threadCulture);
+            Assert.Equal("11月22日 15:44", When(sameYear, now));
+            Assert.Equal("12月24日 9:05", When(morning, now));
+            Assert.Equal("2027年1月5日 14:30", When(nextYear, now));
+        }
+    }
+
+    [Fact]
+    public void A_time_in_a_calendar_that_is_not_the_gregorian_one_is_still_written_in_the_gregorian_one()
+    {
+        // ja-JP on a Windows that counts years from the emperor's era must not turn 2027 into 令和9年: the patterns are written out, the calendar is the invariant one.
+        var now = new DateTimeOffset(new DateTime(2026, 11, 22, 12, 0, 0, DateTimeKind.Local));
+        var nextYear = new DateTimeOffset(new DateTime(2027, 1, 5, 14, 30, 0, DateTimeKind.Local));
+        using var _ = Harness.Locale(Language.Ja);
+        var culture = (CultureInfo)CultureInfo.GetCultureInfo("ja-JP").Clone();
+        culture.DateTimeFormat.Calendar = new JapaneseCalendar();
+        CultureInfo.CurrentCulture = culture;
+
+        Assert.Equal("2027年1月5日 14:30", When(nextYear, now));
     }
 
     // ---- a window to look at: the page with a controller of its own ----
