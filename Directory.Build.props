@@ -12,7 +12,7 @@
     <SatelliteResourceLanguages>en;ja</SatelliteResourceLanguages>
 
     <!-- Local default only (kept at the current release); tools/publish.ps1 passes the real version as -p:Version=x.y.z, and so does CI. -->
-    <Version Condition="'$(Version)' == ''">0.4.0</Version>
+    <Version Condition="'$(Version)' == ''">0.5.0</Version>
     <Company>web-autoai.com</Company>
     <Authors>web-autoai.com</Authors>
     <Product>PC Mieru</Product>

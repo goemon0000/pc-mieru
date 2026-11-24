@@ -38,7 +38,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.4.0',
+    [string]$Version = '0.5.0',
     [string]$Output = '',
     [string]$Runtime = 'win-x64',
     [switch]$Verify,
