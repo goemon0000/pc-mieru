@@ -1,5 +1,6 @@
 using System.Globalization;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Transaction;
 
 namespace PcMieru.Update.Launch;
 
@@ -13,9 +14,16 @@ public sealed record ApplyMessage(string Stage, string ManifestSha256, string Ve
 
     public static ApplyMessage Of(StagedUpdate staged) => new(staged.Folder, staged.ManifestSha256, staged.Version, staged.BuildId, staged.Tag);
 
-    public string ToLine() => string.Join('\t', Verb, Stage, ManifestSha256, Version, BuildId, Tag);
+    /// <summary>The GUI's persisted attempt id, also used as the transaction id. Earlier callers can omit it.</summary>
+    public string? AttemptId { get; init; }
 
-    /// <summary>False unless the line is exactly the six fields, each of the right shape (a plain X.Y.Z version, "v" + it as the tag, a lower-case GUID, 64 lower-case hex digits, an absolute path with no control character).</summary>
+    public string ToLine()
+    {
+        var line = string.Join('\t', Verb, Stage, ManifestSha256, Version, BuildId, Tag);
+        return AttemptId is null ? line : line + "\t" + AttemptId;
+    }
+
+    /// <summary>False unless the line is the six release fields (and, optionally, a transaction id), each of the right shape (a plain X.Y.Z version, "v" + it as the tag, a lower-case GUID, 64 lower-case hex digits, an absolute path with no control character).</summary>
     public static bool TryParse(string? line, out ApplyMessage message)
     {
         message = new ApplyMessage(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
@@ -25,7 +33,7 @@ public sealed record ApplyMessage(string Stage, string ManifestSha256, string Ve
         }
 
         var fields = line.Split('\t');
-        if (fields.Length != 6 || fields[0] != Verb)
+        if (fields.Length is not (6 or 7) || fields[0] != Verb || (fields.Length == 7 && !TxPaths.IsValidTx(fields[6])))
         {
             return false;
         }
@@ -39,7 +47,7 @@ public sealed record ApplyMessage(string Stage, string ManifestSha256, string Ve
             return false;
         }
 
-        message = new ApplyMessage(stage, sha, version, build, tag);
+        message = new ApplyMessage(stage, sha, version, build, tag) { AttemptId = fields.Length == 7 ? fields[6] : null };
         return true;
     }
 }

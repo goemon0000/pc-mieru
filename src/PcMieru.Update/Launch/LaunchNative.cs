@@ -460,12 +460,12 @@ internal static unsafe partial class LaunchNative
         }
     }
 
-    /// <summary>Waits for a process handle to be signalled: true = the process has ended; false = the time is up. A handle that cannot be waited on counts as ended.</summary>
+    /// <summary>Waits for a process handle to be signalled: true = the process has ended; false = it timed out or the wait failed.</summary>
     internal static bool WaitForProcessHandle(nint process, TimeSpan timeout)
     {
         var milliseconds = (uint)Math.Clamp((long)timeout.TotalMilliseconds, 0, uint.MaxValue - 1);
         var result = WaitForSingleObject(process, milliseconds);
-        return result != 0x102; // WAIT_TIMEOUT
+        return result == 0; // WAIT_OBJECT_0; timeout and wait failure both leave the process unconfirmed
     }
 
     /// <summary>An inheritable copy of this process's own handle, which the swapper waits on (the GUI that hands over is the process whose end it waits for). 0 when it could not be made.</summary>

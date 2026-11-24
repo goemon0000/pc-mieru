@@ -78,7 +78,7 @@ public sealed class TestEnvironmentTests
     }
 
     [Fact]
-    public void The_forcing_is_named_in_the_update_project_and_in_one_source_file_and_nowhere_else()
+    public void Only_the_update_project_and_its_token_reader_use_the_forcing_and_the_publish_script_only_refuses_it()
     {
         var root = RepoRoot();
         foreach (var file in SourcesUnder(root, "*.cs", "*.csproj", "*.props", "*.targets", "*.ps1", "*.yml", "*.yaml", "*.json", "*.slnx", "*.sh", "*.cmd", "*.bat"))
@@ -91,11 +91,11 @@ public sealed class TestEnvironmentTests
             }
 
             var text = File.ReadAllText(file);
-            var allowed = relative is "src/PcMieru.Update/PcMieru.Update.csproj" or "src/PcMieru.Update/Transaction/ProcessElevation.cs";
+            var allowed = relative is "src/PcMieru.Update/PcMieru.Update.csproj" or "src/PcMieru.Update/Transaction/ProcessElevation.cs" or "tools/publish.ps1";
             if (!allowed)
             {
                 Assert.False(text.Contains("PcmForceElevated", StringComparison.Ordinal) || text.Contains("PCM_FORCE_ELEVATED", StringComparison.Ordinal),
-                    $"{relative} names the forced-elevation switch: it belongs to the Update project and ProcessElevation.cs only (not to a workflow, the publish script or any other source)");
+                    $"{relative} names the forced-elevation switch: it belongs to the Update project, ProcessElevation.cs and the publish guard only");
             }
         }
 
@@ -116,6 +116,16 @@ public sealed class TestEnvironmentTests
         Assert.Matches(@"<Target Name=""NoForcedElevationInTheProduct""[^>]*>\s*<Error ", csproj);
         // The symbol is defined only under the switch (never unconditionally).
         Assert.Matches(@"<PropertyGroup Condition=""'\$\(PcmForceElevated\)' == 'true'"">\s*<DefineConstants>\$\(DefineConstants\);PCM_FORCE_ELEVATED</DefineConstants>", csproj);
+
+        // The script catches the evaluated symbol even when the Update project is a referenced build outside _IsPublishing.
+        var script = File.ReadAllText(Path.Combine(RepoRoot(), "tools", "publish.ps1"));
+        var guard = script.IndexOf("-contains 'PCM_FORCE_ELEVATED'", StringComparison.Ordinal);
+        var refused = script.IndexOf("throw 'PCM_FORCE_ELEVATED is defined in the product build.", StringComparison.Ordinal);
+        var clean = script.IndexOf("Write-Step \"Clean $Output\"", StringComparison.Ordinal);
+        Assert.Contains("-getProperty:DefineConstants", script, StringComparison.Ordinal);
+        Assert.True(guard >= 0 && refused > guard && clean > refused, "the script must reject the evaluated test symbol before preparing the publish");
+        Assert.DoesNotContain("PcmForceElevated", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:DefineConstants", script, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------- durability

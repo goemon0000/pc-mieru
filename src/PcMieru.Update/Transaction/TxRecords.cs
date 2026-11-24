@@ -98,6 +98,36 @@ public static class LastResult
 {
     public const string Format = "pcm-last-result/1";
 
+    /// <summary>Null when there is no result for this attempt, including an older result for the same build.</summary>
+    internal static string? ReadAttemptReason(string path, string attemptId, string version, string buildId)
+    {
+        var bytes = TxEngine.ReadSmall(path, 65_536);
+        if (bytes is null || !TxJson.TryParseRoot(bytes, out var doc, out _))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (!TxJson.TryGetString(root, "format", out var format) || format != Format
+                || !TxJson.TryGetString(root, "tx", out var tx) || tx != attemptId
+                || !root.TryGetProperty("to", out var to)
+                || !TxJson.TryGetString(to, "version", out var toVersion) || toVersion != version
+                || !TxJson.TryGetString(to, "buildId", out var toBuild) || toBuild != buildId)
+            {
+                return null;
+            }
+
+            return TxJson.TryGetString(root, "outcome", out var outcome) ? outcome switch
+            {
+                "busy" => "busy",
+                "aborted" or "rolledBack" when TxJson.TryGetString(root, "reason", out var reason) => reason,
+                _ => string.Empty,
+            } : string.Empty;
+        }
+    }
+
     public static string Camel(string name) => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name[1..];
 
     internal static byte[] Bytes(DateTimeOffset utc, string kind, TxResult result)

@@ -118,6 +118,13 @@ public sealed class SwapHost
 
     /// <summary>How long the message on the pipe of <c>--apply</c> may take to come.</summary>
     public TimeSpan ApplyMessageWait { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long the accepted hand-off gives the originating GUI to save its work and exit.</summary>
+    public TimeSpan ApplyGuiExitWait { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Whether a normal GUI is holding the start gate after the originating GUI exited.</summary>
+    internal Func<string, bool> HasGuiGateHolder { get; init; } = static gate =>
+        RestartManager.ReadHolders(gate)?.Any(holder => holder.Name.Equals("PCMieru", StringComparison.OrdinalIgnoreCase)) == true;
 }
 
 /// <summary>The one real call of the process helpers: wait for a process to end.</summary>

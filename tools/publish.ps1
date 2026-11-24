@@ -638,6 +638,14 @@ $zip = Join-Path $Output ($name + '.zip')
 $outerManifest = Join-Path $Output ($name + '.manifest.json')
 $hashList = Join-Path $Output 'SHA256.txt'
 
+# Evaluate the update project's Release constants before publishing the apps that reference it. A referenced build can compile outside _IsPublishing.
+$updateProject = Join-Path $root 'src\PcMieru.Update\PcMieru.Update.csproj'
+$updateConstants = & dotnet msbuild $updateProject -nologo -getProperty:DefineConstants -p:Configuration=Release "-p:RuntimeIdentifier=$Runtime" "-p:Version=$Version"
+if ($LASTEXITCODE -ne 0) { throw "Could not evaluate the update project's compile constants" }
+if (($updateConstants -join ';') -split '[;,\s]+' -contains 'PCM_FORCE_ELEVATED') {
+    throw 'PCM_FORCE_ELEVATED is defined in the product build. Forced elevation is only for tests.'
+}
+
 Write-Step "Clean $Output"
 foreach ($path in @($work, $folder, $zip, $outerManifest, $hashList)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }

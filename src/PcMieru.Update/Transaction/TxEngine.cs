@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using PcMieru.Update.Bundle;
+using PcMieru.Update.Launch;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Update.Transaction;
@@ -9,6 +10,8 @@ public sealed record SwapRequest(string StagedFolder)
 {
     /// <summary>The manifest bytes bound to the release by the apply runner.</summary>
     internal byte[]? BoundManifest { get; init; }
+
+    internal ApplyMessage? HandOff { get; init; }
 }
 
 /// <summary>
@@ -40,8 +43,11 @@ public static class SwapTransaction
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(seams);
-        return new TxEngine(gate, seams, "swap").Refuse(reason, detail);
+        return Refuse(gate, seams, reason, detail, null);
     }
+
+    internal static TxResult Refuse(GateEntry gate, TxSeams seams, TxReason reason, string detail, ApplyMessage? handOff) =>
+        new TxEngine(gate, seams, "swap").Refuse(reason, detail, handOff);
 }
 
 /// <summary>
@@ -78,6 +84,7 @@ internal sealed partial class TxEngine
     private readonly string _kind;
 
     private string? _tx;
+    private ApplyMessage? _handOff;
     private InstalledRecord? _fromRecord;
     private InstalledRecord? _toRecord;
     private string? _workFolder;
@@ -119,8 +126,8 @@ internal sealed partial class TxEngine
             Tx = _tx,
             FromVersion = _fromRecord?.Version,
             FromBuildId = _fromRecord?.BuildId,
-            ToVersion = _toRecord?.Version,
-            ToBuildId = _toRecord?.BuildId,
+            ToVersion = _toRecord?.Version ?? _handOff?.Version,
+            ToBuildId = _toRecord?.BuildId ?? _handOff?.BuildId,
             Tag = tag,
             CleanupPending = cleanupPending,
         };
@@ -186,22 +193,23 @@ internal sealed partial class TxEngine
         }
     }
 
-    /// <summary>The failure tag of a rollback, best effort (it only keeps the next check from offering the same build again).</summary>
-    private void WriteBlockedTag(TxJournal journal)
+    /// <summary>Atomically replaces the blocked list. Returns the write error for the rollback result, if any.</summary>
+    private string? WriteBlockedTag(TxJournal journal)
     {
         if (journal.Tag is null)
         {
-            return;
+            return null;
         }
 
         try
         {
             var tag = new BlockedTag(journal.To.Version, journal.To.BuildId, journal.Tag, _seams.UtcNow().UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture));
             _io.WriteReplace(TxSteps.BlockedTag, _paths.Blocked, BlockedTags.Bytes(BlockedTags.Read(_paths.Blocked), tag));
+            return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // see above
+            return "blocked.json could not be written: " + ex.Message;
         }
     }
 
@@ -251,7 +259,8 @@ internal sealed partial class TxEngine
             throw new ArgumentException("a swap needs a launcher in the seams");
         }
 
-        _tx = TxPaths.NewTx();
+        _handOff = request.HandOff;
+        _tx = _handOff?.AttemptId ?? TxPaths.NewTx();
         TxJournal journal;
         try
         {
@@ -270,9 +279,10 @@ internal sealed partial class TxEngine
     }
 
     /// <summary>See <see cref="SwapTransaction.Refuse"/>.</summary>
-    public TxResult Refuse(TxReason reason, string detail)
+    public TxResult Refuse(TxReason reason, string detail, ApplyMessage? handOff)
     {
-        _tx = TxPaths.NewTx();
+        _handOff = handOff;
+        _tx = handOff?.AttemptId ?? TxPaths.NewTx();
         try
         {
             CheckGate();
@@ -323,7 +333,8 @@ internal sealed partial class TxEngine
         CheckGate();
 
         // NTFS or ReFS only, and asked before anything is written (not even last-result.json): the swap stands on the order of their metadata log (see TxNative).
-        if (!SystemVolumeFormat.IsSupported(_seams.Volume.FormatOf(_paths.Install)))
+        var supportedVolume = SystemVolumeFormat.IsSupported(_seams.Volume.FormatOf(_paths.Install));
+        if (!supportedVolume && _handOff?.AttemptId is null)
         {
             throw new TxFailure(TxReason.NotNtfs, "the volume of the install folder is not NTFS or ReFS");
         }
@@ -340,6 +351,11 @@ internal sealed partial class TxEngine
         }
 
         _mayWriteResult = true;
+        if (!supportedVolume)
+        {
+            // The apply caller needs to distinguish a permanent refusal from a lost runner. Only the result is written.
+            throw new TxFailure(TxReason.NotNtfs, "the volume of the install folder is not NTFS or ReFS");
+        }
 
         // The gate file keeps its identity (volume and file index) through the whole swap: it is never renamed, replaced or deleted. Asked now, asked again after the swap.
         _gateIdentity = FileIdentity.Of(_paths.Gate) ?? throw new TxFailure(TxReason.GateLost, "the gate file cannot be identified");

@@ -1,5 +1,7 @@
 using PcMieru.Update.Feed;
 using PcMieru.Update.Launch;
+using PcMieru.Update.Transaction;
+using RestartManager = PcMieru.Gui.RestartManager;
 
 namespace PcMieru.Gui.Tests;
 
@@ -11,6 +13,216 @@ public sealed class UpdateHandOffTests
     };
 
     private static readonly UpdateIdleFacts Idle = new(1000, false, false, false, false, RecordingActivity.Idle, false, false);
+
+    [Theory]
+    [InlineData("diskFull")]
+    [InlineData("filesInUse")]
+    [InlineData("swapIoFailure")]
+    [InlineData("ioFailure")]
+    [InlineData(null)]
+    public async Task An_aborted_build_gets_three_attempts_across_restarts_with_one_then_six_hours_between_them(string? reason)
+    {
+        using var rig = new Attempts();
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(1, rig.Starts);
+
+        rig.Clock.Utc -= TimeSpan.FromMinutes(1);
+        await rig.Make(reason).TryAsync();
+        rig.Clock.Utc += TimeSpan.FromMinutes(60);
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(1, rig.Starts);
+        Assert.Equal(UpdateAttemptFailure.Waiting, rig.Decision.Failure);
+
+        rig.Clock.Utc += TimeSpan.FromMinutes(1);
+        await rig.Make(reason).TryAsync();
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(2, rig.Starts);
+        rig.Clock.Utc += TimeSpan.FromHours(6) - TimeSpan.FromSeconds(1);
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(2, rig.Starts);
+
+        rig.Clock.Utc += TimeSpan.FromSeconds(1);
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(3, rig.Starts);
+        rig.Clock.Utc += TimeSpan.FromDays(1);
+        await rig.Make(reason).TryAsync();
+        Assert.Null(rig.Store.Read().Staged);
+        Assert.Equal(UpdateAttemptFailure.Permanent, rig.Decision.Failure);
+        Assert.Equal(3, rig.Starts);
+        Assert.Equal(3, rig.Closes);
+    }
+
+    [Theory]
+    [InlineData("nameCollision")]
+    [InlineData("installedFilesChanged")]
+    [InlineData("notNtfs")]
+    [InlineData("noRecord")]
+    [InlineData("stagedMismatch")]
+    [InlineData("backupIncomplete")]
+    [InlineData("unknownReason")]
+    public async Task A_permanent_abort_discards_the_stage_and_its_notice_is_acknowledged_once(string reason)
+    {
+        using var rig = new Attempts();
+        await rig.Make(reason).TryAsync();
+        await rig.Make(reason).TryAsync();
+        Assert.Null(rig.Store.Read().Staged);
+        Assert.False(Directory.Exists(rig.Staged.Folder));
+        Assert.Equal(UpdateAttemptFailure.Permanent, rig.Decision.Failure);
+        rig.Service().MarkHandOffFailureShown(rig.Decision.AttemptId!);
+
+        rig.SetStage(rig.Staged, generation: "another check");
+        await rig.Make(reason).TryAsync();
+        Assert.Equal(1, rig.Starts);
+        Assert.Null(rig.Store.Read().Staged);
+        Assert.Null(rig.Decision.Failure);
+    }
+
+    [Fact]
+    public async Task An_old_result_for_the_same_build_does_not_classify_a_new_attempt()
+    {
+        using var rig = new Attempts();
+        rig.WriteResult("000000000000", "nameCollision");
+        await rig.Make().TryAsync();
+        await rig.Make().TryAsync();
+        Assert.Equal(UpdateAttemptFailure.Waiting, rig.Decision.Failure);
+        Assert.Equal(rig.Staged, rig.Store.Read().Staged);
+    }
+
+    [Fact]
+    public async Task The_committed_version_clears_the_attempt_even_if_the_stage_is_still_recorded()
+    {
+        using var rig = new Attempts();
+        await rig.Make().TryAsync();
+        Assert.Single(rig.Store.Read().HandOffAttempts!);
+
+        var committed = rig.Service(new AppVersion(1, 2, 3));
+        Assert.Null(committed.InspectHandOff().Failure);
+        Assert.Empty(rig.Store.Read().HandOffAttempts!);
+        Assert.Null(rig.Store.Read().Staged);
+    }
+
+    [Theory]
+    [InlineData(ApplyRefusal.StageChanged)]
+    [InlineData(ApplyRefusal.NotNewer)]
+    [InlineData(ApplyRefusal.NotAutomatic)]
+    public async Task A_refusal_is_remembered_until_the_check_or_the_staged_build_changes(ApplyRefusal refusal)
+    {
+        using var rig = new Attempts();
+        var first = rig.Make(refusal: refusal);
+        await first.TryAsync();
+        await first.TryAsync();
+        await rig.Make(refusal: refusal).TryAsync();
+        Assert.Equal(1, rig.Starts);
+
+        rig.SetStage(rig.Staged, generation: "second check");
+        await rig.Make(refusal: refusal).TryAsync();
+        Assert.Equal(2, rig.Starts);
+
+        rig.SetStage(rig.Staged with { ManifestSha256 = new string('b', 64) }, generation: "second check");
+        await rig.Make(refusal: refusal).TryAsync();
+        Assert.Equal(3, rig.Starts);
+        Assert.Equal(0, rig.Closes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_blocked_build_is_discarded_and_never_handed_off_again(bool blockedBeforeTheFirstTry)
+    {
+        using var rig = new Attempts();
+        if (blockedBeforeTheFirstTry)
+        {
+            File.WriteAllText(rig.Paths.Blocked, $$"""
+                { "format": "pcm-blocked/1", "tags": [
+                    { "version": "{{rig.Staged.Version}}", "buildId": "{{rig.Staged.BuildId}}", "reason": "launch-failed", "utc": "2026-11-25T01:02:03Z" }
+                ] }
+                """);
+            Assert.Null(rig.Service().ReadStatus().CandidateVersion);
+        }
+
+        await rig.Make(refusal: ApplyRefusal.Blocked).TryAsync();
+        Assert.Null(rig.Store.Read().Staged);
+        rig.SetStage(rig.Staged, generation: "another check");
+        await rig.Make(refusal: ApplyRefusal.Blocked).TryAsync();
+        Assert.Equal(blockedBeforeTheFirstTry ? 0 : 1, rig.Starts);
+        Assert.Null(rig.Store.Read().Staged);
+    }
+
+    private sealed class AttemptClock : TimeProvider
+    {
+        public DateTimeOffset Utc { get; set; } = new(2026, 11, 25, 0, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => Utc;
+    }
+
+    private sealed class Attempts : IDisposable
+    {
+        private readonly UpdateTestFolder _folder = new();
+
+        public Attempts()
+        {
+            Store = new UpdateStateStore(Path.Combine(Paths.Install, "state"));
+            Staged = Stage with
+            {
+                Folder = Path.Combine(Store.Folder, "cache", "0123456789ab"),
+                BuildId = Guid.NewGuid().ToString("D"),
+                ManifestSha256 = new string('a', 64),
+            };
+            SetStage(Staged, generation: "first check");
+        }
+
+        public TxPaths Paths => _folder.Paths;
+        public UpdateStateStore Store { get; }
+        public StagedUpdate Staged { get; }
+        public AttemptClock Clock { get; } = new();
+        public int Starts { get; private set; }
+        public int Closes { get; private set; }
+        public HandOffDecision Decision { get; private set; }
+
+        public UpdateService Service(AppVersion? running = null) => new(new UpdateServiceOptions
+        {
+            Running = running ?? new AppVersion(1, 2, 2),
+            StateFolder = Store.Folder,
+            InstallFolder = Paths.Install,
+            Clock = Clock,
+            TransportFactory = () => throw new InvalidOperationException("the hand-off must not use the network"),
+        });
+
+        public void SetStage(StagedUpdate staged, string generation)
+        {
+            Directory.CreateDirectory(staged.Folder);
+            var state = Store.Read();
+            state.Staged = staged;
+            state.LatestVersion = staged.Version;
+            state.CheckGeneration = generation;
+            Assert.True(Store.TryWrite(state));
+        }
+
+        public void WriteResult(string id, string reason) => File.WriteAllText(Paths.LastResult, $$"""
+            { "format": "pcm-last-result/1", "tx": "{{id}}", "outcome": "aborted", "reason": "{{reason}}",
+              "to": { "version": "{{Staged.Version}}", "buildId": "{{Staged.BuildId}}" } }
+            """);
+
+        public UpdateHandOff Make(string? reason = null, ApplyRefusal? refusal = null)
+        {
+            var service = Service();
+            return new UpdateHandOff(() => (UpdateMode.Automatic, service.ReadStatus().Staged), () => Idle,
+                () => GateHolders.Clear, (_, id) =>
+                {
+                    Assert.Contains(Store.Read().HandOffAttempts!, attempt => attempt.Id == id);
+                    Starts++;
+                    if (reason is not null)
+                    {
+                        WriteResult(id!, reason);
+                    }
+
+                    return refusal is { } why ? ApplyHandOffResult.No(why, "test") : ApplyHandOffResult.Yes;
+                },
+                _ => { }, () => Closes++, () => 61_000, service, decision => Decision = decision);
+        }
+
+        public void Dispose() => _folder.Dispose();
+    }
 
     [Theory]
     [InlineData("notify")]

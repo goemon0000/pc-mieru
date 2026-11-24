@@ -23,28 +23,24 @@ internal sealed class UpdateHandOff(
     Func<(UpdateMode Mode, StagedUpdate? Stage)> candidate,
     Func<UpdateIdleFacts> facts,
     Func<GateHolders> holders,
-    Func<StagedUpdate, ApplyHandOffResult> handOff,
+    Func<StagedUpdate, string?, ApplyHandOffResult> handOff,
     Action<UpdateDeferral?> defer,
     Action close,
-    Func<uint>? tick = null)
+    Func<uint>? tick = null,
+    IUpdateService? attempts = null,
+    Action<HandOffDecision>? failure = null)
 {
     private bool _trying;
 
-    public async Task TryAsync()
+    public UpdateHandOff(Func<(UpdateMode, StagedUpdate?)> candidate, Func<UpdateIdleFacts> facts, Func<GateHolders> holders,
+        Func<StagedUpdate, ApplyHandOffResult> handOff, Action<UpdateDeferral?> defer, Action close, Func<uint>? tick = null)
+        : this(candidate, facts, holders, (stage, _) => handOff(stage), defer, close, tick)
+    {
+    }
+
+    public async Task TryAsync(bool reconcileOnly = false)
     {
         if (_trying)
-        {
-            return;
-        }
-
-        var (mode, staged) = candidate();
-        if (mode != UpdateMode.Automatic || staged is null)
-        {
-            defer(null);
-            return;
-        }
-
-        if (!Idle())
         {
             return;
         }
@@ -52,6 +48,31 @@ internal sealed class UpdateHandOff(
         _trying = true;
         try
         {
+            var (mode, staged) = candidate();
+            if (attempts is not null && UpdateModes.MayUseNetwork(mode))
+            {
+                var decision = await Task.Run(attempts.InspectHandOff).ConfigureAwait(true);
+                failure?.Invoke(decision);
+                if (!decision.MayStart)
+                {
+                    defer(decision.Refusal is { } why ? new UpdateDeferral(GateHolders.Clear, why) : null);
+                    return;
+                }
+
+                (mode, staged) = candidate();
+            }
+
+            if (reconcileOnly || mode != UpdateMode.Automatic || staged is null)
+            {
+                defer(null);
+                return;
+            }
+
+            if (!Idle())
+            {
+                return;
+            }
+
             var held = await Task.Run(holders).ConfigureAwait(true);
             if (candidate() != (mode, staged) || !Idle())
             {
@@ -64,16 +85,22 @@ internal sealed class UpdateHandOff(
                 return;
             }
 
-            // Keep the UI sequence together: after the runner accepts, it is already waiting for this process to exit.
-            var reply = handOff(staged);
+            using var attempt = attempts?.BeginHandOff(staged);
+            if (attempts is not null && attempt is null)
+            {
+                return;
+            }
+
+            // The pipe may take seconds to answer. Once it accepts, the very next action on the window's thread is the close.
+            var reply = await Task.Run(() => handOff(staged, attempt?.Id)).ConfigureAwait(true);
             if (reply.Accepted)
             {
                 close();
+                return;
             }
-            else
-            {
-                defer(new UpdateDeferral(GateHolders.Clear, reply.Refusal));
-            }
+
+            attempt?.Refused(reply.Refusal);
+            defer(new UpdateDeferral(GateHolders.Clear, reply.Refusal));
         }
         finally
         {

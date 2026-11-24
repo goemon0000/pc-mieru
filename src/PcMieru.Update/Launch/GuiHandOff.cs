@@ -34,7 +34,7 @@ public sealed class HandOffOptions
 /// </summary>
 public static class GuiHandOff
 {
-    public static ApplyHandOffResult Run(string installFolder, StagedUpdate staged, HandOffOptions? options = null)
+    public static ApplyHandOffResult Run(string installFolder, StagedUpdate staged, HandOffOptions? options = null, string? attemptId = null)
     {
         options ??= new HandOffOptions();
         var ready = options.Prepare(installFolder);
@@ -73,7 +73,8 @@ public static class GuiHandOff
             child.Dispose(); // not a job: the runner outlives this program on purpose; only our handle to it is let go
             channel = new PipeChannel(server);
             server = new SafeFileHandle();
-            if (!channel.Send(ApplyMessage.Of(staged).ToLine()))
+            var message = ApplyMessage.Of(staged) with { AttemptId = attemptId };
+            if (!channel.Send(message.ToLine()))
             {
                 return ApplyHandOffResult.No(ApplyRefusal.NoAnswer, "the runner closed the pipe");
             }

@@ -37,7 +37,7 @@ internal static class UpdateComposition
 
         var service = new DeferredUpdateService(
             () => InstallId.StateFolder(localFolder, programFile) is { } folder
-                ? new UpdateService(OptionsFor(running, folder, InstallGate.InstallFolderOf(programFile)))
+                ? new UpdateService(OptionsFor(running, folder, InstallGate.InstallFolderOf(programFile), localFolder))
                 : GateIsThere(programFile)
                     ? new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "the gate file of this install has no id")
                     : new UnavailableUpdateService(UpdateRefusal.GateMissing, "there is no gate file beside this program"),
@@ -45,10 +45,11 @@ internal static class UpdateComposition
         return new UpdateWiring(new UpdateController(service, settings, timers, () => PlacementOf(programFile), running), null);
     }
 
-    internal static UpdateServiceOptions OptionsFor(AppVersion running, string state, string install) => new()
+    internal static UpdateServiceOptions OptionsFor(AppVersion running, string state, string install, string? localFolder = null) => new()
     {
         Running = running,
         StateFolder = state,
+        LocalFolder = localFolder,
         InstallFolder = install,
         BlockedTags = BlockedTags.Read(new TxPaths(install).Blocked)
             .Select(blocked => AppVersion.TryParse(blocked.Version, out var version) ? version.Tag : null)
@@ -81,6 +82,12 @@ internal sealed class DeferredUpdateService(Func<IUpdateService> make, Func<Upda
 
     public Task<UpdateStageResult> StageAsync(UpdateMode mode, UpdateCheck candidate, CancellationToken ct) =>
         mode == UpdateMode.Automatic ? _inner.Value.StageAsync(mode, candidate, ct) : Task.FromResult(UpdateStageResult.NotAttempted("automatic updates are off"));
+
+    public HandOffDecision InspectHandOff() => _inner.Value.InspectHandOff();
+
+    public UpdateAttemptLease? BeginHandOff(StagedUpdate stage) => _inner.Value.BeginHandOff(stage);
+
+    public void MarkHandOffFailureShown(string attemptId) => _inner.Value.MarkHandOffFailureShown(attemptId);
 }
 
 /// <summary>A service that cannot check (this PC cannot say who it is, or what version it is): it refuses with the reason and asks nobody.</summary>

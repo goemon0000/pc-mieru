@@ -114,6 +114,34 @@ public sealed class StageTests : IDisposable
         return result.Staged!;
     }
 
+    [Fact]
+    public async Task The_stager_and_its_cache_accept_a_profile_junction_above_L()
+    {
+        var profile = Path.Combine(_r.Feed.Temp, "profile");
+        var alias = Path.Combine(_r.Feed.Temp, "alias");
+        Directory.CreateDirectory(profile);
+        Rig.Junction(alias, profile);
+        try
+        {
+            var local = Path.Combine(alias, "PCMieru");
+            var state = Path.Combine(local, "update", "install");
+            var service = _r.Feed.Service(state, local);
+            _r.Feed.Release();
+            var check = await service.CheckAsync(UpdateMode.Automatic, manual: true, CancellationToken.None);
+            var first = Staged(await service.StageAsync(UpdateMode.Automatic, check, CancellationToken.None));
+            var second = await service.StageAsync(UpdateMode.Automatic, check, CancellationToken.None);
+
+            Assert.Equal(first, Staged(second));
+            Assert.True(second.Reused);
+            Assert.StartsWith(local, first.Folder, StringComparison.OrdinalIgnoreCase);
+            Assert.True(Directory.Exists(Path.Combine(profile, "PCMieru", "update", "install", "cache", Path.GetFileName(first.Folder))));
+        }
+        finally
+        {
+            Directory.Delete(alias);
+        }
+    }
+
     // ---------------------------------------------------------------------------------------------------------------- only Automatic downloads
 
     [Theory]

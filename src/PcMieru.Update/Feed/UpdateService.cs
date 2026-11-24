@@ -42,6 +42,17 @@ public interface IUpdateService
     {
     }
 
+    /// <summary>Reconciles the persisted attempt with the running version and the runner's last result.</summary>
+    HandOffDecision InspectHandOff() => new(true);
+
+    /// <summary>Records a hand-off before the runner can start, holding the check lock until its answer.</summary>
+    UpdateAttemptLease? BeginHandOff(StagedUpdate stage) => null;
+
+    /// <summary>Acknowledges the permanent failure when the settings page displays it.</summary>
+    void MarkHandOffFailureShown(string attemptId)
+    {
+    }
+
     /// <summary>Forgets the staged update and removes its folder (the runner refused it, or it can no longer be trusted): the next check stages it again.</summary>
     void DiscardStage()
     {
@@ -62,6 +73,9 @@ public sealed class UpdateServiceOptions
 
     /// <summary>L\update\&lt;id&gt; (see <see cref="InstallId.StateFolder"/>).</summary>
     public required string StateFolder { get; init; }
+
+    /// <summary>L, the root below which staging refuses reparse points. Standalone callers can use the state folder as their root.</summary>
+    public string? LocalFolder { get; init; }
 
     /// <summary>Tags that must not be offered again (step 4 reads them from its blocked list). Compared to the tag as written, "v1.2.3".</summary>
     public IReadOnlyCollection<string> BlockedTags { get; init; } = [];
@@ -97,7 +111,7 @@ public sealed class UpdateServiceOptions
 /// (a manual check waits too), then "not due yet" (a scheduled check only), then the one write that says "I looked now", then the requests: the API, SHA256.txt and the
 /// outer manifest. <see cref="CheckAsync"/> never asks for the zip; <see cref="StageAsync"/> does, in Automatic mode only (DESIGN-B 3.3).
 /// </summary>
-public sealed class UpdateService : IUpdateService
+public sealed partial class UpdateService : IUpdateService
 {
     private readonly UpdateServiceOptions _options;
     private readonly UpdateStateStore _store;
@@ -108,7 +122,13 @@ public sealed class UpdateService : IUpdateService
         _store = new UpdateStateStore(options.StateFolder);
     }
 
-    public UpdateStatus ReadStatus() => _store.Read().ToStatus(_options.StateFolder);
+    public UpdateStatus ReadStatus()
+    {
+        var status = _store.Read().ToStatus(_options.StateFolder);
+        return status.CandidateVersion is { } candidate && IsBlocked(candidate)
+            ? status with { CandidateVersion = null, CandidatePageUrl = null, Staged = null, LastRefusal = UpdateRefusal.BlockedTag, RefusedVersion = candidate }
+            : status;
+    }
 
     public async Task<UpdateCheck> CheckAsync(UpdateMode mode, bool manual, CancellationToken ct)
     {
@@ -145,6 +165,7 @@ public sealed class UpdateService : IUpdateService
 
             // "I looked now" is written before the request: a crash or a hang in the request must not make the next start look again at once.
             state.LastCheckUtc = now;
+            state.CheckGeneration = Guid.NewGuid().ToString("N");
             state.LastRefusal = null;
             if (!_store.TryWrite(state))
             {
@@ -187,7 +208,7 @@ public sealed class UpdateService : IUpdateService
             if (!operational && state.Staged is { } stale && !(result.Kind == UpdateCheckKind.Candidate && result.Version is { } offered && stale.Tag == offered.Tag))
             {
                 state.Staged = null;
-                StageCache.Clear(_options.StateFolder);
+                StageCache.Clear(_options.StateFolder, localFolder: _options.LocalFolder);
             }
 
             _store.TryWrite(state);
@@ -217,7 +238,7 @@ public sealed class UpdateService : IUpdateService
         // From here on the release has been read, so a refusal says which version it is about.
         UpdateCheck RefusedV(UpdateRefusal reason, string text) => UpdateCheck.Refuse(reason, text, fetched: true, release.Version);
 
-        if (_options.BlockedTags.Contains(release.Tag, StringComparer.Ordinal))
+        if (IsBlocked(release.Version))
         {
             return RefusedV(UpdateRefusal.BlockedTag, release.Tag + " is on the blocked list");
         }
@@ -326,12 +347,22 @@ public sealed class UpdateService : IUpdateService
         {
             var state = _store.Read();
 
+            if (IsBlocked(release.Version))
+            {
+                return UpdateStageResult.Refuse(UpdateRefusal.BlockedTag, "this version is on the blocked list");
+            }
+
+            if (FindAttempt(state, release.Manifest.BuildId, release.ManifestSha256) is { Permanent: true })
+            {
+                return UpdateStageResult.NotAttempted("an earlier hand-off permanently refused this build");
+            }
+
             // A stage that is already here is checked again in full (every file, length and hash); if it is whole it is kept and nothing is downloaded.
             if (state.Staged is { } existing && existing.Tag == release.Tag && existing.BuildId == release.Manifest.BuildId
                 && string.Equals(existing.ManifestSha256, release.ManifestSha256, StringComparison.Ordinal)
-                && await Task.Run(() => StageCache.IsIntact(_options.StateFolder, existing, ct), ct).ConfigureAwait(false))
+                && await Task.Run(() => StageCache.IsIntact(_options.StateFolder, existing, ct, _options.LocalFolder), ct).ConfigureAwait(false))
             {
-                StageCache.Clear(_options.StateFolder, keep: existing.Folder);
+                StageCache.Clear(_options.StateFolder, keep: existing.Folder, localFolder: _options.LocalFolder);
                 return UpdateStageResult.Done(existing, reused: true);
             }
 
@@ -345,7 +376,7 @@ public sealed class UpdateService : IUpdateService
             }
 
             // Old stage folders go before a new one is made (and a stage that is not wanted any more with them).
-            StageCache.Clear(_options.StateFolder);
+            StageCache.Clear(_options.StateFolder, localFolder: _options.LocalFolder);
             state.Staged = null;
 
             using var transport = _options.TransportFactory?.Invoke() ?? new UpdateHttp(_options.Running.ToString(), clock: _options.Clock);
@@ -358,7 +389,7 @@ public sealed class UpdateService : IUpdateService
             StageRun run;
             try
             {
-                run = await stager.RunAsync(release, _options.StateFolder, RunnerHandOff.CurrentRecord(new TxPaths(install)), TxPaths.NewTx(), ct).ConfigureAwait(false);
+                run = await stager.RunAsync(release, _options.StateFolder, _options.LocalFolder ?? _options.StateFolder, RunnerHandOff.CurrentRecord(new TxPaths(install)), TxPaths.NewTx(), ct).ConfigureAwait(false);
             }
             catch (RateLimitedException limited)
             {
@@ -426,7 +457,7 @@ public sealed class UpdateService : IUpdateService
                 changed = true;
             }
 
-            StageCache.Clear(_options.StateFolder, keep: state.Staged?.Folder);
+            StageCache.Clear(_options.StateFolder, keep: state.Staged?.Folder, localFolder: _options.LocalFolder);
             if (changed)
             {
                 _store.TryWrite(state);
@@ -463,10 +494,16 @@ public sealed class UpdateService : IUpdateService
 
         using (held)
         {
-            var state = _store.Read();
-            state.Staged = null;
-            StageCache.Clear(_options.StateFolder);
-            _store.TryWrite(state);
+            DiscardStage(_store.Read());
+        }
+    }
+
+    private void DiscardStage(UpdateState state)
+    {
+        state.Staged = null;
+        if (_store.TryWrite(state))
+        {
+            StageCache.Clear(_options.StateFolder, localFolder: _options.LocalFolder);
         }
     }
 

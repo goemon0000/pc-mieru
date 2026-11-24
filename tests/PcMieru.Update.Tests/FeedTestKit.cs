@@ -334,11 +334,12 @@ internal sealed class FeedRig : IDisposable
 
     public string Temp => _temp.Path;
 
-    public UpdateService Service() => new(new UpdateServiceOptions
+    public UpdateService Service(string? stateFolder = null, string? localFolder = null) => new(new UpdateServiceOptions
     {
         Running = Running,
         Installed = Installed,
-        StateFolder = StateFolder,
+        StateFolder = stateFolder ?? StateFolder,
+        LocalFolder = localFolder,
         BlockedTags = Blocked,
         Clock = Clock,
         InstallFolder = InstallFolder,

@@ -53,10 +53,10 @@ internal sealed class ApplyRig : IDisposable
     /// <summary>Files of the user's own that are in L (planted before, and byte-identical after, whatever the update does).</summary>
     public static readonly string[] UserFilesInLocal = ["settings/mine.json", "records/a.bin"];
 
-    public ApplyRig(string label, string? mode = "auto", Action<SyntheticSet, SyntheticSet>? shape = null)
+    public ApplyRig(string label, string? mode = "auto", Action<SyntheticSet, SyntheticSet>? shape = null, string? profile = null)
     {
         Rig = Rig.Create(label, recorded: true, shape);
-        Local = Scratch.NewFolder(label + "-L");
+        Local = profile is null ? Scratch.NewFolder(label + "-L") : Path.Combine(profile, "PCMieru");
         foreach (var name in UserFilesInLocal)
         {
             var path = Path.Combine(Local, name.Replace('/', Path.DirectorySeparatorChar));
@@ -162,6 +162,10 @@ public sealed class SwapApplyTests
 
         public bool NoEndpoint { get; set; }
 
+        public bool AnotherGui { get; set; }
+
+        public IFaultInjector? Fault { get; set; }
+
         public int Opened { get; private set; }
 
         public int Released { get; private set; }
@@ -169,6 +173,8 @@ public sealed class SwapApplyTests
         public List<TimeSpan> GuiWaits { get; } = [];
 
         public string Self { get; set; } = rig.Rig.Paths.Recover;
+
+        public string LocalFolder { get; set; } = rig.Local;
 
         /// <summary>What the host says to start I\PCMieru.exe with at the end: nothing, like the product's runner, unless a test (standing for the test build of the runner) says otherwise.</summary>
         public IReadOnlyList<string> ProgramArguments { get; set; } = [];
@@ -181,14 +187,14 @@ public sealed class SwapApplyTests
             Out = Out,
             Error = Err,
             IsElevated = () => Elevated,
-            Seams = Rig.Seams(),
+            Seams = Rig.Seams(Fault),
             Starter = Starter,
             Sleep = static _ => { },
             ConsoleIsAlone = static () => false,
             SwapGateWait = TimeSpan.FromSeconds(1),
-            AfterPidWait = TimeSpan.FromSeconds(30),
+            HasGuiGateHolder = _ => AnotherGui,
             ReadingPause = TimeSpan.Zero,
-            LocalFolder = rig.Local,
+            LocalFolder = LocalFolder,
             ProgramArguments = ProgramArguments,
             OpenApplyEndpoint = (_, _) =>
             {
@@ -515,7 +521,7 @@ public sealed class SwapApplyTests
     // ---------------------------------------------------------------------------------------------------------------------------- after "accepted"
 
     [Fact]
-    public void A_program_that_does_not_close_in_time_leaves_everything_as_it_was_and_starts_nothing()
+    public void A_program_that_does_not_close_in_five_minutes_leaves_everything_as_it_was_and_starts_once()
     {
         using var rig = new ApplyRig("apply-notclosed");
         var before = rig.Snapshot();
@@ -524,29 +530,39 @@ public sealed class SwapApplyTests
         Assert.Equal(SwapExit.Busy, run.Run());
 
         Assert.Equal([ApplyAnswer.Accepted], run.Channel.Sent);
-        Assert.Equal([TimeSpan.FromSeconds(30)], run.GuiWaits);
-        Assert.Empty(run.Starter.Starts); // the program is still open: a second one would be wrong
+        Assert.Equal([TimeSpan.FromMinutes(5)], run.GuiWaits);
+        AssertStartedOnce(run, rig);
         Assert.Contains("result AfterPid Busy exit=30", run.Out.ToString(), StringComparison.Ordinal);
         rig.AssertUnchanged(before, "the program did not close");
         Assert.Null(rig.LastResultOnDisk());
         Assert.False(File.Exists(rig.Rig.Paths.Journal));
     }
 
-    [Fact]
-    public void A_gate_that_stays_busy_writes_no_journal_and_starts_the_old_program_again()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_gate_that_stays_busy_starts_the_old_gui_only_if_another_gui_does_not_hold_it(bool anotherGui)
     {
         using var rig = new ApplyRig("apply-gatebusy");
         var before = rig.Snapshot();
-        var run = new Harness(rig);
+        var run = new Harness(rig) { AnotherGui = anotherGui };
 
-        using (var program = InstallGate.EnterStartup(rig.Rig.ExePath)) // another PC Mieru is open: its shared hold keeps the exclusive entry out
+        using (var program = InstallGate.EnterStartup(rig.Rig.ExePath)) // a shared hold keeps exclusive entry out
         {
             Assert.True(program.IsOpen);
             Assert.Equal(SwapExit.Busy, run.Run());
         }
 
         Assert.Contains("result Gate Busy exit=30", run.Out.ToString(), StringComparison.Ordinal);
-        AssertStartedOnce(run, rig);
+        if (anotherGui)
+        {
+            Assert.Empty(run.Starter.Starts);
+        }
+        else
+        {
+            AssertStartedOnce(run, rig);
+        }
+
         Assert.True(run.Channel.Disposed);
         rig.AssertUnchanged(before, "a gate that stayed busy");
         Assert.Null(rig.LastResultOnDisk());
@@ -564,9 +580,11 @@ public sealed class SwapApplyTests
     public void A_change_that_the_closing_program_makes_is_seen_again_after_it_closed_and_the_old_program_is_started(string change)
     {
         using var rig = new ApplyRig("apply-recheck-" + change);
+        const string attemptId = "1123456789ab";
         var treeBefore = Rig.Snapshot(rig.Rig.Install, includeUpdate: true);
         var run = new Harness(rig)
         {
+            Channel = new ScriptedChannel((rig.Message with { AttemptId = attemptId }).ToLine()),
             OnGuiEnd = () =>
             {
                 switch (change)
@@ -602,6 +620,7 @@ public sealed class SwapApplyTests
         var written = rig.LastResultOnDisk();
         Assert.Equal("aborted", written?.Outcome);
         Assert.Equal(change.StartsWith("stage", StringComparison.Ordinal) ? "stagedMismatch" : "updateNotAllowed", written?.Reason);
+        Assert.Equal(written?.Reason, LastResult.ReadAttemptReason(rig.Rig.Paths.LastResult, attemptId, rig.Staged.Version, rig.Staged.BuildId));
         rig.Rig.AssertTree(Generation.Old, "after an abort");
         var treeAfter = Rig.Snapshot(rig.Rig.Install, includeUpdate: true);
         foreach (var key in treeBefore.Keys.Where(k => k != "update/last-result.json"))
@@ -610,6 +629,41 @@ public sealed class SwapApplyTests
         }
 
         Assert.False(File.Exists(rig.Rig.Paths.Journal));
+    }
+
+    [Fact]
+    public void A_junction_above_L_is_allowed_by_the_gui_cache_and_the_runner()
+    {
+        var scratch = Scratch.NewFolder("apply-ancestor-link");
+        var profile = Path.Combine(scratch, "profile");
+        var alias = Path.Combine(scratch, "alias");
+        try
+        {
+            using var rig = new ApplyRig("apply-ancestor", profile: profile);
+            Rig.Junction(alias, profile);
+            var local = Path.Combine(alias, Path.GetFileName(rig.Local));
+            var state = InstallId.StateFolder(local, rig.Rig.ExePath)!;
+            var stage = rig.Staged with { Folder = Path.Combine(StageLayout.CacheOf(state), Path.GetFileName(rig.Staged.Folder)) };
+            Assert.True(StageCache.IsIntact(state, stage, localFolder: local));
+            var run = new Harness(rig)
+            {
+                LocalFolder = local,
+                Channel = new ScriptedChannel(ApplyMessage.Of(stage).ToLine()),
+                Launcher = FakeLauncher.Ok(),
+            };
+
+            Assert.Equal(SwapExit.Committed, run.Run());
+            AssertStartedOnce(run, rig);
+        }
+        finally
+        {
+            if (Directory.Exists(alias))
+            {
+                Directory.Delete(alias);
+            }
+
+            Scratch.Delete(scratch);
+        }
     }
 
     [Fact]
@@ -666,7 +720,7 @@ public sealed class SwapApplyTests
     }
 
     [Fact]
-    public void A_recovery_that_failed_starts_nothing_and_says_so()
+    public void A_recovery_that_failed_starts_the_gui_once_for_its_recovery_screen()
     {
         using var rig = new ApplyRig("apply-recoveryfailed");
         var launcher = new FakeLauncher(LaunchVerdict.Failed)
@@ -677,9 +731,59 @@ public sealed class SwapApplyTests
 
         Assert.Equal(SwapExit.RecoveryFailed, run.Run());
 
-        Assert.Empty(run.Starter.Starts);
+        AssertStartedOnce(run, rig);
         Assert.Equal(("recoveryFailed", "fileNeitherHash"), rig.LastResultOnDisk());
         Assert.True(File.Exists(rig.Rig.Paths.Sentinel));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_gate_refusal_or_an_unexpected_exception_after_accept_starts_the_program_once(bool throws)
+    {
+        using var rig = new ApplyRig("apply-final-start");
+        var run = new Harness(rig)
+        {
+            OnGuiEnd = () =>
+            {
+                if (throws)
+                {
+                    throw new InvalidOperationException("the wait failed");
+                }
+
+                File.Delete(rig.Rig.Paths.Gate);
+            },
+        };
+
+        Assert.Equal(throws ? SwapExit.Crashed : SwapExit.GateRefused, run.Run());
+        Assert.Equal([ApplyAnswer.Accepted], run.Channel.Sent);
+        Assert.True(run.Channel.Disposed);
+        Assert.Equal(1, run.Released);
+        AssertStartedOnce(run, rig);
+    }
+
+    [Fact]
+    public void A_failed_blocked_list_write_keeps_the_old_list_and_is_reported_in_the_rollback_result()
+    {
+        using var rig = new ApplyRig("apply-block-error");
+        rig.Block("0.0.1", rig.Rig.Old.BuildId);
+        var run = new Harness(rig)
+        {
+            Launcher = FakeLauncher.AlwaysFail(),
+            Fault = new FailOnce(new CutPoint(TxSteps.BlockedTag, TxEdge.Mid, 1)),
+        };
+
+        Assert.Equal(SwapExit.RolledBack, run.Run());
+        AssertStartedOnce(run, rig);
+        Assert.Equal("0.0.1", Assert.Single(BlockedTags.Read(rig.Rig.Paths.Blocked)).Version);
+        var result = File.ReadAllText(rig.Rig.Paths.LastResult);
+        Assert.Contains("blocked.json could not be written", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_wait_on_an_invalid_process_handle_does_not_count_as_exit()
+    {
+        Assert.False(LaunchNative.WaitForProcessHandle(0, TimeSpan.Zero));
     }
 
     [Fact]

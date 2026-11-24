@@ -58,7 +58,11 @@ internal sealed partial class TxEngine
                 _io.DeleteFile(TxSteps.SentinelDelete, _paths.Sentinel);
             }
 
-            WriteBlockedTag(j);
+            if (WriteBlockedTag(j) is { } tagError)
+            {
+                detail += "; " + tagError;
+            }
+
             _io.DeleteFile(TxSteps.RollbackJournalDelete, _paths.Journal);
         }
         catch (TxFailure failure)

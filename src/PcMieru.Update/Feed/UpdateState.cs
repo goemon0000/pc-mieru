@@ -13,6 +13,12 @@ public sealed class UpdateState
     /// <summary>When the last check began (written before the request, so a crash does not make a loop).</summary>
     public DateTimeOffset? LastCheckUtc { get; set; }
 
+    /// <summary>The identity of the last check, even when two checks started at the same wall clock time.</summary>
+    public string? CheckGeneration { get; set; }
+
+    /// <summary>The GUI's automatic hand-off history, by build id and outer manifest hash.</summary>
+    public List<UpdateAttempt>? HandOffAttempts { get; set; }
+
     /// <summary>Until when a rate limit must be waited out.</summary>
     public DateTimeOffset? BackoffUntilUtc { get; set; }
 

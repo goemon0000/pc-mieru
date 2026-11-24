@@ -26,7 +26,7 @@ public sealed class ApplyEndpoint : IDisposable
 
     public IMessageChannel Channel { get; }
 
-    /// <summary>True when the program has ended (or the handle cannot be waited on); false when the time ran out.</summary>
+    /// <summary>True only when the originating process is known to have ended.</summary>
     public bool WaitForGuiEnd(TimeSpan timeout) => _waitForGuiEnd(timeout);
 
     /// <summary>Closes the pipe and the process handle. Called before anything is started from the runner: nothing that was handed down may reach a program it starts.</summary>
@@ -69,11 +69,11 @@ public sealed class ApplyEndpoint : IDisposable
 ///   <c>L\update</c>), it is the folder whose manifest has the hash that was sent (and its inner manifest is the file that manifest lists), the version is not blocked and is newer than the installed one, and gui.ini says
 ///   <c>update.mode=auto</c>. A refusal is answered (<c>refused &lt;why&gt;</c>, exit 12) and the program stays open; nothing was changed.</item>
 /// <item>Answer <c>accepted</c>. Only now does the program save its settings, stop its helpers and close.</item>
-/// <item>Wait for THAT process (its handle) to end, 30 s. Still there: exit 30, nothing changed, nothing started.</item>
-/// <item>Let go of the pipe and the process handle, then take the start gate EXCLUSIVELY (<see cref="SwapHost.SwapGateWait"/>). Busy: no journal, the old program is started again, exit 30.</item>
+/// <item>Wait for THAT process (its handle) to end, up to five minutes. If the wait cannot confirm its exit, return 30 without swapping.</item>
+/// <item>Let go of the pipe and the process handle, then take the start gate EXCLUSIVELY (<see cref="SwapHost.SwapGateWait"/>). Busy: no journal, exit 30.</item>
 /// <item>Look at the disk again, now that nobody can start (the first look was while the program was still open). A change: an abort that is written to last-result.json, the old program is started again, exit 12.</item>
 /// <item>The swap itself (<see cref="SwapTransaction.Run"/>) with the production launch check (<see cref="ProductionLaunchVerifier"/>): it keeps the gate exclusive and starts the new version in verify mode.</item>
-/// <item>Let go of the gate, then start <c>I\PCMieru.exe</c> (the new version after a commit, the old one after a rollback or an abort). After a failed recovery nothing is started: the next normal start shows the gate window.</item>
+/// <item>Let go of the gate, then start <c>I\PCMieru.exe</c> (the new version after a commit, the old one after a rollback or an abort). This also opens the gate window after a failed recovery. If another normal GUI already holds the gate, it is left running on its own.</item>
 /// </list>
 /// The swap's preparation checks the staged payload against the inner manifest, which <see cref="StageCache.ReadBoundManifest"/> ties to the manifest hash sent on the pipe.
 /// </summary>
@@ -122,7 +122,13 @@ public static class SwapApply
         var state = InstallId.StateFolder(local, exe); // asked now: once the gate is held exclusively, even this process cannot open the gate file to read its id
         var staged = new StagedUpdate { Version = message.Version, BuildId = message.BuildId, Tag = message.Tag, Folder = message.Stage, ManifestSha256 = message.ManifestSha256 };
 
-        if (Check(install, local, state, staged, out _) is { } first)
+        Finding? first;
+        using (var files = OpenStage(local, state, staged))
+        {
+            first = Check(install, local, state, staged, files, out _);
+        }
+
+        if (first is not null)
         {
             endpoint.Channel.Send(ApplyAnswer.Refuse(first.Refusal));
             host.Out.WriteLine($"result Refused {first.Refusal} exit={SwapExit.Aborted.ToString(CultureInfo.InvariantCulture)}");
@@ -138,72 +144,88 @@ public static class SwapApply
             return SwapExit.Aborted;
         }
 
-        // The program closes after "accepted". Its pipe stays open until it has gone (what was written is read before it ends), then the handles are let go of.
-        if (!endpoint.WaitForGuiEnd(host.AfterPidWait))
+        var anotherGui = false;
+        try
         {
-            host.Out.WriteLine("result AfterPid Busy exit=" + SwapExit.Busy.ToString(CultureInfo.InvariantCulture));
-            SwapCli.Say(host, "PCミエルがまだ終了していません。PCミエルをすべて終了してから、もう一度実行してください。", "PC Mieru has not closed yet. Close PC Mieru completely, then run this again.");
-            return SwapExit.Busy;
+            // Keep the pipe open until the originating process has read its answer and exited.
+            if (!endpoint.WaitForGuiEnd(host.ApplyGuiExitWait))
+            {
+                host.Out.WriteLine("result AfterPid Busy exit=" + SwapExit.Busy.ToString(CultureInfo.InvariantCulture));
+                SwapCli.Say(host, "PCミエルがまだ終了していません。PCミエルをすべて終了してから、もう一度実行してください。", "PC Mieru has not closed yet. Close PC Mieru completely, then run this again.");
+                return SwapExit.Busy;
+            }
+
+            endpoint.Dispose(); // Nothing handed down reaches a program that is started from here.
+            using var gate = SwapCli.EnterGate(host, install, host.SwapGateWait);
+            if (!gate.IsOpen)
+            {
+                anotherGui = gate.Outcome == GateOutcome.Busy && host.HasGuiGateHolder(gate.GatePath);
+                return NotEntered(host, gate);
+            }
+
+            return Locked(host, install, local, state, staged, message, gate);
         }
-
-        endpoint.Dispose(); // nothing handed down reaches a program that is started from here
-
-        int code;
-        bool startProgram;
-        using (var gate = SwapCli.EnterGate(host, install, host.SwapGateWait))
+        finally
         {
-            (code, startProgram) = gate.IsOpen ? Locked(host, install, local, state, staged, gate) : NotEntered(host, gate);
+            try
+            {
+                endpoint.Dispose();
+            }
+            finally
+            {
+                if (!anotherGui)
+                {
+                    SwapCli.StartInstalledProgram(host, install);
+                }
+            }
         }
-
-        if (startProgram)
-        {
-            SwapCli.StartInstalledProgram(host, install);
-        }
-
-        return code;
     }
 
-    private static (int Code, bool Start) NotEntered(SwapHost host, GateEntry gate)
+    private static int NotEntered(SwapHost host, GateEntry gate)
     {
         if (gate.Outcome == GateOutcome.Busy)
         {
             host.Out.WriteLine("result Gate Busy exit=" + SwapExit.Busy.ToString(CultureInfo.InvariantCulture));
             SwapCli.Say(host, "PCミエルのファイルが使用中です。PCミエルをすべて終了してから、もう一度実行してください。", "PC Mieru's files are in use. Close PC Mieru completely, then run this again.");
-            return (SwapExit.Busy, true); // no journal was written: the old program is simply started again
+            return SwapExit.Busy;
         }
 
         host.Out.WriteLine($"result Gate {gate.Outcome} exit={SwapExit.GateRefused.ToString(CultureInfo.InvariantCulture)}");
         host.Error.WriteLine("swap: " + gate.Reason + " (" + gate.Detail + ")");
         SwapCli.Say(host, "PCミエルの起動の門を開けませんでした。ZIP を新しいフォルダーに展開して使ってください。", "The start gate could not be opened. Unzip the ZIP into a new folder and use that copy. (" + gate.Reason + ")");
-        return (SwapExit.GateRefused, false);
+        return SwapExit.GateRefused;
     }
 
-    private static (int Code, bool Start) Locked(SwapHost host, string install, string local, string? state, StagedUpdate staged, GateEntry gate)
+    private static int Locked(SwapHost host, string install, string local, string? state, StagedUpdate staged, ApplyMessage message, GateEntry gate)
     {
         TxResult result;
-        if (Check(install, local, state, staged, out var boundManifest) is { } changed)
+        using var files = OpenStage(local, state, staged);
+        if (Check(install, local, state, staged, files, out var boundManifest) is { } changed)
         {
             var reason = changed.Refusal is ApplyRefusal.StageNotFound or ApplyRefusal.StageChanged ? TxReason.StagedMismatch : TxReason.UpdateNotAllowed;
-            result = SwapTransaction.Refuse(gate, host.Seams, reason, "after the program closed: " + changed.Detail);
+            result = SwapTransaction.Refuse(gate, host.Seams, reason, "after the program closed: " + changed.Detail, message);
         }
         else
         {
-            var request = new SwapRequest(staged.FilesFolder()) { BoundManifest = boundManifest };
+            var request = new SwapRequest(files!.FullName) { BoundManifest = boundManifest, HandOff = message };
             result = SwapTransaction.Run(gate, request, host.Seams.With(launcher: host.LauncherFor(gate)));
         }
 
         var exit = SwapExit.For(result.Outcome);
         host.Out.WriteLine($"result {result.Outcome} {result.Reason} exit={exit.ToString(CultureInfo.InvariantCulture)}");
         SwapCli.Say(host, SwapSentences.Ja(result), SwapSentences.En(result));
-        return (exit, SwapExit.InstallUsable(exit));
+        return exit;
     }
 
     // ------------------------------------------------------------------------------------------------------------ what is looked at on disk
 
     internal sealed record Finding(ApplyRefusal Refusal, string Detail);
 
+    private static StageDirectory? OpenStage(string local, string? state, StagedUpdate staged) =>
+        state is not null && staged.IsWellFormedFor(state) ? StageDirectory.Open(local, staged.FilesFolder()) : null;
+
     /// <summary>Null when the update may go on; otherwise why not. Reads only; trusts nothing of <paramref name="staged"/> but where to look.</summary>
-    private static Finding? Check(string install, string local, string? state, StagedUpdate staged, out byte[]? boundManifest)
+    private static Finding? Check(string install, string local, string? state, StagedUpdate staged, StageDirectory? files, out byte[]? boundManifest)
     {
         boundManifest = null;
         if (state is null)
@@ -216,7 +238,7 @@ public static class SwapApply
             return new Finding(ApplyRefusal.StageNotFound, "the folder is not a stage of this install");
         }
 
-        boundManifest = StageCache.ReadBoundManifest(state, staged);
+        boundManifest = files is null ? null : StageCache.ReadBoundManifest(files, staged);
         if (boundManifest is null)
         {
             return new Finding(ApplyRefusal.StageChanged, "the stage on disk is not the one the manifest hash names (or a link is in the way)");

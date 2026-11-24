@@ -79,6 +79,22 @@ internal sealed class UpdateController : IDisposable
 
     internal UpdateRefusal? StageRefusal { get; private set; }
 
+    internal IUpdateService HandOffService => _service;
+
+    internal HandOffDecision HandOffFailure { get; private set; }
+
+    internal void SetHandOffFailure(HandOffDecision decision)
+    {
+        if (_disposed || HandOffFailure == decision
+            || (HandOffFailure.Failure == UpdateAttemptFailure.Permanent && decision.Failure is null))
+        {
+            return;
+        }
+
+        HandOffFailure = decision;
+        Changed?.Invoke();
+    }
+
     internal void SetDeferral(UpdateDeferral? deferral)
     {
         if (Deferral != deferral)
@@ -166,12 +182,13 @@ internal sealed class UpdateController : IDisposable
             return null;
         }
 
-        if (_last is { Kind: UpdateCheckKind.Candidate, Version: { } found } check && found > _running)
+        var status = Status();
+        if (_last is { Kind: UpdateCheckKind.Candidate, Version: { } found } check && found > _running
+            && !(status.LastRefusal == UpdateRefusal.BlockedTag && status.RefusedVersion == found))
         {
             return (found, check.PageUrl);
         }
 
-        var status = Status();
         return status.CandidateVersion is { } stored && stored > _running ? (stored, status.CandidatePageUrl) : null;
     }
 

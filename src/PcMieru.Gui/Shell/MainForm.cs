@@ -328,13 +328,15 @@ internal sealed class MainForm : Form
                 own.Add(Environment.ProcessId);
                 return RestartManager.Classify(holders, own);
             },
-            stage => GuiHandOff.Run(install, stage), updates.SetDeferral, Close);
+            (stage, id) => GuiHandOff.Run(install, stage, attemptId: id), updates.SetDeferral, Close,
+            attempts: updates.HandOffService, failure: updates.SetHandOffFailure);
 
         _handOffTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
         _handOffTimer.Tick += async (_, _) => await handOff.TryAsync().ConfigureAwait(true);
         _syncHandOffTimer = () => _handOffTimer.Enabled = updates.Allowed && updates.Mode == UpdateMode.Automatic;
         updates.Changed += _syncHandOffTimer;
         _syncHandOffTimer();
+        _ = handOff.TryAsync(reconcileOnly: true); // reconcile the previous run before the first timer tick
     }
 
     private static bool HasOpenMenu(Control control) =>

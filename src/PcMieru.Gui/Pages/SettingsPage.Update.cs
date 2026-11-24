@@ -238,7 +238,18 @@ internal sealed partial class SettingsPage
             : line.Text);
         _updateStatus.SetTone(updates.StageRefusal is not null ? CellTone.Warning : line.Tone);
         var result = Context.LastUpdate.Value;
-        ShowReason(_updateResult, result?.Text ?? string.Empty);
+        var failure = updates.HandOffFailure;
+        var failureText = failure.Failure switch
+        {
+            UpdateAttemptFailure.Permanent => Strings.Get("gui.update.apply.permanent"),
+            UpdateAttemptFailure.Waiting => Strings.Get("gui.update.apply.waiting"),
+            _ => null,
+        };
+        ShowReason(_updateResult, failureText ?? result?.Text ?? string.Empty);
+        if (failure.Failure == UpdateAttemptFailure.Permanent && failure.AttemptId is { } attempt)
+        {
+            updates.HandOffService.MarkHandOffFailureShown(attempt);
+        }
         if (result is not null && Context.Settings.GetValue(result.Key) != result.Stamp)
         {
             Context.Settings.SetValue(result.Key, result.Stamp);

@@ -32,7 +32,7 @@ internal sealed class UpdateStager(IFeedTransport transport, ISignatureInspector
     internal const long SpaceMargin = 32L * 1024 * 1024;
 
     /// <param name="installed">What is installed now (the record, or the install's own manifest); null when it cannot be read, and then every program file is looked at.</param>
-    public async Task<StageRun> RunAsync(ValidatedRelease release, string stateFolder, InstalledRecord? installed, string tx, CancellationToken ct)
+    public async Task<StageRun> RunAsync(ValidatedRelease release, string stateFolder, string localFolder, InstalledRecord? installed, string tx, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(release);
         if (!TxPaths.IsValidTx(tx))
@@ -40,14 +40,59 @@ internal sealed class UpdateStager(IFeedTransport transport, ISignatureInspector
             throw new ArgumentException("not a transaction id", nameof(tx));
         }
 
+        using var state = StageDirectory.Open(localFolder, stateFolder);
+        if (state is null)
+        {
+            return StageRun.Fail(UpdateRefusal.StageFailed, "the state path could not be opened safely");
+        }
+
         var cache = StageLayout.CacheOf(stateFolder);
-        var folder = Path.Combine(cache, tx);
+        var resolvedCache = Path.Combine(state.FullName, StageLayout.CacheFolderName);
+        try
+        {
+            Directory.CreateDirectory(resolvedCache);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return StageRun.Fail(UpdateRefusal.StageFailed, "the cache folder could not be made: " + ex.Message);
+        }
+
+        using var openedCache = StageDirectory.Open(localFolder, cache);
+        if (openedCache is null || !openedCache.FullName.Equals(resolvedCache, StringComparison.OrdinalIgnoreCase))
+        {
+            return StageRun.Fail(UpdateRefusal.StageFailed, "the cache path could not be opened safely");
+        }
+
+        var folder = Path.Combine(openedCache.FullName, tx);
         var finished = false;
         try
         {
-            var run = await StageAsync(release, stateFolder, cache, folder, installed, ct).ConfigureAwait(false);
-            finished = run.Staged is not null;
-            return run;
+            Directory.CreateDirectory(folder);
+            var stagedPath = Path.Combine(cache, tx);
+            using var openedStage = StageDirectory.Open(localFolder, stagedPath);
+            if (openedStage is null || !openedStage.FullName.Equals(folder, StringComparison.OrdinalIgnoreCase))
+            {
+                return StageRun.Fail(UpdateRefusal.StageFailed, "the stage path could not be opened safely");
+            }
+
+            var run = await StageAsync(release, folder, installed, ct).ConfigureAwait(false);
+            if (run.Staged is not { } staged)
+            {
+                return run;
+            }
+
+            using var files = StageDirectory.Open(localFolder, Path.Combine(stagedPath, StageLayout.FilesFolderName));
+            if (files is null || !files.FullName.Equals(Path.Combine(folder, StageLayout.FilesFolderName), StringComparison.OrdinalIgnoreCase))
+            {
+                return StageRun.Fail(UpdateRefusal.StageFailed, "the unpacked stage path could not be opened safely");
+            }
+
+            finished = true;
+            return StageRun.Done(staged with { Folder = stagedPath });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return StageRun.Fail(UpdateRefusal.StageFailed, "the stage folder could not be made: " + ex.Message);
         }
         finally
         {
@@ -59,7 +104,7 @@ internal sealed class UpdateStager(IFeedTransport transport, ISignatureInspector
         }
     }
 
-    private async Task<StageRun> StageAsync(ValidatedRelease release, string stateFolder, string cache, string folder, InstalledRecord? installed, CancellationToken ct)
+    private async Task<StageRun> StageAsync(ValidatedRelease release, string folder, InstalledRecord? installed, CancellationToken ct)
     {
         // The two small files and the numbers must be what the check made them (a ValidatedRelease is built in one place, but a stage does not rest on that).
         if (!string.Equals(Sha256Of(release.HashListBytes), release.HashListSha256, StringComparison.Ordinal)
@@ -71,17 +116,6 @@ internal sealed class UpdateStager(IFeedTransport transport, ISignatureInspector
 
         try
         {
-            if (TxPaths.IsLink(stateFolder) || TxPaths.IsLink(cache))
-            {
-                return StageRun.Fail(UpdateRefusal.StageFailed, "the state folder or its cache folder is a link");
-            }
-
-            Directory.CreateDirectory(folder);
-            if (TxPaths.IsLink(folder))
-            {
-                return StageRun.Fail(UpdateRefusal.StageFailed, "the stage folder is a link");
-            }
-
             var need = checked(release.ZipDeclaredBytes + release.Manifest.Files.Sum(f => f.Bytes) + SpaceMargin);
             var free = disk.FreeBytes(folder);
             if (free < need)
@@ -152,6 +186,12 @@ internal sealed class UpdateStager(IFeedTransport transport, ISignatureInspector
         try
         {
             Directory.CreateDirectory(files);
+            using var opened = StageDirectory.Open(folder, files);
+            if (opened is null)
+            {
+                return StageRun.Fail(UpdateRefusal.StageFailed, "the files folder could not be opened safely");
+            }
+
             var root = Path.GetFullPath(files) + Path.DirectorySeparatorChar;
 
             using (var source = new FileStream(zip, FileMode.Open, FileAccess.Read, FileShare.Read))

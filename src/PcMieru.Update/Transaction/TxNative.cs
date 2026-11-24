@@ -444,6 +444,28 @@ internal static partial class TxNative
             return null;
         }
 
+        var text = FinalPath(handle);
+        return new VolumeFacts(new string(name), serial, text?.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    /// <summary>Opens a directory without sharing delete. At or below L, open the final component as itself and reject links on the handle.</summary>
+    internal static SafeFileHandle? OpenStageDirectory(string path, bool allowLink)
+    {
+        var flags = allowLink ? BackupSemantics : BackupSemantics | OpenReparsePoint;
+        var handle = CreateFile(Extended(path), AccessReadAttributes, ShareReadWrite, 0, OpenExisting, flags, 0);
+        if (!handle.IsInvalid && GetFileInformationByHandle(handle, out var info)
+            && (info.Attributes & (uint)FileAttributes.Directory) != 0
+            && (allowLink || (info.Attributes & (uint)FileAttributes.ReparsePoint) == 0))
+        {
+            return handle;
+        }
+
+        handle.Dispose();
+        return null;
+    }
+
+    internal static unsafe string? FinalPath(SafeFileHandle handle)
+    {
         var size = 1024u;
         var finalPath = new char[size];
         uint needed;
@@ -461,8 +483,7 @@ internal static partial class TxNative
             }
         }
 
-        var text = needed == 0 || needed > finalPath.Length ? string.Empty : new string(finalPath, 0, (int)needed);
-        return new VolumeFacts(new string(name), serial, text.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase));
+        return needed == 0 || needed >= finalPath.Length ? null : new string(finalPath, 0, (int)needed);
     }
 
     /// <summary>Paths of 248 characters or more are given to the API in the extended form (a path of this install is under a user's folder and may be long).</summary>
