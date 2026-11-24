@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.IO.Enumeration;
 using System.Text.RegularExpressions;
 using PcMieru.Update.Transaction;
 
@@ -28,10 +29,33 @@ public sealed class TestEnvironmentTests
         return dir?.FullName ?? throw new InvalidOperationException("PcMieru.slnx not found above " + AppContext.BaseDirectory);
     }
 
-    private static IEnumerable<string> SourcesUnder(string folder, params string[] patterns) =>
-        patterns.SelectMany(p => Directory.GetFiles(folder, p, SearchOption.AllDirectories))
-            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                     && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+    private static IEnumerable<string> SourcesUnder(string folder, params string[] patterns)
+    {
+        var scratch = Path.Combine(RepoRoot(), ".testtmp");
+        return new FileSystemEnumerable<string>(folder, static (ref FileSystemEntry entry) => entry.ToFullPath(),
+            new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false })
+        {
+            // Other test classes create and remove fixtures concurrently. Keep the source scan out of the worktree's scratch directory.
+            ShouldRecursePredicate = (ref FileSystemEntry entry) =>
+                !entry.FileName.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                && !entry.FileName.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(entry.ToFullPath(), scratch, StringComparison.OrdinalIgnoreCase),
+            ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory && MatchesAny(entry.FileName, patterns),
+        };
+    }
+
+    private static bool MatchesAny(ReadOnlySpan<char> name, string[] patterns)
+    {
+        foreach (var pattern in patterns)
+        {
+            if (FileSystemName.MatchesSimpleExpression(pattern, name, ignoreCase: true))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // ---------------------------------------------------------------------------------------------------------------------------- forced elevation
 

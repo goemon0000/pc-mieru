@@ -82,7 +82,13 @@ public sealed class GateEntry : IDisposable
     public byte[]? ReadHeld(int maxBytes = 4096)
     {
         var handle = _handle;
-        if (handle is null || handle.IsClosed || handle.IsInvalid)
+        return handle is null ? null : ReadFrom(handle, maxBytes);
+    }
+
+    /// <summary>The positioned read of <see cref="ReadHeld"/>, of any open handle.</summary>
+    internal static byte[]? ReadFrom(SafeFileHandle handle, int maxBytes)
+    {
+        if (handle.IsClosed || handle.IsInvalid)
         {
             return null;
         }
@@ -107,6 +113,17 @@ public sealed class GateEntry : IDisposable
         }
 
         return done == bytes.Length ? bytes : null;
+    }
+
+    /// <summary>
+    /// A duplicate of the held handle that a child process can inherit (0 when nothing is held or the copy could not be made). Only the swapper uses it: it keeps the gate exclusive while the program it started
+    /// verifies a new version, and gives that program THIS handle (<see cref="InstallGate.AdoptInherited"/> is the other end), so nobody else can enter in between. The caller closes the copy once the child is
+    /// started (the child has its own); this entry still holds the original and <see cref="Dispose"/> closes only that.
+    /// </summary>
+    public nint DuplicateForChild()
+    {
+        var handle = _handle;
+        return handle is null || handle.IsClosed || handle.IsInvalid ? 0 : GateNative.DuplicateInheritable(handle);
     }
 
     /// <summary>Lets go of the gate file. Safe to call twice.</summary>
@@ -158,6 +175,62 @@ public static class InstallGate
     /// For the swapper (PCMieru.Swap.exe, which also runs as recover.exe): the same gate taken exclusively (<c>FileShare.None</c>). <see cref="GateOutcome.Busy"/> while any program of the install holds it. It does not look at the journal.
     /// </summary>
     public static GateEntry EnterExclusive(string executablePath) => Enter(InstallFolderOf(executablePath), FileShare.None);
+
+    /// <summary>
+    /// For the program the swapper starts to verify a new version (<c>PCMieru.exe --verify-update</c>): the gate the swapper holds exclusively, handed down as an inherited handle (<see cref="GateEntry.DuplicateForChild"/>).
+    /// It cannot be opened by path (the swapper's exclusive hold refuses every other open), so what is checked is the HANDLE: a file on a disk, not a link and with one name, whose FINAL path is the gate file of the install
+    /// of <paramref name="executablePath"/> (<see cref="GatePathOf"/>), whose bytes are the fixed gate bytes, and which really is held exclusively (an open by path is refused with a sharing violation: a handle made by
+    /// somebody who holds the file shared is not what the swapper gives). Any other answer than <see cref="GateOutcome.Open"/> holds nothing, and a handle that was refused is not closed (it was not made here).
+    /// </summary>
+    public static GateEntry AdoptInherited(string executablePath, nint handleValue)
+    {
+        var expected = GatePathOf(executablePath);
+        if (handleValue == 0 || handleValue == -1)
+        {
+            return Refuse(GateOutcome.Unreadable, expected, "there is no gate handle");
+        }
+
+        using var look = new SafeFileHandle(handleValue, ownsHandle: false);
+        if (!GateNative.IsDiskFile(look) || !GateNative.TryInformationOf(look, out var held))
+        {
+            return Refuse(GateOutcome.Unreadable, expected, "the inherited handle is not a file on a disk");
+        }
+
+        if ((held.Attributes & (uint)FileAttributes.ReparsePoint) != 0 || held.NumberOfLinks > 1)
+        {
+            return Refuse(GateOutcome.ReparseRefused, expected, "the inherited handle is a reparse point or a file with more than one name");
+        }
+
+        var final = GateNative.FinalPathOf(look);
+        if (final is null || !string.Equals(final, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return Refuse(GateOutcome.MissingGate, expected, "the inherited handle is not the gate file of this install");
+        }
+
+        // Held exclusively: a second open for reading must be a sharing violation. (A handle somebody opened with sharing, to look like the swapper's, lets this one in, and is refused.)
+        try
+        {
+            using var second = File.OpenHandle(expected, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.None);
+            return Refuse(GateOutcome.Busy, expected, "the gate file is not held exclusively");
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            // as it must be
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
+        {
+            return Refuse(GateOutcome.Unreadable, expected, "the gate file cannot be looked at: " + ex.GetType().Name);
+        }
+
+        var bytes = GateEntry.ReadFrom(look, 4096);
+        if (bytes is null || !bytes.AsSpan().SequenceEqual(GateFile.Bytes()))
+        {
+            return Refuse(GateOutcome.Unreadable, expected, "the inherited handle does not hold the fixed gate bytes");
+        }
+
+        // Only now is the handle taken over (closed when the entry is disposed): before this it was not ours to close.
+        return new GateEntry(GateOutcome.Open, expected, "inherited, exclusive", null, new SafeFileHandle(handleValue, ownsHandle: true));
+    }
 
     /// <summary>
     /// The install folder I of an exe: the folder of the exe file's FINAL path (GetFinalPathNameByHandle on the file: symbolic links and junctions on the way followed, 8.3 names long, the case that is stored;

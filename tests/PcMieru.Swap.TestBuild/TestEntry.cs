@@ -132,6 +132,25 @@ public static class TestEntry
         return SwapCli.RunRunner(host, site.InstallFolder, recovery: false, options.AfterPid, thenStart: false, gate => SwapTransaction.Run(gate, new SwapRequest(staged), seams));
     }
 
+    /// <summary>
+    /// The environment variable that names another L for the install this exe belongs to (the same switch as <see cref="Variable"/>: it works only when that one names the same install folder). The trial runs the
+    /// runner's <c>--apply</c> against a scratch L that way; the product's runner always asks the system.
+    /// </summary>
+    public const string LocalVariable = "PCMIERU_SWAP_TEST_LOCAL";
+
+    /// <summary>The scratch L the test switch names for the install of <paramref name="selfPath"/>; null (the system's L) when the switch is off, names another install, or the value is not a full path.</summary>
+    public static string? LocalFolder(string selfPath, Func<string, string?> getVariable)
+    {
+        var site = RunnerRules.Locate(selfPath);
+        if (site.Role == RunnerRole.Refused || !SwitchOn(getVariable, site.InstallFolder))
+        {
+            return null;
+        }
+
+        var value = getVariable(LocalVariable);
+        return !string.IsNullOrWhiteSpace(value) && Path.IsPathFullyQualified(value) ? Path.TrimEndingDirectorySeparator(value) : null;
+    }
+
     private static int Bad(SwapHost host, string problem)
     {
         host.Error.WriteLine("swap: " + problem);

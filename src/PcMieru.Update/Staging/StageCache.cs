@@ -95,6 +95,58 @@ public static class StageCache
         }
     }
 
+    /// <summary>
+    /// Reads the inner manifest when the stage belongs to this install, its path contains no reparse points, and both manifests match the release details and one another.
+    /// Preparation uses the returned bytes to check each staged file's length and SHA-256.
+    /// </summary>
+    internal static byte[]? ReadBoundManifest(string stateFolder, StagedUpdate staged)
+    {
+        try
+        {
+            if (!staged.IsWellFormedFor(stateFolder))
+            {
+                return null;
+            }
+
+            for (var folder = new DirectoryInfo(staged.FilesFolder()); folder is not null; folder = folder.Parent)
+            {
+                if (ManagedSet.Look(folder.FullName) != Presence.Other)
+                {
+                    return null;
+                }
+            }
+
+            var manifestBytes = TxEngine.ReadSmall(Path.Combine(staged.Folder, StageLayout.ManifestFileName), BundleManifest.MaxBytes);
+            if (manifestBytes is null || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(manifestBytes)), staged.ManifestSha256, StringComparison.Ordinal)
+                || !BundleManifest.TryParse(manifestBytes, out var outer, out _)
+                || outer.Version != staged.Version || outer.BuildId != staged.BuildId)
+            {
+                return null;
+            }
+
+            var listed = outer.Files.FirstOrDefault(f => f.Path == BundleFormat.InnerManifestName);
+            if (listed is null)
+            {
+                return null;
+            }
+
+            var inner = TxEngine.ReadSmall(Path.Combine(staged.FilesFolder(), BundleFormat.InnerManifestName), BundleManifest.MaxBytes);
+            if (inner is null || inner.Length != listed.Bytes || Convert.ToHexStringLower(SHA256.HashData(inner)) != listed.Sha256
+                || !BundleManifest.TryParse(inner, out var manifest, out _) || manifest.Version != outer.Version || manifest.BuildId != outer.BuildId
+                || !manifest.Files.OrderBy(f => f.Path, StringComparer.Ordinal)
+                    .SequenceEqual(outer.Files.Where(f => f != listed).OrderBy(f => f.Path, StringComparer.Ordinal)))
+            {
+                return null;
+            }
+
+            return inner;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private static bool FilesMatch(string filesFolder, BundleManifest outer, CancellationToken ct)
     {
         if (TxPaths.IsLink(filesFolder) || !Directory.Exists(filesFolder))

@@ -43,6 +43,39 @@ public static class UpdateModes
         _ => UpdateMode.Ask,
     };
 
+    /// <summary>
+    /// The mode that <paramref name="path"/> (gui.ini) says, read the way the GUI's own settings reader reads it (<c>GuiSettings.Load</c>: lines, a key before the first '=', trimmed, the LAST
+    /// <c>update.mode</c> wins, an unknown word is Ask), so that the runner (which must not load the GUI) and the GUI agree; a test holds the two to the same answers. A missing, unreadable or absurdly large
+    /// file is <see cref="UpdateMode.Ask"/>: the runner swaps only when the file says "auto".
+    /// </summary>
+    public static UpdateMode ReadFromFile(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length > 1024 * 1024)
+            {
+                return UpdateMode.Ask;
+            }
+
+            var mode = UpdateMode.Ask;
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var eq = line.IndexOf('=');
+                if (eq > 0 && line[..eq].Trim() == IniKey)
+                {
+                    mode = FromIni(line[(eq + 1)..].Trim());
+                }
+            }
+
+            return mode;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return UpdateMode.Ask;
+        }
+    }
+
     /// <summary>The two modes in which the feed may be asked.</summary>
     public static bool MayUseNetwork(UpdateMode mode) => mode is UpdateMode.Notify or UpdateMode.Automatic;
 }

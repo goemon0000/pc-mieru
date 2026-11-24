@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using PcMieru.Update.Launch;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Update.Transaction;
@@ -96,6 +97,21 @@ public sealed class SwapHost
 
     /// <summary>How long the result stays on screen when <see cref="ConsoleIsAlone"/>.</summary>
     public TimeSpan ReadingPause { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// <c>%LOCALAPPDATA%\PCMieru</c> (L: gui.ini and the state folders of the installs). Null: asked of the system (SHGetKnownFolderPath, the same call the GUI makes, which the environment variable cannot move). Only the TEST
+    /// build of the runner sets it (see tests/PcMieru.Swap.TestBuild); the product never does.
+    /// </summary>
+    public string? LocalFolder { get; init; }
+
+    /// <summary>Takes the two handles of <c>--apply</c> (the pipe, the process of the program that asked) and returns what the runner talks and waits with; null when they are not a pipe and a process.</summary>
+    public Func<nint, nint, ApplyEndpoint?> OpenApplyEndpoint { get; init; } = static (pipe, process) => ApplyEndpoint.FromInherited(pipe, process);
+
+    /// <summary>The launch check of a swap, made for the gate this process holds. The real one starts <c>I\PCMieru.exe --verify-update</c>.</summary>
+    public Func<GateEntry, ILaunchVerifier> LauncherFor { get; init; } = static gate => new ProductionLaunchVerifier(gate);
+
+    /// <summary>How long the message on the pipe of <c>--apply</c> may take to come.</summary>
+    public TimeSpan ApplyMessageWait { get; init; } = TimeSpan.FromSeconds(10);
 }
 
 /// <summary>The one real call of the process helpers: wait for a process to end.</summary>
@@ -148,8 +164,11 @@ public static class SwapCli
         + "  --recover                         recover an interrupted update (no argument does the same)\n"
         + "  --after-pid <n>                   wait for that process to end first (set by whoever starts it)\n"
         + "  --then-start                      (with --recover) start PCMieru.exe afterwards when the install can be used; set by the start gate window's Recover button\n"
+        + "  --apply <pipe> <process>          (recover.exe only; PC Mieru starts it, a person does not) install the update that PC Mieru names on the pipe. It needs the two handles\n"
+        + "                                    that PC Mieru passes down and one valid message on the pipe; without them it changes nothing (exit 2). It answers \"accepted\" or a refusal\n"
+        + "                                    (exit 12, nothing changed), waits for PC Mieru to close (exit 30 if it does not), swaps, checks the new version, and starts PC Mieru again\n"
         + "exit codes: 0 nothing to do, 1 handed over to recover.exe, 2 bad command line, 3 crashed,\n"
-        + "            10 committed, 11 rolled back, 12 aborted (nothing changed), 20 recovery failed, 30 busy (a program is using PC Mieru's files), 31 gate refused,\n"
+        + "            10 committed, 11 rolled back, 12 aborted or refused (nothing changed), 20 recovery failed, 30 busy (a program is using PC Mieru's files), 31 gate refused,\n"
         + "            32 refused: running as administrator (open it again with normal rights),\n"
         + "            40 wrong place (not I\\PCMieru.Swap.exe or I\\update\\recover.exe), 41 recover.exe could not be made ready";
 
@@ -188,6 +207,23 @@ public static class SwapCli
         }
 
         var rest = options.Rest;
+        var applying = rest.Count > 0 && rest[0] == SwapApply.Option;
+        if (applying)
+        {
+            if (rest.Count != 3 || options.AfterPid is not null || options.ThenStart || !TryHandle(rest[1], out var pipe) || !TryHandle(rest[2], out var process) || pipe == process)
+            {
+                return BadCommandLine(host, SwapApply.Option + " takes exactly a pipe handle and a process handle (numbers), and no other option");
+            }
+
+            var runnerSite = RunnerRules.Locate(host.SelfPath);
+            if (runnerSite.Role != RunnerRole.Runner)
+            {
+                return runnerSite.Role == RunnerRole.Refused ? WrongPlace(host) : BadCommandLine(host, SwapApply.Option + " is for recover.exe only (PC Mieru starts it; the launcher PCMieru.Swap.exe does not apply updates)");
+            }
+
+            return SwapApply.Run(host, runnerSite.InstallFolder, pipe, process);
+        }
+
         if (!(rest.Count == 0 || (rest.Count == 1 && rest[0] == RecoverOption)))
         {
             return BadCommandLine(host, "the arguments are not understood");
@@ -196,9 +232,7 @@ public static class SwapCli
         var site = RunnerRules.Locate(host.SelfPath);
         if (site.Role == RunnerRole.Refused)
         {
-            host.Error.WriteLine("swap: this exe is neither I\\PCMieru.Swap.exe nor I\\update\\recover.exe of an install, so it does nothing");
-            Say(host, "この PCMieru.Swap.exe は、PCミエルのフォルダーの中で実行してください。", "Run PCMieru.Swap.exe from inside the PC Mieru folder (recover.exe from its update folder).");
-            return SwapExit.WrongPlace;
+            return WrongPlace(host);
         }
 
         if (RefuseIfElevated(host) is { } refused)
@@ -216,6 +250,26 @@ public static class SwapCli
         host.Error.WriteLine("swap: " + problem);
         host.Error.WriteLine(Usage);
         return SwapExit.BadCommandLine;
+    }
+
+    private static int WrongPlace(SwapHost host)
+    {
+        host.Error.WriteLine("swap: this exe is neither I\\PCMieru.Swap.exe nor I\\update\\recover.exe of an install, so it does nothing");
+        Say(host, "この PCMieru.Swap.exe は、PCミエルのフォルダーの中で実行してください。", "Run PCMieru.Swap.exe from inside the PC Mieru folder (recover.exe from its update folder).");
+        return SwapExit.WrongPlace;
+    }
+
+    /// <summary>A handle value on a command line: decimal digits only, not zero, and one that fits the 32 bits Windows gives handle values that cross processes.</summary>
+    private static bool TryHandle(string text, out nint value)
+    {
+        value = 0;
+        if (!ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number == 0 || number > uint.MaxValue)
+        {
+            return false;
+        }
+
+        value = (nint)number;
+        return true;
     }
 
     // ------------------------------------------------------------------------------------------------------------ the command line
@@ -331,17 +385,7 @@ public static class SwapCli
         if (thenStart && SwapExit.InstallUsable(code))
         {
             // The start gate window's "Recover" button: it handed over and ended (its own exe cannot be replaced while it runs), so the program is started again here, once the install is in order.
-            var exe = Path.Combine(install, "PCMieru.exe");
-            started = host.Starter.TryStart(exe, install, [], out var detail);
-            if (started)
-            {
-                Say(host, "PCミエルを起動しました。", "Starting PC Mieru.");
-            }
-            else
-            {
-                host.Error.WriteLine("swap: PCMieru.exe could not be started: " + detail);
-                Say(host, "PCミエルを起動できませんでした。いつもどおり、自分で起動してください。", "PC Mieru could not be started from here. Please start it as usual.");
-            }
+            started = StartInstalledProgram(host, install);
         }
 
         if (recovery && !started && host.ConsoleIsAlone())
@@ -387,7 +431,25 @@ public static class SwapCli
         return exit;
     }
 
-    private static GateEntry EnterGate(SwapHost host, string install, TimeSpan wait)
+    /// <summary>Starts <c>I\PCMieru.exe</c> normally (no argument), after the gate was let go of; says so (or says that it could not). True when it was started.</summary>
+    internal static bool StartInstalledProgram(SwapHost host, string install)
+    {
+        var exe = Path.Combine(install, "PCMieru.exe");
+        var started = host.Starter.TryStart(exe, install, [], out var detail);
+        if (started)
+        {
+            Say(host, "PCミエルを起動しました。", "Starting PC Mieru.");
+        }
+        else
+        {
+            host.Error.WriteLine("swap: PCMieru.exe could not be started: " + detail);
+            Say(host, "PCミエルを起動できませんでした。いつもどおり、自分で起動してください。", "PC Mieru could not be started from here. Please start it as usual.");
+        }
+
+        return started;
+    }
+
+    internal static GateEntry EnterGate(SwapHost host, string install, TimeSpan wait)
     {
         var exe = Path.Combine(install, "PCMieru.exe");
         var waited = TimeSpan.Zero;
@@ -411,7 +473,7 @@ public static class SwapCli
         }
     }
 
-    private static void Say(SwapHost host, string ja, string en)
+    internal static void Say(SwapHost host, string ja, string en)
     {
         host.Out.WriteLine(ja);
         host.Out.WriteLine(en);

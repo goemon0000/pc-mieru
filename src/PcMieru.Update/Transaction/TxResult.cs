@@ -55,6 +55,9 @@ public enum TxReason
     /// <summary>A staged file is not what its manifest says, or the two generations disagree about the gate file or the spelling of a name.</summary>
     StagedMismatch,
 
+    /// <summary>Checked again from the disk after the program that asked had closed (the swapper's <c>--apply</c>): the version is blocked, not newer than the installed one, or gui.ini no longer says <c>update.mode=auto</c>. Nothing was changed.</summary>
+    UpdateNotAllowed,
+
     /// <summary>The staged build is the installed build.</summary>
     SameBuild,
 
@@ -166,6 +169,7 @@ public static class TxReasonText
         TxReason.NotNtfs => "このフォルダーのあるドライブは NTFS ではないため、自動では更新しません。ZIP を新しいフォルダーに展開してください。",
         TxReason.Elevated => "管理者として実行されているため、更新も回復も行いません。ふつうの権限で、もう一度開いてください。",
         TxReason.StagedUnreadable or TxReason.StagedMismatch => "ダウンロードした内容を確かめられなかったため、更新しませんでした。もう一度試してください。",
+        TxReason.UpdateNotAllowed => "この更新は、いまの設定や版では入れないことになっているため、何も変えずにやめました。",
         TxReason.SameBuild => "すでに同じ版です。",
         TxReason.NoRecord or TxReason.InstalledRecordUnreadable or TxReason.InstalledFilesChanged =>
             "PCミエルのファイルが、展開したときの状態と違っています。自動では更新できません。ZIP をもう一度ダウンロードして、新しいフォルダーに展開してください。",
@@ -190,6 +194,7 @@ public static class TxReasonText
         TxReason.NotNtfs => "The drive of this folder is not NTFS, so PC Mieru does not update itself here. Unzip the ZIP into a new folder.",
         TxReason.Elevated => "This is running as administrator, so it does not update or recover anything. Open it again with normal rights.",
         TxReason.StagedUnreadable or TxReason.StagedMismatch => "The downloaded files could not be checked, so nothing was updated. Try again.",
+        TxReason.UpdateNotAllowed => "This update is not allowed by the current settings or version, so nothing was changed.",
         TxReason.SameBuild => "This is already the same version.",
         TxReason.NoRecord or TxReason.InstalledRecordUnreadable or TxReason.InstalledFilesChanged =>
             "PC Mieru's files are different from how they were unzipped, so it cannot update itself here. Download the ZIP again and unzip it into a new folder.",

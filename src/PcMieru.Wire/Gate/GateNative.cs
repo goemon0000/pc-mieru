@@ -117,4 +117,30 @@ internal static unsafe partial class GateNative
     /// <summary>GetFileInformationByHandle on an open handle: attributes and the number of names the file has. False when the system could not say.</summary>
     internal static bool TryInformationOf(SafeFileHandle handle, out ByHandleInformation information) =>
         GetFileInformationByHandle(handle, out information);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetCurrentProcess();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DuplicateHandle(nint sourceProcess, SafeFileHandle source, nint targetProcess, out nint target, uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial uint GetFileType(SafeFileHandle file);
+
+    private const uint DuplicateSameAccess = 0x2;
+    private const uint FileTypeDisk = 0x1;
+
+    /// <summary>
+    /// A duplicate of an open handle that a child process can inherit (the swapper hands the gate it holds exclusively to the program it starts to verify a new version). 0 when it could not be made.
+    /// The caller closes it as soon as the child is started; the original stays where it is.
+    /// </summary>
+    internal static nint DuplicateInheritable(SafeFileHandle handle)
+    {
+        var self = GetCurrentProcess();
+        return DuplicateHandle(self, handle, self, out var copy, 0, true, DuplicateSameAccess) ? copy : 0;
+    }
+
+    /// <summary>True when the handle is a file on a disk (GetFileType: not a pipe, not a console, not a device).</summary>
+    internal static bool IsDiskFile(SafeFileHandle handle) => GetFileType(handle) == FileTypeDisk;
 }

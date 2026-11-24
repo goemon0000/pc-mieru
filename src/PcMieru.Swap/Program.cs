@@ -46,7 +46,16 @@ namespace PcMieru.Swap
             }
 
             var self = Path.Combine(InstallGate.InstallFolderOf(processPath), Path.GetFileName(processPath));
-            var host = new SwapHost { SelfPath = self, Out = Console.Out, Error = Console.Error };
+            var host = new SwapHost
+            {
+                SelfPath = self,
+                Out = Console.Out,
+                Error = Console.Error,
+#if PCM_SWAP_TESTBUILD
+                // The test build can be told another L (a scratch folder) for the install it is run in; the product cannot (the system's answer is the only one).
+                LocalFolder = PcMieru.Swap.TestBuild.TestEntry.LocalFolder(self, Environment.GetEnvironmentVariable),
+#endif
+            };
 #if PCM_SWAP_TESTBUILD
             // Only tests/PcMieru.Swap.TestBuild defines the symbol (the product's csproj stops the build if it is defined there): the test-only entry lives in that project, never in the product.
             return PcMieru.Swap.TestBuild.TestEntry.Run(args, host, Environment.GetEnvironmentVariable);

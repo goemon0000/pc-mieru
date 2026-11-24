@@ -5,7 +5,11 @@ using PcMieru.Wire.Gate;
 namespace PcMieru.Update.Transaction;
 
 /// <summary>What a swap is asked to install: a folder that already passed the bundle checks (step 3). The transaction still checks every file it copies against the folder's own manifest.</summary>
-public sealed record SwapRequest(string StagedFolder);
+public sealed record SwapRequest(string StagedFolder)
+{
+    /// <summary>The manifest bytes bound to the release by the apply runner.</summary>
+    internal byte[]? BoundManifest { get; init; }
+}
 
 /// <summary>
 /// The swap (DESIGN-B 5, 11 step 4): <see cref="Run"/> takes the staged folder of a verified bundle and replaces the installed set with it, or leaves the install as it was. The caller holds the gate EXCLUSIVELY
@@ -24,7 +28,19 @@ public static class SwapTransaction
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(seams);
-        return new TxEngine(gate, seams, "swap").Run(request.StagedFolder);
+        return new TxEngine(gate, seams, "swap").Run(request);
+    }
+
+    /// <summary>
+    /// A swap that the caller decided not to start, after it already holds the gate (the swapper's <c>--apply</c> looks at the disk once more when nobody can start any more, and finds the update no longer allowed). Nothing
+    /// is changed; the result is an <see cref="TxOutcome.Aborted"/> with <paramref name="reason"/>, written to last-result.json under the same conditions as any abort (the gate is the held one, the update folder is
+    /// not a link, no journal or sentinel is there), so the settings page can say why the update did not happen.
+    /// </summary>
+    public static TxResult Refuse(GateEntry gate, TxSeams seams, TxReason reason, string detail)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        ArgumentNullException.ThrowIfNull(seams);
+        return new TxEngine(gate, seams, "swap").Refuse(reason, detail);
     }
 }
 
@@ -228,18 +244,18 @@ internal sealed partial class TxEngine
 
     // ---------------------------------------------------------------------------------------------------------------- Run: prepare
 
-    public TxResult Run(string stagedFolder)
+    public TxResult Run(SwapRequest request)
     {
         if (_seams.Launcher is null)
         {
-            throw new ArgumentException("a swap needs a launcher in the seams", nameof(stagedFolder));
+            throw new ArgumentException("a swap needs a launcher in the seams");
         }
 
         _tx = TxPaths.NewTx();
         TxJournal journal;
         try
         {
-            journal = Prepare(stagedFolder);
+            journal = Prepare(request);
         }
         catch (TxFailure failure)
         {
@@ -251,6 +267,29 @@ internal sealed partial class TxEngine
         }
 
         return Swap(journal);
+    }
+
+    /// <summary>See <see cref="SwapTransaction.Refuse"/>.</summary>
+    public TxResult Refuse(TxReason reason, string detail)
+    {
+        _tx = TxPaths.NewTx();
+        try
+        {
+            CheckGate();
+        }
+        catch (TxFailure failure)
+        {
+            return Make(TxOutcome.Aborted, failure.Reason, failure.Message); // the gate is not ours: nothing may be written
+        }
+
+        if (!TxPaths.IsLink(_paths.Update) && !ManagedSet.Exists(_paths.Journal) && !ManagedSet.Exists(_paths.JournalTemp) && !ManagedSet.Exists(_paths.Sentinel))
+        {
+            _mayWriteResult = true;
+        }
+
+        var result = Make(TxOutcome.Aborted, reason, detail);
+        WriteLastResult(result);
+        return result;
     }
 
     private TxResult Abort(TxReason reason, string detail)
@@ -277,8 +316,9 @@ internal sealed partial class TxEngine
     }
 
     /// <summary>Everything up to and including the committed journal (phase Prepared). Throws <see cref="TxFailure"/> to abort; no file of the install is changed by any of it.</summary>
-    private TxJournal Prepare(string stagedFolder)
+    private TxJournal Prepare(SwapRequest request)
     {
+        var stagedFolder = request.StagedFolder;
         var tx = _tx!;
         CheckGate();
 
@@ -305,7 +345,7 @@ internal sealed partial class TxEngine
         _gateIdentity = FileIdentity.Of(_paths.Gate) ?? throw new TxFailure(TxReason.GateLost, "the gate file cannot be identified");
 
         // The new generation, from the staged folder's own manifest.
-        var stagedManifest = ReadSmall(Path.Combine(stagedFolder, BundleFormat.InnerManifestName), BundleManifest.MaxBytes)
+        var stagedManifest = request.BoundManifest ?? ReadSmall(Path.Combine(stagedFolder, BundleFormat.InnerManifestName), BundleManifest.MaxBytes)
             ?? throw new TxFailure(TxReason.StagedUnreadable, $"{BundleFormat.InnerManifestName} of the staged folder cannot be read");
         if (!BundleManifest.TryParse(stagedManifest, out var stagedBundle, out var stagedVerdict))
         {
@@ -375,6 +415,19 @@ internal sealed partial class TxEngine
 
         var ops = TxJournal.Diff(current, to, out var problem) ?? throw new TxFailure(TxReason.StagedMismatch, problem);
 
+        if (request.BoundManifest is not null)
+        {
+            var copied = ops.Where(op => op.Intent != TxOpIntent.Remove).Select(op => op.Path).ToHashSet(StringComparer.Ordinal);
+            var stagedPaths = new TxPaths(stagedFolder);
+            foreach (var file in to.Files.Where(file => !copied.Contains(file.Path)))
+            {
+                if (ManagedSet.CheckOne(stagedPaths, file, gate: null) is { } difference)
+                {
+                    throw new TxFailure(TxReason.StagedMismatch, "the staged file does not match: " + difference);
+                }
+            }
+        }
+
         foreach (var add in ops.Where(o => o.Intent == TxOpIntent.Add))
         {
             if (CollidesWithUnknown(add.Path, out var why))
@@ -403,7 +456,7 @@ internal sealed partial class TxEngine
         {
             to.TryGet(op.Path, out var file);
             var source = TxPaths.Under(stagedFolder, op.Path);
-            if (ManagedSet.Look(source) != Presence.File)
+            if (ManagedSet.Look(source) != Presence.File || (request.BoundManifest is not null && TxPaths.IsLink(Path.GetDirectoryName(source)!)))
             {
                 throw new TxFailure(TxReason.StagedMismatch, $"the staged file '{BundleNames.Show(op.Path)}' is missing or not a file");
             }

@@ -1,3 +1,5 @@
+using PcMieru.TxChild;
+using PcMieru.Update.Launch;
 using PcMieru.Update.Transaction;
 using PcMieru.Wire.Gate;
 
@@ -9,6 +11,13 @@ using PcMieru.Wire.Gate;
 const int BadUsage = 2;
 const int Crashed = 3;
 
+// The verification child of the launch check (ChildModes.cs) is the one mode that runs BEFORE the start gate: the runner holds the gate exclusively and hands this program a handle to it (the product's PCMieru.exe
+// does the same, before anything else of its Main); entering the start gate here would be refused as busy.
+if (args.Length > 0 && args[0] == VerifyAdmission.Option)
+{
+    return ChildModes.Verify(args);
+}
+
 // The one call every exe of the solution makes (tests/PcMieru.Gate.Tests checks it): the start gate of THIS program's own folder, the dev copy of the gate file the build puts beside the exe.
 // The transaction below enters a different gate: the one of the install folder the test made (its first argument).
 using var startGate = InstallGate.EnterStartup();
@@ -16,6 +25,16 @@ if (!startGate.IsOpen)
 {
     Console.Error.WriteLine("start gate " + startGate.Reason);
     return Crashed;
+}
+
+if (args.Length == 0)
+{
+    return ChildModes.Started();
+}
+
+if (args[0] == "handoff")
+{
+    return ChildModes.HandOff(args);
 }
 
 try
