@@ -418,6 +418,7 @@ public sealed class HandOffProcessTests
     {
         info.Environment[PcMieru.Swap.TestBuild.TestEntry.Variable] = InstallGate.InstallFolderOf(rig.Rig.ExePath);
         info.Environment[PcMieru.Swap.TestBuild.TestEntry.LocalVariable] = rig.Local;
+        info.Environment[PcMieru.Swap.TestBuild.TestEntry.NotElevatedVariable] = "1"; // the machine's token is not what these tests are about (an elevated CI runner would refuse every run)
     }
 
     private static string StartedLog(ApplyRig rig) => Path.Combine(rig.Rig.Root, "started.log");

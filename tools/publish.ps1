@@ -92,6 +92,8 @@ $KnownRuntimeSwitchNames = @('System.Net.SocketsHttpHandler.Http3Support')
 
 # Parts of method names in the ILC map that mean network code, in the map's spelling (dots are underscores). Case-sensitive on purpose.
 $NetworkMapFragments = @('System_Net', 'Http', 'Socket', 'WinInet', 'Dns', 'NetworkInformation', 'Feed_Update', 'Feed_Release')
+# Exact method names that hold a fragment and are known to read only a local file: the runner's --apply reads the update mode from gui.ini (UpdateModes in Update.Feed). Any other method of that type is still a hit.
+$NetworkMapAllowed = @('PcMieru_Update_PcMieru_Update_Feed_UpdateModes__FromIni', 'PcMieru_Update_PcMieru_Update_Feed_UpdateModes__ReadFromFile')
 
 # The test-only entry of the runner (a scripted verdict, a stop at a named step) lives in the test-only build of the swapper and in no shipped program. Its option name and its environment variable
 # must not be in the published exe, as ASCII or as UTF-16 text (Test-NoTestEntry), and none of the names in $TestEntryMapFragments may be a compiled method in the ILC map (Test-SwapMap).
@@ -302,7 +304,8 @@ function Test-NoTestEntry([string]$Path) {
 
 # The strong evidence that no network code is in the swapper: the ILC map (IlcGenerateMapFile in PcMieru.Swap.csproj) lists every method the compiler kept, by its full name. The bytes of the exe only
 # hold the names of the types that reflection can see, so a method that is compiled in can have no name there; the map has them all. The map is trusted only when it names the swap's own code (a control),
-# and the names are then searched for the fragments of $NetworkMapFragments. Update.Feed has two harmless users in the swapper (AppVersion, Sha256List) and nothing else from the update client.
+# and the names are then searched for the fragments of $NetworkMapFragments. Update.Feed has three harmless users in the swapper (AppVersion, Sha256List, and UpdateModes by the exact names in
+# $NetworkMapAllowed) and nothing else from the update client.
 #
 # Which map: the one of THIS publish, by its exact path (the target framework of PcMieru.Swap.csproj and the runtime of this script), never "the newest map under obj" (a Debug build, another runtime or an
 # earlier publish could have left another). The compiler writes the map and then the linker writes the exe (a fraction of a second later), so the map belongs to the exe in the release folder when the exe
@@ -327,6 +330,7 @@ function Test-SwapMap([string]$ExePath) {
     if ($control.Count -lt 50) { throw ('the ILC map names only ' + $control.Count + ' methods of the swap code (PcMieru.Update.Transaction); it cannot vouch for the swapper') }
     $hits = New-Object System.Collections.Generic.List[string]
     foreach ($name in $names) {
+        if ($NetworkMapAllowed -ccontains $name) { continue }
         foreach ($fragment in $NetworkMapFragments) {
             if ($name.IndexOf($fragment, [StringComparison]::Ordinal) -ge 0) { $hits.Add($name); break }
         }

@@ -54,6 +54,7 @@ namespace PcMieru.Swap
 #if PCM_SWAP_TESTBUILD
                 // The test build can be told another L (a scratch folder) for the install it is run in; the product cannot (the system's answer is the only one).
                 LocalFolder = PcMieru.Swap.TestBuild.TestEntry.LocalFolder(self, Environment.GetEnvironmentVariable),
+                IsElevated = PcMieru.Swap.TestBuild.TestEntry.IsElevated(self, Environment.GetEnvironmentVariable),
 #endif
             };
 #if PCM_SWAP_TESTBUILD

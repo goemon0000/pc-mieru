@@ -151,6 +151,21 @@ public static class TestEntry
         return !string.IsNullOrWhiteSpace(value) && Path.IsPathFullyQualified(value) ? Path.TrimEndingDirectorySeparator(value) : null;
     }
 
+    /// <summary>
+    /// The environment variable that makes the test build answer "not elevated" whatever its token is (the same switch as <see cref="Variable"/>: it works only when that one names this install). The tests run on
+    /// machines whose session is elevated (the GitHub runner), where every real runner would refuse with Elevated; the refusal itself is tested in-process with <see cref="SwapHost.IsElevated"/>.
+    /// </summary>
+    public const string NotElevatedVariable = "PCMIERU_SWAP_TEST_NOT_ELEVATED";
+
+    /// <summary>The elevation question of the test build: always "no" when the switch names this install and <see cref="NotElevatedVariable"/> is 1, the real token otherwise.</summary>
+    public static Func<bool> IsElevated(string selfPath, Func<string, string?> getVariable)
+    {
+        var site = RunnerRules.Locate(selfPath);
+        return site.Role != RunnerRole.Refused && SwitchOn(getVariable, site.InstallFolder) && getVariable(NotElevatedVariable) == "1"
+            ? static () => false
+            : static () => ProcessElevation.IsElevated();
+    }
+
     private static int Bad(SwapHost host, string problem)
     {
         host.Error.WriteLine("swap: " + problem);
