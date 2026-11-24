@@ -137,6 +137,55 @@ public partial class NoNetworkTests
     }
 
     [Fact]
+    public void The_launch_check_and_the_verify_entry_name_no_network_type_and_a_verify_run_never_starts_the_update_check()
+    {
+        // The launch check runs inside the swapper between the swap and the commit: the Launch folder (the verify launcher, the --apply side, the pipe) is compiled into PCMieru.Swap.exe, so the swapper's
+        // rule holds for it as well. PCMieru.exe --verify-update is the program the launcher starts; its entry file and the window's start of the update check are read here too. The only channel there is
+        // is a local pipe, made in one place that refuses remote clients.
+        var root = RepoRoot();
+        var files = Directory.GetFiles(Path.Combine(root, "src", "PcMieru.Update", "Launch"), "*.cs", SearchOption.AllDirectories)
+            .Concat([Path.Combine(root, "src", "PcMieru.Gui", "Update", "VerifyUpdate.cs")])
+            .Where(f => !IsBuildOutput(root, f))
+            .ToArray();
+        string[] expected = ["ApplyProtocol.cs", "GuiHandOff.cs", "LaunchNative.cs", "PipeChannel.cs", "ProductionLaunchVerifier.cs", "SwapApply.cs", "VerifyAdmission.cs", "VerifyUpdate.cs"];
+        foreach (var name in expected)
+        {
+            Assert.Contains(files, f => Path.GetFileName(f) == name);
+        }
+
+        foreach (var file in files)
+        {
+            var code = CodeOf(file);
+            Assert.DoesNotMatch(HttpWords(), code);
+            Assert.DoesNotMatch(NeverWords(), code);
+            Assert.DoesNotMatch(SocketWords(), code);
+            Assert.DoesNotContain("System.Net", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("UpdateHttp", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("UpdateService", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("NamedPipeServerStream", code, StringComparison.Ordinal); // its default lets a remote client in
+            Assert.DoesNotContain("NamedPipeClientStream", code, StringComparison.Ordinal);
+        }
+
+        // The pipe: one CreateNamedPipe call in the whole folder, and it says PIPE_REJECT_REMOTE_CLIENTS.
+        var creates = files.SelectMany(f => CodeOf(f).Split('\n'))
+            .Where(line => line.Contains("CreateNamedPipe(", StringComparison.Ordinal) && !line.Contains("partial", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(creates);
+        Assert.Contains("PipeRejectRemoteClients", creates[0], StringComparison.Ordinal);
+
+        // The verify run does not build the update check, does not start it, and the window it shows does not start it either (Program.cs calls StartUpdates; VerifyUpdate.Run never does).
+        var entry = CodeOf(Path.Combine(root, "src", "PcMieru.Gui", "Update", "VerifyUpdate.cs"));
+        foreach (var word in new[] { "StartUpdates", "UpdateComposition", "UpdateController", "IUpdateService", "StartHandOff" })
+        {
+            Assert.DoesNotContain(word, entry, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("verifying: true", entry, StringComparison.Ordinal);
+        var window = CodeOf(Path.Combine(root, "src", "PcMieru.Gui", "Shell", "MainForm.cs"));
+        Assert.Matches(new Regex(@"void\s+StartUpdates\(\)\s*\{\s*if\s*\([^)]*_context\.Verifying"), window);
+    }
+
+    [Fact]
     public void The_update_project_references_no_package_and_no_project_but_the_wire_project_and_the_wire_reaches_nothing()
     {
         var text = File.ReadAllText(Path.Combine(RepoRoot(), "src", "PcMieru.Update", "PcMieru.Update.csproj"));
@@ -322,6 +371,9 @@ public partial class NoNetworkTests
 
         return hits;
     }
+
+    /// <summary>The code of one file (its comments removed), as one text.</summary>
+    private static string CodeOf(string file) => string.Join('\n', File.ReadAllLines(file).Select(WithoutComments));
 
     /// <summary>The line without its "//" comment. A "//" inside a string literal is not a comment.</summary>
     private static string WithoutComments(string line)

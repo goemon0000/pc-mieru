@@ -53,6 +53,17 @@ internal static class Scenarios
         // A swap whose new version fails its check while it still has its NEW library and its added library mapped (the verify run that hangs): the rollback sets them aside (rollback.aside) and puts the
         // old ones back. The "program" ends before the last recovery.
         new Scenario("swap-rollback-image", label => Rig.Create(label, recorded: true, shape: Rig.RealImages), (rig, fault) => rig.Swap(Rig.Seams(fault, MapsTheNewImages(rig))), rig => rig.ReleaseHolds()),
+
+        // The launch check is where the faults are (the Launch step has an edge on each side of every attempt, and the verdict of an attempt decides what is written next). A swap whose check fails twice and
+        // passes on the third attempt, the last one the journal allows: a cut or an I/O error before or after any of the three launches. A recovery that cut in the middle of the third attempt has all three counted
+        // and must not give the new version a fourth.
+        new Scenario("swap-launch-third-time", label => Rig.Create(label, recorded: true), (rig, fault) => rig.Swap(Rig.Seams(fault, new FakeLauncher(LaunchVerdict.Failed, LaunchVerdict.Failed, LaunchVerdict.Ok)))),
+
+        // A recovery that has to run the launch check itself (the journal says VerifyPending) and whose check never passes: the two attempts it still has, then the rollback with the launch-failed tag.
+        new Scenario("recover-launch-fails", label => Cut(Rig.Create(label), TxSteps.Launch, TxEdge.Before), (rig, fault) => rig.Recover(FakeLauncher.AlwaysFail(), automatic: true, fault: fault)),
+
+        // A recovery of a VerifyPending whose three attempts are used up, with a launcher that WOULD pass: it is rolled back without a launch (and the launcher is never asked).
+        new Scenario("recover-launch-spent", label => CutBeforeTheThirdLaunch(Rig.Create(label, recorded: true)), (rig, fault) => rig.Recover(FakeLauncher.Ok(), automatic: true, fault: fault)),
     }.ToDictionary(s => s.Name, StringComparer.Ordinal);
 
     public static IEnumerable<string> Names => ByName.Keys;
@@ -107,6 +118,27 @@ internal static class Scenarios
         if (!cutter.Fired)
         {
             throw new InvalidOperationException("the scenario's first cut was never reached");
+        }
+
+        return rig;
+    }
+
+    /// <summary>Runs the swap with a launcher that fails every time and cuts the power just before the third launch: the journal says VerifyPending with all three attempts counted.</summary>
+    private static Rig CutBeforeTheThirdLaunch(Rig rig)
+    {
+        var cutter = new Cutter(new CutPoint(TxSteps.Launch, TxEdge.Before, 3));
+        try
+        {
+            rig.Swap(Rig.Seams(cutter, FakeLauncher.AlwaysFail()));
+        }
+        catch (PowerCutException)
+        {
+            // the point of it
+        }
+
+        if (!cutter.Fired)
+        {
+            throw new InvalidOperationException("the scenario's cut before the third launch was never reached");
         }
 
         return rig;
@@ -308,6 +340,45 @@ public sealed class TxFaultMatrixTests
         var cutter = new Cutter(first);
         Assert.Throws<PowerCutException>(() => scenario.Run(rig, cutter));
         return rig;
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------- a cut inside the launch check
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void A_power_cut_while_the_launch_check_runs_leaves_the_attempt_counted_and_is_recovered_by_the_table(int attempt)
+    {
+        // The Cutter fires at the edges of the Launch step, outside the call. This is the runner dying INSIDE the call (the verify child still running): the exception has to pass the seam's catch (a seam
+        // that fails is a failed launch, a power cut is not), nothing may be rolled back or tidied, and the journal says which attempt it was.
+        foreach (var withLauncher in new[] { false, true })
+        {
+            using var rig = Rig.Create($"launch-inside-{attempt}-{(withLauncher ? "L" : "N")}", recorded: true);
+            var launcher = new FakeLauncher(Enumerable.Repeat(LaunchVerdict.Failed, attempt - 1).Append(LaunchVerdict.Ok).ToArray())
+            {
+                OnCall = request =>
+                {
+                    if (request.Attempt == attempt)
+                    {
+                        throw new PowerCutException("the runner died during attempt " + attempt);
+                    }
+                },
+            };
+            Assert.Throws<PowerCutException>(() => rig.Swap(launcher));
+            Assert.Equal(attempt, launcher.Calls.Count);
+
+            var observed = Observe(rig, $"after a cut inside launch attempt {attempt}");
+            Assert.Equal(TxPhase.VerifyPending, observed.Phase);
+            Assert.Equal(attempt, observed.Attempts);
+
+            var result = rig.Recover(withLauncher ? FakeLauncher.Ok() : null);
+            Assert.True(result.Outcome != TxOutcome.RecoveryFailed, $"recovery after a cut inside attempt {attempt}: {result.Reason} {result.Detail}");
+            var generation = rig.AssertEnded($"after a cut inside launch attempt {attempt} and a recovery {(withLauncher ? "with" : "without")} a launcher");
+            Assert.Equal(Expect(observed, withLauncher), generation);
+            Assert.Equal(withLauncher && attempt < TxLimits.MaxLaunchAttempts ? Generation.New : Generation.Old, generation); // the table in words: only an unused attempt and a launcher keep the new version
+            Assert.Equal(TxOutcome.NothingToDo, rig.Recover().Outcome);
+        }
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------- an ordinary I/O error at any point

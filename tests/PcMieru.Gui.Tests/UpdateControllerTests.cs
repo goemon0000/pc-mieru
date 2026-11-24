@@ -695,6 +695,32 @@ public sealed class UpdateControllerTests
         _ = deferred.ReadStatus();
         Assert.Equal(1, made);
     }
+
+    [Theory]
+    [InlineData(UpdateMode.Ask)]
+    [InlineData(UpdateMode.Off)]
+    [InlineData(UpdateMode.Notify)]
+    public async Task A_stage_in_any_mode_but_Automatic_does_not_make_the_deferred_service_and_asks_nothing(UpdateMode mode)
+    {
+        var made = 0;
+        var inner = new FakeUpdateService(UpdateKit.Running);
+        var deferred = new DeferredUpdateService(() =>
+        {
+            made++;
+            return inner;
+        });
+
+        var answer = await deferred.StageAsync(mode, UpdateCheck.NotAllowed(mode), CancellationToken.None);
+
+        Assert.Equal(UpdateStageKind.NotAttempted, answer.Kind);
+        Assert.Equal(0, made);
+        Assert.Equal(0, inner.StageCalls);
+
+        // Automatic is the one mode that reaches the real service.
+        _ = await deferred.StageAsync(UpdateMode.Automatic, UpdateCheck.NotAllowed(UpdateMode.Automatic), CancellationToken.None);
+        Assert.Equal(1, made);
+        Assert.Equal(1, inner.StageCalls);
+    }
 #endif
 
     [Fact]
