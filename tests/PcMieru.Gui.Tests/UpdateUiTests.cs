@@ -1428,20 +1428,19 @@ public sealed class UpdateUiTests
     }
 
     [Theory]
-    [InlineData(false, "Updated to 1.2.4.", "1.2.4 に更新しました。")]
-    [InlineData(true, "1.2.4 could not be started, so PC Mieru went back to 1.2.3. This version will not be installed again.", "1.2.4 は起動を確かめられなかったため、元の 1.2.3 に戻しました。この版は今後入れません。")]
-    public void The_note_about_the_last_update_is_on_the_page_once_and_follows_the_language(bool rolledBack, string english, string japanese)
+    [InlineData("committed", "none", "Updated to 1.2.4.", "1.2.4 に更新しました。")]
+    [InlineData("rolledBack", "launchFailed", "1.2.4 could not be confirmed to start, so PC Mieru went back to 1.2.3. 1.2.4 will not be installed automatically again. You can keep using PC Mieru as it is.", "1.2.4 の起動を確認できなかったため、PCミエルを 1.2.3 に戻しました。1.2.4 は今後、自動では入れません。このままお使いいただけます。")]
+    [InlineData("rolledBack", "swapIoFailure", "1.2.4 could not be installed, so PC Mieru went back to 1.2.3. It will try again later. You can keep using PC Mieru as it is.", "1.2.4 に更新できなかったため、PCミエルを 1.2.3 に戻しました。あとでもう一度試します。このままお使いいただけます。")]
+    public void The_note_about_the_last_update_is_on_the_page_once_and_follows_the_language(string outcome, string reason, string english, string japanese)
     {
         using var folder = new UpdateTestFolder();
-        var outcome = rolledBack ? "rolledBack" : "committed";
-        var reason = rolledBack ? "launchFailed" : "none";
         File.WriteAllText(folder.Paths.LastResult, $$"""
             { "format": "pcm-last-result/1", "kind": "apply", "utc": "2026-11-25T01:02:03Z", "tx": "0123456789ab",
               "outcome": "{{outcome}}", "reason": "{{reason}}", "detail": "",
               "from": { "version": "1.2.3", "buildId": "{{UpdateResultNoteTests.Before}}" },
               "to": { "version": "1.2.4", "buildId": "{{UpdateResultNoteTests.After}}" } }
             """);
-        if (rolledBack)
+        if (reason == "launchFailed")
         {
             File.WriteAllText(folder.Paths.Blocked, $$"""
                 { "format": "pcm-blocked/1", "tags": [
@@ -1452,13 +1451,20 @@ public sealed class UpdateUiTests
 
         using var rig = new PageRig("auto", lastUpdate: () => UpdateResultNote.Read(folder.Paths.Install));
         var page = rig.Page;
+        // Scale the settings content and its font as on a 200% display, without changing the desktop DPI.
+        using var font = new Font(page.Font.FontFamily, page.Font.SizeInPoints * 2);
+        page.Scale(new SizeF(2, 2));
+        page.Font = font;
+        page.Size = new Size(1440, 960);
 
         Assert.Equal(english, page.UpdateResultText);
+        AssertUpdateResultFits(page, outcome == "rolledBack");
 
         Strings.Current = Language.Ja;
         page.ApplyLanguage();
 
         Assert.Equal(japanese, page.UpdateResultText);
+        AssertUpdateResultFits(page, outcome == "rolledBack");
 
         // The note was shown, so its stamp is kept: a window that reads the same file again says nothing, and the page that is opened again shows none.
         var note = rig.Context.LastUpdate.Value!;
@@ -1467,6 +1473,24 @@ public sealed class UpdateUiTests
         Assert.Null(rig.Context.LastUpdate.Value);
         page.OnActivated();
         Assert.Equal(string.Empty, page.UpdateResultText);
+    }
+
+    private static void AssertUpdateResultFits(SettingsPage page, bool wraps)
+    {
+        var grid = (TableLayoutPanel)page.Controls["settingsGrid"]!;
+        var note = (Label)grid.Controls["settingsUpdateResult"]!;
+        var buttons = grid.Controls["settingsUpdateButtons"]!;
+        page.PerformLayout();
+        grid.PerformLayout();
+
+        var preferred = note.GetPreferredSize(new Size(note.Width, 0));
+        Assert.True(note.Height >= preferred.Height);
+        Assert.True(note.Right <= grid.ClientSize.Width - grid.Padding.Right);
+        Assert.True(note.Bottom <= buttons.Top);
+        if (wraps)
+        {
+            Assert.True(preferred.Height > note.Font.Height);
+        }
     }
 
     [Fact]

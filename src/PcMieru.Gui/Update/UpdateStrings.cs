@@ -24,10 +24,10 @@ internal static class UpdateStrings
         new("gui.update.apply.waiting", "更新を入れられなかったため、しばらくしてからもう一度試します。PCミエルはこれまでの版のまま使えます。",
             "The update could not be installed. It will try again later. PC Mieru keeps working as before."),
         new("gui.update.result.committed", "{to} に更新しました。", "Updated to {to}."),
-        new("gui.update.result.blocked", "{to} は起動を確かめられなかったため、元の {from} に戻しました。この版は今後入れません。",
-            "{to} could not be started, so PC Mieru went back to {from}. This version will not be installed again."),
-        new("gui.update.result.retry", "{to} に更新できなかったため、元の {from} に戻しました。あとでもう一度試します。",
-            "{to} could not be installed, so PC Mieru went back to {from}. It will try again later."),
+        new("gui.update.result.blocked", "{to} の起動を確認できなかったため、PCミエルを {from} に戻しました。{to} は今後、自動では入れません。このままお使いいただけます。",
+            "{to} could not be confirmed to start, so PC Mieru went back to {from}. {to} will not be installed automatically again. You can keep using PC Mieru as it is."),
+        new("gui.update.result.retry", "{to} に更新できなかったため、PCミエルを {from} に戻しました。あとでもう一度試します。このままお使いいただけます。",
+            "{to} could not be installed, so PC Mieru went back to {from}. It will try again later. You can keep using PC Mieru as it is."),
         new("gui.update.stage.failed", "更新を準備できませんでした: {reason}。", "The update could not be prepared: {reason}."),
 
         // --- the four modes (one key per UpdateMode member: a test keeps the two in step) ---

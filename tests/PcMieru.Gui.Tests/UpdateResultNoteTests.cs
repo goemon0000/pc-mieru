@@ -11,10 +11,10 @@ public sealed class UpdateResultNoteTests
     [Theory]
     [InlineData(Language.Ja, "committed", false, "1.2.4 に更新しました。")]
     [InlineData(Language.En, "committed", false, "Updated to 1.2.4.")]
-    [InlineData(Language.Ja, "rolledBack", true, "1.2.4 は起動を確かめられなかったため、元の 1.2.3 に戻しました。この版は今後入れません。")]
-    [InlineData(Language.En, "rolledBack", true, "1.2.4 could not be started, so PC Mieru went back to 1.2.3. This version will not be installed again.")]
-    [InlineData(Language.Ja, "rolledBack", false, "1.2.4 に更新できなかったため、元の 1.2.3 に戻しました。あとでもう一度試します。")]
-    [InlineData(Language.En, "rolledBack", false, "1.2.4 could not be installed, so PC Mieru went back to 1.2.3. It will try again later.")]
+    [InlineData(Language.Ja, "rolledBack", true, "1.2.4 の起動を確認できなかったため、PCミエルを 1.2.3 に戻しました。1.2.4 は今後、自動では入れません。このままお使いいただけます。")]
+    [InlineData(Language.En, "rolledBack", true, "1.2.4 could not be confirmed to start, so PC Mieru went back to 1.2.3. 1.2.4 will not be installed automatically again. You can keep using PC Mieru as it is.")]
+    [InlineData(Language.Ja, "rolledBack", false, "1.2.4 に更新できなかったため、PCミエルを 1.2.3 に戻しました。あとでもう一度試します。このままお使いいただけます。")]
+    [InlineData(Language.En, "rolledBack", false, "1.2.4 could not be installed, so PC Mieru went back to 1.2.3. It will try again later. You can keep using PC Mieru as it is.")]
     public void Result_text_matches_the_outcome_and_actual_blocked_build(Language language, string outcome, bool blocked, string expected)
     {
         using var locale = Harness.Locale(language);

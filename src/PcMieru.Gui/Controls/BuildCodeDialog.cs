@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using PcMieru.Checks.Build;
 
@@ -54,6 +55,7 @@ internal sealed class BuildCodeDialog : Form
     private readonly bool _empty;
     private TableLayoutPanel _root = null!;
     private int _codeLines = CodeLines;
+    private int _codeTextTop;
     private bool _saving;
 
     private readonly record struct PartRow(string Category, string Name, string Detail, string Count);
@@ -195,7 +197,6 @@ internal sealed class BuildCodeDialog : Form
         theme.Apply(this);
         _code.Font = _mono;
         _fontsReady = true;
-        // The box is whole lines high (no half line at the bottom): its client area is CodeLines lines of the code's own font plus a little air.
         // The list and the box give up rows and lines when the screen is too low for the whole dialog.
         FitToScreen();
         _status.ForeColor = theme.Palette.TextDim;
@@ -234,14 +235,11 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>The box the code is in, for tests and the smoke run.</summary>
     internal TextBox CodeBox => _code;
 
-    /// <summary>The height of the code box's client area: <see cref="CodeLinesShown"/> lines of the code's font and a little air, never a part of a line.</summary>
-    internal int CodeBoxClientHeight => (_codeLines * CodeLineHeight) + LogicalToDeviceUnits(CodeBoxPadding);
+    /// <summary>The height of the client area, from the top inset to the start of the next line.</summary>
+    internal int CodeBoxClientHeight => _codeTextTop + (_codeLines * CodeLineHeight);
 
-    /// <summary>The air in the code box, in logical pixels.</summary>
-    internal const int CodeBoxPadding = 6;
-
-    /// <summary>The line height of the code's font (the box's own, so a window at another scale is asked what it has now), in pixels.</summary>
-    internal int CodeLineHeight => _code.Font.Height;
+    /// <summary>The line height used by the edit control, in pixels.</summary>
+    internal int CodeLineHeight { get; private set; }
 
     /// <summary>How many lines the box shows now: <see cref="CodeLines"/>, or fewer on a screen too low for the whole dialog.</summary>
     internal int CodeLinesShown => _codeLines;
@@ -336,6 +334,7 @@ internal sealed class BuildCodeDialog : Form
     /// </summary>
     internal int FitToHeight(int available)
     {
+        (_codeTextTop, CodeLineHeight) = MeasureCodeLines();
         var rows = Math.Min(_rows.Count, MaxShownRows);
         var lines = CodeLines;
         SetHeights(rows, lines);
@@ -356,6 +355,7 @@ internal sealed class BuildCodeDialog : Form
             }
         }
 
+        SetCodeFormattingRectangle();
         return PreferredHeight;
     }
 
@@ -367,15 +367,80 @@ internal sealed class BuildCodeDialog : Form
         }
 
         _codeLines = lines;
-        // Handing the client width back (ClientSize) takes a scroll bar's width off the box each time its bar comes and goes (a short code is
-        // scrolled in a box of two lines and not in one of five). Below the usual floor it keeps the width it had, so a squeezed window is not also narrower.
-        var width = _code.Width;
-        _code.ClientSize = new Size(_code.ClientSize.Width, CodeBoxClientHeight);
-        if (lines < MinCodeLines)
+        // The next line starts immediately after the last whole one. Extra client height can expose the tops of its glyphs.
+        // Keep the outer width when the native vertical scroll bar appears or disappears.
+        _code.Height += CodeBoxClientHeight - _code.ClientSize.Height;
+    }
+
+    private (int Top, int LineHeight) MeasureCodeLines()
+    {
+        if (!_code.IsHandleCreated)
         {
-            _code.Width = width;
+            return (LogicalToDeviceUnits(1), _code.Font.Height);
+        }
+
+        _ = SendMessage(_code.Handle, EmGetRect, IntPtr.Zero, out var rect);
+        var font = SendMessage(_code.Handle, WmGetFont, IntPtr.Zero, IntPtr.Zero);
+        using var graphics = _code.CreateGraphics();
+        var dc = graphics.GetHdc();
+        var previous = SelectObject(dc, font);
+        try
+        {
+            // Measure with the HFONT selected by EDIT. Font.Height uses GDI+ metrics, which can round differently.
+            return GetTextExtentPoint32(dc, "M", 1, out var size) ? (rect.Top, size.Height) : (rect.Top, _code.Font.Height);
+        }
+        finally
+        {
+            _ = SelectObject(dc, previous);
+            graphics.ReleaseHdc(dc);
         }
     }
+
+    private void SetCodeFormattingRectangle()
+    {
+        if (!_code.IsHandleCreated)
+        {
+            return;
+        }
+
+        _ = SendMessage(_code.Handle, EmGetRect, IntPtr.Zero, out var rect);
+        // EDIT applies its border inset to the supplied rectangle. Keep the existing horizontal margins
+        // and put the resulting bottom at the client edge, where the next line starts.
+        rect.Left -= _codeTextTop;
+        rect.Top = 0;
+        rect.Right += _codeTextTop;
+        rect.Bottom = _code.ClientSize.Height + _codeTextTop;
+        _ = SetEditRectangle(_code.Handle, EmSetRect, IntPtr.Zero, in rect);
+    }
+
+    private const int EmGetRect = 0x00B2;
+    private const int EmSetRect = 0x00B3;
+    private const int WmGetFont = 0x0031;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EditRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, out EditRect rect);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SetEditRectangle(IntPtr hwnd, int message, IntPtr wParam, in EditRect rect);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetTextExtentPoint32(IntPtr dc, string text, int length, out Size size);
 
     /// <summary>
     /// Fits the window to the working area of the screen it is on, leaving a little air. Before it is shown (it is centred on its owner and not
