@@ -104,6 +104,12 @@ public sealed class SwapHost
     /// </summary>
     public string? LocalFolder { get; init; }
 
+    /// <summary>
+    /// The arguments of the final start of <c>I\PCMieru.exe</c> after a swap, a rollback, an abort or a recovery (<see cref="SwapCli.StartInstalledProgram"/>). Always empty in the product: PC Mieru is started plainly, as a person would
+    /// start it. Only the TEST BUILD of the runner fills it (see tests/PcMieru.Swap.TestBuild), so that a trial can start the version that is installed in a way that reads and writes nothing of the owner's.
+    /// </summary>
+    public IReadOnlyList<string> ProgramArguments { get; init; } = [];
+
     /// <summary>Takes the two handles of <c>--apply</c> (the pipe, the process of the program that asked) and returns what the runner talks and waits with; null when they are not a pipe and a process.</summary>
     public Func<nint, nint, ApplyEndpoint?> OpenApplyEndpoint { get; init; } = static (pipe, process) => ApplyEndpoint.FromInherited(pipe, process);
 
@@ -431,11 +437,11 @@ public static class SwapCli
         return exit;
     }
 
-    /// <summary>Starts <c>I\PCMieru.exe</c> normally (no argument), after the gate was let go of; says so (or says that it could not). True when it was started.</summary>
+    /// <summary>Starts <c>I\PCMieru.exe</c> normally (no argument; <see cref="SwapHost.ProgramArguments"/> is empty in the product), after the gate was let go of; says so (or says that it could not). True when it was started.</summary>
     internal static bool StartInstalledProgram(SwapHost host, string install)
     {
         var exe = Path.Combine(install, "PCMieru.exe");
-        var started = host.Starter.TryStart(exe, install, [], out var detail);
+        var started = host.Starter.TryStart(exe, install, host.ProgramArguments, out var detail);
         if (started)
         {
             Say(host, "PCミエルを起動しました。", "Starting PC Mieru.");

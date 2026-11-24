@@ -104,6 +104,18 @@ public sealed class TestBuildSeparationTests
         Assert.DoesNotContain("PCMieru.Swap.TestBuild", File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Update", "Bundle", "BundleFloor.cs")), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_start_arguments_of_the_runner_are_given_only_inside_the_test_symbol_and_nowhere_else_in_the_product()
+    {
+        // SwapHost.ProgramArguments is empty by default (the product starts PCMieru.exe plainly); the one place that fills it is the test build's block of Program.cs.
+        var setters = ProductSources().Where(f => Regex.IsMatch(File.ReadAllText(f), @"\bProgramArguments\s*=(?!=)")).Select(Relative).ToList();
+
+        Assert.Equal(["src/PcMieru.Swap/Program.cs"], setters);
+        var program = File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Swap", "Program.cs"));
+        Assert.Matches(@"(?s)#if " + Symbol + @"\r?\n(?:(?!#endif|#else).)*?\bProgramArguments\s*=\s*PcMieru\.Swap\.TestBuild\.TestEntry\.ProgramArguments\(", program);
+        Assert.Matches(@"public IReadOnlyList<string> ProgramArguments \{ get; init; \} = \[\];", File.ReadAllText(Path.Combine(Root, "src", "PcMieru.Update", "Transaction", "SwapCli.cs")));
+    }
+
     // ---------------------------------------------------------------------------------------------------------------------------- the built product
 
     private static bool Contains(byte[] bytes, string text) =>

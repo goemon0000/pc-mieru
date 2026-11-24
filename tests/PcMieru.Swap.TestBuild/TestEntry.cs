@@ -166,6 +166,38 @@ public static class TestEntry
             : static () => ProcessElevation.IsElevated();
     }
 
+    /// <summary>
+    /// The environment variable that replaces the runner's final start of <c>I\PCMieru.exe</c> (after a commit, a rollback or an abort) by <c>I\PCMieru.exe --smoke &lt;this file&gt; --fakes</c> (the same switch as
+    /// <see cref="Variable"/>: it works only when that one names this install). Its value is the full path of the report file the smoke run writes. A normal start of the real window reads and writes the owner's settings
+    /// and may ask the network for a newer version; the smoke run with <c>--fakes</c> keeps its settings in memory, uses a fake update service and makes no request, and (see SmokeRun.Update.cs) puts the version it
+    /// is and the update note of its own install folder into the report, which is how a trial sees "this version started and shows its result". The product's runner has no such variable and always starts it plainly.
+    /// </summary>
+    public const string StartVariable = "PCMIERU_SWAP_TEST_START";
+
+    /// <summary>
+    /// The arguments of the final start of the installed program for the install of <paramref name="selfPath"/>: <c>--smoke &lt;file&gt; --fakes</c> when the switch names this install and
+    /// <see cref="StartVariable"/> holds a full path of a file on a local drive (a drive letter: a share would be the network); empty, which is the plain start, when the switch is off, names another install, or the value is
+    /// empty, relative, a folder's name (it ends in a separator) or not a drive path.
+    /// </summary>
+    public static IReadOnlyList<string> ProgramArguments(string selfPath, Func<string, string?> getVariable)
+    {
+        var site = RunnerRules.Locate(selfPath);
+        if (site.Role == RunnerRole.Refused || !SwitchOn(getVariable, site.InstallFolder))
+        {
+            return [];
+        }
+
+        var value = getVariable(StartVariable);
+        return IsLocalDriveFile(value) ? ["--smoke", value!, "--fakes"] : [];
+    }
+
+    private static bool IsLocalDriveFile(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && Path.IsPathFullyQualified(value)
+        && value.Length > 3
+        && char.IsAsciiLetter(value[0]) && value[1] == ':' && value[2] is ('\\' or '/')
+        && value[^1] is not ('\\' or '/');
+
     private static int Bad(SwapHost host, string problem)
     {
         host.Error.WriteLine("swap: " + problem);

@@ -936,6 +936,7 @@ internal static partial class SmokeRun
             {
                 ["ok"] = exitCode == 0,
                 ["version"] = AppInfo.Version,
+                ["updateNote"] = UpdateNoteOfThisInstall(),
                 ["dpi"] = form.DeviceDpi,
                 ["sampleData"] = context.Services.UsesFakeData,
                 ["fakeAreas"] = new JsonArray(context.Services.FakeAreas.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray()),

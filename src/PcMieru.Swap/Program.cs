@@ -55,6 +55,8 @@ namespace PcMieru.Swap
                 // The test build can be told another L (a scratch folder) for the install it is run in; the product cannot (the system's answer is the only one).
                 LocalFolder = PcMieru.Swap.TestBuild.TestEntry.LocalFolder(self, Environment.GetEnvironmentVariable),
                 IsElevated = PcMieru.Swap.TestBuild.TestEntry.IsElevated(self, Environment.GetEnvironmentVariable),
+                // ... and a harmless start of the installed program in place of the plain one (a trial must not read or write what the owner keeps); the product always starts it plainly.
+                ProgramArguments = PcMieru.Swap.TestBuild.TestEntry.ProgramArguments(self, Environment.GetEnvironmentVariable),
 #endif
             };
 #if PCM_SWAP_TESTBUILD

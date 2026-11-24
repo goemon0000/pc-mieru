@@ -65,6 +65,12 @@ public sealed class SwapCliTests
 
         public Func<string, string?>? GetVariable { get; set; }
 
+        /// <summary>The environment of this harness as the test build's switches read it (<see cref="Environment"/>, a dictionary: nothing of the real environment is looked at).</summary>
+        public string? Lookup(string name) => GetVariable is { } get ? get(name) : Environment.TryGetValue(name, out var value) ? value : null;
+
+        /// <summary>What the host says to start I\PCMieru.exe with at the end: nothing, like the product's runner, unless a test (standing for the test build's Program.cs) fills it from <see cref="TestEntry.ProgramArguments"/>.</summary>
+        public IReadOnlyList<string> ProgramArguments { get; set; } = [];
+
         public string Self { get; set; } = self;
 
         /// <summary>What the process says about its token. False unless a test says otherwise, whatever the shell the tests are run from.</summary>
@@ -85,6 +91,7 @@ public sealed class SwapCliTests
                 Out = Out,
                 Error = Err,
                 IsElevated = () => Elevated,
+                ProgramArguments = ProgramArguments,
                 ProcessId = OwnPid,
                 Seams = Seams,
                 Starter = Starter,
@@ -416,6 +423,111 @@ public sealed class SwapCliTests
         Assert.Throws<PowerCutException>(() => cli.RunTestBuild(cli.TestSwap("ok")));
 
         Assert.True(File.Exists(rig.Paths.Journal), "the cut left the journal, as a real cut does");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------- the test switch: the final start of the installed program
+
+    /// <summary>A report file the switch is given. It is never created: the switch only reads its name, and the fake starter starts nothing.</summary>
+    private const string ReportFile = "C:\\scratch\\smoke-report.json";
+
+    [Fact]
+    public void The_start_variable_does_nothing_unless_the_test_switch_names_this_install()
+    {
+        using var rig = Rig.Create("cli-start1", recorded: true);
+        var cli = Runner(rig);
+        cli.Environment[TestEntry.StartVariable] = ReportFile;
+
+        Assert.Empty(TestEntry.ProgramArguments(cli.Self, cli.Lookup)); // no switch at all
+
+        foreach (var wrong in new[] { "", "   ", "1", "true", "C:\\some\\other\\folder", Path.Combine(rig.Install, "update") })
+        {
+            cli.Environment[TestEntry.Variable] = wrong;
+            Assert.Empty(TestEntry.ProgramArguments(cli.Self, cli.Lookup));
+        }
+
+        var elsewhere = new Harness(rig, Path.Combine(rig.Install, "other.exe")); // an exe that is not this install's runner is not given the switch either
+        elsewhere.SwitchOn();
+        elsewhere.Environment[TestEntry.StartVariable] = ReportFile;
+        Assert.Empty(TestEntry.ProgramArguments(elsewhere.Self, elsewhere.Lookup));
+
+        cli.SwitchOn();
+        Assert.Equal(new[] { "--smoke", ReportFile, "--fakes" }, TestEntry.ProgramArguments(cli.Self, cli.Lookup));
+    }
+
+    [Fact]
+    public void The_start_variable_is_read_with_the_same_spelling_of_the_install_as_the_switch_and_for_the_launcher_too()
+    {
+        using var rig = Rig.Create("cli-start2", recorded: true);
+        foreach (var cli in new[] { Runner(rig), Launcher(rig) })
+        {
+            cli.Environment[TestEntry.Variable] = rig.Install.ToUpperInvariant() + Path.DirectorySeparatorChar;
+            cli.Environment[TestEntry.StartVariable] = ReportFile;
+
+            Assert.Equal(new[] { "--smoke", ReportFile, "--fakes" }, TestEntry.ProgramArguments(cli.Self, cli.Lookup));
+        }
+    }
+
+    [Fact]
+    public void The_start_variable_missing_leaves_the_plain_start_even_with_the_switch_on()
+    {
+        using var rig = Rig.Create("cli-start3", recorded: true);
+        var cli = Runner(rig);
+        cli.SwitchOn();
+
+        Assert.Empty(TestEntry.ProgramArguments(cli.Self, cli.Lookup));
+        Assert.Equal("PCMIERU_SWAP_TEST_START", TestEntry.StartVariable);
+        Assert.StartsWith(TestEntry.Variable, TestEntry.StartVariable, StringComparison.Ordinal); // the name the publish scan already looks for
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("smoke.json")]
+    [InlineData("sub\\smoke.json")]
+    [InlineData("..\\smoke.json")]
+    [InlineData("\\smoke.json")]
+    [InlineData("C:smoke.json")]
+    [InlineData("C:")]
+    [InlineData("C:\\")]
+    [InlineData("C:\\scratch\\")]
+    [InlineData("C:\\scratch/")]
+    [InlineData("\\\\server\\share\\smoke.json")]
+    [InlineData("\\\\?\\C:\\scratch\\smoke.json")]
+    [InlineData("\\\\.\\pipe\\smoke")]
+    [InlineData("http://example.invalid/smoke.json")]
+    public void A_start_file_that_is_empty_relative_a_folder_or_not_a_path_on_a_local_drive_is_ignored_and_the_start_stays_plain(string value)
+    {
+        using var rig = Rig.Create("cli-start4", recorded: true);
+        var cli = Runner(rig);
+        cli.SwitchOn();
+        cli.Environment[TestEntry.StartVariable] = value;
+
+        Assert.Empty(TestEntry.ProgramArguments(cli.Self, cli.Lookup));
+    }
+
+    [Fact]
+    public void The_product_starts_the_installed_program_plainly_whatever_the_environment_says_and_the_test_build_starts_the_smoke_run_with_the_fakes()
+    {
+        using var rig = Rig.Create("cli-start5", recorded: true);
+        var report = Path.Combine(rig.Root, "smoke-report.json");
+
+        var product = Runner(rig);
+        product.SwitchOn();
+        product.Environment[TestEntry.StartVariable] = report; // the product's host never reads the environment
+        Assert.Equal(SwapExit.NothingToDo, product.Run("--recover", "--then-start"));
+        var plain = Assert.Single(product.Starter.Starts);
+        Assert.Equal(Path.GetFullPath(rig.ExePath), plain.Exe);
+        Assert.Empty(plain.Arguments);
+
+        var testBuild = Runner(rig);
+        testBuild.SwitchOn();
+        testBuild.Environment[TestEntry.StartVariable] = report;
+        testBuild.ProgramArguments = TestEntry.ProgramArguments(testBuild.Self, testBuild.Lookup); // what the test build's Program.cs does
+        Assert.Equal(SwapExit.NothingToDo, testBuild.Run("--recover", "--then-start"));
+        var smoke = Assert.Single(testBuild.Starter.Starts);
+        Assert.Equal(Path.GetFullPath(rig.ExePath), smoke.Exe);
+        Assert.Equal(new[] { "--smoke", report, "--fakes" }, smoke.Arguments);
+        Assert.False(File.Exists(report), "nothing was started: the fake starter was only asked");
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------- the Launcher (I\PCMieru.Swap.exe)

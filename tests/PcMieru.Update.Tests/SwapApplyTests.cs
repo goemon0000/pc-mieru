@@ -170,6 +170,9 @@ public sealed class SwapApplyTests
 
         public string Self { get; set; } = rig.Rig.Paths.Recover;
 
+        /// <summary>What the host says to start I\PCMieru.exe with at the end: nothing, like the product's runner, unless a test (standing for the test build of the runner) says otherwise.</summary>
+        public IReadOnlyList<string> ProgramArguments { get; set; } = [];
+
         public int Run(params string[] args) => SwapCli.Run(args.Length == 0 ? ["--apply", Pipe, Process] : args, Host());
 
         private SwapHost Host() => new()
@@ -186,6 +189,7 @@ public sealed class SwapApplyTests
             AfterPidWait = TimeSpan.FromSeconds(30),
             ReadingPause = TimeSpan.Zero,
             LocalFolder = rig.Local,
+            ProgramArguments = ProgramArguments,
             OpenApplyEndpoint = (_, _) =>
             {
                 Opened++;
@@ -693,6 +697,35 @@ public sealed class SwapApplyTests
         Assert.Empty(BlockedTags.Read(rig.Rig.Paths.Blocked));
         AssertStartedOnce(run, rig);
         rig.Rig.AssertTree(Generation.Old, "after the rollback");
+    }
+
+    [Theory]
+    [InlineData("commit")]
+    [InlineData("rollback")]
+    [InlineData("abort")]
+    public void The_final_start_carries_the_arguments_the_host_names_after_a_commit_a_rollback_and_an_abort_and_nothing_else_changes(string end)
+    {
+        using var rig = new ApplyRig("apply-startargs-" + end);
+        var smoke = Path.Combine(rig.Rig.Root, "smoke-report.json");
+        string[] arguments = ["--smoke", smoke, "--fakes"];
+        var run = new Harness(rig)
+        {
+            ProgramArguments = arguments,
+            Launcher = end == "rollback" ? FakeLauncher.AlwaysFail() : FakeLauncher.Ok(),
+        };
+        var expected = end switch { "commit" => SwapExit.Committed, "rollback" => SwapExit.RolledBack, _ => SwapExit.Aborted };
+
+        if (end == "abort")
+        {
+            run.OnGuiEnd = () => rig.Block(rig.Staged.Version, rig.Staged.BuildId); // the program closes, and by then the version is one that must not be installed
+        }
+
+        Assert.Equal(expected, run.Run());
+
+        var start = Assert.Single(run.Starter.Starts);
+        Assert.Equal(Path.Combine(InstallGate.InstallFolderOf(rig.Rig.ExePath), "PCMieru.exe"), start.Exe);
+        Assert.Equal(arguments, start.Arguments);
+        rig.Rig.AssertTree(end == "commit" ? Generation.New : Generation.Old, "the swap is the same whatever the final start is");
     }
 
     [Fact]

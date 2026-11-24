@@ -1,5 +1,6 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.Json.Nodes;
 using PcMieru.Update.Feed;
 using PcMieru.Update.Launch;
 using PcMieru.Update.Transaction;
@@ -15,6 +16,25 @@ internal static partial class SmokeRun
         private static bool NoHttp() => FeedTraffic.Requests == 0 && FeedTraffic.ClientsCreated == 0;
 
         private static string HttpCounts() => FeedTraffic.Requests + " requests, " + FeedTraffic.ClientsCreated + " clients";
+
+        /// <summary>
+        /// What the report says of the runner's note about the last update (the file the real window shows once on its settings page, <see cref="UpdateResultNote"/>): the note that the install folder of THIS running program
+        /// holds (<c>update\last-result.json</c>, and <c>blocked.json</c> for "blocked" against "retry"), as <c>message</c> (committed, blocked or retry), <c>to</c> and <c>from</c> (versions); null when there is none.
+        /// It is only read, from the folder of the running exe (never from L), and never marks the note as shown: a trial that starts the installed version in this mode reads from the report that the version started and what it
+        /// was told. The walks of the update screens point the window at folders of their own and do not look at this one.
+        /// </summary>
+        private static JsonObject? UpdateNoteOfThisInstall()
+        {
+            var program = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(program) || !Path.IsPathFullyQualified(program))
+            {
+                return null;
+            }
+
+            return UpdateResultNote.Read(InstallGate.InstallFolderOf(program)) is { } note
+                ? new JsonObject { ["message"] = note.Message, ["to"] = note.To, ["from"] = note.From }
+                : null;
+        }
 
         /// <summary>
         /// The update check, walked with the fake feed (DESIGN-B 4): the first-run dialog, the settings section in Ask, in Notify with a candidate, with a refusal and
