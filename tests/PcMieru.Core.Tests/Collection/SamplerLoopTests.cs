@@ -292,8 +292,11 @@ public sealed class SamplerLoopTests
         Assert.True(await UntilAsync(() => source.Calls >= 4));
         await loop.StopAsync();
 
-        // A beat of 200 ms with 80 ms of work is a 200 ms gap, not a 280 ms one.
-        Assert.All(source.StartGapsMs.Take(2), gap => Assert.InRange(gap, 180, 260));
+        // A beat of 200 ms with 80 ms of work is a 200 ms gap, not a 280 ms one. A busy machine only makes a gap longer (a CI runner gave one of 372 ms),
+        // so no gap may be short and at least one of the first three must be a beat: a loop that waits after the end never has a gap under 280 ms.
+        var gaps = source.StartGapsMs.Take(3).ToList();
+        Assert.All(gaps, gap => Assert.True(gap >= 180, $"a sample started {gap:F1} ms after the previous one with a 200 ms interval"));
+        Assert.Contains(gaps, gap => gap < 260);
     }
 
     [Fact]
