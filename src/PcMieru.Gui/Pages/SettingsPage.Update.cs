@@ -66,6 +66,9 @@ internal sealed partial class SettingsPage
     /// <summary>The short line under 「更新内容をブラウザーで開く」 that says why it is off; empty while it is on.</summary>
     internal string UpdateNotesReasonText => _updateNotesReason.Visible ? _updateNotesReason.Text : string.Empty;
 
+    /// <summary>The note about the last update (updated, went back); empty while there is none to show.</summary>
+    internal string UpdateResultText => _updateResult.Visible ? _updateResult.Text : string.Empty;
+
     /// <summary>The Release page that 「更新内容をブラウザーで開く」 opens; null when no newer version is known.</summary>
     internal string? NotesUrl => _notesUrl;
 

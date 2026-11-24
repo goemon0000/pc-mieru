@@ -108,7 +108,7 @@ public sealed class UpdateUiTests
         private int _probes;
 
         /// <param name="activate">True (the default): the page is the one on show, as the main window makes it (<c>OnActivated</c>), and its first probe has ended. False: the page is built and hidden.</param>
-        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En, TimeProvider? clock = null, bool activate = true, Func<Placement>? probe = null)
+        public PageRig(string? mode = null, string? iniPath = null, IUpdateService? service = null, Language language = Language.En, TimeProvider? clock = null, bool activate = true, Func<Placement>? probe = null, Func<UpdateResultNote?>? lastUpdate = null)
         {
             // The test thread stands in for the UI thread: what a check or a probe hands back is queued here and runs when the test pumps (Finish, WaitUntil). Without this,
             // xunit's own context would run the continuations (and so the page's handlers) on a pool thread, as no window of the app ever does.
@@ -118,7 +118,7 @@ public sealed class UpdateUiTests
             Pump = new SnapshotPump(Services);
             Settings = UpdateKit.Impatient(UpdateKit.Settings(iniPath, mode));
             Controller = new UpdateController(service ?? Fake, Settings, Timers, probe ?? Probe, UpdateKit.Running, clock);
-            Context = new GuiContext(Services, Pump, _theme, Settings, updates: Controller);
+            Context = new GuiContext(Services, Pump, _theme, Settings, updates: Controller, lastUpdate: lastUpdate);
             Context.StatusMessage += Messages.Add;
             Page = new SettingsPage(Context);
             if (activate)
@@ -1402,6 +1402,71 @@ public sealed class UpdateUiTests
         Assert.DoesNotContain("put in place", text);
         Assert.DoesNotContain("sends the information it collects nowhere", text);
         Assert.StartsWith("Nothing this app collects is sent anywhere.", text);
+    }
+
+    [Theory]
+    [InlineData(Language.En, true, "Waiting to update because an AI app is using pcmi.")]
+    [InlineData(Language.Ja, true, "AI アプリが pcmi を使っているため、更新を待っています。")]
+    [InlineData(Language.En, false, "Waiting to update because another PC Mieru is open.")]
+    [InlineData(Language.Ja, false, "ほかの PCミエルが開いているため、更新を待っています。")]
+    public void A_deferred_update_is_said_in_the_status_line_and_the_status_bar_and_the_usual_line_comes_back_when_it_goes(Language language, bool pcmi, string expected)
+    {
+        using var rig = new PageRig("auto", language: language);
+        var page = rig.Page;
+        var usual = page.UpdateStatusText;
+
+        rig.Controller.SetDeferral(new UpdateDeferral(pcmi ? GateHolders.Pcmi : GateHolders.Other));
+
+        Assert.Equal(expected, page.UpdateStatusText);
+        Assert.Equal(expected, rig.Context.UpdateNotice);
+
+        rig.Controller.SetDeferral(null);
+
+        Assert.Equal(usual, page.UpdateStatusText);
+        Assert.NotEqual(expected, page.UpdateStatusText);
+        Assert.Null(rig.Context.UpdateNotice);
+    }
+
+    [Theory]
+    [InlineData(false, "Updated to 1.2.4.", "1.2.4 に更新しました。")]
+    [InlineData(true, "1.2.4 could not be started, so PC Mieru went back to 1.2.3. This version will not be installed again.", "1.2.4 は起動を確かめられなかったため、元の 1.2.3 に戻しました。この版は今後入れません。")]
+    public void The_note_about_the_last_update_is_on_the_page_once_and_follows_the_language(bool rolledBack, string english, string japanese)
+    {
+        using var folder = new UpdateTestFolder();
+        var outcome = rolledBack ? "rolledBack" : "committed";
+        var reason = rolledBack ? "launchFailed" : "none";
+        File.WriteAllText(folder.Paths.LastResult, $$"""
+            { "format": "pcm-last-result/1", "kind": "apply", "utc": "2026-11-25T01:02:03Z", "tx": "0123456789ab",
+              "outcome": "{{outcome}}", "reason": "{{reason}}", "detail": "",
+              "from": { "version": "1.2.3", "buildId": "{{UpdateResultNoteTests.Before}}" },
+              "to": { "version": "1.2.4", "buildId": "{{UpdateResultNoteTests.After}}" } }
+            """);
+        if (rolledBack)
+        {
+            File.WriteAllText(folder.Paths.Blocked, $$"""
+                { "format": "pcm-blocked/1", "tags": [
+                    { "version": "1.2.4", "buildId": "{{UpdateResultNoteTests.After}}", "reason": "launch-failed", "utc": "2026-11-25T01:02:03Z" }
+                ] }
+                """);
+        }
+
+        using var rig = new PageRig("auto", lastUpdate: () => UpdateResultNote.Read(folder.Paths.Install));
+        var page = rig.Page;
+
+        Assert.Equal(english, page.UpdateResultText);
+
+        Strings.Current = Language.Ja;
+        page.ApplyLanguage();
+
+        Assert.Equal(japanese, page.UpdateResultText);
+
+        // The note was shown, so its stamp is kept: a window that reads the same file again says nothing, and the page that is opened again shows none.
+        var note = rig.Context.LastUpdate.Value!;
+        Assert.Equal(note.Stamp, rig.Settings.GetValue(note.Key));
+        rig.Context.UseLastUpdate(() => UpdateResultNote.Read(folder.Paths.Install));
+        Assert.Null(rig.Context.LastUpdate.Value);
+        page.OnActivated();
+        Assert.Equal(string.Empty, page.UpdateResultText);
     }
 
     [Fact]

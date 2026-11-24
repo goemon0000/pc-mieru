@@ -1,6 +1,8 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Launch;
+using PcMieru.Update.Transaction;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui;
@@ -142,19 +144,166 @@ internal static partial class SmokeRun
             settings.UpdateModeBox.SelectedIndex = settings.UpdateModeBox.FindStringExact(UpdateText.ModeName(UpdateMode.Off));
             var after = await updates.CheckNowAsync().ConfigureAwait(true);
             Check("update: Off turns the button off, says so with its reason, and asks nobody", updates.Mode == UpdateMode.Off && !settings.UpdateCheckNowButton.Enabled && settings.UpdateCheckNowReasonText == Strings.Get("gui.update.reason.choosemode") && settings.UpdateStatusText == Strings.Get("gui.update.state.off") && after is null && fake.Calls == 5 && !updates.TimersRunning && context.UpdateNotice is null, updates.Mode + ", calls " + fake.Calls);
+            await UpdateHandOffWalk(settings, fake, candidate).ConfigureAwait(true);
             Check("update: the walk went through the window's own controller with no real request", NoHttp(), HttpCounts());
         }
 
-        /// <summary>The settings section of the update check in one state, in every look: its words, no cut-off text, the theme, and (with --shots) its picture.</summary>
-        private async Task ShootUpdateSettings(SettingsPage page, string state)
+        /// <summary>
+        /// Automatic with an update waiting in the stage folder (DESIGN-B 5a), in the four states the hand-off and the runner's last result add to the settings page. Each is made the way
+        /// the program makes it: the two deferrals by the window's own <see cref="UpdateHandOff"/> (the gate rows as Restart Manager gives them, classified by the same function; the
+        /// runner is never started and the window never closed) set on the controller through <see cref="UpdateController.SetDeferral"/>; the two notes by <see cref="UpdateResultNote.Read"/>
+        /// of a temporary install folder this walk owns, with the files the runner writes (<c>last-result.json</c>, and <c>blocked.json</c> after a rollback). Nothing is written outside it.
+        /// </summary>
+        private async Task UpdateHandOffWalk(SettingsPage settings, FakeUpdateService fake, UpdateCheck candidate)
+        {
+            const string BuildBefore = "f0e1d2c3-b4a5-4968-8776-655443322110";
+            var updates = context.Updates;
+            var running = updates.Running;
+            var found = candidate.Version!.Value;
+            var root = Path.Combine(Path.GetTempPath(), "pcmieru-smoke-update-" + Guid.NewGuid().ToString("N")[..8]);
+            try
+            {
+                Directory.CreateDirectory(root);
+
+                // Automatic, the newer version found by the (fake) feed, and the stage the program would have unpacked for it (the fake keeps it in its status as state.json does).
+                updates.ChooseMode(UpdateMode.Automatic);
+                await updates.RefreshPlacement().ConfigureAwait(true);
+                fake.Answer = (_, _) => candidate;
+                await updates.CheckNowAsync().ConfigureAwait(true);
+                var staged = new StagedUpdate
+                {
+                    Folder = Path.Combine(root, "cache", "0123456789ab"),
+                    Version = found.ToString(),
+                    BuildId = candidate.Manifest!.BuildId,
+                    Tag = found.Tag,
+                    ManifestSha256 = new string('b', 64),
+                };
+                fake.SetStatus(fake.ReadStatus() with { Staged = staged });
+                Check("update: Automatic with a staged update starts no timer and asks nobody beyond the one check", updates.Mode == UpdateMode.Automatic && updates.Allowed && !updates.TimersRunning && updates.Status().Staged == staged && updates.Deferral is null && NoHttp(), updates.Mode + ", timers " + updates.TimersRunning + ", " + HttpCounts());
+
+                var idle = new UpdateIdleFacts(1000, false, false, false, false, RecordingActivity.Idle, false, false);
+                var own = new HashSet<int> { 1 };
+                IReadOnlyList<RestartManager.Holder> rows = [];
+                var runnerStarts = 0;
+                var closes = 0;
+                var handOff = new UpdateHandOff(
+                    () => updates.Allowed ? (updates.Mode, updates.Status().Staged) : (UpdateMode.Off, null),
+                    () => idle,
+                    () => RestartManager.Classify(rows, own),
+                    _ =>
+                    {
+                        runnerStarts++;
+                        return ApplyHandOffResult.No(ApplyRefusal.NoAnswer, "the walk starts no runner");
+                    },
+                    updates.SetDeferral,
+                    () => closes++,
+                    () => 61_000);
+                var noticeLabel = form.Controls.Find("updateNotice", searchAllChildren: true).OfType<Label>().SingleOrDefault();
+
+                // --- a: pcmi (the command line tool of an AI app) has the gate file open ---
+                rows = [new RestartManager.Holder(1, "PCMieru"), new RestartManager.Holder(2, "pcmi")];
+                await handOff.TryAsync().ConfigureAwait(true);
+                var pcmi = Strings.Get("gui.update.defer.pcmi");
+                Check("update: an update that waits for pcmi says so in the status line and the status bar, and neither starts the runner nor closes the window", updates.Deferral is { Holders: GateHolders.Pcmi, Refusal: null } && settings.UpdateStatusText == pcmi && context.UpdateNotice == pcmi && noticeLabel is { Visible: true } && noticeLabel.Text == pcmi && runnerStarts == 0 && closes == 0, settings.UpdateStatusText + " / " + noticeLabel?.Text + ", runner " + runnerStarts + ", close " + closes);
+                await ShootUpdateSettings(settings, "deferred-pcmi", expectedStatus: () => Strings.Get("gui.update.defer.pcmi")).ConfigureAwait(true);
+
+                // --- b: another program (here another PC Mieru) has it open ---
+                rows = [new RestartManager.Holder(1, "PCMieru"), new RestartManager.Holder(3, "PCMieru")];
+                await handOff.TryAsync().ConfigureAwait(true);
+                var other = Strings.Get("gui.update.defer.other");
+                Check("update: an update that waits for another program says so in the status line and the status bar, and neither starts the runner nor closes the window", updates.Deferral is { Holders: GateHolders.Other, Refusal: null } && settings.UpdateStatusText == other && context.UpdateNotice == other && noticeLabel is { Visible: true } && noticeLabel.Text == other && runnerStarts == 0 && closes == 0, settings.UpdateStatusText + " / " + noticeLabel?.Text + ", runner " + runnerStarts + ", close " + closes);
+                await ShootUpdateSettings(settings, "deferred-other", expectedStatus: () => Strings.Get("gui.update.defer.other")).ConfigureAwait(true);
+
+                // --- after the swap: the stage is gone and the feed has nothing newer; what is left is the runner's note ---
+                updates.SetDeferral(null);
+                fake.Answer = static (_, _) => UpdateCheck.NoCandidate(fetched: true);
+                await updates.CheckNowAsync().ConfigureAwait(true);
+                fake.SetStatus(fake.ReadStatus() with { Staged = null });
+                Check("update: with the stage gone nothing is deferred and the status bar line goes", updates.Deferral is null && settings.UpdateStatusText != pcmi && settings.UpdateStatusText != other && context.UpdateNotice is null && noticeLabel is { Visible: false }, settings.UpdateStatusText + " / " + context.UpdateNotice);
+
+                string InstallWithNote(string name, string outcome, string reason, AppVersion from, AppVersion to, bool blocked)
+                {
+                    var paths = new TxPaths(Path.Combine(root, name));
+                    Directory.CreateDirectory(paths.Update);
+                    File.WriteAllText(paths.LastResult, $$"""
+                        { "format": "pcm-last-result/1", "kind": "apply", "utc": "2026-11-25T01:02:03Z", "tx": "0123456789ab",
+                          "outcome": "{{outcome}}", "reason": "{{reason}}", "detail": "",
+                          "from": { "version": "{{from}}", "buildId": "{{BuildBefore}}" },
+                          "to": { "version": "{{to}}", "buildId": "{{candidate.Manifest!.BuildId}}" } }
+                        """);
+                    if (blocked)
+                    {
+                        File.WriteAllText(paths.Blocked, $$"""
+                            { "format": "pcm-blocked/1", "tags": [
+                                { "version": "{{to}}", "buildId": "{{candidate.Manifest!.BuildId}}", "reason": "launch-failed", "utc": "2026-11-25T01:02:03Z" }
+                            ] }
+                            """);
+                    }
+
+                    return paths.Install;
+                }
+
+                async Task<UpdateResultNote?> ShowNote(string install)
+                {
+                    // The window reads the note once when the page asks for it: the walk points that at its own folder and opens the page again (the same call the real start makes).
+                    context.UseLastUpdate(() => UpdateResultNote.Read(install));
+                    settings.OnActivated();
+                    await updates.RefreshPlacement().ConfigureAwait(true);
+                    return context.LastUpdate.Value;
+                }
+
+                // --- c: updated (the note after a committed swap; this program is the new version) ---
+                var before = new AppVersion(running.Major, Math.Max(running.Minor - 1, 0), 0);
+                var committed = await ShowNote(InstallWithNote("committed", "committed", "none", before, running, blocked: false)).ConfigureAwait(true);
+                var updated = Strings.Format("gui.update.result.committed", Fmt.Dict(("to", running.ToString())));
+                Check("update: after a committed swap the settings say it updated to this version, once (the stamp is kept as shown), and the status line is the usual one", committed is { Message: "committed" } && settings.UpdateResultText == updated && context.Settings.GetValue(committed.Key) == committed.Stamp && updates.Deferral is null && settings.UpdateStatusText.StartsWith(Strings.Get("gui.update.state.current").Split('{')[0], StringComparison.Ordinal), settings.UpdateResultText + " / " + settings.UpdateStatusText);
+                await ShootUpdateSettings(settings, "updated", expectedResult: () => Strings.Format("gui.update.result.committed", Fmt.Dict(("to", running.ToString())))).ConfigureAwait(true);
+
+                // --- d: rolled back (the note after a rollback; the new version could not be started and is blocked, this program is the old one) ---
+                var rolledBack = await ShowNote(InstallWithNote("rolledback", "rolledBack", "launchFailed", running, found, blocked: true)).ConfigureAwait(true);
+                var back = Strings.Format("gui.update.result.blocked", Fmt.Dict(("to", found.ToString()), ("from", running.ToString())));
+                Check("update: after a rollback the settings say it went back to the old version and will not install the new one again, once (the stamp is kept as shown)", rolledBack is { Message: "blocked" } && settings.UpdateResultText == back && context.Settings.GetValue(rolledBack.Key) == rolledBack.Stamp && updates.Deferral is null, settings.UpdateResultText);
+                await ShootUpdateSettings(settings, "rolledback", expectedResult: () => Strings.Format("gui.update.result.blocked", Fmt.Dict(("to", found.ToString()), ("from", running.ToString())))).ConfigureAwait(true);
+            }
+            finally
+            {
+                context.UseLastUpdate(null);
+                updates.SetDeferral(null);
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // a folder in the temporary folder that stays is not a failure of the screens
+                }
+            }
+        }
+
+        /// <summary>
+        /// The settings section of the update check in one state, in every look: its words, no cut-off text, the theme, and (with --shots) its picture.
+        /// <paramref name="expectedStatus"/> and <paramref name="expectedResult"/> give the exact words the status line and the note about the last update must have in the
+        /// language of each look (a language change writes the section again, so the words are asked again too).
+        /// </summary>
+        private async Task ShootUpdateSettings(SettingsPage page, string state, Func<string>? expectedStatus = null, Func<string>? expectedResult = null)
         {
             await ForEachLook(async look =>
             {
                 page.ScrollToUpdateSection();
                 await Task.Delay(200).ConfigureAwait(true);
-                var texts = new[] { page.UpdateStatusText, page.UpdateCandidateText, page.UpdateLastText, page.UpdatePlacementText, page.UpdateCheckNowReasonText, page.UpdateNotesReasonText, page.UpdateModeBox.Text, page.UpdateCheckNowButton.Text, page.UpdateNotesButton.Text, page.ThemeBox.Text };
+                var texts = new[] { page.UpdateStatusText, page.UpdateResultText, page.UpdateCandidateText, page.UpdateLastText, page.UpdatePlacementText, page.UpdateCheckNowReasonText, page.UpdateNotesReasonText, page.UpdateModeBox.Text, page.UpdateCheckNowButton.Text, page.UpdateNotesButton.Text, page.ThemeBox.Text };
                 var missing = SmokeText.Missing(page).Concat(SmokeText.Missing(form)).Distinct().Take(5).ToList();
                 Check($"update: the settings section has its texts, {state} ({look})", missing.Count == 0 && !texts.Any(SmokeText.IsPlaceholder), string.Join(" | ", missing));
+                if (expectedStatus is not null)
+                {
+                    Check($"update: the status line is exactly the words of {state} in this language ({look})", page.UpdateStatusText == expectedStatus(), page.UpdateStatusText + " / " + expectedStatus());
+                }
+
+                if (expectedResult is not null)
+                {
+                    Check($"update: the note about the last update is exactly the words of {state} in this language ({look})", page.UpdateResultText == expectedResult(), page.UpdateResultText + " / " + expectedResult());
+                }
+
                 var clipped = SmokeClip.Clipped(form).Distinct().Take(6).ToList();
                 Check($"update: the settings section has no cut-off text, {state} ({look})", clipped.Count == 0, string.Join(" | ", clipped));
                 var off = SmokeTheme.Mismatches(form, context.Theme.Palette).Take(5).ToList();

@@ -19,8 +19,7 @@ internal sealed class GuiContext
         Theme = theme;
         Settings = settings;
         Verifying = verifying;
-        LastUpdate = new Lazy<UpdateResultNote?>(() =>
-            lastUpdate?.Invoke() is { } result && settings.GetValue(result.Key) != result.Stamp ? result : null);
+        UseLastUpdate(lastUpdate);
         NetMeter = netMeter ?? services.NetMeter;
         if (checks is null && services.Options.ForceFakes)
         {
@@ -55,7 +54,15 @@ internal sealed class GuiContext
 
     internal bool Verifying { get; }
 
-    internal Lazy<UpdateResultNote?> LastUpdate { get; }
+    internal Lazy<UpdateResultNote?> LastUpdate { get; private set; } = null!;
+
+    /// <summary>
+    /// Where the note about the last update comes from (the real one reads the install folder's <c>update\last-result.json</c>). A note that the window already showed
+    /// once (<see cref="UpdateResultNote.Stamp"/> kept in the settings) is not shown again. The smoke run points this at a temporary install folder of its own.
+    /// </summary>
+    internal void UseLastUpdate(Func<UpdateResultNote?>? source) =>
+        LastUpdate = new Lazy<UpdateResultNote?>(() =>
+            source?.Invoke() is { } result && Settings.GetValue(result.Key) != result.Stamp ? result : null);
 
     /// <summary>The marks of a <c>--measure</c> run; null in a normal start (DESIGN-A 10, <see cref="MeasureMarks"/>).</summary>
     public MeasureMarks? Measure { get; }
