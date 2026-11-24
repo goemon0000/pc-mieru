@@ -1,0 +1,7 @@
+PC Mieru: start gate file. Please leave it where it is.
+
+This file holds no settings and no personal data. Every PC Mieru program keeps it open while it runs, and an update waits until all of them have closed it. If you delete, move or edit it, PC Mieru will not start and cannot update itself. To repair it, download PC Mieru's ZIP file again and unzip it into a new folder.
+
+PCミエルの起動の門のファイルです。そのままにしておいてください。
+
+このファイルには設定も個人の情報も入っていません。PCミエルのプログラムは、動いている間このファイルを開いたままにし、更新はそのすべてが閉じるまで待ちます。削除・移動・編集するとPCミエルは起動せず、自分で更新もできなくなります。直すには、PCミエルの ZIP をもう一度ダウンロードして、新しいフォルダーに展開してください。

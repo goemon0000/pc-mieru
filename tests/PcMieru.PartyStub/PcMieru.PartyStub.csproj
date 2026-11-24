@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TEST ONLY, never shipped (tools/publish.ps1 does not know it and the bundle floor does not list it).
+    A stand-in for "a program of the install that passes the start gate": it makes the same Wire call (InstallGate.EnterStartup) as every real exe, so tests/PcMieru.Gate.Tests
+    can check the gate with a real child process that is neither the GUI nor a console tool of ours: a party (a later-step program, a plug-in host) must be able to rely on the call alone.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>PCMieru.Party</AssemblyName>
+    <RootNamespace>PcMieru.PartyStub</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PcMieru.Wire\PcMieru.Wire.csproj" />
+  </ItemGroup>
+
+  <!-- The gate file beside the exe, like every real exe in a dev build (see build/GateNextToExe.targets). -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
+
+</Project>

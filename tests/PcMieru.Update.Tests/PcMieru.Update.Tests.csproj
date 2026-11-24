@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>PcMieru.Update.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="PcMieru.TestSupport" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/BoundedProcess.cs" Link="Shared/BoundedProcess.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PcMieru.Update\PcMieru.Update.csproj" />
+    <!-- The command line of the validator (tools/publish.ps1 -Verify runs it): its options are tested in-process. -->
+    <ProjectReference Include="..\..\tools\BundleCheck\BundleCheck.csproj" />
+    <!-- The child process of the kill tests (TxKillTests): only BUILT here, never loaded; the tests start its exe from its own build folder. -->
+    <ProjectReference Include="..\PcMieru.TxChild\PcMieru.TxChild.csproj" ReferenceOutputAssembly="false" />
+    <!-- The test build of PCMieru.Swap.exe: built with the tests so that it cannot rot (the trial publishes it with NativeAOT); never loaded here. -->
+    <ProjectReference Include="..\PcMieru.Swap.TestBuild\PcMieru.Swap.TestBuild.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The test-only entry of the TEST BUILD of PCMieru.Swap.exe (tests/PcMieru.Swap.TestBuild): compiled into this project too, so that SwapCliTests runs the very file the test build exe is made from. -->
+    <Compile Include="..\PcMieru.Swap.TestBuild\TestEntry.cs" Link="SwapTestBuild\TestEntry.cs" />
+  </ItemGroup>
+
+</Project>

@@ -3,8 +3,9 @@ namespace PcMieru.Gui;
 /// <summary>
 /// The few settings there are: update interval and pause, theme, language, always on top. Each takes effect at once and is
 /// written to gui.ini; there is no Apply button. The same pause switch is in the status bar and the two stay in step.
+/// The "Updates" section (what the check of new versions does and whether it may run) is in <c>SettingsPage.Update.cs</c>.
 /// </summary>
-internal sealed class SettingsPage : PageBase
+internal sealed partial class SettingsPage : PageBase
 {
     private readonly Label _intervalLabel = new() { AutoSize = true };
     private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Name = "settingsInterval" };
@@ -23,6 +24,13 @@ internal sealed class SettingsPage : PageBase
     private readonly ToneLabel _privacy = new() { AutoSize = true, Name = "settingsPrivacy" };
     private readonly ToolTip _tips = new() { ShowAlways = true };
     private bool _filling;
+
+    /// <summary>
+    /// True from <see cref="OnActivated"/> to <see cref="OnDeactivated"/>: the page is the one on show. The update section is drawn only then (an hourly tick or a
+    /// language change while another page is open must not make this one do work nobody sees); activation draws it. An explicit flag, because a control that has no
+    /// parent yet (a page a test builds, the shell building all pages at start) reports Visible false although nothing is hidden.
+    /// </summary>
+    private bool _active;
 
     public SettingsPage(GuiContext context)
         : base(context, "settings", "gui.nav.settings")
@@ -53,15 +61,18 @@ internal sealed class SettingsPage : PageBase
         AddRow(grid, _netUnitLabel, _netUnit, 5);
         AddWide(grid, _onTop, 6);
         AddWide(grid, _netAutostart, 7);
+        var next = BuildUpdateSection(grid, 8);
         _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
         _privacy.MaximumSize = new Size(Px(640), 0);
-        grid.Controls.Add(_about, 0, 8);
+        grid.Controls.Add(_about, 0, next);
         grid.SetColumnSpan(_about, 2);
-        grid.Controls.Add(_privacy, 0, 9);
+        grid.Controls.Add(_privacy, 0, next + 1);
         grid.SetColumnSpan(_privacy, 2);
         Controls.Add(grid);
+        // The update section made the page taller than a small window: it scrolls instead of cutting rows off.
+        AutoScroll = true;
 
         _interval.TabIndex = 0;
         _pause.TabIndex = 1;
@@ -128,7 +139,10 @@ internal sealed class SettingsPage : PageBase
             }
         };
         context.NetworkUnitChanged += Sync;
+        // The theme box follows the theme however it was changed (this box, a command-line option, the Windows setting in "Follow Windows", the smoke run's looks).
+        context.Theme.Changed += OnThemeChanged;
         context.Pump.StateChanged += OnPumpState;
+        ConnectUpdateSection();
         ApplyLanguage();
     }
 
@@ -149,7 +163,16 @@ internal sealed class SettingsPage : PageBase
     internal CheckBox NetAutostartBox => _netAutostart;
 
     /// <summary>The controls are brought back in line with the live state every time the page opens (the theme or language may have been changed by a switch, a command-line option or the status bar).</summary>
-    public override void OnActivated() => Sync();
+    public override void OnActivated()
+    {
+        _active = true;
+        Sync();
+
+        // The write probe of the install folder: once per activation, off the UI thread, remembered (the page shows "checking" until it ends, then the answer).
+        _ = Context.Updates.RefreshPlacement();
+    }
+
+    public override void OnDeactivated() => _active = false;
 
     public override void ApplyLanguage()
     {
@@ -178,6 +201,7 @@ internal sealed class SettingsPage : PageBase
             _netUnit.Items.Clear();
             _netUnit.Items.AddRange([.. NetworkUnits.All.Select(NetworkUnits.Label).Cast<object>()]);
             _netAutostart.Text = Strings.Get("gui.settings.netmeter.autostart");
+            ApplyUpdateLanguage();
             ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
             _privacy.Text = Strings.Get("gui.settings.privacy");
@@ -204,10 +228,28 @@ internal sealed class SettingsPage : PageBase
         {
             Context.Pump.StateChanged -= OnPumpState;
             Context.NetworkUnitChanged -= Sync;
+            Context.Theme.Changed -= OnThemeChanged;
+            DisconnectUpdateSection();
             _tips.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private void OnThemeChanged()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired && IsHandleCreated)
+        {
+            BeginInvoke(Sync);
+            return;
+        }
+
+        Sync();
     }
 
     private void Sync()
@@ -234,6 +276,7 @@ internal sealed class SettingsPage : PageBase
         _onTop.Checked = Context.Settings.AlwaysOnTop;
         _netUnit.SelectedIndex = Math.Max(0, Array.IndexOf(NetworkUnits.All, Context.Settings.NetworkUnit));
         _netAutostart.Checked = Context.Settings.NetMeterAutostart;
+        ShowUpdate();
     }
 
     private void OnPumpState()
@@ -291,6 +334,10 @@ internal static class SettingsStrings
         new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
-        new("gui.settings.privacy", "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。", "This app sends nothing anywhere. A diagnostic report leaves the app only when you copy or save it."),
+        // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
+        new(
+            "gui.settings.privacy",
+            "集めた情報は、このアプリからどこにも送りません。診断レポートは、コピーや保存をしたときだけ外に出ます。ただし、更新の確認を「自動」か「知らせるだけ」にしたときは、新しい版が出ていないかを GitHub に問い合わせます。送るのはアプリの名前と版だけで、このPCの情報や測定値は送りません。問い合わせは 1 日に 1 回ほどで、GitHub にはこのPCの IP アドレスが分かります。新しい版があるときは、確かめるための小さなファイル（SHA256.txt とマニフェスト）も GitHub から受け取ります。",
+            "Nothing this app collects is sent anywhere. A diagnostic report leaves the app only when you copy or save it. The one exception is the update check: when it is set to Automatic or Notify only, the app asks GitHub whether a new version is out. It sends only the app name and version, nothing about this PC and no measurements. It asks about once a day, and GitHub sees this PC's IP address. When a newer version exists, two small files used to verify it (SHA256.txt and the manifest) are also fetched from GitHub."),
     ];
 }

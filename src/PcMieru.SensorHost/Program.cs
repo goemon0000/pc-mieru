@@ -1,21 +1,37 @@
 using System.Text;
 using PcMieru.Core;
 using PcMieru.Core.Hardware.Model;
+using PcMieru.Core.Hardware.Sensors;
 using PcMieru.SensorHost;
 
 // PCMieru.SensorHost: reads GPU sensors through the vendors' own libraries (NVML, ADLX) in a process of its own, because a vendor driver
-// call can hang and must never freeze the app. Protocol: one SensorFrame JSON line on stdout every two seconds (the first one as soon as the
-// libraries are open), diagnostics on stderr, exit when stdin closes (the app is gone) or after one frame with --once.
-// Runs as the normal user. Reads only; nothing here changes a GPU setting.
+// call can hang and must never freeze the app. Protocol: one SensorFrame JSON line on stdout every two seconds (or every second while the
+// parent asks for it; the first one as soon as the libraries are open), diagnostics on stderr, exit when stdin closes (the app is gone) or
+// after one frame with --once. The parent starts the child with --interval-ms (its current request) and --generation (its own number for
+// this child, copied into every frame), and changes the period later by writing a line, "1000" or "2000", to stdin; the new period starts
+// at the next sampling boundary (SensorCadence). Runs as the normal user. Reads only; nothing here changes a GPU setting.
+// The start gate (DESIGN-B 4): before the stdin watch and before any vendor library is touched. Not open = one fixed line on stderr, exit 3, no frame (the app waits and restarts it).
+using var gate = PcMieru.Wire.Gate.InstallGate.EnterStartup();
+if (!gate.IsOpen)
+{
+    Console.Error.WriteLine("sensorhost " + gate.Reason);
+    return 3;
+}
+
 const int DefaultIntervalMs = 2000;
 
 var once = args.Contains("--once", StringComparer.Ordinal);
 var intervalMs = DefaultIntervalMs;
+long generation = 0;
 for (var i = 0; i + 1 < args.Length; i++)
 {
     if (args[i] == "--interval-ms" && int.TryParse(args[i + 1], out var parsed) && parsed is >= 100 and <= 60_000)
     {
         intervalMs = parsed;
+    }
+    else if (args[i] == "--generation" && long.TryParse(args[i + 1], out var gen) && gen > 0)
+    {
+        generation = gen;
     }
 }
 
@@ -23,16 +39,18 @@ for (var i = 0; i + 1 < args.Length; i++)
 using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 using var stderr = new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
+var cadence = new SensorCadence(intervalMs);
 if (!once)
 {
-    // The parent closing our input is the "you may stop" signal. Exit the whole process: the main thread may be stuck inside a vendor driver
-    // call, and waiting for it would keep this process (and the driver) alive.
+    // Lines from the parent are period requests; the parent closing our input is the "you may stop" signal. Exit the whole process: the
+    // main thread may be stuck inside a vendor driver call, and waiting for it would keep this process (and the driver) alive.
     var watcher = new Thread(() =>
     {
         try
         {
-            while (Console.In.ReadLine() is not null)
+            while (Console.In.ReadLine() is { } line)
             {
+                _ = cadence.TryRequest(line);
             }
         }
         catch (IOException)
@@ -50,8 +68,13 @@ if (!once)
 
 var sampler = new GpuSampler(line => stderr.WriteLine("sensorhost " + line));
 var next = Environment.TickCount64;
+long sequence = 0;
 do
 {
+    // The sampling boundary. The frame says the period that led up to it; a request that came in while we waited starts to count now.
+    var framePeriod = cadence.PeriodMs;
+    var period = cadence.ApplyPending();
+
     Value<IReadOnlyList<GpuSensorReading>> gpus;
     try
     {
@@ -63,7 +86,15 @@ do
         gpus = Value.Failed<IReadOnlyList<GpuSensorReading>>("sensorhost", "reading the GPU sensors failed (" + ex.GetType().Name + ")");
     }
 
-    var frame = new SensorFrame(SensorFrame.CurrentSchemaVersion, DateTime.UtcNow, gpus);
+    sequence++;
+    var frame = new SensorFrame(
+        SensorFrame.CurrentSchemaVersion,
+        DateTime.UtcNow,
+        gpus,
+        generation,
+        sequence,
+        framePeriod,
+        MonotonicClock.NowMicroseconds());
     stdout.WriteLine(PcMieruJson.Serialize(frame));
     if (once)
     {
@@ -71,7 +102,7 @@ do
     }
 
     // A fixed cadence: a slow reading does not push every later frame back.
-    next += intervalMs;
+    next += period;
     var wait = next - Environment.TickCount64;
     if (wait > 0)
     {

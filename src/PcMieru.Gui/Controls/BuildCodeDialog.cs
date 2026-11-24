@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using PcMieru.Checks.Build;
 
@@ -18,10 +19,18 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>How many parts the list shows before it scrolls.</summary>
     private const int MaxShownRows = 10;
 
-    /// <summary>The fewest parts the list shows, and the fewest lines of the code the box shows, when the screen is too low for the dialog.</summary>
+    /// <summary>The fewest parts the list shows, and the fewest lines of the code the box shows, on a screen that is only a little low for the dialog.</summary>
     private const int MinShownRows = 3;
 
     private const int MinCodeLines = 3;
+
+    /// <summary>
+    /// The least of both, for a screen too low even for that (the dialog at 200% on a 1080-line screen has about 540 logical pixels): the notes and
+    /// the unread lines cannot give anything up, so the list and the box do, and both scroll.
+    /// </summary>
+    private const int LeastShownRows = 1;
+
+    private const int LeastCodeLines = 2;
 
     private readonly BuildCodeResult _result;
     private readonly Func<string, bool> _copyToClipboard;
@@ -46,6 +55,7 @@ internal sealed class BuildCodeDialog : Form
     private readonly bool _empty;
     private TableLayoutPanel _root = null!;
     private int _codeLines = CodeLines;
+    private int _codeTextTop;
     private bool _saving;
 
     private readonly record struct PartRow(string Category, string Name, string Detail, string Count);
@@ -187,7 +197,6 @@ internal sealed class BuildCodeDialog : Form
         theme.Apply(this);
         _code.Font = _mono;
         _fontsReady = true;
-        // The box is whole lines high (no half line at the bottom): its client area is CodeLines lines of the code's own font plus a little air.
         // The list and the box give up rows and lines when the screen is too low for the whole dialog.
         FitToScreen();
         _status.ForeColor = theme.Palette.TextDim;
@@ -226,14 +235,11 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>The box the code is in, for tests and the smoke run.</summary>
     internal TextBox CodeBox => _code;
 
-    /// <summary>The height of the code box's client area: <see cref="CodeLinesShown"/> lines of the code's font and a little air, never a part of a line.</summary>
-    internal int CodeBoxClientHeight => (_codeLines * CodeLineHeight) + LogicalToDeviceUnits(CodeBoxPadding);
+    /// <summary>The height of the client area, from the top inset to the start of the next line.</summary>
+    internal int CodeBoxClientHeight => _codeTextTop + (_codeLines * CodeLineHeight);
 
-    /// <summary>The air in the code box, in logical pixels.</summary>
-    internal const int CodeBoxPadding = 6;
-
-    /// <summary>The line height of the code's font (the box's own, so a window at another scale is asked what it has now), in pixels.</summary>
-    internal int CodeLineHeight => _code.Font.Height;
+    /// <summary>The line height used by the edit control, in pixels.</summary>
+    internal int CodeLineHeight { get; private set; }
 
     /// <summary>How many lines the box shows now: <see cref="CodeLines"/>, or fewer on a screen too low for the whole dialog.</summary>
     internal int CodeLinesShown => _codeLines;
@@ -241,8 +247,19 @@ internal sealed class BuildCodeDialog : Form
     /// <summary>How many parts the list shows now before it scrolls: ten, or fewer on a screen too low for the whole dialog.</summary>
     internal int PartRowsShown => _rows.Count == 0 ? 0 : _parts.RowsThatFit(_parts.Height);
 
-    /// <summary>The height the whole window needs now: its content and the frame round it.</summary>
-    internal int PreferredHeight => _root.GetPreferredSize(Size.Empty).Height + (Height - ClientSize.Height);
+    /// <summary>
+    /// The height the whole window needs now: its content and the frame round it. Once the window has a handle, the height it really has counts
+    /// too: at 200% its button bar lays out 32 px higher than the preferred size of the content says (the bar is measured without a width), and
+    /// the fit must be to the window the screen shows (the window grows and shrinks with its content, so it is never higher than it needs).
+    /// </summary>
+    internal int PreferredHeight
+    {
+        get
+        {
+            var measured = _root.GetPreferredSize(Size.Empty).Height + (Height - ClientSize.Height);
+            return IsHandleCreated ? Math.Max(measured, Height) : measured;
+        }
+    }
 
     /// <summary>
     /// The height of the list for this many rows: the header as the list measures it now, the rows as the list measures them, and the border.
@@ -311,29 +328,34 @@ internal sealed class BuildCodeDialog : Form
 
     /// <summary>
     /// Makes the window as low as the screen allows: the list gives up rows first (down to <see cref="MinShownRows"/>; it scrolls), then the box
-    /// gives up lines of the code (down to <see cref="MinCodeLines"/>; it scrolls too). Each call starts from the full size, so a window that
-    /// goes to a roomier screen gets its rows back. Returns the height the window needs then.
+    /// gives up lines of the code (down to <see cref="MinCodeLines"/>; it scrolls too). A screen still too low goes on the same way down to
+    /// <see cref="LeastShownRows"/> and <see cref="LeastCodeLines"/>, so the window is never higher than the screen unless the text under the list
+    /// alone is. Each call starts from the full size, so a window that goes to a roomier screen gets its rows back. Returns the height the window needs then.
     /// </summary>
     internal int FitToHeight(int available)
     {
-        var floorRows = Math.Min(_rows.Count, MinShownRows);
+        (_codeTextTop, CodeLineHeight) = MeasureCodeLines();
         var rows = Math.Min(_rows.Count, MaxShownRows);
         var lines = CodeLines;
         SetHeights(rows, lines);
-        while (PreferredHeight > available && (rows > floorRows || lines > MinCodeLines))
+        foreach (var (floorRows, floorLines) in new[] { (Math.Min(_rows.Count, MinShownRows), MinCodeLines), (Math.Min(_rows.Count, LeastShownRows), LeastCodeLines) })
         {
-            if (rows > floorRows)
+            while (PreferredHeight > available && (rows > floorRows || lines > floorLines))
             {
-                rows--;
-            }
-            else
-            {
-                lines--;
-            }
+                if (rows > floorRows)
+                {
+                    rows--;
+                }
+                else
+                {
+                    lines--;
+                }
 
-            SetHeights(rows, lines);
+                SetHeights(rows, lines);
+            }
         }
 
+        SetCodeFormattingRectangle();
         return PreferredHeight;
     }
 
@@ -345,15 +367,94 @@ internal sealed class BuildCodeDialog : Form
         }
 
         _codeLines = lines;
-        _code.ClientSize = new Size(_code.ClientSize.Width, CodeBoxClientHeight);
+        // The next line starts immediately after the last whole one. Extra client height can expose the tops of its glyphs.
+        // Keep the outer width when the native vertical scroll bar appears or disappears.
+        _code.Height += CodeBoxClientHeight - _code.ClientSize.Height;
     }
 
-    /// <summary>Fits the window to the working area of the screen it is on (the primary one while it has no window yet), leaving a little air.</summary>
+    private (int Top, int LineHeight) MeasureCodeLines()
+    {
+        if (!_code.IsHandleCreated)
+        {
+            return (LogicalToDeviceUnits(1), _code.Font.Height);
+        }
+
+        _ = SendMessage(_code.Handle, EmGetRect, IntPtr.Zero, out var rect);
+        var font = SendMessage(_code.Handle, WmGetFont, IntPtr.Zero, IntPtr.Zero);
+        using var graphics = _code.CreateGraphics();
+        var dc = graphics.GetHdc();
+        var previous = SelectObject(dc, font);
+        try
+        {
+            // Measure with the HFONT selected by EDIT. Font.Height uses GDI+ metrics, which can round differently.
+            return GetTextExtentPoint32(dc, "M", 1, out var size) ? (rect.Top, size.Height) : (rect.Top, _code.Font.Height);
+        }
+        finally
+        {
+            _ = SelectObject(dc, previous);
+            graphics.ReleaseHdc(dc);
+        }
+    }
+
+    private void SetCodeFormattingRectangle()
+    {
+        if (!_code.IsHandleCreated)
+        {
+            return;
+        }
+
+        _ = SendMessage(_code.Handle, EmGetRect, IntPtr.Zero, out var rect);
+        // EDIT applies its border inset to the supplied rectangle. Keep the existing horizontal margins
+        // and put the resulting bottom at the client edge, where the next line starts.
+        rect.Left -= _codeTextTop;
+        rect.Top = 0;
+        rect.Right += _codeTextTop;
+        rect.Bottom = _code.ClientSize.Height + _codeTextTop;
+        _ = SetEditRectangle(_code.Handle, EmSetRect, IntPtr.Zero, in rect);
+    }
+
+    private const int EmGetRect = 0x00B2;
+    private const int EmSetRect = 0x00B3;
+    private const int WmGetFont = 0x0031;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EditRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, out EditRect rect);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SetEditRectangle(IntPtr hwnd, int message, IntPtr wParam, in EditRect rect);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetTextExtentPoint32(IntPtr dc, string text, int length, out Size size);
+
+    /// <summary>
+    /// Fits the window to the working area of the screen it is on, leaving a little air. Before it is shown (it is centred on its owner and not
+    /// placed yet) that is its owner's screen; once it is shown, the screen it has been moved to; with no window at all, the primary one.
+    /// </summary>
     private void FitToScreen()
     {
-        var area = IsHandleCreated ? Screen.FromControl(this).WorkingArea : (Screen.PrimaryScreen ?? Screen.AllScreens[0]).WorkingArea;
-        FitToHeight(area.Height - LogicalToDeviceUnits(24));
+        var screen = !_shown && Owner is { IsHandleCreated: true } owner
+            ? Screen.FromControl(owner)
+            : IsHandleCreated ? Screen.FromControl(this) : Screen.PrimaryScreen ?? Screen.AllScreens[0];
+        FitToHeight(screen.WorkingArea.Height - LogicalToDeviceUnits(24));
     }
+
+    private bool _shown;
 
     /// <summary>
     /// The columns of the list are made for what the rows hold, in pixels of the scale the window is at now: the category, the detail and the
@@ -384,6 +485,7 @@ internal sealed class BuildCodeDialog : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _shown = true;
 
         // The window is laid out and on its screen: the list is asked for its header and rows once more (only a height that differs is a change).
         FitPartColumns();

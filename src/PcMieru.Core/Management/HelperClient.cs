@@ -45,6 +45,16 @@ internal sealed class SystemElevatedLauncher(string? verb = "runas") : IElevated
 {
     private const int ErrorCancelled = ManagementNative.ERROR_CANCELLED;
     private const int SliceMs = 250;
+    private readonly object _gate = new();
+    private readonly HashSet<Process> _children = [];
+
+    internal int[] LivePids()
+    {
+        lock (_gate)
+        {
+            return _children.Where(child => !child.HasExited).Select(child => child.Id).ToArray();
+        }
+    }
 
     public LaunchResult Run(string exe, string arguments, TimeSpan timeout, CancellationToken ct)
     {
@@ -87,6 +97,11 @@ internal sealed class SystemElevatedLauncher(string? verb = "runas") : IElevated
 
         using (process)
         {
+            lock (_gate)
+            {
+                _children.Add(process);
+            }
+
             try
             {
                 var deadline = Stopwatch.StartNew();
@@ -108,6 +123,13 @@ internal sealed class SystemElevatedLauncher(string? verb = "runas") : IElevated
             catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
             {
                 return new LaunchResult(LaunchStatus.Unobserved);
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _children.Remove(process);
+                }
             }
         }
     }
@@ -132,6 +154,11 @@ public sealed class HelperClient : IHelperClient
     private readonly string _helperPath;
     private readonly string _resultDirectory;
     private readonly TimeSpan _timeout;
+    private int _running;
+
+    internal bool Running => Volatile.Read(ref _running) != 0;
+
+    internal int[] LivePids() => _launcher is SystemElevatedLauncher system ? system.LivePids() : [];
 
     public HelperClient()
         : this(
@@ -193,6 +220,7 @@ public sealed class HelperClient : IHelperClient
         }
 
         var commandLine = string.Join(' ', args.Select(QuoteArgument));
+        Interlocked.Increment(ref _running);
         try
         {
             // The UAC prompt is modal and answered by the user; it cannot be cancelled from here, so it is not raced against ct.
@@ -202,6 +230,7 @@ public sealed class HelperClient : IHelperClient
         finally
         {
             TryDelete(resultPath);
+            Interlocked.Decrement(ref _running);
         }
     }
 

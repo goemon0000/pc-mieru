@@ -1,5 +1,6 @@
 using System.Text;
 using PcMieru.Cli;
+using PcMieru.Wire.Gate;
 
 var utf8 = new UTF8Encoding(false);
 TextWriter stdout;
@@ -30,6 +31,16 @@ if (Console.IsErrorRedirected)
 else
 {
     stderr = Console.Error;
+}
+
+// The start gate (DESIGN-B 4): the one place before every command and before the stdio RPC loop of the MCP server. A refusal is written to stderr only; stdout is the MCP channel and
+// gets nothing. Access denied is Denied (4); a busy gate (an update being installed), a recovery that is pending or failed, a missing gate and a link are Failure (1).
+// Held until Main returns: for the MCP server that is as long as the AI app keeps it running.
+using var gate = InstallGate.EnterStartup();
+if (!gate.IsOpen)
+{
+    stderr.WriteLine("pcmi: " + gate.Reason + (gate.RecoveryNotePath is { } note ? " (see " + note + ")" : string.Empty));
+    return (int)(gate.Outcome == GateOutcome.Denied ? ExitCode.Denied : ExitCode.Failure);
 }
 
 var stdin = new StreamReader(Console.OpenStandardInput(), utf8, detectEncodingFromByteOrderMarks: false);

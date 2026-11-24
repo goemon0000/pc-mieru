@@ -225,7 +225,7 @@ web-autoai.com の、ブラウザの中だけで動く道具（電力・互換�
 ```
 {
   "format": "pcm-parts/1",
-  "app": "PCMieru 0.4.0",
+  "app": "PCMieru 0.5.0",
   "cpu":      [ { "name", "vendor", "cpuid": "ファミリ-モデル-ステッピング（10 進）" } ],
   "board":    { "manufacturer", "product" },
   "memory":   [ { "manufacturer", "partNumber", "type", "capacityBytes", "count" } ],
@@ -284,7 +284,7 @@ web-autoai.com の、ブラウザの中だけで動く道具（電力・互換�
 - OS build・電源プラン・ドライバ版・発行の設定を記録。
 - 長時間: 2 時間・全タブを巡回・プロセスの生成消滅を繰り返す負荷で、private bytes とハンドル数が増え続けないこと。
 - working set を強制的に削って数字を作らない。
-- 目標（保証ではない）: private 100MB 未満・定常 CPU 平均 0.3% 未満（1 コア換算 10ms/秒未満）・warm 起動 1 秒未満。
+- 目標（保証ではない）: private 100MB 未満・定常 CPU 平均 0.3% 未満かつ 10ms/秒未満（2 つは同じ値ではない。基準機の 32 論理 CPU では 0.3% は約 96ms/秒にあたり、きついのは 10ms/秒の方）・warm 起動 1 秒未満。
 
 ## 12. 試験
 

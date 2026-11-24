@@ -22,7 +22,8 @@ internal sealed record Palette(
     Color TextDisabled,
     Color Good,
     Color Warning,
-    Color Danger);
+    Color Danger,
+    Color ButtonBorder);
 
 /// <summary>
 /// Light/dark plumbing. Pages never hard-code a colour: they take it from <see cref="Palette"/> and are re-applied
@@ -42,7 +43,8 @@ internal sealed class ThemeService : IDisposable
         TextDisabled: Color.FromArgb(118, 118, 118),
         Good: Color.FromArgb(20, 118, 60),
         Warning: Color.FromArgb(158, 80, 0),
-        Danger: Color.FromArgb(190, 28, 28));
+        Danger: Color.FromArgb(190, 28, 28),
+        ButtonBorder: Color.FromArgb(214, 214, 214));
 
     private static readonly Palette DarkPalette = new(
         Window: Color.FromArgb(32, 32, 32),
@@ -56,7 +58,10 @@ internal sealed class ThemeService : IDisposable
         TextDisabled: Color.FromArgb(150, 150, 150),
         Good: Color.FromArgb(120, 214, 150),
         Warning: Color.FromArgb(255, 176, 96),
-        Danger: Color.FromArgb(255, 140, 132));
+        Danger: Color.FromArgb(255, 140, 132),
+        // The outline of a button. Border (70) on the window (32) is 1.7:1, so a button on the dark window was told from it only by its fill; 120 is over 3:1 against both the window and the button's own surface
+        // (WCAG 2.1 1.4.11, the contrast a control's outline needs). The light theme keeps the border it had.
+        ButtonBorder: Color.FromArgb(120, 120, 120));
 
     private readonly Func<bool> _systemIsDark;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> _hooked = new();
@@ -128,7 +133,7 @@ internal sealed class ThemeService : IDisposable
                 break;
             case Button button:
                 button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderColor = palette.Border;
+                button.FlatAppearance.BorderColor = palette.ButtonBorder;
                 button.BackColor = palette.Surface;
                 button.ForeColor = palette.Text;
                 HookDisabledText(button);

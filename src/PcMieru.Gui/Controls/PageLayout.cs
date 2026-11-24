@@ -38,8 +38,8 @@ internal static class PageLayout
         return bar;
     }
 
-    /// <summary>The thin line under a list: a count on the left, a hint in the dim tone next to it.</summary>
-    public static FlowLayoutPanel Footer(string name, int pad, Label count, ToneLabel hint)
+    /// <summary>The thin line under a list: a count on the left, a hint in the dim tone next to it, and any more notes (also dim) after those.</summary>
+    public static FlowLayoutPanel Footer(string name, int pad, Label count, ToneLabel hint, params ToneLabel[] more)
     {
         var footer = new FooterPanel(pad)
         {
@@ -51,6 +51,12 @@ internal static class PageLayout
         hint.SetTone(CellTone.Dim);
         footer.Controls.Add(count);
         footer.Controls.Add(hint);
+        foreach (var note in more)
+        {
+            note.SetTone(CellTone.Dim);
+            footer.Controls.Add(note);
+        }
+
         return footer;
     }
 

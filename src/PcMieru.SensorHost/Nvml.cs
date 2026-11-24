@@ -22,7 +22,8 @@ internal sealed record NvmlLive(
     VendorNumber MemoryUsedBytes,
     VendorNumber MemoryTotalBytes,
     VendorNumber PcieGeneration,
-    VendorNumber PcieWidth);
+    VendorNumber PcieWidth,
+    VendorMask ClocksEventReasons);
 
 /// <summary>What does not change while the driver is loaded.</summary>
 internal sealed record NvmlStatic(
@@ -58,6 +59,7 @@ internal sealed unsafe class NvmlReader
     private readonly delegate* unmanaged<IntPtr, ulong*, int> _memory;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _pcieGeneration;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _pcieWidth;
+    private readonly delegate* unmanaged<IntPtr, ulong*, int> _clocksEventReasons;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _pcieMaxGeneration;
     private readonly delegate* unmanaged<IntPtr, uint*, int> _pcieMaxWidth;
     private readonly delegate* unmanaged<IntPtr, byte*, uint, int> _vbios;
@@ -81,6 +83,11 @@ internal sealed unsafe class NvmlReader
         _memory = (delegate* unmanaged<IntPtr, ulong*, int>)Optional(lib, "nvmlDeviceGetMemoryInfo");
         _pcieGeneration = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetCurrPcieLinkGeneration");
         _pcieWidth = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetCurrPcieLinkWidth");
+
+        // The driver renamed "throttle reasons" to "clocks event reasons" (same function, same bits); either name is accepted.
+        var reasons = Optional(lib, "nvmlDeviceGetCurrentClocksEventReasons");
+        reasons = reasons != null ? reasons : Optional(lib, "nvmlDeviceGetCurrentClocksThrottleReasons");
+        _clocksEventReasons = (delegate* unmanaged<IntPtr, ulong*, int>)reasons;
         _pcieMaxGeneration = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetMaxPcieLinkGeneration");
         _pcieMaxWidth = (delegate* unmanaged<IntPtr, uint*, int>)Optional(lib, "nvmlDeviceGetMaxPcieLinkWidth");
         _vbios = (delegate* unmanaged<IntPtr, byte*, uint, int>)Optional(lib, "nvmlDeviceGetVbiosVersion");
@@ -224,7 +231,7 @@ internal sealed unsafe class NvmlReader
         if (rc != 0)
         {
             var failed = VendorNumber.Failed(rc);
-            return new NvmlLive(failed, failed, failed, failed, failed, failed, failed, failed, failed, failed, failed);
+            return new NvmlLive(failed, failed, failed, failed, failed, failed, failed, failed, failed, failed, failed, VendorMask.Failed(rc));
         }
 
         VendorNumber used, total;
@@ -265,7 +272,8 @@ internal sealed unsafe class NvmlReader
             used,
             total,
             Uint(_pcieGeneration, h),
-            Uint(_pcieWidth, h));
+            Uint(_pcieWidth, h),
+            Mask(_clocksEventReasons, h));
     }
 
     private static void* Optional(IntPtr lib, string name) => NativeLibrary.TryGetExport(lib, name, out var p) ? (void*)p : null;
@@ -280,6 +288,18 @@ internal sealed unsafe class NvmlReader
         uint value = 0;
         var rc = function(handle, &value);
         return rc == 0 ? VendorNumber.Of(value / divisor) : VendorNumber.Failed(rc);
+    }
+
+    private static VendorMask Mask(delegate* unmanaged<IntPtr, ulong*, int> function, IntPtr handle)
+    {
+        if (function == null)
+        {
+            return VendorMask.Missing;
+        }
+
+        ulong value = 0;
+        var rc = function(handle, &value);
+        return rc == 0 ? VendorMask.Of(value) : VendorMask.Failed(rc);
     }
 
     private static VendorNumber WithArgument(delegate* unmanaged<IntPtr, int, uint*, int> function, IntPtr handle, int argument)

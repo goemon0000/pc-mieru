@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TEST ONLY, never shipped (tools/publish.ps1 does not know it and the bundle floor does not list it).
+    A child process that runs the swap transaction (or a recovery) in a folder the test made and STOPS ITSELF at a named step: it writes a marker file and then sleeps, so the test can kill the whole
+    process (Process.Kill, the closest a test gets to a power cut: no finally, no Dispose, the exclusive gate handle goes away with the process) and run a fresh recovery. See TxKillTests in
+    tests/PcMieru.Update.Tests. Like every exe of the solution it passes the start gate of its own (dev build) folder first; the gate the transaction enters is the one of the test's
+    own install folder (its first argument).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>PCMieru.TxChild</AssemblyName>
+    <RootNamespace>PcMieru.TxChild</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PcMieru.Update\PcMieru.Update.csproj" />
+  </ItemGroup>
+
+  <!-- The gate file beside the exe, like every real exe in a dev build (see build/GateNextToExe.targets). -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
+
+</Project>

@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using PcMieru.Helper;
 using PcMieru.Wire;
+using PcMieru.Wire.Gate;
 
 return HelperMain.Run(args);
 
@@ -27,6 +28,16 @@ namespace PcMieru.Helper
             }
 
             NativeSearch.Pin();
+
+            // The start gate (DESIGN-B 4), after the library search is fixed and before the request is even read: while an update is being installed (or was left half done, or the
+            // gate file is gone) nothing is run, no result file is made and nothing is started to recover. The parent shows the failure the way it shows any other Helper failure.
+            // The gate stays open until this method returns, i.e. as long as the work. Denied (4) when the file system refused, Error (1) for everything else.
+            using var gate = InstallGate.EnterStartup();
+            if (!gate.IsOpen)
+            {
+                Console.Error.WriteLine("PCMieru.Helper: " + gate.Reason);
+                return (int)(gate.Outcome == GateOutcome.Denied ? OperationCode.Denied : OperationCode.Error);
+            }
 
             if (!HelperRequest.TryParse(args, out var request, out var error) || request is null)
             {

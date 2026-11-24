@@ -34,7 +34,11 @@ public class SensorFrameParserTests
         var line = PcMieruJson.Serialize(new SensorFrame(
             SensorFrame.CurrentSchemaVersion,
             DateTime.UtcNow,
-            Value.Unsupported<IReadOnlyList<GpuSensorReading>>("sensorhost", "no NVIDIA or AMD driver")));
+            Value.Unsupported<IReadOnlyList<GpuSensorReading>>("sensorhost", "no NVIDIA or AMD driver"),
+            GenerationId: 1,
+            Sequence: 1,
+            PeriodMs: 2000,
+            MonotonicUs: 5_000_000));
         Assert.True(SensorFrameParser.TryParse(line, out var frame, out _));
         Assert.Equal(ValueStatus.Unsupported, frame!.Gpus.Status);
         Assert.Equal("no NVIDIA or AMD driver", frame.Gpus.Detail);
@@ -44,11 +48,91 @@ public class SensorFrameParserTests
     [Fact]
     public void ADifferentSchemaVersionIsRefused()
     {
-        var line = PcMieruJson.Serialize(new SensorFrame("2", DateTime.UtcNow, SensorFixtures.Readings()));
-        Assert.False(SensorFrameParser.TryParse(line, out var frame, out var error));
+        // The schema the previous child wrote: a parent of this build must refuse it, in words, and say it is a mismatch rather than noise.
+        var line = PcMieruJson.Serialize(new SensorFrame("1", DateTime.UtcNow, SensorFixtures.Readings()));
+        Assert.False(SensorFrameParser.TryParse(line, out var frame, out var error, out var incompatible));
         Assert.Null(frame);
-        Assert.Contains("schema 2", error);
-        Assert.Contains("expects 1", error);
+        Assert.True(incompatible);
+        Assert.Contains("schema 1", error);
+        Assert.Contains("expects 2", error);
+    }
+
+    [Fact]
+    public void TheCurrentSchemaIsTwoSoAChildOfTheOldBuildCannotBeMistakenForIt()
+    {
+        Assert.Equal("2", SensorFrame.CurrentSchemaVersion);
+    }
+
+    [Fact]
+    public void ASchemaTwoFrameWithoutItsAcquisitionFieldsIsUnreadableNotIncompatible()
+    {
+        foreach (var frame in new[]
+        {
+            SensorFixtures.Frame(1, 0, 2000),
+            SensorFixtures.Frame(1, 5, 0),
+            SensorFixtures.Frame(1, 5, 2000) with { MonotonicUs = 0 },
+        })
+        {
+            var line = SensorFixtures.Serialize(frame);
+            Assert.False(SensorFrameParser.TryParse(line, out var parsed, out var error, out var incompatible));
+            Assert.Null(parsed);
+            Assert.False(incompatible);
+            Assert.Contains("without its sequence", error);
+        }
+    }
+
+    [Fact]
+    public void AFrameKeepsItsGenerationSequencePeriodAndMonotonicTime()
+    {
+        var line = SensorFixtures.Serialize(SensorFixtures.Frame(3, 41, 1000, SensorFixtures.Reading("luid_a")));
+
+        Assert.True(SensorFrameParser.TryParse(line, out var frame, out var error, out var incompatible), error);
+        Assert.False(incompatible);
+        Assert.Equal(3, frame!.GenerationId);
+        Assert.Equal(41, frame.Sequence);
+        Assert.Equal(1000, frame.PeriodMs);
+        Assert.Equal(1_000_000 + (41 * 1_000_000L), frame.MonotonicUs);
+    }
+
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(0x4UL)]
+    [InlineData(0x1FFUL)]
+    [InlineData(ulong.MaxValue)]
+    public void TheLimitReasonMaskTravelsAsAnUnsignedNumber(ulong mask)
+    {
+        var line = SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a", extras: SensorFixtures.Extras(reasons: mask)));
+
+        Assert.True(SensorFrameParser.TryParse(line, out var frame, out var error), error);
+        var reasons = frame!.Gpus.Data![0].Extras!.ClocksEventReasons;
+        Assert.True(reasons.IsOk);
+        Assert.Equal(mask, reasons.Data);
+    }
+
+    [Fact]
+    public void AnUnsupportedLimitReasonStaysMissingWithItsReason()
+    {
+        var line = SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a", extras: SensorFixtures.Extras(reasons: null)));
+
+        Assert.True(SensorFrameParser.TryParse(line, out var frame, out var error), error);
+        var reasons = frame!.Gpus.Data![0].Extras!.ClocksEventReasons;
+        Assert.Equal(ValueStatus.Unsupported, reasons.Status);
+        Assert.False(reasons.IsOk);
+        Assert.Equal(0UL, reasons.Data);
+    }
+
+    [Fact]
+    public void AFrameFromAHostThatPredatesTheLimitReasonsLeavesThemNotCollected()
+    {
+        var line = SensorFixtures.FrameLine(SensorFixtures.Reading("luid_a", extras: SensorFixtures.Extras(reasons: 4)));
+        const string key = ",\"clocksEventReasons\":";
+        var start = line.IndexOf(key, StringComparison.Ordinal);
+        Assert.True(start > 0, "the field is in the frame");
+        var end = line.IndexOf('}', start) + 1;
+        var old = line.Remove(start, end - start);
+
+        Assert.True(SensorFrameParser.TryParse(old, out var frame, out var error), error);
+        Assert.Equal(ValueStatus.NotCollected, frame!.Gpus.Data![0].Extras!.ClocksEventReasons.Status);
     }
 
     [Theory]

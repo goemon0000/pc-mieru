@@ -1,4 +1,5 @@
 using PcMieru.Checks.Build;
+using PcMieru.Update.Feed;
 
 namespace PcMieru.Gui;
 
@@ -9,13 +10,17 @@ internal sealed class GuiContext
     /// <param name="checks">The window's one check run. Null: the real one, or the fake one with <c>--fakes</c> (made without reading or creating anything, see <see cref="CheckComposition"/>). A test passes its own.</param>
     /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
     /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null)
+    /// <param name="updates">The window's update check. Null: the real one, or the fake one with <c>--fakes</c> (making either reads nothing, starts no timer and makes no HTTP client, see <see cref="UpdateComposition"/>). A test passes its own.</param>
+    /// <param name="recording">The window's recording (the recording tab and the status bar). Null: the real one, or the fake one with <c>--fakes</c>; nothing of it is built until a recording starts or the tab is shown (see <see cref="RecordingHub"/>). A test passes its own.</param>
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null, UpdateController? updates = null, bool verifying = false, Func<UpdateResultNote?>? lastUpdate = null, RecordingHub? recording = null)
     {
         Measure = measure;
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
+        Verifying = verifying;
+        UseLastUpdate(lastUpdate);
         NetMeter = netMeter ?? services.NetMeter;
         if (checks is null && services.Options.ForceFakes)
         {
@@ -26,9 +31,46 @@ internal sealed class GuiContext
 
         Checks = checks ?? CheckComposition.Create(services);
         BuildCode = buildCode ?? CheckComposition.CreateBuildCode(services);
+        if (updates is null)
+        {
+            var wiring = UpdateComposition.Create(
+                services.Options.ForceFakes,
+                settings,
+                AppInfo.Version,
+                Path.GetDirectoryName(GuiSettings.DefaultPath) ?? string.Empty,
+                Environment.ProcessPath ?? string.Empty);
+            updates = wiring.Controller;
+            FakeUpdates = wiring.Fake;
+        }
+
+        Updates = updates;
+        // Quiet by design: a line in the status bar that stays while a newer version is on file and goes when it is not (or when the mode no longer asks). No dialog, no
+        // balloon, nothing that takes the focus. It is kept as the VERSION and written in the language of the moment it is shown (see UpdateNotice), not as a text said once.
+        Updates.CandidateFound += (_, _) => RefreshNotice();
+        Updates.Changed += RefreshNotice;
+        Updates.Failed += ex => Report("gui.status.failed", ("error", CheckFormat.ExceptionDetail(ex)));
+        if (recording is null && services.Options.ForceFakes)
+        {
+            RecordingFake = new FakeRecordingKit();
+            recording = RecordingComposition.Create(services, kit: RecordingFake);
+        }
+
+        Recording = recording ?? RecordingComposition.Create(services);
     }
 
     public PcMieruServices Services { get; }
+
+    internal bool Verifying { get; }
+
+    internal Lazy<UpdateResultNote?> LastUpdate { get; private set; } = null!;
+
+    /// <summary>
+    /// Where the note about the last update comes from (the real one reads the install folder's <c>update\last-result.json</c>). A note that the window already showed
+    /// once (<see cref="UpdateResultNote.Stamp"/> kept in the settings) is not shown again. The smoke run points this at a temporary install folder of its own.
+    /// </summary>
+    internal void UseLastUpdate(Func<UpdateResultNote?>? source) =>
+        LastUpdate = new Lazy<UpdateResultNote?>(() =>
+            source?.Invoke() is { } result && Settings.GetValue(result.Key) != result.Stamp ? result : null);
 
     /// <summary>The marks of a <c>--measure</c> run; null in a normal start (DESIGN-A 10, <see cref="MeasureMarks"/>).</summary>
     public MeasureMarks? Measure { get; }
@@ -43,6 +85,62 @@ internal sealed class GuiContext
 
     /// <summary>The check that is running in this window, its state and its last results. Owned here, not by a page: the pages come and go while it runs.</summary>
     public CheckController Checks { get; }
+
+    /// <summary>
+    /// The update check of this window: the mode, the two timers, the one check that may run. In Ask and Off it does nothing at all. Owned here, not by the
+    /// settings page: the page comes and goes while a check runs.
+    /// </summary>
+    internal UpdateController Updates { get; }
+
+    /// <summary>With <c>--fakes</c> and no controller given: the fake service the smoke run drives (a scripted answer, never a request). Null otherwise.</summary>
+    internal FakeUpdateService? FakeUpdates { get; }
+
+    /// <summary>
+    /// "Open the notes" of a candidate: the Release page of this project in the default browser. Only the address the feed handed over and only when it is
+    /// a page of this project's releases (<see cref="UpdateEndpoints.IsReleasePage"/>); anything else is not opened. Returns whether a page was opened.
+    /// </summary>
+    internal bool OpenReleaseNotes(string? url)
+    {
+        if (url is null || !UpdateEndpoints.IsReleasePage(url))
+        {
+            return false;
+        }
+
+        ShellActions.OpenUrl(url);
+        return true;
+    }
+
+    /// <summary>
+    /// The quiet line about a newer version, in the language the window shows now; null when there is none to say. It follows the CURRENT state (what
+    /// <see cref="UpdateController.Candidate"/> says): it stays through a failed check that learned nothing about the release, and goes when the candidate is
+    /// cleared by a check that did judge a release, or when the mode is Ask or Off.
+    /// </summary>
+    internal string? UpdateNotice => Updates.Deferral?.Text ??
+        (_noticeVersion is { } version ? Strings.Format("gui.update.notice", Fmt.Dict(("version", version.ToString()))) : null);
+
+    /// <summary>Raised when <see cref="UpdateNotice"/> appeared, went or names another version. (A language change is not one: the shell writes the notice again then.)</summary>
+    internal event Action? UpdateNoticeChanged;
+
+    private AppVersion? _noticeVersion;
+    private UpdateDeferral? _noticeDeferral;
+
+    private void RefreshNotice()
+    {
+        var wanted = Updates.Candidate()?.Version;
+        if (wanted == _noticeVersion && Updates.Deferral == _noticeDeferral)
+        {
+            return;
+        }
+
+        _noticeVersion = wanted;
+        _noticeDeferral = Updates.Deferral;
+        UpdateNoticeChanged?.Invoke();
+    }
+    /// <summary>The recording of this window: started, marked and stopped from the recording tab, shown in the status bar, stopped (bounded) when the window closes. Owned here, not by the tab.</summary>
+    public RecordingHub Recording { get; }
+
+    /// <summary>With <c>--fakes</c> and no hub given: the in-memory recorder and store the smoke run seeds. Null otherwise.</summary>
+    internal FakeRecordingKit? RecordingFake { get; }
 
     public SnapshotPump Pump { get; }
 
@@ -151,7 +249,22 @@ internal sealed class GuiContext
     /// Starts the network meter. The call runs on a pool thread: it waits for the UAC prompt, and the window must keep
     /// painting meanwhile. The meter reports where it is through <see cref="INetMeterControl.StateChanged"/>.
     /// </summary>
-    public Task<NetMeterState> StartNetMeterAsync() => Task.Run(() => NetMeter.StartAsync());
+    private int _netMeterStarts;
+
+    internal bool PendingUac => _netMeterStarts != 0 || Services.HelperBusy;
+
+    public async Task<NetMeterState> StartNetMeterAsync()
+    {
+        Interlocked.Increment(ref _netMeterStarts);
+        try
+        {
+            return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _netMeterStarts);
+        }
+    }
 
     public Task StopNetMeterAsync() => Task.Run(NetMeter.Stop);
 

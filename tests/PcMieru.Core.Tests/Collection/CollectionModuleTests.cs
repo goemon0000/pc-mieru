@@ -74,6 +74,28 @@ public sealed class CollectionModuleTests(ITestOutputHelper output)
         Assert.Contains(nameof(FakeNetMeterControl), services.FakeAreas);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_recording_side_is_the_sampler_loop_itself_so_a_lease_changes_the_loop_the_GUI_shows(bool forceFakes)
+    {
+        using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = forceFakes });
+
+        Assert.Same(services.Sampler, services.Recording);
+        Assert.False(services.Sampler.IsRecording);
+        Assert.Equal(0, services.Sampler.LeaseCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_sensor_client_is_also_the_one_second_cadence_the_sampler_asks_to(bool forceFakes)
+    {
+        using var services = PcMieruServices.Create(new PcMieruOptions { ForceFakes = forceFakes });
+
+        Assert.Same(services.Get<ISensorClient>(), services.Get<ISensorCadence>());
+    }
+
     [Fact]
     public void The_group_and_state_strings_exist_in_both_languages()
     {

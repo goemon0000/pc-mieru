@@ -144,6 +144,7 @@ internal sealed class GpuSampler
             PciBusId: slot.PciBusId)
         {
             TemperatureLimitC = SensorMapping.NumberNote(A, fixedValues.TemperatureSlowdownC.Number, fixedValues.TemperatureSlowdownC.Code, "nvml:nvmlDeviceGetTemperatureThreshold", 0, 200, "the temperature at which the driver starts to slow the GPU down"),
+            ClocksEventReasons = SensorMapping.Mask(A, live.ClocksEventReasons.Bits, live.ClocksEventReasons.Code, "nvml:nvmlDeviceGetCurrentClocksEventReasons"),
         };
 
         return new GpuSensorReading(
@@ -189,6 +190,7 @@ internal sealed class GpuSampler
             PciBusId: slot.PciBusId)
         {
             TemperatureLimitC = Value.Unsupported<double>(None, "ADLX monitoring does not give the temperature limit"),
+            ClocksEventReasons = Value.Unsupported<ulong>(None, "ADLX monitoring does not give the limit reasons"),
         };
 
         return new GpuSensorReading(

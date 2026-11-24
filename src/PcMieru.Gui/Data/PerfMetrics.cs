@@ -220,6 +220,14 @@ internal static class PerfMetrics
             case PerfKind.Cpu:
                 lines.Add(Line("gui.perf.s.usage", system.Cpu.TotalPercent, v => v.ToString("0.0", CultureInfo.CurrentCulture) + " %"));
                 lines.Add(Line("gui.perf.s.speed", system.Cpu.CurrentMhz, Ghz));
+                lines.Add(Line("gui.perf.s.cpupower", system.Cpu.PackagePowerWatts, Watts));
+                lines.Add(Line("gui.perf.s.ac", system.Power.AcConnected, v => Strings.Get(v ? "gui.perf.s.ac.on" : "gui.perf.s.ac.off")));
+                if (system.Power.BatteryPercent.IsOk)
+                {
+                    // A desktop has no battery: a permanent dash line would only be noise. A battery that is there but unreadable still shows.
+                    lines.Add(Battery(system.Power));
+                }
+
                 lines.Add(Plain("gui.perf.s.logical", system.Cpu.LogicalProcessors.ToString(CultureInfo.CurrentCulture)));
                 lines.Add(Line("gui.perf.s.cores", facts.PhysicalCores, v => v.ToString(CultureInfo.CurrentCulture)));
                 lines.Add(Line("gui.perf.s.base", facts.BaseClockMhz, v => Ghz(v)));
@@ -254,6 +262,7 @@ internal static class PerfMetrics
                 lines.Add(GpuPower(gpu.PowerWatts));
                 lines.Add(Line("gui.perf.s.fan", gpu.FanPercent, v => v.ToString("0", CultureInfo.CurrentCulture) + " %"));
                 lines.Add(Line("gui.perf.s.clock", gpu.ClockMhz, v => v.ToString("0", CultureInfo.CurrentCulture) + " MHz"));
+                lines.Add(Line("gui.perf.s.limit", gpu.LimitReasons, LimitReasonText));
                 foreach (var engine in gpu.Engines.OrderBy(e => e.Type, StringComparer.OrdinalIgnoreCase).Take(MaxEngines))
                 {
                     lines.Add(new StatLine(
@@ -287,7 +296,7 @@ internal static class PerfMetrics
         return lines;
     }
 
-    /// <summary>The most facts one panel can list (GPU: seven values plus the engines). The page keeps this many caption/value pairs.</summary>
+    /// <summary>The most facts one panel can list (GPU: eight values plus the engines). The page keeps this many caption/value pairs.</summary>
     public const int MaxStats = 24;
 
     private const int MaxEngines = 12;
@@ -355,6 +364,42 @@ internal static class PerfMetrics
     }
 
     private static string Watts(double value) => value.ToString("0.0", CultureInfo.CurrentCulture) + " W";
+
+    /// <summary>
+    /// The driver's clocks event reasons in words. Only the bits the driver documents get a name; a bit nobody has named is "other", and no
+    /// reason is ever worked out from a temperature or a power figure. 0 is a real answer ("nothing is holding the clocks back").
+    /// </summary>
+    internal static string LimitReasonText(ulong mask)
+    {
+        var names = new List<string>(4);
+        foreach (var id in ClocksEventReasons.Ids(mask))
+        {
+            names.Add(Strings.Get("gui.perf.reason." + id));
+        }
+
+        if (ClocksEventReasons.HasUnknown(mask))
+        {
+            names.Add(Strings.Get("gui.perf.reason.other"));
+        }
+
+        return names.Count == 0 ? Strings.Get("gui.perf.reason.none") : string.Join(", ", names);
+    }
+
+    private static StatLine Battery(PowerInfo power)
+    {
+        var label = Strings.Get("gui.perf.s.battery");
+        var percent = power.BatteryPercent.Data.ToString("0", CultureInfo.CurrentCulture) + " %";
+        var text = power.BatteryState.TryGet(out var state)
+            ? percent + " (" + Strings.Get(state switch
+            {
+                "charging" => "gui.perf.s.battery.charging",
+                "plugged in" => "gui.perf.s.battery.plugged",
+                "on battery" => "gui.perf.s.battery.discharging",
+                _ => "gui.perf.s.battery.unknown",
+            }) + ")"
+            : percent;
+        return new StatLine(label, text, SourceTip(power.BatteryPercent), false);
+    }
 
     private static StatLine Commit(MemoryInfo memory)
     {

@@ -300,8 +300,32 @@ public sealed class FakeStorageInspectionSource(Func<DateTime>? clock = null) : 
         return new StorageInspection(at, 0, drives);
     }
 }
-public sealed class FakeSensorClient : ISensorClient, IFakeImplementation
+public sealed class FakeSensorClient : ISensorClient, ISensorCadence, IFakeImplementation
 {
+    private int _oneSecondLeases;
+
+    /// <summary>How many one-second leases are held right now (the fake has no process, so this is all a lease does).</summary>
+    public int OneSecondLeases => Volatile.Read(ref _oneSecondLeases);
+
+    public IDisposable AcquireOneSecondLease()
+    {
+        _ = Interlocked.Increment(ref _oneSecondLeases);
+        return new Lease(this);
+    }
+
+    private sealed class Lease(FakeSensorClient owner) : IDisposable
+    {
+        private FakeSensorClient? _owner = owner;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is { } o)
+            {
+                _ = Interlocked.Decrement(ref o._oneSecondLeases);
+            }
+        }
+    }
+
     public Task<Value<IReadOnlyList<GpuSensorReading>>> ReadGpuAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -338,13 +362,16 @@ public static class HardwareModule
             registry.Set<IHardwareProvider>(new FakeHardwareProvider(options.Clock));
             registry.Set<IStorageHealthProvider>(new FakeStorageHealthProvider());
             registry.Set<IStorageInspectionSource>(new FakeStorageInspectionSource(options.Clock));
-            registry.Set<ISensorClient>(new FakeSensorClient());
+            var fakeSensors = new FakeSensorClient();
+            registry.Set<ISensorClient>(fakeSensors);
+            registry.Set<ISensorCadence>(fakeSensors);
             return;
         }
 
         var sensors = new SensorHostClient();
         registry.Set<ISensorClient>(sensors);
-        registry.Set<IHardwareProvider>(new RealHardwareProvider(options.Clock, sensors));
+        registry.Set<ISensorCadence>(sensors);
+        registry.Set<IHardwareProvider>(new RealHardwareProvider(options.Clock, options.InProcessOnly ? null : sensors));
         // The Helper is registered by the Management module, which comes after this one: look it up when a read needs it, not now.
         var elevatedReader = new HelperStorageReader(() => registry.TryGet<IHelperClient>(out var helper) ? helper : null);
         registry.Set<IStorageHealthProvider>(new RealStorageHealthProvider(elevatedReader));

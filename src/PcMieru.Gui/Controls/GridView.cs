@@ -64,6 +64,9 @@ internal struct GridCell
     /// <summary>A cell that opens something when it is clicked: drawn underlined in the accent colour, so the colour is not the only sign.</summary>
     public bool Link;
 
+    /// <summary>First column only: the text runs on across the columns to its right (a sentence of its own; those cells hold nothing and draw nothing).</summary>
+    public bool Span;
+
     public GridCell(string text, CellTone tone = CellTone.Normal)
     {
         Text = text;
@@ -75,6 +78,7 @@ internal struct GridCell
         Icon = null;
         Bar = 0;
         Link = false;
+        Span = false;
     }
 }
 
@@ -90,6 +94,8 @@ internal class GridView : ListView, IThemed
 {
     private const int WmContextMenu = 0x007B;
     private const int WmPaint = 0x000F;
+    private const int WmWindowPosChanging = 0x0046;
+    private const int SwpNoSize = 0x0001;
 
     private readonly ImageList _rowHeight = new();
     private readonly ToolTip _tip = new() { ShowAlways = true };
@@ -98,6 +104,7 @@ internal class GridView : ListView, IThemed
     private int _drawSelected = -1;
     private int _lastTipRow = -2;
     private int _lastTipColumn = -2;
+    private int _headerTipColumn = -2;
     private int _sortColumn = -1;
     private bool _sortDescending;
     private bool _fitting;
@@ -164,6 +171,13 @@ internal class GridView : ListView, IThemed
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal Func<int, int, string?>? CellTip { get; set; }
 
+    /// <summary>What a column header says when the pointer rests on it (its meaning, in a sentence). Null for none. The header is a window of its own, so the grid shows this itself.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Func<int, string?>? HeaderTip { get; set; }
+
+    /// <summary>The text of the header tip shown last (tests and the smoke run read it; null when none is up).</summary>
+    internal string? ShownHeaderTip { get; private set; }
+
     /// <summary>The user clicked the expander glyph of a tree row (or double-clicked the row).</summary>
     public event Action<int>? ExpanderClicked;
 
@@ -172,6 +186,30 @@ internal class GridView : ListView, IThemed
     public bool SortDescending => _sortDescending;
 
     public int RowHeight { get; private set; }
+
+    private int _rowPadding = 14;
+
+    /// <summary>
+    /// The room a row has besides its text, in pixels at 96 DPI (the height of a row is the height of the font and this). The default is the roomy row
+    /// of every list of the app; a table that has to show many lines in a low window (the recording summary at 200 %) asks for less.
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal int RowPadding
+    {
+        get => _rowPadding;
+        set
+        {
+            var padding = Math.Clamp(value, 4, 24);
+            if (padding == _rowPadding)
+            {
+                return;
+            }
+
+            _rowPadding = padding;
+            UpdateRowHeight();
+            Invalidate();
+        }
+    }
 
     /// <summary>Row index under a client-area point, or -1.</summary>
     public int RowAt(Point point) => HitTest(point).Item?.Index ?? -1;
@@ -250,7 +288,7 @@ internal class GridView : ListView, IThemed
             }
 
             var last = Columns[fill];
-            var wanted = Math.Max(ClientSize.Width - used - VerticalBarAllowance(), FillColumn >= 0 ? Scaled(140) : MinimumFillWidth(last));
+            var wanted = Math.Max(ClientSize.Width - used - VerticalBarAllowance(), FillColumn >= 0 ? Math.Max(Scaled(140), HeaderNeed(fill)) : MinimumFillWidth(last));
             if (last.Width != wanted)
             {
                 last.Width = wanted;
@@ -317,6 +355,9 @@ internal class GridView : ListView, IThemed
         IsHandleCreated && (GetWindowLongPtr(Handle, GwlStyle).ToInt64() & WsVScroll) != 0
             ? SystemInformation.GetVerticalScrollBarWidthForDpi(CurrentDpi)
             : 0;
+
+    /// <summary>The width the columns have together: the client width less the vertical bar's (columns that are wider than this are clipped on the right, the horizontal bar being hidden).</summary>
+    internal int ColumnRoom() => Math.Max(ClientSize.Width - VerticalBarAllowance(), 0);
 
     private const long WsVScroll = 0x00200000;
     private const int GwlStyle = -16;
@@ -390,8 +431,12 @@ internal class GridView : ListView, IThemed
     private sealed class HeaderStrip(GridView owner) : NativeWindow
     {
         private const int WmPaint = 0x000F;
+        private const int WmMouseMove = 0x0200;
+        private const int WmMouseLeave = 0x02A3;
         private const int HdmGetItemCount = 0x1200;
         private const int HdmGetItemRect = 0x1207;
+
+        private bool _tracking;
 
         protected override void WndProc(ref Message m)
         {
@@ -400,7 +445,36 @@ internal class GridView : ListView, IThemed
             {
                 Fill(palette);
             }
+            else if (m.Msg == WmMouseMove)
+            {
+                if (!_tracking)
+                {
+                    // Ask for the message that says the pointer left the header, to put the tip away.
+                    var track = new TrackMouseEventData { Size = System.Runtime.InteropServices.Marshal.SizeOf<TrackMouseEventData>(), Flags = 2, Window = Handle };
+                    _tracking = TrackMouseEvent(ref track);
+                }
+
+                owner.OnHeaderMouseMove((short)(m.LParam.ToInt64() & 0xFFFF));
+            }
+            else if (m.Msg == WmMouseLeave)
+            {
+                _tracking = false;
+                owner.OnHeaderMouseLeave();
+            }
         }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct TrackMouseEventData
+        {
+            public int Size;
+            public int Flags;
+            public IntPtr Window;
+            public int HoverTime;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool TrackMouseEvent(ref TrackMouseEventData data);
 
         private void Fill(Palette palette)
         {
@@ -496,9 +570,57 @@ internal class GridView : ListView, IThemed
         }
     }
 
+    /// <summary>The column whose header is under this x (in the list's client pixels), or -1.</summary>
+    internal int HeaderColumnAt(int x)
+    {
+        var left = 0;
+        for (var i = 0; i < Columns.Count; i++)
+        {
+            left += Columns[i].Width;
+            if (x < left)
+            {
+                return x >= 0 ? i : -1;
+            }
+        }
+
+        return -1;
+    }
+
+    private void OnHeaderMouseMove(int x)
+    {
+        var column = HeaderColumnAt(x);
+        if (column == _headerTipColumn)
+        {
+            return;
+        }
+
+        _headerTipColumn = column;
+        var text = column >= 0 ? HeaderTip?.Invoke(column) : null;
+        ShownHeaderTip = string.IsNullOrEmpty(text) ? null : text;
+        if (ShownHeaderTip is null)
+        {
+            _tip.Hide(this);
+            return;
+        }
+
+        _tip.Show(ShownHeaderTip, this, Math.Max(x - Scaled(8), 0), HeaderHeight + Scaled(4), 9000);
+    }
+
+    private void OnHeaderMouseLeave()
+    {
+        _headerTipColumn = -2;
+        ShownHeaderTip = null;
+        _tip.Hide(this);
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (_headerTipColumn != -2)
+        {
+            OnHeaderMouseLeave();
+        }
+
         if (CellTip is null)
         {
             return;
@@ -533,6 +655,11 @@ internal class GridView : ListView, IThemed
             var at = row >= 0 ? GetItemRect(row).Location : Point.Empty;
             menu.Show(this, new Point(at.X + Scaled(24), at.Y + RowHeight));
             return;
+        }
+
+        if (m.Msg == WmWindowPosChanging && ScrollsBackWhenWhole)
+        {
+            BeforeResize(m.LParam);
         }
 
         base.WndProc(ref m);
@@ -701,7 +828,7 @@ internal class GridView : ListView, IThemed
             left += Columns[i].Width;
         }
 
-        var width = Columns[e.ColumnIndex].Width;
+        var width = cell.Span && e.ColumnIndex == 0 ? SpanWidth() : Columns[e.ColumnIndex].Width;
         var pad = Scaled(8);
         var bounds = new Rectangle(left + pad, row.Top, Math.Max(width - (pad * 2), 0), row.Height);
         if (cell.Bar > 0 && !header)
@@ -912,7 +1039,7 @@ internal class GridView : ListView, IThemed
 
     private void UpdateRowHeight()
     {
-        RowHeight = Math.Max(Font.Height + Scaled(14), Scaled(28));
+        RowHeight = Math.Max(Font.Height + Scaled(_rowPadding), Scaled(_rowPadding * 2));
         // The row height of a details ListView follows its image list: a 1-pixel-wide image of the wanted height sets it.
         if (_rowHeight.ImageSize.Height != RowHeight)
         {
@@ -927,7 +1054,38 @@ internal class GridView : ListView, IThemed
     /// the grid itself and never a copy of its arithmetic.
     /// </summary>
     internal bool IsCut(int row, int column) =>
-        column >= 0 && column < Columns.Count && NeededWidth(row, column) > Columns[column].Width;
+        column >= 0 && column < Columns.Count && NeededWidth(row, column) > CellWidth(row, column);
+
+    /// <summary>The width a cell has: its column's, or every column's together for a first-column cell that spans them.</summary>
+    internal int CellWidth(int row, int column) =>
+        column == 0 && Cells is { } cells && row >= 0 && row < VirtualListSize && cells(row, 0).Span ? SpanWidth() : Columns[column].Width;
+
+    private int SpanWidth()
+    {
+        var total = 0;
+        foreach (ColumnHeader column in Columns)
+        {
+            total += column.Width;
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// The width a text can use in a cell of this column before it has to wrap: the column (all of them for a cell that spans), less the padding on
+    /// both sides and, in the first column, the indent and the glyph slot. The other side of <see cref="NeededWidth"/>.
+    /// </summary>
+    internal int TextRoom(int column, int indent, bool span)
+    {
+        var room = (span && column == 0 ? SpanWidth() : Columns[column].Width) - (Scaled(8) * 2);
+        return column == 0 ? room - ((indent + 1) * Scaled(16)) : room;
+    }
+
+    /// <summary>The width a text takes drawn on one line in the font of a cell (bold or not).</summary>
+    internal int TextWidth(string text, bool bold) =>
+        text.Length == 0
+            ? 0
+            : TextRenderer.MeasureText(text, bold ? BoldFont : Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
 
     /// <summary>
     /// The width the column has to be for the text of this cell to be drawn whole: the text, the padding on both sides and, in the first column,
@@ -979,7 +1137,9 @@ internal class GridView : ListView, IThemed
 
     /// <summary>
     /// The width the header of the column needs to be read whole: its text, the padding on both sides and, for the sorted column, the room of
-    /// the arrow (<c>OnDrawColumnHeader</c> draws exactly that). Measured at the scale the grid is at now.
+    /// the arrow (<c>OnDrawColumnHeader</c> draws exactly that). Measured at the scale the grid is at now. It is never less than what the smoke run asks of
+    /// every list header (the text as the system measures it, with its own padding, and 14 px): at the default text size, one point above the system's,
+    /// the drawn text needed 7 px less than that and a header was 1 px short of the rule.
     /// </summary>
     internal int HeaderNeed(int column)
     {
@@ -990,11 +1150,12 @@ internal class GridView : ListView, IThemed
 
         var header = Columns[column];
         var arrow = column == _sortColumn && header.TextAlign != HorizontalAlignment.Right ? Scaled(14) : 0;
-        return (Scaled(8) * 2) + arrow + TextRenderer.MeasureText(
+        var drawn = (Scaled(8) * 2) + arrow + TextRenderer.MeasureText(
             header.Text,
             Font,
             new Size(int.MaxValue, int.MaxValue),
             TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+        return Math.Max(drawn, header.Text.Length == 0 ? 0 : TextRenderer.MeasureText(header.Text, Font).Width + Scaled(14));
     }
 
     /// <summary>The width a column needs for its header and for every cell on show, whichever is wider (<see cref="WidestNeed"/> and <see cref="HeaderNeed"/>).</summary>
@@ -1054,6 +1215,83 @@ internal class GridView : ListView, IThemed
         }
     }
 
+    /// <summary>The index of the first row on show: 0 for a list that is not scrolled (and for one that has no window or no rows yet).</summary>
+    internal int TopRow => IsHandleCreated && VirtualListSize > 0 ? Math.Max((int)SendMessage(Handle, ListTopIndexMessage, IntPtr.Zero, IntPtr.Zero), 0) : 0;
+
+    /// <summary>
+    /// True when a row is whole inside the rows on show: not scrolled out above or below, and not cut by the bottom edge. A list with no window, or a row it
+    /// gives no rectangle for, answers false. The recording tab's list is a few rows high, and the smoke run asks this of the selected row.
+    /// </summary>
+    internal bool IsRowVisible(int row)
+    {
+        if (!IsHandleCreated || row < 0 || row >= VirtualListSize || RowRect(row) is not { } rect)
+        {
+            return false;
+        }
+
+        return rect.Top >= HeaderHeight - 1 && rect.Bottom <= ClientSize.Height + 1;
+    }
+
+    /// <summary>
+    /// Scrolls the list so that the selected row is whole on show, when it is not (the list got shorter, or the row was chosen before the list had its height).
+    /// Nothing is selected, no window, or the row is already on show: nothing happens (a list the person scrolled away from a row they are not on is left alone).
+    /// </summary>
+    internal void EnsureSelectedVisible()
+    {
+        if (IsHandleCreated && SelectedRow is >= 0 and var row && row < VirtualListSize && !IsRowVisible(row))
+        {
+            EnsureVisible(row);
+        }
+    }
+
+    /// <summary>Puts a scrolled list back at its first row (a list with no window or no rows is already there).</summary>
+    internal void ScrollToFirstRow()
+    {
+        if (IsHandleCreated && VirtualListSize > 0 && TopRow > 0)
+        {
+            EnsureVisible(0);
+        }
+    }
+
+    /// <summary>
+    /// Sets the number of rows of a list that asks to go back to its first row (<see cref="ScrollsBackWhenWhole"/>): when the new count fits in
+    /// the window it goes back to its first row first, while the row it was scrolled to is still there. The native list keeps its place when
+    /// the count shrinks, and then shows its first row far below the header with nothing to bring it back.
+    /// </summary>
+    internal void SetRowCount(int count)
+    {
+        if (ScrollsBackWhenWhole && count <= RowsThatFit(Height))
+        {
+            ScrollToFirstRow();
+        }
+
+        VirtualListSize = count;
+    }
+
+    /// <summary>
+    /// For a list that is made taller than its rows: it goes back to its first row before it grows. The native list keeps the place it was
+    /// scrolled to when it grows until every row fits, and then shows its first row far below the header with nothing to bring it back.
+    /// Off unless a page asks for it (the lists of the recording tab do).
+    /// </summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal bool ScrollsBackWhenWhole { get; set; }
+
+    private void BeforeResize(IntPtr windowPos)
+    {
+        // WINDOWPOS: two handles, then x, y, cx, cy and the flags.
+        var flags = System.Runtime.InteropServices.Marshal.ReadInt32(windowPos, (2 * IntPtr.Size) + 16);
+        if ((flags & SwpNoSize) != 0 || !IsHandleCreated)
+        {
+            return;
+        }
+
+        var height = System.Runtime.InteropServices.Marshal.ReadInt32(windowPos, (2 * IntPtr.Size) + 12);
+        if (height > 0 && RowsThatFit(height) >= VirtualListSize)
+        {
+            ScrollToFirstRow();
+        }
+    }
+
     /// <summary>
     /// What is wrong with the rows as the native list lays them out now, for a list that is meant to end on a whole row under its header; null
     /// when they are whole. The first row must start where the header's own window ends (a gap above it is how a list that has lost its place
@@ -1070,29 +1308,45 @@ internal class GridView : ListView, IThemed
 
         var header = HeaderWindowHeight();
         var fit = RowsThatFit(Height);
-        var shown = Math.Min(VirtualListSize, fit);
-        if (header <= 0 || shown <= 0 || RowRect(0) is not { } first || RowRect(shown - 1) is not { } last)
+
+        // Every row fits and yet the list is scrolled: a list that kept the place it had for a longer list. The check below starts from the top row on show and would take
+        // that for the first row, however many rows are out of sight above it.
+        if (ScrolledWithRoomProblem(TopRow, VirtualListSize, fit) is { } scrolled)
+        {
+            facts = $"top row {TopRow}, {VirtualListSize} rows, room for {fit}";
+            return scrolled;
+        }
+
+        // A list scrolled to show a row further down starts at its top row, not at the first one (a list that holds more rows than it has room for).
+        var top = Math.Min(TopRow, VirtualListSize - 1);
+        var left = VirtualListSize - top;
+        var shown = Math.Min(left, fit);
+        if (header <= 0 || shown <= 0 || RowRect(top) is not { } first || RowRect(top + shown - 1) is not { } last)
         {
             facts = $"header {header} px, {shown} rows on show";
             return "the list gives no rectangle for its header or its rows";
         }
 
         var client = ClientSize.Height;
-        var next = shown < VirtualListSize ? RowRect(shown) : null;
-        facts = $"header {header} px, first row at {first.Top} px, row {first.Height} px, {shown} of {VirtualListSize} rows on show, last row ends at {last.Bottom} px of {client} px" + (next is { } n ? $", next row at {n.Top} px" : string.Empty);
+        var next = shown < left ? RowRect(top + shown) : null;
+        facts = $"header {header} px, first row on show ({top}) at {first.Top} px, row {first.Height} px, {shown} of {left} rows on show, last row ends at {last.Bottom} px of {client} px" + (next is { } n ? $", next row at {n.Top} px" : string.Empty);
         if (Math.Abs(first.Top - header) > 3)
         {
             return $"the first row starts at {first.Top} px where the header ends at {header} px";
         }
 
         // A list with fewer rows than it has room for ends where its rows end; a full one ends at the bottom.
-        if (last.Bottom > client + 1 || (VirtualListSize >= fit && last.Bottom < client - 3))
+        if (last.Bottom > client + 1 || (left >= fit && last.Bottom < client - 3))
         {
             return $"the last row on show ends at {last.Bottom} px in a client area {client} px high";
         }
 
         return next is { } below && below.Top < client - 1 ? $"part of the next row shows under the last (it starts at {below.Top} px of {client} px)" : null;
     }
+
+    /// <summary>The words for a list that is scrolled (its top row on show is <paramref name="topRow"/>) although all its <paramref name="rows"/> rows fit in the room for <paramref name="fit"/>; null when it is not.</summary>
+    internal static string? ScrolledWithRoomProblem(int topRow, int rows, int fit) =>
+        topRow > 0 && rows <= fit ? $"the list is scrolled to row {topRow} although all {rows} rows fit" : null;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]

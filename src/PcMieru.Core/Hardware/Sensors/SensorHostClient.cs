@@ -30,8 +30,10 @@ internal sealed record SensorHostOptions
 /// driver hangs, this side notices that no line arrived for six seconds, kills the process and starts a new one (waiting 1, 2, 4 ... 30 s
 /// between failed starts). The process is launched by the first read, not at construction, so a program that never asks for GPU
 /// sensors never starts it. A reading older than the timeout is never returned as if it were current.
+/// While a one-second lease is held (<see cref="AcquireOneSecondLease"/>) the process is asked for a frame every second instead of every two,
+/// and a process started or restarted meanwhile starts at one second.
 /// </summary>
-public sealed class SensorHostClient : ISensorClient
+public sealed class SensorHostClient : ISensorClient, IFramedSensorClient, ISensorCadence
 {
     private const string Src = "sensorhost";
 
@@ -39,13 +41,23 @@ public sealed class SensorHostClient : ISensorClient
     private readonly SensorHostOptions _options;
     private readonly Func<long> _nowMs;
     private readonly object _gate = new();
+
+    /// <summary>Only ever held for a handful of instructions (never across a launch or a kill): it orders "read the count, tell the child" so the last word the child gets is the current one.</summary>
+    private readonly object _pushGate = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Timer? _watchdog;
 
-    private ISensorProcess? _process;
+    // Written under _gate, read without it (the lease calls and PushPeriod must not wait for a launch or a kill).
+    private volatile ISensorProcess? _process;
+    private volatile bool _restarting;
     private long _startedAt;
     private long _lastFrameAt = -1;
     private Value<IReadOnlyList<GpuSensorReading>>? _latest;
+    private SourceOrigin? _latestOrigin;
+    private SourceGap _gap = SourceGap.NotStarted;
+    private long _generation;
+    private int _leases; // Interlocked: taken and given back without _gate
+    private string? _incompatible;
     private TaskCompletionSource _firstFrame = NewSignal();
     private int _failures;
     private long _nextStartAt;
@@ -59,6 +71,17 @@ public sealed class SensorHostClient : ISensorClient
     public SensorHostClient(string? exePath = null)
         : this(new SystemSensorProcessFactory(exePath ?? SystemSensorProcessFactory.DefaultPath()), SensorHostOptions.Default)
     {
+    }
+
+    internal int? LivePid
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _process?.LivePid;
+            }
+        }
     }
 
     internal SensorHostClient(ISensorProcessFactory factory, SensorHostOptions options, Func<long>? nowMs = null)
@@ -95,7 +118,73 @@ public sealed class SensorHostClient : ISensorClient
         }
     }
 
-    public async Task<Value<IReadOnlyList<GpuSensorReading>>> ReadGpuAsync(CancellationToken ct = default)
+    /// <summary>The period (ms) currently requested from SensorHost: 1000 while a one-second lease is held, otherwise 2000. Never waits for the gate.</summary>
+    int IFramedSensorClient.RequestedPeriodMs => RequestedPeriod();
+
+    /// <summary>True from the moment the child was stopped after a failure (a hang, an exit, a failed start) until the first frame of the next one.</summary>
+    bool IFramedSensorClient.IsHostRestarting => _restarting;
+
+    public async Task<Value<IReadOnlyList<GpuSensorReading>>> ReadGpuAsync(CancellationToken ct = default) =>
+        (await ReadFramedAsync(ct).ConfigureAwait(false)).Gpus;
+
+    Task<GpuSensorView> IFramedSensorClient.ReadGpuFramedAsync(CancellationToken ct) => ReadFramedAsync(ct);
+
+    /// <summary>
+    /// Never takes <c>_gate</c>: a launch (starting a process) and a kill both run under it and can take a while, and the caller is the recorder's
+    /// thread, which must not wait for them. The running child changes at its next sampling boundary; a child that is being launched right now gets
+    /// the period when its launch ends (<see cref="StartIfDueLocked"/> reads the count again), and one that dies is restarted at the then-current one.
+    /// </summary>
+    public IDisposable AcquireOneSecondLease()
+    {
+        if (Interlocked.Increment(ref _leases) == 1)
+        {
+            PushPeriod();
+        }
+
+        return new CadenceLease(this);
+    }
+
+    private void ReleaseLease()
+    {
+        int seen;
+        do
+        {
+            seen = Volatile.Read(ref _leases);
+            if (seen == 0)
+            {
+                return;
+            }
+        }
+        while (Interlocked.CompareExchange(ref _leases, seen - 1, seen) != seen);
+
+        if (seen == 1)
+        {
+            PushPeriod();
+        }
+    }
+
+    private int RequestedPeriod() => Volatile.Read(ref _leases) > 0 ? SensorCadence.FastMs : SensorCadence.SlowMs;
+
+    /// <summary>Tells the running child the period that is requested NOW. The count is read inside the gate, so two pushes that cross each other leave the child with the latest.</summary>
+    private void PushPeriod()
+    {
+        lock (_pushGate)
+        {
+            try
+            {
+                _process?.SetPeriod(RequestedPeriod()); // never waits (latest wins); a process that is gone drops it
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or IOException)
+            {
+                // The child is being torn down; the watchdog restarts it, and a start reads the count.
+            }
+        }
+    }
+
+    private GpuSensorView Missing(Value<IReadOnlyList<GpuSensorReading>> value, SourceGap gap) =>
+        new(value, SourceOrigin.Missing(gap, RequestedPeriod()));
+
+    private async Task<GpuSensorView> ReadFramedAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Task wait;
@@ -103,12 +192,17 @@ public sealed class SensorHostClient : ISensorClient
         {
             if (_disposed)
             {
-                return Value.Gone<IReadOnlyList<GpuSensorReading>>(Src, "the sensor client was shut down");
+                return Missing(Value.Gone<IReadOnlyList<GpuSensorReading>>(Src, "the sensor client was shut down"), SourceGap.NotStarted);
+            }
+
+            if (_incompatible is not null)
+            {
+                return Missing(Value.Failed<IReadOnlyList<GpuSensorReading>>(Src, _incompatible), SourceGap.ReadFailed);
             }
 
             if (_missing)
             {
-                return Value.Unsupported<IReadOnlyList<GpuSensorReading>>(Src, _problem);
+                return Missing(Value.Unsupported<IReadOnlyList<GpuSensorReading>>(Src, _problem), SourceGap.Unsupported);
             }
 
             var now = _nowMs();
@@ -118,7 +212,7 @@ public sealed class SensorHostClient : ISensorClient
             if (_missing)
             {
                 // The launch just found the executable missing: say so now, not only on the next ask.
-                return Value.Unsupported<IReadOnlyList<GpuSensorReading>>(Src, _problem);
+                return Missing(Value.Unsupported<IReadOnlyList<GpuSensorReading>>(Src, _problem), SourceGap.Unsupported);
             }
 
             if (Fresh(now, out var fresh))
@@ -128,7 +222,7 @@ public sealed class SensorHostClient : ISensorClient
 
             if (_process is null)
             {
-                return NotRunning(now);
+                return Missing(NotRunning(now), _gap);
             }
 
             wait = _firstFrame.Task;
@@ -148,7 +242,12 @@ public sealed class SensorHostClient : ISensorClient
             if (_disposed)
             {
                 // Dispose woke us up: say so, instead of "not started".
-                return Value.Gone<IReadOnlyList<GpuSensorReading>>(Src, "the sensor client was shut down");
+                return Missing(Value.Gone<IReadOnlyList<GpuSensorReading>>(Src, "the sensor client was shut down"), SourceGap.NotStarted);
+            }
+
+            if (_incompatible is not null)
+            {
+                return Missing(Value.Failed<IReadOnlyList<GpuSensorReading>>(Src, _incompatible), SourceGap.ReadFailed);
             }
 
             var now = _nowMs();
@@ -159,13 +258,15 @@ public sealed class SensorHostClient : ISensorClient
 
             if (_process is null)
             {
-                return NotRunning(now);
+                return Missing(NotRunning(now), _gap);
             }
 
-            return Value.Missing<IReadOnlyList<GpuSensorReading>>(
-                ValueStatus.Timeout,
-                Src,
-                _lastFrameAt >= 0 ? "SensorHost has stopped answering and will be restarted" : "SensorHost has not produced a reading yet");
+            return Missing(
+                Value.Missing<IReadOnlyList<GpuSensorReading>>(
+                    ValueStatus.Timeout,
+                    Src,
+                    _lastFrameAt >= 0 ? "SensorHost has stopped answering and will be restarted" : "SensorHost has not produced a reading yet"),
+                _lastFrameAt >= 0 ? SourceGap.HostRestart : SourceGap.NotStarted);
         }
     }
 
@@ -243,6 +344,7 @@ public sealed class SensorHostClient : ISensorClient
             _disposed = true;
             process = _process;
             _process = null;
+            _restarting = false;
             _latest = null;
             _firstFrame.TrySetResult();
         }
@@ -266,15 +368,15 @@ public sealed class SensorHostClient : ISensorClient
 
     private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private bool Fresh(long now, out Value<IReadOnlyList<GpuSensorReading>> value)
+    private bool Fresh(long now, out GpuSensorView view)
     {
-        if (_latest is { } latest && _lastFrameAt >= 0 && now - _lastFrameAt <= (long)_options.StaleAfter.TotalMilliseconds)
+        if (_latest is { } latest && _latestOrigin is { } origin && _lastFrameAt >= 0 && now - _lastFrameAt <= (long)_options.StaleAfter.TotalMilliseconds)
         {
-            value = latest;
+            view = new GpuSensorView(latest, origin);
             return true;
         }
 
-        value = default;
+        view = default;
         return false;
     }
 
@@ -287,15 +389,18 @@ public sealed class SensorHostClient : ISensorClient
 
     private void StartIfDueLocked(long now)
     {
-        if (_disposed || _process is not null || _missing || now < _nextStartAt)
+        if (_disposed || _process is not null || _missing || _incompatible is not null || now < _nextStartAt)
         {
             return;
         }
 
         ISensorProcess process;
+        var generation = _generation + 1;
+        var launchPeriod = RequestedPeriod();
         try
         {
-            process = _factory.Start();
+            // A restart with a lease held starts at one second at once: the new child never runs at two seconds and waits for a request.
+            process = _factory.Start(launchPeriod, generation);
         }
         catch (FileNotFoundException ex)
         {
@@ -310,13 +415,21 @@ public sealed class SensorHostClient : ISensorClient
             return;
         }
 
-        _process = process;
+        _ = Interlocked.Exchange(ref _process, process); // a full fence: the count is read AFTER the child is visible to PushPeriod
+        _generation = generation;
         _startedAt = now;
         _lastFrameAt = -1;
         _latest = null;
+        _latestOrigin = null;
         _firstFrame = NewSignal();
         _problem = "SensorHost is starting";
         _ = Task.Run(() => ReadLoopAsync(process), _lifetime.Token);
+        if (RequestedPeriod() != launchPeriod)
+        {
+            // A lease was taken or given back while the process was being launched (the gate was held, the lease calls do not wait for it): the
+            // child started at the old period, and nobody had it yet to tell. Whoever came after the line above pushes by themselves.
+            PushPeriod();
+        }
     }
 
     private async Task ReadLoopAsync(ISensorProcess process)
@@ -330,11 +443,20 @@ public sealed class SensorHostClient : ISensorClient
                     continue;
                 }
 
-                var ok = SensorFrameParser.TryParse(line, out var frame, out var error);
+                var ok = SensorFrameParser.TryParse(line, out var frame, out var error, out var incompatible);
                 lock (_gate)
                 {
                     if (_process != process)
                     {
+                        return;
+                    }
+
+                    if (incompatible)
+                    {
+                        // A SensorHost of another build (old child + new parent, or the reverse). Restarting it cannot make it speak this
+                        // schema, so this is a standing failure with its own words, not a silent restart loop that hides the reason.
+                        _incompatible = "SensorHost does not match this app: " + error;
+                        StopLocked(_incompatible, true, _nowMs());
                         return;
                     }
 
@@ -345,8 +467,13 @@ public sealed class SensorHostClient : ISensorClient
                     }
 
                     _latest = frame!.Gpus;
+                    _latestOrigin = new SourceOrigin(
+                        new FrameId(frame.GenerationId > 0 ? frame.GenerationId : _generation, frame.Sequence),
+                        frame.MonotonicUs,
+                        frame.PeriodMs);
                     _lastFrameAt = _nowMs();
                     _failures = 0;
+                    _restarting = false;
                     _problem = "SensorHost is running";
                     _firstFrame.TrySetResult();
                 }
@@ -395,8 +522,11 @@ public sealed class SensorHostClient : ISensorClient
         var process = _process;
         _process = null;
         _latest = null;
+        _latestOrigin = null;
         _lastFrameAt = -1;
         _problem = reason;
+        _gap = failure ? SourceGap.HostRestart : SourceGap.NotStarted;
+        _restarting = failure && _incompatible is null; // a standing mismatch is not a restart: restarting cannot cure it
         if (!failure)
         {
             _nextStartAt = now;
@@ -409,5 +539,13 @@ public sealed class SensorHostClient : ISensorClient
             process.Kill();
             process.Dispose();
         }
+    }
+
+    /// <summary>One one-second lease. Disposing twice gives back one count only.</summary>
+    private sealed class CadenceLease(SensorHostClient owner) : IDisposable
+    {
+        private SensorHostClient? _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseLease();
     }
 }

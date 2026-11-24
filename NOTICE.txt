@@ -136,6 +136,97 @@ goemon0000/parts-life and the owner's pl-sensors helper
       src/PartsLife.Check/PartsLife.Check.csproj
   src/PcMieru.NetMeter/PcMieru.NetMeter.csproj
       the same post-link check, copied for the network meter
+  src/PcMieru.Swap/PcMieru.Swap.csproj
+      the same post-link check, copied for the swap runner (PCMieru.Swap.exe)
+  src/PcMieru.Update/Feed/AppVersion.cs
+      the X.Y.Z version number, its parse and its ordering, from the owner's
+      pl-cloud src/PartsLife.Update/AppVersion.cs
+  src/PcMieru.Update/Feed/Sha256List.cs
+      the SHA256.txt reader (name match to the letter, a name with two values
+      is not used), from the owner's pl-cloud src/PartsLife.Update/Sha256List.cs
+  src/PcMieru.Update/Feed/ReleaseInfo.cs
+      the shape of the release JSON as read, from the owner's pl-cloud
+      src/PartsLife.Update/ReleaseInfo.cs
+  src/PcMieru.Update/Feed/UpdateEndpoints.cs
+      the release and asset addresses (the exact-match rule), from the owner's
+      pl-cloud src/PartsLife.Update/UpdateEndpoints.cs
+  src/PcMieru.Update/Feed/UpdateHttp.cs
+      the hand-followed redirects and the capped body reads, from the owner's
+      pl-cloud src/PartsLife.Update/UpdateHttp.cs
+  src/PcMieru.Update/Feed/UpdateSchedule.cs
+      the first delay, the hourly look and the 24 hour interval, from the
+      owner's pl-cloud src/PartsLife.Update/UpdateSchedule.cs
+  src/PcMieru.Update/Feed/UpdateService.cs
+      the flow of one check (the code is rebuilt), from Updater.CheckAsync in
+      the owner's pl-cloud src/PartsLife.Update/Updater.cs
+  src/PcMieru.Update/Feed/UpdateState.cs
+      the state file and its safe write, from the owner's pl-cloud
+      src/PartsLife.Update/UpdateState.cs
+  src/PcMieru.Update/Staging/Authenticode.cs
+      the embedded-signature check through WinVerifyTrust (Valid / Unsigned /
+      Invalid, no network), from the owner's pl-cloud
+      src/PartsLife.Update/Authenticode.cs (the identity comparison of its
+      signature policy is not ported)
+  src/PcMieru.Update/Transaction/TxFault.cs
+  src/PcMieru.Update/Transaction/TxIo.cs
+      the file-operation seam that fails at a chosen place, so that every
+      failure road can be tried (the code is new: named steps, three edges and a
+      power cut that unwinds), from FileOps and FaultyOps in the owner's
+      pl-cloud src/PartsLife.Update/Swapper.cs and
+      tests/PartsLife.Update.Tests/FaultTests.cs
+  src/PcMieru.Update/Transaction/TxEngine.Rollback.cs
+  src/PcMieru.Update/Transaction/TxJournal.cs
+      the recovery rules (the code is new, on the journal): the attempt is
+      counted in the record BEFORE the work, an automatic retry stops after a
+      fixed number, a version is blamed only when it was really launched, and a
+      give-up keeps the backup and the record, from SwapRecovery.cs and
+      SwapBoot.cs in the owner's pl-cloud src/PartsLife.Update
+  tests/PcMieru.Update.Tests/TxSwapTests.cs
+  tests/PcMieru.Update.Tests/TxRecoveryTests.cs
+  tests/PcMieru.Update.Tests/TxFaultMatrixTests.cs
+      the cases (a staged file that was tampered with, a failure half-way, a
+      leftover of the last time, a record that cannot be written, a rollback
+      that must not loop, a give-up that keeps the backup) rebuilt for the
+      transaction, from SwapperTests, FaultTests and RecoveryTests in the
+      owner's pl-cloud tests/PartsLife.Update.Tests; the rest are new
+  tests/PcMieru.Update.Tests/VersionAndHashListTests.cs
+      the cases of the two tests above, from the owner's pl-cloud
+      tests/PartsLife.Update.Tests/RulesTests.cs
+  tests/PcMieru.Update.Tests/TestBundle.cs
+      the idea of a release made in memory with knobs to break it (the code is
+      new), from FakeRelease.Zip in the owner's pl-cloud
+      tests/PartsLife.Update.Tests/UpdaterTests.cs
+  tests/PcMieru.Update.Tests/FeedHttpTests.cs
+  tests/PcMieru.Update.Tests/FeedParserTests.cs
+  tests/PcMieru.Update.Tests/FeedServiceTests.cs
+  tests/PcMieru.Update.Tests/FeedStateTests.cs
+  tests/PcMieru.Update.Tests/FeedZeroHttpTests.cs
+      several cases ported from RulesTests, UpdaterTests, StateTests and
+      SwapperTests of the owner's pl-cloud tests/PartsLife.Update.Tests (each
+      names its old test in a comment); the rest are new
+  tests/PcMieru.Update.Tests/FeedTestKit.cs
+      the fake GitHub and the fake release (the code is new), from FakeGitHub
+      and FakeRelease in the owner's pl-cloud
+      tests/PartsLife.Update.Tests/UpdaterTests.cs
+  src/PcMieru.Checks/Recording/RunSummarizer.cs
+      every threshold and wording rule of the interval summary (the busy
+      level, the sustained window, the limit bits, the co-occurrence spans,
+      the notes), line for line, from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/Summarizer.cs and Summary.cs
+  src/PcMieru.Checks/Recording/LegacyRun.cs
+      the header fields and the CSV layout of the old partslife-run/1 runs
+      (read only), from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/RunStore.cs and Session.cs
+  src/PcMieru.Checks/Recording/RunCodes.cs
+  src/PcMieru.Checks/Recording/RunFiles.cs
+  src/PcMieru.Checks/Recording/RunSeries.cs
+  src/PcMieru.Checks/Recording/RunStore.cs
+  src/PcMieru.Checks/Recording/RunSummary.cs
+  src/PcMieru.Checks/Recording/RunTypes.cs
+      only the name of the old partslife-run/1 format and of the
+      Documents\PartsLife\runs folder it lived in, so that the old runs can be
+      listed and read (never written), from the owner's pl-sensors
+      src/PartsLife.Checks/Recording/RunStore.cs
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART

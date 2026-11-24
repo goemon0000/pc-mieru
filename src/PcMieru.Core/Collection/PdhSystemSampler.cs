@@ -3,8 +3,17 @@ using System.Globalization;
 
 namespace PcMieru.Core.Collection;
 
-/// <summary>What the always-on PDH query yields for one tick.</summary>
-internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<double> CpuMhz, Value<int> DisksState);
+/// <summary>
+/// What the always-on PDH query yields for one tick. <see cref="PackageWatts"/> is the CPU package power (missing with its reason when the
+/// Energy Meter counters are not there); <see cref="AcquiredTicks"/> is the Stopwatch timestamp taken right after the collection that
+/// produced the numbers (0 when there was none), so the recorder can say when these values were acquired.
+/// </summary>
+internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<double> CpuMhz, Value<int> DisksState)
+{
+    public Value<double> PackageWatts { get; init; } = Value.NotCollected<double>("none");
+
+    public long AcquiredTicks { get; init; }
+}
 
 /// <summary>
 /// Physical disks (<c>\PhysicalDisk(*)</c>) and the CPU clock from one PDH query that stays open. PDH computes the rates
@@ -15,6 +24,7 @@ internal sealed class PdhSystemSampler : IDisposable
 {
     private const string DiskSource = "PDH PhysicalDisk";
     private const string ClockSource = "PDH Processor Information";
+    private const string PowerSource = "PDH Energy Meter";
     private const double MinWindowMs = 200;
 
     private readonly PdhQuery _query = new();
@@ -25,6 +35,7 @@ internal sealed class PdhSystemSampler : IDisposable
     private readonly nint _latency;
     private readonly nint _frequency;
     private readonly nint _performance;
+    private readonly nint _energy;
     private readonly Dictionary<string, DiskAccumulator> _disks = [];
     private readonly Dictionary<int, string> _models = [];
     private long _lastStamp;
@@ -43,6 +54,9 @@ internal sealed class PdhSystemSampler : IDisposable
         _latency = _query.Add(@"\PhysicalDisk(*)\Avg. Disk sec/Transfer", out _);
         _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
         _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
+
+        // The CPU package power. Many PCs have no Energy Meter counter set: Add then gives 0 and the value says so, it is never a 0 W reading.
+        _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
 
         // The first collection only starts PDH's clock. Doing it here lets the first tick already have rates.
         if (_query.Collect() == Pdh.Success)
@@ -108,7 +122,11 @@ internal sealed class PdhSystemSampler : IDisposable
         }
 
         disks.Sort(static (a, b) => string.CompareOrdinal(a.Id, b.Id));
-        return new PdhSystemReading(disks, ReadClock(primed), DisksState(disks.Count));
+        return new PdhSystemReading(disks, ReadClock(primed), DisksState(disks.Count))
+        {
+            PackageWatts = ReadPackagePower(primed),
+            AcquiredTicks = _lastStamp,
+        };
     }
 
     public void Dispose() => _query.Dispose();
@@ -243,6 +261,38 @@ internal sealed class PdhSystemSampler : IDisposable
             : Value.NotCollected<double>(ClockSource, "counter returned no data");
     }
 
+    private Value<double> ReadPackagePower(bool primed)
+    {
+        if (_energy == 0)
+        {
+            return PackagePowerValue(new PackagePowerReading(PackagePowerState.NoCounter, 0), primed);
+        }
+
+        if (!_reader.Read(_energy))
+        {
+            // "No instance" is the answer of a machine whose meter lists nothing; any other failure is a sample that did not come.
+            return PackagePowerValue(
+                new PackagePowerReading(_reader.Status == Pdh.NoInstance ? PackagePowerState.NoPackageInstance : PackagePowerState.NoValidSample, 0),
+                primed);
+        }
+
+        return PackagePowerValue(PdhReadRule.PackagePower(_reader.Bytes, _reader.BaseAddress, _reader.Count), primed);
+    }
+
+    /// <summary>
+    /// A package power reading as a value: watts when valid, otherwise missing with the reason. An absent counter set or package instance is
+    /// Unsupported (this PC cannot say), a sample that did not come is NotCollected; neither is ever a 0 W reading.
+    /// </summary>
+    internal static Value<double> PackagePowerValue(PackagePowerReading reading, bool primed) => reading.State switch
+    {
+        PackagePowerState.Valid => Value.Ok(reading.Watts, PowerSource),
+        PackagePowerState.NoCounter => Value.Unsupported<double>(PowerSource, @"this Windows has no Energy Meter counters (\Energy Meter(*)\Power), so the CPU package power is not available"),
+        PackagePowerState.NoPackageInstance => Value.Unsupported<double>(PowerSource, "the Energy Meter lists no CPU package (_PKG) instance on this PC"),
+        _ => primed
+            ? Value.NotCollected<double>(PowerSource, "the CPU package power sample was not usable")
+            : Value.NotCollected<double>(PowerSource, "no baseline yet (first sample)"),
+    };
+
     private string? ModelOf(string instance)
     {
         if (!TryParseInstance(instance, out var index, out _))
@@ -260,7 +310,10 @@ internal sealed class PdhSystemSampler : IDisposable
     }
 
     internal static PdhSystemReading Unavailable(string detail) =>
-        new([], Value.Failed<double>(ClockSource, detail), Value.Failed<int>(DiskSource, detail));
+        new([], Value.Failed<double>(ClockSource, detail), Value.Failed<int>(DiskSource, detail))
+        {
+            PackageWatts = Value.Failed<double>(PowerSource, detail),
+        };
 
     /// <summary>The disk list is Ok (zero is then a real answer) unless the PhysicalDisk counters were never there to read.</summary>
     private Value<int> DisksState(int count) =>

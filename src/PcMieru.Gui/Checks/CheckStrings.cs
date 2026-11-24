@@ -19,6 +19,7 @@ internal static class CheckStrings
         new("gui.chk.tab.system", "システム", "System"),
         new("gui.chk.tab.load", "負荷", "Load"),
         new("gui.chk.tab.storage", "記憶媒体", "Storage"),
+        new("gui.chk.tab.record", "テストの記録", "Recording"),
         new("gui.chk.tab.history", "履歴", "History"),
 
         new("gui.chk.start", "点検する", "Check now"),

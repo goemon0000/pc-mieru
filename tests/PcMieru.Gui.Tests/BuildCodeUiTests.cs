@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using PcMieru.Checks;
 using PcMieru.Checks.Build;
@@ -797,24 +798,93 @@ public class BuildCodeUiTests
     }
 
     [Theory]
-    [InlineData(Language.Ja)]
-    [InlineData(Language.En)]
-    public async Task The_code_box_is_whole_lines_high_and_the_dialog_gives_it_its_own_height(Language language)
+    [InlineData(1.0f, false)]
+    [InlineData(1.25f, false)]
+    [InlineData(1.5f, false)]
+    [InlineData(1.75f, false)]
+    [InlineData(2.0f, true)]
+    public async Task BuildCodeDialog_shows_whole_native_lines_and_a_scroll_bar(float scale, bool dark)
     {
-        using var rig = new Rig(language);
-        var trimmed = await TrimmedResult();
-        using var dialog = new BuildCodeDialog(rig.Theme, trimmed, _ => true);
-        var box = dialog.CodeBox;
+        var result = await TrimmedResult();
+        Ui.Run(_ =>
+        {
+            using var locale = Harness.Locale(Language.En);
+            using var theme = new ThemeService(dark ? ThemeMode.Dark : ThemeMode.Light);
+            var basis = SystemFonts.MessageBoxFont ?? Control.DefaultFont;
+            using var font = new Font(basis.FontFamily, basis.SizeInPoints * scale);
+            // Exercise wrapping of a single unbroken code. Leave the parts list empty so fitting gives up only code lines.
+            using var dialog = new BuildCodeDialog(theme, result with
+            {
+                Config = new BuildConfig(), Code = "PCB1:" + new string('A', 2048), Notes = [], Unread = [],
+            }, _ => true);
+            dialog.Font = font;
+            var box = dialog.CodeBox;
+            box.Width = (int)Math.Round(box.Width * scale);
+            dialog.PreventActivation();
+            dialog.StartPosition = FormStartPosition.Manual;
+            dialog.Location = new Point(-10000, -10000);
+            dialog.Show();
+            Application.DoEvents();
 
-        // N lines of the code's font and the air round them: no part of a line at the bottom.
-        var air = dialog.LogicalToDeviceUnits(BuildCodeDialog.CodeBoxPadding);
-        Assert.Equal(box.Font.Height, dialog.CodeLineHeight);
-        Assert.InRange(dialog.CodeLinesShown, 3, BuildCodeDialog.CodeLines);
-        Assert.Equal((dialog.CodeLinesShown * dialog.CodeLineHeight) + air, dialog.CodeBoxClientHeight);
-        Assert.Equal(dialog.CodeBoxClientHeight, box.ClientSize.Height);
-        Assert.Equal(0, (box.ClientSize.Height - air) % dialog.CodeLineHeight);
-        Assert.Equal(dialog.CodeLinesShown, (box.ClientSize.Height - air) / dialog.CodeLineHeight);
+            var full = dialog.FitToHeight(int.MaxValue);
+            Assert.True(box.GetFirstCharIndexFromLine(BuildCodeDialog.CodeLines) > 0);
+            var pitch = LineY(box, 1) - LineY(box, 0);
+            Assert.True(pitch > 0);
+            var width = box.Width;
+
+            for (var lines = BuildCodeDialog.CodeLines; lines >= 2; lines--)
+            {
+                dialog.FitToHeight(full - ((BuildCodeDialog.CodeLines - lines) * pitch));
+                Assert.Equal(lines, dialog.CodeLinesShown);
+                Assert.Equal(width, box.Width);
+
+                SendMessage(box.Handle, 0x00B2, IntPtr.Zero, out var rect); // EM_GETRECT
+                Assert.InRange(rect.Bottom - rect.Top, (lines * pitch) - 1, (lines * pitch) + 1);
+                Assert.InRange(LineY(box, lines), box.ClientSize.Height, box.ClientSize.Height + 1);
+
+                var bar = new ScrollBarInfo { Size = Marshal.SizeOf<ScrollBarInfo>(), State = new uint[6] };
+                Assert.True(GetScrollBarInfo(box.Handle, -5, ref bar)); // OBJID_VSCROLL
+                Assert.Equal(0u, bar.State[0] & 0x8001u); // Unavailable or invisible
+                Assert.True(bar.Rect.Right > bar.Rect.Left && bar.Rect.Bottom > bar.Rect.Top);
+                if (lines == BuildCodeDialog.CodeLines)
+                {
+                    Assert.True(bar.ThumbBottom > bar.ThumbTop);
+                }
+            }
+        });
     }
+
+    private static int LineY(TextBox box, int line) =>
+        box.GetPositionFromCharIndex(box.GetFirstCharIndexFromLine(line)).Y;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EditRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScrollBarInfo
+    {
+        public int Size;
+        public EditRect Rect;
+        public int LineButton;
+        public int ThumbTop;
+        public int ThumbBottom;
+        public int Reserved;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
+        public uint[] State;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, out EditRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetScrollBarInfo(IntPtr hwnd, int objectId, ref ScrollBarInfo info);
 
     [Fact]
     public async Task A_screen_too_low_for_the_dialog_takes_rows_from_the_list_first_then_lines_from_the_code_box_and_a_roomy_one_gives_them_back()
@@ -841,17 +911,52 @@ public class BuildCodeUiTests
         Assert.Equal(BuildCodeDialog.CodeLines, dialog.CodeLinesShown);
         Assert.True(fitted <= available, $"{fitted} px in {available} px");
 
-        // No room at all: the list and the box stop at their least, and the window is as low as it can be.
-        var least = dialog.FitToHeight(0);
+        // Room for exactly the usual floors (three rows, three lines); a pixel less goes on below them, again the list first.
+        var floor = dialog.FitToHeight(full - (7 * rowHeight) - (2 * dialog.CodeLineHeight));
         Assert.Equal(3, dialog.PartRowsShown);
         Assert.Equal(3, dialog.CodeLinesShown);
-        Assert.True(least < full);
+        var belowFloor = dialog.FitToHeight(floor - 1);
+        Assert.Equal(2, dialog.PartRowsShown);
+        Assert.Equal(3, dialog.CodeLinesShown);
+        Assert.True(belowFloor <= floor - 1, $"{belowFloor} px in {floor - 1} px");
+
+        // No room at all: the list and the box stop at their least (one row, two lines), and the window is as low as it can be.
+        var least = dialog.FitToHeight(0);
+        Assert.Equal(1, dialog.PartRowsShown);
+        Assert.Equal(2, dialog.CodeLinesShown);
+        Assert.True(least < floor);
         Assert.Equal(dialog.CodeBoxClientHeight, dialog.CodeBox.ClientSize.Height);
 
         // A roomier screen: everything comes back.
         Assert.Equal(full, dialog.FitToHeight(int.MaxValue));
         Assert.Equal(10, dialog.PartRowsShown);
         Assert.Equal(BuildCodeDialog.CodeLines, dialog.CodeLinesShown);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public async Task A_work_area_lower_than_the_usual_floors_is_met_by_the_list_and_the_box_and_the_whole_row_still_ends_the_list(Language language)
+    {
+        using var rig = new Rig(language);
+        using var dialog = new BuildCodeDialog(rig.Theme, await TrimmedResult(), _ => true);
+        var grid = dialog.PartsList;
+        var full = dialog.FitToHeight(int.MaxValue);
+        var least = dialog.FitToHeight(0);
+        Assert.True(least < full);
+
+        // Every work area from the window's least to its full height (what 200% on a 1080-line screen leaves is near the low end): the window is
+        // never higher than the area, and the list is a whole number of rows high under its header, the box a whole number of lines.
+        var rowHeight = grid.MeasuredRowHeight;
+        for (var area = least; area <= full + rowHeight; area += (rowHeight / 2) + 1)
+        {
+            var height = dialog.FitToHeight(area);
+            Assert.True(height <= area, $"{height} px in a work area of {area} px");
+            Assert.InRange(dialog.PartRowsShown, 1, 10);
+            Assert.Equal(grid.HeightForRows(dialog.PartRowsShown), grid.Height);
+            Assert.Equal(dialog.CodeBoxClientHeight, dialog.CodeBox.ClientSize.Height);
+            Assert.Equal(height, dialog.PreferredHeight);
+        }
     }
 
     [Theory]

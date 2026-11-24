@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using PcMieru.Checks;
 
 namespace PcMieru.Gui.Tests;
@@ -115,6 +116,76 @@ internal static class Ui
             SynchronizationContext.SetSynchronizationContext(previous);
         }
     }
+
+    /// <summary>
+    /// Pumps the windows' messages (and the test context's queue, when there is one) until the condition holds, or the bound ends. For a window that has
+    /// been shown: its native parts lay themselves out in messages, which <see cref="QueueContext.Until"/> does not pump. A condition, not a stretch of
+    /// time; the bound is there so a broken test ends instead of hanging.
+    /// </summary>
+    public static bool PumpUntil(Func<bool> condition, int timeoutMs = 20_000)
+    {
+        var watch = Stopwatch.StartNew();
+        while (true)
+        {
+            (SynchronizationContext.Current as QueueContext)?.Pump();
+            Application.DoEvents();
+            if (condition())
+            {
+                return true;
+            }
+
+            if (watch.ElapsedMilliseconds > timeoutMs)
+            {
+                return false;
+            }
+
+            Thread.Sleep(2);
+        }
+    }
+
+    /// <summary>
+    /// Waits until a native window has taken what was done to it: the thread's message queue is empty and what <paramref name="state"/> reports has not
+    /// changed over three rounds in a row. For the case where nothing is expected to change (a negative) as well as where something is. The bound ends a
+    /// broken run by failing the test.
+    /// </summary>
+    public static void Settle(Func<string> state, int timeoutMs = 20_000)
+    {
+        var watch = Stopwatch.StartNew();
+        var last = string.Empty;
+        var steady = 0;
+        while (watch.ElapsedMilliseconds < timeoutMs)
+        {
+            (SynchronizationContext.Current as QueueContext)?.Pump();
+            Application.DoEvents();
+            var now = state();
+            steady = now == last && !PeekMessage(out _, IntPtr.Zero, 0, 0, 0) ? steady + 1 : 0;
+            last = now;
+            if (steady >= 3)
+            {
+                return;
+            }
+
+            Thread.Sleep(2);
+        }
+
+        Assert.Fail("The window never settled: " + last);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMessage
+    {
+        public IntPtr Window;
+        public uint Id;
+        public IntPtr WParam;
+        public IntPtr LParam;
+        public uint Time;
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "PeekMessageW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PeekMessage(out NativeMessage message, IntPtr window, uint min, uint max, uint remove);
 
     /// <summary>A temporary folder that is removed (and its removal confirmed) when the test is done.</summary>
     public sealed class TempRoot : IDisposable

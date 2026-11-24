@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    Dev builds only: puts the start gate file (PCMieru.gate.txt, DESIGN-B 4) next to the exe of every program that checks it at start (Gui, Cli, SensorHost, Helper, NetMeter and
+    the test-only Party stub). Without it a plain "dotnet build" or F5 would make an exe that refuses to start with "the gate file is missing".
+    The file is the one in assets\, the same bytes a release carries; tests/PcMieru.Gate.Tests checks that these bytes are exactly the text fixed in
+    src/PcMieru.Wire/Gate/GateFile.cs. tools/publish.ps1 does not rely on this: it writes the gate into the publish folder on its own, and passes -p:GateNextToExe=false to its
+    publishes (the copy goes to the build folder, never to a publish folder, so the switch is a second lock, not the first).
+  -->
+  <Target Name="CopyGateFileNextToExe" AfterTargets="CopyFilesToOutputDirectory" Condition="'$(OutDir)' != '' And '$(GateNextToExe)' != 'false'">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\assets\PCMieru.gate.txt" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

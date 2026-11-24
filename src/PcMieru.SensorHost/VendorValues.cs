@@ -15,6 +15,19 @@ internal readonly record struct VendorNumber(double Number, int Code)
     public bool Ok => Code == 0;
 }
 
+/// <summary>
+/// A bit mask as the driver gave it (NVML clocks event reasons), same result code convention as <see cref="VendorNumber"/>. Kept apart from
+/// <see cref="VendorNumber"/> because a 64-bit mask does not survive a round trip through a double.
+/// </summary>
+internal readonly record struct VendorMask(ulong Bits, int Code)
+{
+    public static VendorMask Missing => new(0, -1);
+
+    public static VendorMask Failed(int code) => new(0, code);
+
+    public static VendorMask Of(ulong bits) => new(bits, 0);
+}
+
 /// <summary>A text (VBIOS version, driver version) with the same result code convention as <see cref="VendorNumber"/>.</summary>
 internal readonly record struct VendorText(string? Text, int Code)
 {

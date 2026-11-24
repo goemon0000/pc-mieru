@@ -26,6 +26,8 @@
     <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
     <!-- The checks page (system, load, storage, history) draws the runs of PcMieru.Checks; the checks themselves live there (docs/unify/DESIGN-A.md 7). -->
     <ProjectReference Include="..\PcMieru.Checks\PcMieru.Checks.csproj" />
+    <!-- The release feed, the update mode and the first-run choice (docs/unify/DESIGN-B.md 3.1, 4). The one HTTP client of the app lives there, in Feed\UpdateHttp.cs. -->
+    <ProjectReference Include="..\PcMieru.Update\PcMieru.Update.csproj" />
     <!-- Not linked: only built, so PCMieru.SensorHost.exe lands next to the app (the GPU live values are read by that process). -->
     <ProjectReference Include="..\PcMieru.SensorHost\PcMieru.SensorHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
@@ -40,5 +42,8 @@
   </ItemGroup>
 
   <Import Project="..\..\build\SensorHostNextToApp.targets" />
+
+  <!-- Dev builds: the start gate file beside the exe (see build/GateNextToExe.targets). -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
 
 </Project>

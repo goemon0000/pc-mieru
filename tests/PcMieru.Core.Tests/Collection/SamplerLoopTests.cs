@@ -160,9 +160,67 @@ internal sealed class TestControl : ISamplerControl
 
     public TimeSpan EffectiveInterval => Minimized ? MinimizedInterval : Interval;
 
-    public bool GpuActive => false;
+    public bool GpuActive => ActiveGpuSubscriptions > 0;
 
-    public IDisposable SubscribeGpu() => throw new NotSupportedException();
+    /// <summary>How many times the GPU was subscribed, ever.</summary>
+    public int GpuSubscriptions => Volatile.Read(ref _subscriptions);
+
+    /// <summary>Subscriptions that have not been disposed.</summary>
+    public int ActiveGpuSubscriptions => Volatile.Read(ref _activeSubscriptions);
+
+    private int _subscriptions;
+    private int _activeSubscriptions;
+
+    public IDisposable SubscribeGpu()
+    {
+        _ = Interlocked.Increment(ref _subscriptions);
+        _ = Interlocked.Increment(ref _activeSubscriptions);
+        return new Subscription(this);
+    }
+
+    private sealed class Subscription(TestControl owner) : IDisposable
+    {
+        private TestControl? _owner = owner;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is { } o)
+            {
+                _ = Interlocked.Decrement(ref o._activeSubscriptions);
+            }
+        }
+    }
+}
+
+/// <summary>A SensorHost cadence control that only counts: how many leases were taken and how many are still held.</summary>
+internal sealed class CountingCadence : ISensorCadence
+{
+    private int _acquired;
+    private int _active;
+
+    public int Acquired => Volatile.Read(ref _acquired);
+
+    public int Active => Volatile.Read(ref _active);
+
+    public IDisposable AcquireOneSecondLease()
+    {
+        _ = Interlocked.Increment(ref _acquired);
+        _ = Interlocked.Increment(ref _active);
+        return new Lease(this);
+    }
+
+    private sealed class Lease(CountingCadence owner) : IDisposable
+    {
+        private CountingCadence? _owner = owner;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is { } o)
+            {
+                _ = Interlocked.Decrement(ref o._active);
+            }
+        }
+    }
 }
 
 public sealed class HistoryRingTests
@@ -292,8 +350,11 @@ public sealed class SamplerLoopTests
         Assert.True(await UntilAsync(() => source.Calls >= 4));
         await loop.StopAsync();
 
-        // A beat of 200 ms with 80 ms of work is a 200 ms gap, not a 280 ms one.
-        Assert.All(source.StartGapsMs.Take(2), gap => Assert.InRange(gap, 180, 260));
+        // A beat of 200 ms with 80 ms of work is a 200 ms gap, not a 280 ms one. A busy machine only makes a gap longer (a CI runner gave one of 372 ms),
+        // so no gap may be short and at least one of the first three must be a beat: a loop that waits after the end never has a gap under 280 ms.
+        var gaps = source.StartGapsMs.Take(3).ToList();
+        Assert.All(gaps, gap => Assert.True(gap >= 180, $"a sample started {gap:F1} ms after the previous one with a 200 ms interval"));
+        Assert.Contains(gaps, gap => gap < 260);
     }
 
     [Fact]

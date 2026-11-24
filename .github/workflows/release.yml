@@ -1,7 +1,9 @@
 name: Release
 
-# A tag v1.2.3 builds PCMieru-1.2.3-win-x64.zip plus SHA256.txt and attaches both to a GitHub release.
+# A tag v1.2.3 builds PCMieru-1.2.3-win-x64.zip, its outer manifest PCMieru-1.2.3-win-x64.manifest.json (pcm-bundle/1)
+# and SHA256.txt (the hashes of those two) and attaches all three to a GitHub release.
 # A manual run builds the same files from the chosen ref and keeps them as a workflow artifact only.
+# publish.ps1 -Verify judges the zip with the real bundle validator (tools/BundleCheck) before anything is attached.
 on:
   push:
     tags: ['v*']
@@ -33,7 +35,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = $env:INPUT_VERSION }
-          if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "not a version: '$v'" }
+          if ($v -notmatch '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\z') { throw "not a plain X.Y.Z version: '$v'" }
           "value=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "version $v"
 
@@ -51,6 +53,7 @@ jobs:
           name: PCMieru-${{ steps.version.outputs.value }}-win-x64
           path: |
             dist/PCMieru-*.zip
+            dist/PCMieru-*.manifest.json
             dist/SHA256.txt
           if-no-files-found: error
 
@@ -60,6 +63,7 @@ jobs:
         with:
           files: |
             dist/PCMieru-${{ steps.version.outputs.value }}-win-x64.zip
+            dist/PCMieru-${{ steps.version.outputs.value }}-win-x64.manifest.json
             dist/SHA256.txt
           fail_on_unmatched_files: true
           generate_release_notes: true

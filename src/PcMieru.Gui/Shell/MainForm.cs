@@ -1,4 +1,8 @@
 using System.Globalization;
+using PcMieru.Update.Feed;
+using PcMieru.Update.Launch;
+using PcMieru.Update.Transaction;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui;
 
@@ -13,6 +17,10 @@ internal sealed class MainForm : Form
     private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Name = "statusBar", AccessibleRole = AccessibleRole.StatusBar };
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Name = "statusText" };
     private readonly Label _updated = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updated" };
+    private readonly Label _recording = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "recordingIndicator", Cursor = Cursors.Hand, Visible = false, AccessibleRole = AccessibleRole.PushButton };
+
+    /// <summary>The quiet line about a newer version (<see cref="GuiContext.UpdateNotice"/>): between the messages and the time of the last update, in the normal text colour (it is not a link and not an alarm).</summary>
+    private readonly Label _notice = new() { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updateNotice", Visible = false };
     private readonly Button _pause = new() { Name = "pauseButton", TabStop = true, UseVisualStyleBackColor = false };
     private readonly ComboBox _interval = new() { Name = "intervalCombo", DropDownStyle = ComboBoxStyle.DropDownList, TabStop = true };
     private readonly Panel _controls = new() { Dock = DockStyle.Right, Name = "statusControls" };
@@ -21,6 +29,9 @@ internal sealed class MainForm : Form
     private readonly CheckCloseGuard _closeGuard;
     private int _current = -1;
     private bool _rebuildingNav;
+    private bool _updatesStarted;
+    private System.Windows.Forms.Timer? _handOffTimer;
+    private Action? _syncHandOffTimer;
 
     /// <summary>
     /// The pause button and the interval box are the same height and centred in the bar. A docked combo box would stay at
@@ -39,6 +50,7 @@ internal sealed class MainForm : Form
     public MainForm(GuiContext context)
     {
         _context = context;
+        Enabled = !context.Verifying;
         _closeGuard = new CheckCloseGuard(
             context.Checks,
             () => Dialogs.Confirm(
@@ -63,6 +75,7 @@ internal sealed class MainForm : Form
         _statusBar.Padding = new Padding(0, LogicalToDeviceUnits(4), 0, LogicalToDeviceUnits(4));
         _status.Padding = new Padding(LogicalToDeviceUnits(10), 0, 0, 0);
         _updated.Padding = new Padding(0, 0, LogicalToDeviceUnits(12), 0);
+        _recording.Padding = new Padding(0, 0, LogicalToDeviceUnits(12), 0);
         _pause.Margin = Padding.Empty;
         SizeChrome();
         _controls.Controls.Add(_pause);
@@ -71,6 +84,8 @@ internal sealed class MainForm : Form
 
         // Dock order: the last control added is laid out first (outermost on its edge), so Fill goes in first.
         _statusBar.Controls.Add(_status);
+        _statusBar.Controls.Add(_notice);
+        _statusBar.Controls.Add(_recording);
         _statusBar.Controls.Add(_updated);
         _statusBar.Controls.Add(_controls);
         Controls.Add(_host);
@@ -94,11 +109,15 @@ internal sealed class MainForm : Form
         };
         _context.LanguageChanged += ApplyLanguage;
         _context.StatusMessage += message => _status.Text = message;
+        _context.UpdateNoticeChanged += ShowNotice;
+        _statusBar.Resize += (_, _) => SizeNotice();
         _context.Theme.Changed += ApplyTheme;
         _context.Pump.Sampled += OnSampled;
         _context.Pump.Failed += ex => _status.Text = Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message });
         _context.Pump.StateChanged += ShowPumpState;
         _context.NavigateRequested += OnNavigateRequested;
+        _context.Recording.Changed += ShowRecording;
+        _recording.Click += (_, _) => _context.Navigate("checks", argument: "record");
         _context.AlwaysOnTopChanged += () => TopMost = _context.Settings.AlwaysOnTop;
         _context.TextSizeChanged += OnTextSizeChanged;
         TopMost = _context.Settings.AlwaysOnTop;
@@ -254,11 +273,75 @@ internal sealed class MainForm : Form
         _context.Pump.SetPaused(_context.Settings.Paused);
         _context.Pump.Start();
         ShowPumpState();
-        if (_context.Settings.NetMeterAutostart)
+        if (!_context.Verifying && _context.Settings.NetMeterAutostart)
         {
             StartNetMeterAtLaunch();
         }
     }
+
+    /// <summary>
+    /// Real runs only (Program.cs calls this after the window is shown; a smoke run and a measurement never do): starts the update check's timers when the
+    /// mode allows the network, and while the mode is still "not chosen" (Ask) shows the first-run choice. The timer starts only after 「決定」 saved the
+    /// choice (<see cref="UpdateController.ChooseMode"/>); in Ask and Off nothing is created.
+    /// </summary>
+    internal void StartUpdates()
+    {
+        if (IsDisposed || _updatesStarted || _context.Verifying)
+        {
+            return;
+        }
+
+        _updatesStarted = true;
+        var updates = _context.Updates;
+        updates.Start();
+        if (updates.Mode == UpdateMode.Ask)
+        {
+            UpdateChoiceDialog.Open(this, _context.Theme, updates);
+        }
+
+        if (!IsDisposed && !_context.Services.Options.ForceFakes && Environment.ProcessPath is { } executable)
+        {
+            StartHandOff(executable);
+        }
+    }
+
+    private void StartHandOff(string executable)
+    {
+        var install = InstallGate.InstallFolderOf(executable);
+        var gateFile = Path.Combine(install, GateFile.FileName);
+        var updates = _context.Updates;
+        var handOff = new UpdateHandOff(
+            () => !IsDisposed && !Disposing && updates.Allowed ? (updates.Mode, updates.Status().Staged) : (UpdateMode.Off, null),
+            () => UpdateHandOff.ReadFacts(this, HasOpenMenu(this), _context.Checks.IsBusy || updates.Checking
+                || PageById("diagnose") is DiagnosePage { IsRunning: true },
+                // The window's recording (DESIGN-B §8): starting, recording and stopping all hold the hand-off back.
+                UpdateHandOff.ActivityOf(_context.Recording.Phase), _context.PendingUac, ProcessElevation.IsElevated()),
+            () =>
+            {
+                if (!InstallPlacement.Check(install).CanSwap)
+                {
+                    return GateHolders.ReadOnly;
+                }
+
+                var holders = RestartManager.ReadHolders(gateFile);
+                var own = _context.Services.OwnedChildPids();
+                own.Add(Environment.ProcessId);
+                return RestartManager.Classify(holders, own);
+            },
+            (stage, id) => GuiHandOff.Run(install, stage, attemptId: id), updates.SetDeferral, Close,
+            attempts: updates.HandOffService, failure: updates.SetHandOffFailure);
+
+        _handOffTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
+        _handOffTimer.Tick += async (_, _) => await handOff.TryAsync().ConfigureAwait(true);
+        _syncHandOffTimer = () => _handOffTimer.Enabled = updates.Allowed && updates.Mode == UpdateMode.Automatic;
+        updates.Changed += _syncHandOffTimer;
+        _syncHandOffTimer();
+        _ = handOff.TryAsync(reconcileOnly: true); // reconcile the previous run before the first timer tick
+    }
+
+    private static bool HasOpenMenu(Control control) =>
+        control.ContextMenuStrip is { Visible: true } || control is ComboBox { DroppedDown: true }
+        || control.Controls.Cast<Control>().Any(HasOpenMenu);
 
     /// <summary>
     /// The "start measuring when the app opens" setting: asks for administrator permission once, off the UI thread, so the
@@ -300,6 +383,12 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_context.Verifying)
+        {
+            base.OnFormClosing(e);
+            return;
+        }
+
         // A check is running (DESIGN-A §7): the first request is cancelled and asked about; on yes the stop and its save are awaited and the window is
         // closed again, and nothing below runs until then. Windows ending the session cannot be asked: the stop is requested and the close goes on.
         if (!_closeGuard.OnCloseRequested(e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
@@ -307,6 +396,10 @@ internal sealed class MainForm : Form
             e.Cancel = true;
             return;
         }
+
+        // A recording is never a reason to refuse the close (no question): it is stopped and saved first, the wait bounded to ExitBound (2 s). This
+        // comes after the check's guard, so a check and a recording at once are both dealt with, the check first; a cancelled first pass left the recording alone.
+        StopRecordingForClose();
 
         foreach (var page in _pages)
         {
@@ -325,10 +418,68 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _context.Updates.Changed -= _syncHandOffTimer;
+        _handOffTimer?.Dispose();
         _context.Pump.Stop();
+        _context.Updates.Dispose();
         _context.Checks.Dispose();
+        _context.Recording.Dispose();
         base.OnFormClosed(e);
     }
+
+    /// <summary>Stops the recording for the close (and for Windows ending the session, which also comes as a close): the library's bounded stop, reason window_close.</summary>
+    private void StopRecordingForClose()
+    {
+        if (!_context.Recording.IsActive)
+        {
+            return;
+        }
+
+        if (IsHandleCreated && Visible)
+        {
+            _recording.Text = Strings.Get("gui.rtab.saving");
+            _recording.Width = IndicatorWidth();
+            _recording.Visible = true;
+            _statusBar.Refresh();
+        }
+
+        _ = _context.Recording.StopForClose();
+    }
+
+    /// <summary>The status-bar label of a recording: its elapsed time while it runs, "saving" while it is stopped. Hidden when nothing is recording.</summary>
+    private void ShowRecording()
+    {
+        var hub = _context.Recording;
+        var phase = hub.Phase;
+        var show = phase is RecordingPhase.Recording or RecordingPhase.Stopping;
+        RecordingIndicatorOn = show;
+        _recording.Visible = show;
+        if (!show)
+        {
+            // Back to what the theme gives every label: the accent is only for a recording that is on screen (the settings section's theme check walks hidden controls too).
+            _recording.ForeColor = _context.Theme.Palette.Text;
+            return;
+        }
+
+        _recording.Text = phase == RecordingPhase.Stopping
+            ? Strings.Get("gui.rtab.saving")
+            : Strings.Format("gui.rtab.indicator", Fmt.Dict(("time", RecordFormat.Elapsed(hub.ShownElapsed))));
+        _recording.ForeColor = _context.Theme.Palette.Accent;
+        _recording.Width = IndicatorWidth();
+        _tips.SetToolTip(_recording, Strings.Get("gui.rtab.indicator.tip"));
+    }
+
+    private int IndicatorWidth() => TextRenderer.MeasureText(_recording.Text, _recording.Font).Width + _recording.Padding.Horizontal + Chrome(8);
+
+    /// <summary>The indicator, as a read for tests and the smoke run.</summary>
+    internal Label RecordingIndicator => _recording;
+
+    /// <summary>True while the indicator is meant to be on screen (a window that was never shown has a label whose own Visible reads false either way).</summary>
+    internal bool RecordingIndicatorOn { get; private set; }
+
+    /// <summary>A click on the indicator as the label gets it (its own click handler runs), for tests and the smoke run.</summary>
+    internal void ClickRecordingIndicator() =>
+        typeof(Control).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(_recording, [EventArgs.Empty]);
 
     protected override void WndProc(ref Message m)
     {
@@ -470,6 +621,8 @@ internal sealed class MainForm : Form
     {
         _context.Theme.Apply(this);
         ShowPumpState();
+        SizeNotice();
+        ShowRecording();
     }
 
     private void ApplyLanguage()
@@ -519,5 +672,30 @@ internal sealed class MainForm : Form
         }
 
         ShowPumpState();
+        ShowNotice();
+        ShowRecording();
+    }
+
+    /// <summary>Writes the notice in the language shown now (so a language change rewrites it) or hides it when there is none.</summary>
+    private void ShowNotice()
+    {
+        var text = _context.UpdateNotice;
+        _notice.Text = text ?? string.Empty;
+        _notice.Visible = text is not null;
+        _tips.SetToolTip(_notice, text ?? string.Empty);
+        SizeNotice();
+    }
+
+    /// <summary>The notice is as wide as its text, at most 40 % of the bar (an ellipsis and the tool tip carry the rest), so the messages on its left keep their room.</summary>
+    private void SizeNotice()
+    {
+        if (!_notice.Visible)
+        {
+            return;
+        }
+
+        var wanted = TextRenderer.MeasureText(_notice.Text, _notice.Font).Width + LogicalToDeviceUnits(24);
+        var most = Math.Max((int)(_statusBar.ClientSize.Width * 0.4), LogicalToDeviceUnits(160));
+        _notice.Width = Math.Min(wanted, most);
     }
 }

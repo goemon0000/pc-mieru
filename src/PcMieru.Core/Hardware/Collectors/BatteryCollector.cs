@@ -39,6 +39,23 @@ internal static class BatteryCollector
             return Probe.FromException<BatteryHardware>(ex, PowerSrc);
         }
     }
+
+    /// <summary>
+    /// AC and battery charge/state for the sampler, once per sample: one GetSystemPowerStatus call (the same reader <see cref="Collect"/> starts
+    /// from), no device scan. A failure of the call is a Failed value with the reason, never "AC off".
+    /// </summary>
+    public static PowerInfo ReadPower()
+    {
+        try
+        {
+            var power = BatteryNative.ReadPowerStatus(out var error);
+            return BatteryBuilder.BuildPower(power, power is null ? $"GetSystemPowerStatus failed (Win32 error {error})" : null);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return BatteryBuilder.BuildPower(null, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
 }
 
 /// <summary>The pure part of the battery collector. Unit tested with hand-made readings.</summary>
@@ -95,6 +112,45 @@ internal static class BatteryBuilder
                 Value.Ok(system.Count > 0, InfoSrc)));
         return Value.Ok(hardware, "composite:battery");
     }
+
+    /// <summary>
+    /// The sampler's power source values from one power status: AC line, and (when the PC has a battery) charge and a coarse state. The same
+    /// rules as <see cref="Build"/>: no battery is Unsupported with the reason, an unknown byte is "not reported", never 0 or "AC off".
+    /// <paramref name="power"/> null means the call itself failed (<paramref name="failure"/> says how).
+    /// </summary>
+    public static PowerInfo BuildPower(RawPowerStatus? power, string? failure)
+    {
+        if (power is null)
+        {
+            var why = failure ?? "GetSystemPowerStatus failed";
+            return new PowerInfo(Value.Failed<bool>(PowerSrc, why), Value.Failed<int>(PowerSrc, why), Value.Failed<string>(PowerSrc, why));
+        }
+
+        var ac = power.AcLine switch
+        {
+            0 => Value.Ok(false, PowerSrc),
+            1 => Value.Ok(true, PowerSrc),
+            _ => Value.Unsupported<bool>(PowerSrc, "power source not reported"),
+        };
+
+        if ((power.BatteryFlag & FlagNoBattery) != 0)
+        {
+            var why = power.BatteryFlag == Unknown ? "battery status not reported" : "no battery in this PC";
+            return new PowerInfo(ac, Value.Unsupported<int>(PowerSrc, why), Value.Unsupported<string>(PowerSrc, why));
+        }
+
+        var percent = power.BatteryPercent == Unknown || power.BatteryPercent > 100
+            ? Value.Unsupported<int>(PowerSrc, "charge level not reported")
+            : Value.Ok((int)power.BatteryPercent, PowerSrc);
+        var state = CoarseState(power) is { } text
+            ? Value.Ok(text, PowerSrc)
+            : Value.Unsupported<string>(PowerSrc, "charging state not reported");
+        return new PowerInfo(ac, percent, state);
+    }
+
+    /// <summary>"charging", "plugged in" or "on battery" from the coarse flags; null when Windows reports neither.</summary>
+    private static string? CoarseState(RawPowerStatus power) =>
+        (power.BatteryFlag & 8) != 0 ? "charging" : power.AcLine == 1 ? "plugged in" : power.AcLine == 0 ? "on battery" : null;
 
     private const string NoInterface = "the battery driver gives no details to apps";
 

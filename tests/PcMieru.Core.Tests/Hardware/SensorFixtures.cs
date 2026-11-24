@@ -16,7 +16,8 @@ internal static class SensorFixtures
         double? limitDefault = 250,
         int? gen = 5,
         int? width = 16,
-        double? slowdownC = 88)
+        double? slowdownC = 88,
+        ulong? reasons = null)
     {
         return new GpuSensorExtras(
             Vbios: vbios is null ? Value.Unsupported<string>(Src, "none") : Value.Ok(vbios, Src),
@@ -36,6 +37,7 @@ internal static class SensorFixtures
             PciBusId: pciBusId)
         {
             TemperatureLimitC = slowdownC is null ? Value.Unsupported<double>(Src, "none") : Value.Ok(slowdownC.Value, Src),
+            ClocksEventReasons = reasons is null ? Value.Unsupported<ulong>(Src, "none") : Value.Ok(reasons.Value, Src),
         };
     }
 
@@ -55,8 +57,18 @@ internal static class SensorFixtures
     public static Value<IReadOnlyList<GpuSensorReading>> Readings(params GpuSensorReading[] readings) =>
         Value.Ok<IReadOnlyList<GpuSensorReading>>(readings, "sensorhost");
 
-    public static string FrameLine(params GpuSensorReading[] readings) =>
-        PcMieruJson.Serialize(new SensorFrame(SensorFrame.CurrentSchemaVersion, DateTime.UtcNow, Readings(readings)));
+    private static long _sequence;
+
+    /// <summary>A schema 2 frame as the child writes it: generation 1, the next sequence number, a 2 s period, a monotonic time that only grows.</summary>
+    public static string FrameLine(params GpuSensorReading[] readings) => Serialize(Frame(readings));
+
+    public static SensorFrame Frame(params GpuSensorReading[] readings) =>
+        Frame(1, Interlocked.Increment(ref _sequence), 2000, readings);
+
+    public static SensorFrame Frame(long generation, long sequence, int periodMs, params GpuSensorReading[] readings) =>
+        new(SensorFrame.CurrentSchemaVersion, DateTime.UtcNow, Readings(readings), generation, sequence, periodMs, 1_000_000 + (sequence * 1_000_000L));
+
+    public static string Serialize(SensorFrame frame) => PcMieruJson.Serialize(frame);
 
     public static GpuHardware Gpu(string? luid, string vendor = "NVIDIA", string? pciLocation = null, string name = "NVIDIA GeForce RTX 5070")
     {

@@ -316,6 +316,34 @@ public sealed class GpuDescribeTests
     }
 
     [Fact]
+    public void An_adapter_DXGI_lists_twice_under_one_luid_is_one_row_before_and_after_the_first_window()
+    {
+        var again = Real with { Name = "NVIDIA GeForce RTX 5070 (second entry)" };
+
+        var before = GpuSampler.Describe([Real, again], null, primed: false, "no baseline yet", ValueStatus.NotCollected);
+        var interim = GpuSampler.Interim([], [Real, again, Real], ValueStatus.NotCollected, "no baseline yet");
+        var data = Data(a => a.AddAdapterMemory(GpuNames.Adapter(Real.Luid), 1 * GiB, Valid, dedicated: true));
+        var primed = GpuSampler.Describe([Real, again], data, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(Real.Id, Assert.Single(before).Id);
+        Assert.Equal(Real.Id, Assert.Single(interim).Id);
+        Assert.Equal(Real.Id, Assert.Single(primed).Id);
+        Assert.Equal(Real.Name, before[0].Name); // the first entry is the one kept
+    }
+
+    [Fact]
+    public void An_alias_of_a_card_is_not_listed_before_the_first_window_and_not_in_an_interim_list()
+    {
+        var alias = Duplicate with { IsAlias = true };
+
+        var before = GpuSampler.Describe([Real, alias, Software], null, primed: false, "no baseline yet", ValueStatus.NotCollected);
+        var interim = GpuSampler.Interim([], [Real, alias, Software], ValueStatus.NotCollected, "no baseline yet");
+
+        Assert.Equal(Real.Id, Assert.Single(before).Id);
+        Assert.Equal(Real.Id, Assert.Single(interim).Id);
+    }
+
+    [Fact]
     public void Once_counters_were_read_an_adapter_without_any_instance_is_not_listed()
     {
         var data = Data(a =>
@@ -611,6 +639,45 @@ public sealed class GpuSensorMergeTests
     }
 
     [Fact]
+    public void Two_adapters_with_one_name_and_one_reading_give_it_to_the_first_only()
+    {
+        var a = Gpu("luid_0x00000000_0x000166ca", "NVIDIA GeForce RTX 5070");
+        var b = Gpu("luid_0x00000000_0x00024557", "NVIDIA GeForce RTX 5070");
+
+        var merged = GpuSensorMerge.Apply([a, b], Ok(Reading("0", "NVIDIA GeForce RTX 5070")));
+
+        Assert.Equal(65.0, merged[0].TemperatureC.Data);
+        Assert.Equal(ValueStatus.Unsupported, merged[1].TemperatureC.Status); // a reading is one card's: it is never printed on two rows
+        Assert.Equal(ValueStatus.Unsupported, merged[1].PowerWatts.Status);
+    }
+
+    [Fact]
+    public void A_reading_with_the_id_of_the_second_adapter_goes_to_the_second_and_not_also_to_the_first_by_its_name()
+    {
+        var a = Gpu("luid_0x00000000_0x000166ca", "NVIDIA GeForce RTX 5070");
+        var b = Gpu("luid_0x00000000_0x00024557", "NVIDIA GeForce RTX 5070");
+
+        var merged = GpuSensorMerge.Apply([a, b], Ok(Reading(b.Id, "NVIDIA GeForce RTX 5070")));
+
+        Assert.Equal(ValueStatus.Unsupported, merged[0].TemperatureC.Status);
+        Assert.Equal(65.0, merged[1].TemperatureC.Data);
+    }
+
+    [Fact]
+    public void Two_readings_for_two_adapters_of_one_name_go_one_each_by_id_whatever_the_order()
+    {
+        var a = Gpu("luid_0x00000000_0x000166ca", "NVIDIA GeForce RTX 5070");
+        var b = Gpu("luid_0x00000000_0x00024557", "NVIDIA GeForce RTX 5070");
+        var readA = Reading(a.Id, "NVIDIA GeForce RTX 5070") with { TemperatureC = Value.Ok(51.0, "NVML") };
+        var readB = Reading(b.Id, "NVIDIA GeForce RTX 5070") with { TemperatureC = Value.Ok(62.0, "NVML") };
+
+        var merged = GpuSensorMerge.Apply([a, b], Ok(readB, readA));
+
+        Assert.Equal(51.0, merged[0].TemperatureC.Data);
+        Assert.Equal(62.0, merged[1].TemperatureC.Data);
+    }
+
+    [Fact]
     public void No_adapters_is_returned_as_it_is()
     {
         IReadOnlyList<GpuInfo> none = [];
@@ -682,6 +749,69 @@ public sealed class GpuAdaptersTests
         var a = GpuAdapters.ParseDesc1(Desc("x", 1, ulong.MaxValue, 1, 0, 0));
 
         Assert.Equal(long.MaxValue, a.DedicatedBytes);
+    }
+
+    private const long GiB = 1L << 30;
+
+    [Fact]
+    public void A_copy_without_a_pci_address_of_a_card_that_has_one_is_marked_as_an_alias_and_the_card_is_not()
+    {
+        var real = new GpuAdapter(0x166CA, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var phantom = new GpuAdapter(0x24557, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+
+        var marked = GpuAdapters.MarkAliases([real, phantom], a => a.Luid == real.Luid);
+
+        Assert.False(marked[0].IsAlias);
+        Assert.True(marked[1].IsAlias);
+        Assert.Equal(2, marked.Count); // marked, not dropped: the list DXGI gave stays whole
+    }
+
+    [Fact]
+    public void Two_cards_of_one_model_that_both_have_a_pci_address_are_both_kept()
+    {
+        var one = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var two = new GpuAdapter(2, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+
+        var marked = GpuAdapters.MarkAliases([one, two], _ => true);
+
+        Assert.All(marked, a => Assert.False(a.IsAlias));
+    }
+
+    [Fact]
+    public void An_adapter_whose_address_cannot_be_read_is_never_called_an_alias()
+    {
+        var real = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var unknown = new GpuAdapter(2, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+
+        var none = GpuAdapters.MarkAliases([real, unknown], _ => null);
+        var oneKnown = GpuAdapters.MarkAliases([real, unknown], a => a.Luid == real.Luid ? true : null);
+
+        Assert.All(none, a => Assert.False(a.IsAlias));
+        Assert.All(oneKnown, a => Assert.False(a.IsAlias)); // unknown is not "no address": the other card's address proves nothing about it
+    }
+
+    [Fact]
+    public void A_card_with_no_address_that_matches_no_card_with_one_stays()
+    {
+        var real = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var other = new GpuAdapter(2, "AMD Radeon(TM) Graphics", 512L << 20, 0x1002, false);
+        var sameNameOtherMemory = new GpuAdapter(3, "NVIDIA GeForce RTX 5070", 8 * GiB, 0x10DE, false);
+
+        var marked = GpuAdapters.MarkAliases([real, other, sameNameOtherMemory], a => a.Luid == real.Luid ? true : false);
+
+        Assert.All(marked, a => Assert.False(a.IsAlias));
+    }
+
+    [Fact]
+    public void An_empty_name_with_the_same_memory_as_a_card_that_has_an_address_is_an_alias()
+    {
+        var real = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var unnamed = new GpuAdapter(2, string.Empty, 12 * GiB, 0x10DE, false);
+
+        var marked = GpuAdapters.MarkAliases([real, unnamed], a => a.Luid == real.Luid);
+
+        Assert.False(marked[0].IsAlias);
+        Assert.True(marked[1].IsAlias);
     }
 
     [Trait("Category", "RealMachine")]

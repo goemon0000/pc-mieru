@@ -1,7 +1,7 @@
 namespace PcMieru.Gui;
 
 /// <summary>
-/// The checks page: system, load, storage and history, one tab at a time (DESIGN-A §7). The window's one run lives in
+/// The checks page: system, load, storage, the record of tests and history, one tab at a time (DESIGN-A §7, DESIGN-B §6). The window's one run lives in
 /// <see cref="GuiContext.Checks"/>, not here: the tab and the navigation can change while it runs, the page can even be built after it
 /// started, and each tab draws what the controller says. Building the page reads nothing and writes nothing; the history tab reads (never
 /// creating a folder) when it is shown, and nothing is created on disk until the user starts a check.
@@ -19,11 +19,11 @@ internal sealed class ChecksPage : PageBase
     {
         var checks = context.Checks;
 
-        // One line per tab, in the order of the strip. Stage B puts the record of tests between Storage and History with one more line here,
-        // naming its own title key and its tab class; nothing else in this file changes.
+        // One line per tab, in the order of the strip: the record of tests (DESIGN-B §6) sits between Storage and History.
         _tabs.Add(new TabEntry("system", "gui.chk.tab.system", new SystemCheckTab(checks, Px)));
         _tabs.Add(new TabEntry("load", "gui.chk.tab.load", new LoadCheckTab(checks, Px)));
         _tabs.Add(new TabEntry("storage", "gui.chk.tab.storage", new StorageCheckTab(checks, Px)));
+        _tabs.Add(new TabEntry("record", "gui.chk.tab.record", new RecordTab(context, Px)));
         _tabs.Add(new TabEntry("history", "gui.chk.tab.history", new CheckHistoryTab(checks, Px)));
 
         var pad = Px(12);
@@ -90,6 +90,15 @@ internal sealed class ChecksPage : PageBase
     {
         _active = false;
         CurrentTab.OnHidden();
+    }
+
+    /// <summary>The status bar's "recording" label asks for the recording tab (its argument is the tab's id).</summary>
+    public override void OnNavigatedTo(ProcessKey? process)
+    {
+        if (Context.TakeNavigationArgument() is { Length: > 0 } id)
+        {
+            SelectTab(id);
+        }
     }
 
     /// <summary>F5: the history reads its list again; the tabs that run a check have nothing to read.</summary>

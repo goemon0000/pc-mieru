@@ -741,14 +741,8 @@ public class StartupManagerRealReadTests
                 RedirectStandardOutput = true,
                 StandardOutputEncoding = Encoding.UTF8,
             };
-            using var process = Process.Start(info);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var text = process.StandardOutput.ReadToEnd();
-            return process.WaitForExit(60_000) && process.ExitCode == 0 ? text : null;
+            var ran = BoundedProcess.Run(info, TimeSpan.FromSeconds(60));
+            return ran.ExitCode == 0 ? ran.Output : null;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
