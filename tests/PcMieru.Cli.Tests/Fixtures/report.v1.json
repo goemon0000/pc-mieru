@@ -65,6 +65,10 @@
         "temperatureC": {
           "status": "notCollected",
           "source": "none"
+        },
+        "packagePowerWatts": {
+          "status": "notCollected",
+          "source": "none"
         }
       },
       "memory": {
@@ -189,6 +193,10 @@
           "temperatureLimitC": {
             "status": "notCollected",
             "source": "none"
+          },
+          "limitReasons": {
+            "status": "notCollected",
+            "source": "none"
           }
         }
       ],
@@ -207,6 +215,20 @@
         "value": 1,
         "status": "ok",
         "source": "test"
+      },
+      "power": {
+        "acConnected": {
+          "status": "notCollected",
+          "source": "none"
+        },
+        "batteryPercent": {
+          "status": "notCollected",
+          "source": "none"
+        },
+        "batteryState": {
+          "status": "notCollected",
+          "source": "none"
+        }
       }
     },
     "observations": [

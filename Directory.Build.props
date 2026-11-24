@@ -11,8 +11,8 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en;ja</SatelliteResourceLanguages>
 
-    <!-- tools/publish.ps1 and CI pass -p:Version=x.y.z; this is only the local default. -->
-    <Version Condition="'$(Version)' == ''">0.2.0</Version>
+    <!-- Local default only (kept at the current release); tools/publish.ps1 passes the real version as -p:Version=x.y.z, and so does CI. -->
+    <Version Condition="'$(Version)' == ''">0.4.0</Version>
     <Company>web-autoai.com</Company>
     <Authors>web-autoai.com</Authors>
     <Product>PC Mieru</Product>

@@ -60,6 +60,9 @@ internal static class Program
             settings.TextSize = size;
         }
 
+        // --measure-record-interval (test-only): the user's interval of this run, in memory (a measured run never saves its settings).
+        options.MeasureRecord?.ApplyTo(settings);
+
         Strings.Current = settings.Language;
 
         // The start gate (DESIGN-B 4): the first thing the app does once it knows the language and the theme, before the measure marker, the services, any window, the sampling and the
@@ -85,8 +88,15 @@ internal static class Program
         using var pump = new SnapshotPump(services, settings.IntervalMs);
         var readResult = options.MeasureOutput is null && options.SmokeOutput is null && !options.ForceFakes;
         var context = new GuiContext(services, pump, theme, settings, measure: marks, lastUpdate: readResult
-            ? () => UpdateResultNote.Read(InstallGate.InstallFolderOf(Environment.ProcessPath!)) : null);
+            ? () => UpdateResultNote.Read(InstallGate.InstallFolderOf(Environment.ProcessPath!)) : null,
+            recording: MeasureRecording.CreateHub(services, options.MeasureRecord));
         using var form = new MainForm(context);
+
+        // --measure-record (test-only, with --measure): one recording started without a click, into the folder the script gave (see MeasureRecordPlan).
+        if (options.MeasureRecord is { } recordPlan && !MeasureRecording.TryAttach(recordPlan, options.MeasureOutput!, context, form, Console.Error, out _))
+        {
+            return 1;
+        }
 
         if (options.StartPage is { } page && !form.ShowPage(page))
         {
@@ -112,12 +122,22 @@ internal static class Program
         // A window closed by Windows ending (or the task manager) did not wait for a check that was told to stop. The message loop is gone, so
         // waiting here blocks no screen: the stopped run gets a few seconds to write its result, and what is not saved by then is left to the
         // folder's own .tmp clean-up (DESIGN-A §7).
-        context.Checks.WaitUntilIdle(CheckController.ExitWait);
+        WaitForWork(context);
         return 0;
     }
 
-    /// <summary>The command line asks for a measurement run (<c>--measure</c> is on it, however well the rest parses).</summary>
-    internal static bool IsMeasureRun(string[] args) => Array.IndexOf(args, "--measure") >= 0;
+    /// <summary>
+    /// After the message loop: a check that was told to stop, and a recording whose stop is still writing its result, each get their own bounded wait (3 s and
+    /// 2 s). A recording the close already waited for and gave up on is not waited for again.
+    /// </summary>
+    internal static void WaitForWork(GuiContext context)
+    {
+        context.Checks.WaitUntilIdle(CheckController.ExitWait);
+        context.Recording.WaitUntilSaved(RecordingHub.SavedWait);
+    }
+
+    /// <summary>The command line asks for a measurement run (<c>--measure</c> or one of the <c>--measure-record</c> switches is on it, however well the rest parses).</summary>
+    internal static bool IsMeasureRun(string[] args) => Array.Exists(args, a => a == "--measure" || MeasureRecordPlan.IsSwitch(a));
 
     /// <summary>
     /// <c>--measure</c>: makes the marker file before any window exists. A path that cannot be made is one line on <paramref name="error"/> (what
@@ -150,7 +170,8 @@ internal sealed record GuiOptions(
     int Dpi = 0,
     TextSize? TextSize = null,
     bool NetMeter = false,
-    string? MeasureOutput = null)
+    string? MeasureOutput = null,
+    MeasureRecordPlan? MeasureRecord = null)
 {
     /// <summary>The page to open at start: the process page for <c>--measure</c> (what the marks are about), else <c>--page</c> (null: the first page).</summary>
     public string? StartPage => MeasureOutput is not null ? "processes" : Page;
@@ -178,6 +199,7 @@ internal static class GuiArgs
         TextSize? textSize = null;
         var netMeter = false;
         string? measure = null;
+        var measureRecord = new Dictionary<string, string>(StringComparer.Ordinal);
         problem = string.Empty;
         options = new GuiOptions(null, null, null, null, null, false);
 
@@ -253,6 +275,23 @@ internal static class GuiArgs
                     }
 
                     break;
+                case MeasureRecordPlan.FolderSwitch:
+                case MeasureRecordPlan.LeadSwitch:
+                case MeasureRecordPlan.ForSwitch:
+                case MeasureRecordPlan.IntervalSwitch:
+                case MeasureRecordPlan.TimesSwitch:
+                case MeasureRecordPlan.GapSwitch:
+                case MeasureRecordPlan.GcSwitch:
+                    // Test-only (tools/measure.ps1 -Mode record), with --measure: a recording of the measured run itself. Read after the loop.
+                    var recordSwitch = args[i];
+                    var recordValue = Next();
+                    if (string.IsNullOrEmpty(recordValue) || !measureRecord.TryAdd(recordSwitch, recordValue))
+                    {
+                        problem = recordSwitch + (string.IsNullOrEmpty(recordValue) ? " needs a value" : " is given twice");
+                        return false;
+                    }
+
+                    break;
                 case "--fakes":
                     fakes = true;
                     break;
@@ -299,7 +338,12 @@ internal static class GuiArgs
             return false;
         }
 
-        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize, netMeter, measure);
+        if (!MeasureRecordPlan.TryRead(measureRecord, measure is not null, out var recordPlan, out problem))
+        {
+            return false;
+        }
+
+        options = new GuiOptions(language, theme, page, smoke, shots, fakes, onScreen, dpi, textSize, netMeter, measure, recordPlan);
         return true;
     }
 }

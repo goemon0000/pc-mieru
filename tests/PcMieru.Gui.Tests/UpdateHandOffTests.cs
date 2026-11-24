@@ -58,6 +58,71 @@ public sealed class UpdateHandOffTests
         await handOff.TryAsync();
     }
 
+    [Theory]
+    [InlineData("Idle", "Idle")]
+    [InlineData("Starting", "Preparing")]
+    [InlineData("Recording", "Recording")]
+    [InlineData("Stopping", "Stopping")]
+    [InlineData("99", "Recording")]
+    public void The_recording_phase_of_the_window_maps_onto_the_hand_off_activity_and_only_idle_is_idle(string phase, string expected)
+    {
+        // The enums are internal: the theory carries their names (99: a phase the map does not know, which must never read as idle).
+        var read = Enum.TryParse<RecordingPhase>(phase, out var named) ? named : (RecordingPhase)int.Parse(phase);
+        Assert.Equal(expected, UpdateHandOff.ActivityOf(read).ToString());
+    }
+
+    [Fact]
+    public void A_real_recording_hub_that_is_starting_recording_or_stopping_keeps_the_hand_off_from_starting_and_an_idle_one_does_not()
+    {
+        Ui.Run(ui =>
+        {
+            var kit = new FakeRecordingKit();
+            using var hub = kit.CreateHub();
+            var started = 0;
+            var handOff = new UpdateHandOff(() => (UpdateMode.Automatic, Stage),
+                () => Idle with { Recording = UpdateHandOff.ActivityOf(hub.Phase) }, () => GateHolders.Clear,
+                _ =>
+                {
+                    started++;
+                    return ApplyHandOffResult.Yes;
+                },
+                _ => { }, () => { }, () => 61_000);
+
+            // Every state the hub raises while a recording is not idle is tried at the moment it is raised: the hand-off must give up at once, before
+            // it asks for the gate holders (a task that is not finished here has gone on to the runner's side).
+            var tried = new List<(RecordingPhase Phase, bool Refused)>();
+            hub.Changed += () =>
+            {
+                if (hub.Phase != RecordingPhase.Idle)
+                {
+                    tried.Add((hub.Phase, handOff.TryAsync().IsCompleted));
+                }
+            };
+
+            var start = hub.StartAsync();
+            Assert.True(ui.Until(() => start.IsCompleted));
+            Assert.True(start.GetAwaiter().GetResult());
+            Assert.Contains(RecordingPhase.Starting, tried.Select(t => t.Phase));
+            Assert.Contains(RecordingPhase.Recording, tried.Select(t => t.Phase));
+
+            kit.Backend.HangStop = true;
+            var stop = hub.StopAsync();
+            Assert.Equal(RecordingPhase.Stopping, hub.Phase);
+            Assert.Contains(RecordingPhase.Stopping, tried.Select(t => t.Phase));
+            kit.Backend.ReleaseStop();
+            Assert.True(ui.Until(() => stop.IsCompleted));
+
+            Assert.All(tried, t => Assert.True(t.Refused, $"the hand-off went on while the recording was {t.Phase}"));
+            Assert.Equal(0, started);
+
+            // The recording is over: nothing is in the way any more, and the same hand-off now goes through.
+            Assert.Equal(RecordingPhase.Idle, hub.Phase);
+            var handedOff = handOff.TryAsync();
+            Assert.True(ui.Until(() => handedOff.IsCompleted));
+            Assert.Equal(1, started);
+        });
+    }
+
     [Fact]
     public async Task Rechecks_when_the_gate_query_finishes()
     {

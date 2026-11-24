@@ -23,7 +23,7 @@ public static class CollectionModule
             registry.Set<INetMeterControl>(fakeNet);
             var fake = new FakeSnapshotSource(options.Clock, fakeNet);
             registry.Set<ISnapshotSource>(fake);
-            registry.Set(new SamplerLoop(fake, settings));
+            RegisterLoop(registry, new SamplerLoop(fake, settings, SensorCadenceOf(registry)));
             registry.Set<IProcessDetailsProvider>(new FakeProcessDetailsProvider());
             registry.Set<IProcessGroupSource>(new FakeProcessGroupSource());
             registry.Set<IProcessIconSource>(new FakeProcessIconSource());
@@ -49,11 +49,22 @@ public static class CollectionModule
             verifier);
 
         registry.Set<ISnapshotSource>(source);
-        registry.Set(new SamplerLoop(source, settings));
+        RegisterLoop(registry, new SamplerLoop(source, settings, SensorCadenceOf(registry)));
         registry.Set<IProcessGroupSource>(source);
         registry.Set<IProcessDetailsProvider>(details);
         registry.Set<IProcessIconSource>(new ProcessIconSource());
     }
+
+    /// <summary>The loop is also the recording side (<see cref="IRecordingSamples"/>); both slots hold the same object.</summary>
+    private static void RegisterLoop(ServiceRegistry registry, SamplerLoop loop)
+    {
+        registry.Set(loop);
+        registry.Set<IRecordingSamples>(loop);
+    }
+
+    /// <summary>The Hardware module registers the sensor client after this one, so it is looked up when a recording lease needs it.</summary>
+    private static Func<ISensorCadence?> SensorCadenceOf(ServiceRegistry registry) =>
+        () => registry.TryGet<ISensorCadence>(out var cadence) ? cadence : null;
 }
 
 public static class CollectionStrings

@@ -180,6 +180,11 @@
       "temperatureC": {
         "status": "notCollected",
         "source": "none"
+      },
+      "packagePowerWatts": {
+        "value": 85.3,
+        "status": "ok",
+        "source": "fake:pdh-energy-meter"
       }
     },
     "memory": {
@@ -376,6 +381,11 @@
         "temperatureLimitC": {
           "status": "notCollected",
           "source": "none"
+        },
+        "limitReasons": {
+          "value": 0,
+          "status": "ok",
+          "source": "fake:nvml"
         }
       }
     ],
@@ -394,6 +404,23 @@
       "value": 1,
       "status": "ok",
       "source": "fake"
+    },
+    "power": {
+      "acConnected": {
+        "value": true,
+        "status": "ok",
+        "source": "fake:GetSystemPowerStatus"
+      },
+      "batteryPercent": {
+        "status": "unsupported",
+        "source": "fake:GetSystemPowerStatus",
+        "detail": "no battery in this PC"
+      },
+      "batteryState": {
+        "status": "unsupported",
+        "source": "fake:GetSystemPowerStatus",
+        "detail": "no battery in this PC"
+      }
     }
   },
   "observations": [

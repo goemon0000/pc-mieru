@@ -31,6 +31,39 @@ public class SnapshotPumpTests
         public void Dispose() => _inner.Dispose();
     }
 
+    /// <summary>Remembers which threads called it, so a test can tell the loop's thread from the window's.</summary>
+    private sealed class ThreadTrackingSource : ISnapshotSource
+    {
+        private readonly FakeSnapshotSource _inner = new();
+        private readonly HashSet<int> _threads = [];
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public bool WasCalledOn(int managedThreadId)
+        {
+            lock (_threads)
+            {
+                return _threads.Contains(managedThreadId);
+            }
+        }
+
+        public void ResetBaseline() => _inner.ResetBaseline();
+
+        public Task<Snapshot> SampleAsync(CancellationToken ct = default)
+        {
+            lock (_threads)
+            {
+                _ = _threads.Add(Environment.CurrentManagedThreadId);
+            }
+
+            _ = Interlocked.Increment(ref _calls);
+            return _inner.SampleAsync(ct);
+        }
+
+        public void Dispose() => _inner.Dispose();
+    }
+
     // These tests stay on one thread (the pump's deliveries are posted to the thread that made it), so they cannot await.
     private static void Finish(Task task) => task.GetAwaiter().GetResult();
 
@@ -145,6 +178,57 @@ public class SnapshotPumpTests
         Assert.Equal(1, source.Calls);
         Assert.NotNull(pump.Latest);
         Assert.Empty(loop.History);
+    }
+
+    [Fact]
+    public void While_paused_and_recording_a_refresh_shows_exactly_one_new_snapshot_and_takes_none_on_the_window_thread()
+    {
+        // A recording keeps the loop sampling (1 s) under the user's pause. F5 on the paused window must still show something: the pump asks
+        // the loop to show the NEXT sample of its own beat (a second sample taken here would put an off-beat row into the recording), and it
+        // shows that one and no more.
+        var source = new ThreadTrackingSource();
+        using var loop = new SamplerLoop(source, new SamplerSettings());
+        using var pump = new SnapshotPump(loop, source, 500);
+        pump.SetPaused(true);
+        pump.Start();
+        using var lease = loop.AcquireRecordingLease();
+        Assert.True(Pumping(() => source.Calls >= 1), "the loop did not sample for the recording under the pause");
+        Assert.True(loop.IsRecording);
+        Assert.Empty(pump.History); // paused: the window got nothing so far
+
+        var tick = pump.TickAsync();
+
+        Assert.True(Pumping(() => tick.IsCompleted), "the refresh of a paused, recording window did not come back");
+        Finish(tick);
+        Assert.False(source.WasCalledOn(Environment.CurrentManagedThreadId), "the refresh sampled on the window's thread");
+        Assert.NotNull(pump.Latest);
+        Assert.Single(pump.History);
+        Assert.True(pump.Paused);
+        var calls = source.Calls;
+        Assert.True(Pumping(() => source.Calls >= calls + 2), "the recording stopped sampling"); // more recording samples arrive...
+        Assert.Single(pump.History); // ...and the paused window shows none of them
+        Assert.Single(loop.History);
+    }
+
+    [Fact]
+    public void Once_the_recording_ends_a_paused_refresh_samples_here_again()
+    {
+        var source = new ThreadTrackingSource();
+        using var loop = new SamplerLoop(source, new SamplerSettings());
+        using var pump = new SnapshotPump(loop, source, 500);
+        pump.SetPaused(true);
+        pump.Start();
+        var lease = loop.AcquireRecordingLease();
+        Assert.True(Pumping(() => source.Calls >= 1));
+        lease.Dispose();
+        Assert.False(loop.IsRecording);
+
+        var tick = pump.TickAsync();
+        Assert.True(Pumping(() => tick.IsCompleted));
+        Finish(tick);
+
+        Assert.True(source.WasCalledOn(Environment.CurrentManagedThreadId), "the paused refresh did not sample again after the lease ended");
+        Assert.NotNull(pump.Latest);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using PcMieru.Core.Hardware.Collectors;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Collection;
@@ -10,7 +11,7 @@ namespace PcMieru.Core.Collection;
 /// system-wide counters, with deltas against the previous tick (SPEC 4). Calls are serialized; the work runs on the
 /// thread pool so a slow counter never blocks the caller's thread.
 /// </summary>
-public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
+public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource, IBeatAware
 {
     private const int InitialBufferBytes = 1 << 20;
     private const int MaxBufferBytes = 256 << 20;
@@ -48,6 +49,10 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private readonly NicSampler _nic = new();
     private readonly GpuSampler _gpu = new();
     private readonly GpuSensorCache _gpuSensors;
+
+    // The beat of the loop that drives this source (told once, when the loop is built). The first sample after a start or a pause states it as its
+    // nominal interval; without a loop (a direct caller) the user's window interval stands in.
+    private volatile Func<TimeSpan>? _beat;
     private readonly GuardedStage<PdhSystemReading> _pdhStage = new();
     private readonly GuardedStage<NicReading> _nicStage = new();
     private readonly GuardedStage<GpuReading> _gpuStage = new();
@@ -104,6 +109,8 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     }
 
     public ISamplerControl Control => _control;
+
+    void IBeatAware.UseBeat(Func<TimeSpan> beat) => _beat = beat ?? throw new ArgumentNullException(nameof(beat));
 
     public int LogicalProcessors => _cpu.LogicalProcessors;
 
@@ -226,7 +233,9 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
 
         _deltas.Compute(_raw, elapsedSeconds, logical, _rates);
         var cpu = _cpu.Sample();
+        var cpuStamp = Stopwatch.GetTimestamp();
         var memory = MemorySampler.Sample();
+        var memoryStamp = Stopwatch.GetTimestamp();
 
         // The stages have been running since the top of the tick; collect them now (each waits at most `timeout`).
         var pdh = JoinPdh(timeout);
@@ -236,10 +245,11 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         ComputeNet(JoinNet(timeout));
         var processes = BuildProcesses(gpu, windows);
 
-        var nominal = (int)_control.EffectiveInterval.TotalMilliseconds;
+        // Under a recording lease the loop's beat is the recording period (1 s), whatever the window's interval is set to.
+        var nominal = (int)(_beat?.Invoke() ?? _control.EffectiveInterval).TotalMilliseconds;
         var intervalMs = _hasPrevious ? (int)Math.Max(1, Math.Round(elapsedSeconds * 1000)) : nominal;
         var system = new SystemInfo(
-            new CpuInfo(logical, cpu.Total, cpu.PerLogical, pdh.CpuMhz) { TemperatureC = NoCpuTemperature },
+            new CpuInfo(logical, cpu.Total, cpu.PerLogical, pdh.CpuMhz) { TemperatureC = NoCpuTemperature, PackagePowerWatts = pdh.PackageWatts },
             memory,
             pdh.Disks,
             nics.Nics,
@@ -247,7 +257,10 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             Environment.TickCount64 / 1000,
             pdh.DisksState,
             nics.State,
-            gpu.State);
+            gpu.State)
+        {
+            Power = BatteryCollector.ReadPower(),
+        };
 
         var snapshot = new Snapshot(
             Snapshot.CurrentSchemaVersion,
@@ -255,7 +268,10 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             takenAt - TimeSpan.FromMilliseconds(intervalMs),
             intervalMs,
             system,
-            processes);
+            processes)
+        {
+            Provenance = new SnapshotProvenance(stamp, cpuStamp, memoryStamp, pdh.AcquiredTicks, gpu.Reading?.AcquiredTicks ?? 0),
+        };
 
         _lastStamp = stamp;
         _lastSleepDebt = sleepDebt;
@@ -377,7 +393,10 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         return new PdhSystemReading(
             [],
             Value.Missing<double>(failureStatus, "PDH Processor Information", failure),
-            Value.Missing<int>(failureStatus, "PDH PhysicalDisk", failure));
+            Value.Missing<int>(failureStatus, "PDH PhysicalDisk", failure))
+        {
+            PackageWatts = Value.Missing<double>(failureStatus, "PDH Energy Meter", failure),
+        };
     }
 
     private NicReading JoinNics(TimeSpan timeout) =>
@@ -390,7 +409,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
         if (!_gpuStage.TryJoin(timeout, out var reading, out var failure, out var failureStatus) || reading is null)
         {
             var detail = "GPU counters: " + failure;
-            var failed = GpuSampler.Failed(_gpuKnown, failureStatus, detail);
+            var failed = GpuSampler.TimedOut(_gpuKnown, failureStatus, detail, _gpuSensors.RequestedPeriodMs);
             return new GpuTick(failed, null, failureStatus, detail, GpuSampler.ListState(failed, failureStatus, detail));
         }
 
@@ -401,7 +420,8 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             return new GpuTick(reading.Gpus, reading, ValueStatus.NotCollected, null, reading.State);
         }
 
-        var merged = GpuSensorMerge.Apply(reading.Gpus, _gpuSensors.Current());
+        var view = _gpuSensors.CurrentView();
+        var merged = GpuSensorMerge.Apply(reading.Gpus, view.Gpus, view.Origin);
         return new GpuTick(merged, reading, ValueStatus.NotCollected, null, reading.State);
     }
 

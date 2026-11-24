@@ -35,6 +35,8 @@ internal static class GuiStrings
         .. BuildCodeStrings.All,
         .. DiagnoseStrings.All,
         .. CheckStrings.All,
+        .. PcMieru.Checks.RecordStrings.All,
+        .. RecordTabStrings.All,
         .. SettingsStrings.All,
         .. UpdateStrings.All,
         .. GateStrings.All,

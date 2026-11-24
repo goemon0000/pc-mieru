@@ -11,12 +11,12 @@ namespace PcMieru.Core.Tests.Collection;
 /// </summary>
 public sealed class PdhReadRuleTests
 {
-    private const ulong Base = 0x0000_7FF6_1234_0000;
+    internal const ulong Base = 0x0000_7FF6_1234_0000;
 
     private const uint InvalidData = 0xC0000BBA; // PDH_CSTATUS_INVALID_DATA
 
     /// <summary>The layout PdhGetFormattedCounterArrayW writes: 24-byte items first, then the name strings, pointers absolute.</summary>
-    private static byte[] Build(params (string Name, double Value, uint CStatus)[] items)
+    internal static byte[] Build(params (string Name, double Value, uint CStatus)[] items)
     {
         var namesStart = items.Length * PdhArray.ItemSize;
         var names = new MemoryStream();
@@ -40,10 +40,10 @@ public sealed class PdhReadRuleTests
         return buffer;
     }
 
-    private static PackagePowerReading Power(params (string Name, double Value, uint CStatus)[] items) =>
+    internal static PackagePowerReading Power(params (string Name, double Value, uint CStatus)[] items) =>
         PdhReadRule.PackagePower(Build(items), Base, items.Length);
 
-    private static (string, double, uint) Valid(string name, double value) => (name, value, Pdh.CStatusValidData);
+    internal static (string, double, uint) Valid(string name, double value) => (name, value, Pdh.CStatusValidData);
 
     // ---- the effective clock ----
 

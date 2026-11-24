@@ -17,6 +17,7 @@ internal sealed class MainForm : Form
     private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Name = "statusBar", AccessibleRole = AccessibleRole.StatusBar };
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Name = "statusText" };
     private readonly Label _updated = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updated" };
+    private readonly Label _recording = new() { AutoSize = false, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "recordingIndicator", Cursor = Cursors.Hand, Visible = false, AccessibleRole = AccessibleRole.PushButton };
 
     /// <summary>The quiet line about a newer version (<see cref="GuiContext.UpdateNotice"/>): between the messages and the time of the last update, in the normal text colour (it is not a link and not an alarm).</summary>
     private readonly Label _notice = new() { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleRight, Name = "updateNotice", Visible = false };
@@ -74,6 +75,7 @@ internal sealed class MainForm : Form
         _statusBar.Padding = new Padding(0, LogicalToDeviceUnits(4), 0, LogicalToDeviceUnits(4));
         _status.Padding = new Padding(LogicalToDeviceUnits(10), 0, 0, 0);
         _updated.Padding = new Padding(0, 0, LogicalToDeviceUnits(12), 0);
+        _recording.Padding = new Padding(0, 0, LogicalToDeviceUnits(12), 0);
         _pause.Margin = Padding.Empty;
         SizeChrome();
         _controls.Controls.Add(_pause);
@@ -83,6 +85,7 @@ internal sealed class MainForm : Form
         // Dock order: the last control added is laid out first (outermost on its edge), so Fill goes in first.
         _statusBar.Controls.Add(_status);
         _statusBar.Controls.Add(_notice);
+        _statusBar.Controls.Add(_recording);
         _statusBar.Controls.Add(_updated);
         _statusBar.Controls.Add(_controls);
         Controls.Add(_host);
@@ -113,6 +116,8 @@ internal sealed class MainForm : Form
         _context.Pump.Failed += ex => _status.Text = Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message });
         _context.Pump.StateChanged += ShowPumpState;
         _context.NavigateRequested += OnNavigateRequested;
+        _context.Recording.Changed += ShowRecording;
+        _recording.Click += (_, _) => _context.Navigate("checks", argument: "record");
         _context.AlwaysOnTopChanged += () => TopMost = _context.Settings.AlwaysOnTop;
         _context.TextSizeChanged += OnTextSizeChanged;
         TopMost = _context.Settings.AlwaysOnTop;
@@ -309,8 +314,8 @@ internal sealed class MainForm : Form
             () => !IsDisposed && !Disposing && updates.Allowed ? (updates.Mode, updates.Status().Staged) : (UpdateMode.Off, null),
             () => UpdateHandOff.ReadFacts(this, HasOpenMenu(this), _context.Checks.IsBusy || updates.Checking
                 || PageById("diagnose") is DiagnosePage { IsRunning: true },
-                // The test recording (DESIGN-B §8) is not in the window yet: when it is, its preparing / recording / stopping states go here instead of Idle.
-                RecordingActivity.Idle, _context.PendingUac, ProcessElevation.IsElevated()),
+                // The window's recording (DESIGN-B §8): starting, recording and stopping all hold the hand-off back.
+                UpdateHandOff.ActivityOf(_context.Recording.Phase), _context.PendingUac, ProcessElevation.IsElevated()),
             () =>
             {
                 if (!InstallPlacement.Check(install).CanSwap)
@@ -390,6 +395,10 @@ internal sealed class MainForm : Form
             return;
         }
 
+        // A recording is never a reason to refuse the close (no question): it is stopped and saved first, the wait bounded to ExitBound (2 s). This
+        // comes after the check's guard, so a check and a recording at once are both dealt with, the check first; a cancelled first pass left the recording alone.
+        StopRecordingForClose();
+
         foreach (var page in _pages)
         {
             page?.SaveState();
@@ -412,8 +421,63 @@ internal sealed class MainForm : Form
         _context.Pump.Stop();
         _context.Updates.Dispose();
         _context.Checks.Dispose();
+        _context.Recording.Dispose();
         base.OnFormClosed(e);
     }
+
+    /// <summary>Stops the recording for the close (and for Windows ending the session, which also comes as a close): the library's bounded stop, reason window_close.</summary>
+    private void StopRecordingForClose()
+    {
+        if (!_context.Recording.IsActive)
+        {
+            return;
+        }
+
+        if (IsHandleCreated && Visible)
+        {
+            _recording.Text = Strings.Get("gui.rtab.saving");
+            _recording.Width = IndicatorWidth();
+            _recording.Visible = true;
+            _statusBar.Refresh();
+        }
+
+        _ = _context.Recording.StopForClose();
+    }
+
+    /// <summary>The status-bar label of a recording: its elapsed time while it runs, "saving" while it is stopped. Hidden when nothing is recording.</summary>
+    private void ShowRecording()
+    {
+        var hub = _context.Recording;
+        var phase = hub.Phase;
+        var show = phase is RecordingPhase.Recording or RecordingPhase.Stopping;
+        RecordingIndicatorOn = show;
+        _recording.Visible = show;
+        if (!show)
+        {
+            // Back to what the theme gives every label: the accent is only for a recording that is on screen (the settings section's theme check walks hidden controls too).
+            _recording.ForeColor = _context.Theme.Palette.Text;
+            return;
+        }
+
+        _recording.Text = phase == RecordingPhase.Stopping
+            ? Strings.Get("gui.rtab.saving")
+            : Strings.Format("gui.rtab.indicator", Fmt.Dict(("time", RecordFormat.Elapsed(hub.ShownElapsed))));
+        _recording.ForeColor = _context.Theme.Palette.Accent;
+        _recording.Width = IndicatorWidth();
+        _tips.SetToolTip(_recording, Strings.Get("gui.rtab.indicator.tip"));
+    }
+
+    private int IndicatorWidth() => TextRenderer.MeasureText(_recording.Text, _recording.Font).Width + _recording.Padding.Horizontal + Chrome(8);
+
+    /// <summary>The indicator, as a read for tests and the smoke run.</summary>
+    internal Label RecordingIndicator => _recording;
+
+    /// <summary>True while the indicator is meant to be on screen (a window that was never shown has a label whose own Visible reads false either way).</summary>
+    internal bool RecordingIndicatorOn { get; private set; }
+
+    /// <summary>A click on the indicator as the label gets it (its own click handler runs), for tests and the smoke run.</summary>
+    internal void ClickRecordingIndicator() =>
+        typeof(Control).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(_recording, [EventArgs.Empty]);
 
     protected override void WndProc(ref Message m)
     {
@@ -556,6 +620,7 @@ internal sealed class MainForm : Form
         _context.Theme.Apply(this);
         ShowPumpState();
         SizeNotice();
+        ShowRecording();
     }
 
     private void ApplyLanguage()
@@ -606,6 +671,7 @@ internal sealed class MainForm : Form
 
         ShowPumpState();
         ShowNotice();
+        ShowRecording();
     }
 
     /// <summary>Writes the notice in the language shown now (so a language change rewrites it) or hides it when there is none.</summary>

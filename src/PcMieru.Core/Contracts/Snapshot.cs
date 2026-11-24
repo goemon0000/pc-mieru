@@ -16,6 +16,12 @@ public sealed record Snapshot(
     IReadOnlyList<ProcessInfo> Processes)
 {
     public const string CurrentSchemaVersion = "1";
+
+    /// <summary>
+    /// Where each stage's values came from and when (the recorder's input). Set by the real source; null from sources that do not track it.
+    /// Internal and never serialized: it is not part of the snapshot contract.
+    /// </summary>
+    internal SnapshotProvenance? Provenance { get; init; }
 }
 
 /// <summary>
@@ -31,7 +37,23 @@ public sealed record SystemInfo(
     long UptimeSec,
     Value<int> DisksState = default,
     Value<int> NicsState = default,
-    Value<int> GpusState = default);
+    Value<int> GpusState = default)
+{
+    /// <summary>AC connected and battery charge/state, from the same Windows power status the hardware page reads. Missing values say why (a desktop has no battery).</summary>
+    public PowerInfo Power { get; init; } = PowerInfo.NotCollected;
+}
+
+/// <summary>
+/// The machine's power source: whether AC is connected and, on a PC with a battery, its charge and state. Each value is missing with the
+/// reason when Windows does not report it (a desktop has no battery: Unsupported, never 0 %).
+/// </summary>
+public sealed record PowerInfo(Value<bool> AcConnected, Value<int> BatteryPercent, Value<string> BatteryState)
+{
+    internal static readonly PowerInfo NotCollected = new(
+        Value.NotCollected<bool>("none"),
+        Value.NotCollected<int>("none"),
+        Value.NotCollected<string>("none"));
+}
 
 /// <summary>Live CPU numbers. Static facts (model name, cache) live in the hardware model.</summary>
 public sealed record CpuInfo(
@@ -45,6 +67,12 @@ public sealed record CpuInfo(
     /// Unsupported; NotCollected is what a source that never asked leaves. Never a guess.
     /// </summary>
     public Value<double> TemperatureC { get; init; } = Value.NotCollected<double>("none");
+
+    /// <summary>
+    /// The CPU package power in watts, from the Windows Energy Meter counters (the package instance, milliwatts divided by 1000). Missing with
+    /// the reason when this PC's Windows has no such counters: never 0 W.
+    /// </summary>
+    public Value<double> PackagePowerWatts { get; init; } = Value.NotCollected<double>("none");
 }
 
 public sealed record MemoryInfo(
@@ -91,6 +119,15 @@ public sealed record GpuInfo(
     /// nothing was asked, Unsupported (with the reason) when the API gives none. Never a guessed number.
     /// </summary>
     public Value<double> TemperatureLimitC { get; init; } = Value.NotCollected<double>("none");
+
+    /// <summary>
+    /// Why the GPU is held back right now: the NVML clocks-event reasons as the driver's bit mask (0 = nothing holds it back). NotCollected when
+    /// nothing was asked, Unsupported (with the reason) when the vendor API gives none. Never worked out from temperature or power.
+    /// </summary>
+    public Value<ulong> LimitReasons { get; init; } = Value.NotCollected<ulong>("none");
+
+    /// <summary>Where the vendor values (temperature, power, fan, clock, limits) of this adapter came from. Null when none were merged. Never serialized.</summary>
+    internal SourceOrigin? VendorOrigin { get; init; }
 }
 
 public sealed record GpuEngineInfo(string Type, Value<double> Percent);

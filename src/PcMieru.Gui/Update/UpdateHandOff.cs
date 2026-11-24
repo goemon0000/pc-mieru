@@ -89,6 +89,18 @@ internal sealed class UpdateHandOff(
             && state.Recording == RecordingActivity.Idle && !state.PendingUac && !state.Elevated;
     }
 
+    /// <summary>
+    /// What the hand-off sees of the window's recording: only <see cref="RecordingPhase.Idle"/> is idle, and a phase this map does not know is never idle either
+    /// (an update must not hand off while a recording is being prepared, running or being saved).
+    /// </summary>
+    public static RecordingActivity ActivityOf(RecordingPhase phase) => phase switch
+    {
+        RecordingPhase.Idle => RecordingActivity.Idle,
+        RecordingPhase.Starting => RecordingActivity.Preparing,
+        RecordingPhase.Stopping => RecordingActivity.Stopping,
+        _ => RecordingActivity.Recording,
+    };
+
     public static UpdateIdleFacts ReadFacts(Form form, bool menu, bool check, RecordingActivity recording, bool pendingUac, bool elevated)
     {
         var input = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };

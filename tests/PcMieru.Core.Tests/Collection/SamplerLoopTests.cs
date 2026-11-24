@@ -160,9 +160,67 @@ internal sealed class TestControl : ISamplerControl
 
     public TimeSpan EffectiveInterval => Minimized ? MinimizedInterval : Interval;
 
-    public bool GpuActive => false;
+    public bool GpuActive => ActiveGpuSubscriptions > 0;
 
-    public IDisposable SubscribeGpu() => throw new NotSupportedException();
+    /// <summary>How many times the GPU was subscribed, ever.</summary>
+    public int GpuSubscriptions => Volatile.Read(ref _subscriptions);
+
+    /// <summary>Subscriptions that have not been disposed.</summary>
+    public int ActiveGpuSubscriptions => Volatile.Read(ref _activeSubscriptions);
+
+    private int _subscriptions;
+    private int _activeSubscriptions;
+
+    public IDisposable SubscribeGpu()
+    {
+        _ = Interlocked.Increment(ref _subscriptions);
+        _ = Interlocked.Increment(ref _activeSubscriptions);
+        return new Subscription(this);
+    }
+
+    private sealed class Subscription(TestControl owner) : IDisposable
+    {
+        private TestControl? _owner = owner;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is { } o)
+            {
+                _ = Interlocked.Decrement(ref o._activeSubscriptions);
+            }
+        }
+    }
+}
+
+/// <summary>A SensorHost cadence control that only counts: how many leases were taken and how many are still held.</summary>
+internal sealed class CountingCadence : ISensorCadence
+{
+    private int _acquired;
+    private int _active;
+
+    public int Acquired => Volatile.Read(ref _acquired);
+
+    public int Active => Volatile.Read(ref _active);
+
+    public IDisposable AcquireOneSecondLease()
+    {
+        _ = Interlocked.Increment(ref _acquired);
+        _ = Interlocked.Increment(ref _active);
+        return new Lease(this);
+    }
+
+    private sealed class Lease(CountingCadence owner) : IDisposable
+    {
+        private CountingCadence? _owner = owner;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is { } o)
+            {
+                _ = Interlocked.Decrement(ref o._active);
+            }
+        }
+    }
 }
 
 public sealed class HistoryRingTests

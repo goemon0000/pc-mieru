@@ -126,6 +126,15 @@ internal static class SensorMapping
         return v.Status == ValueStatus.Ok ? Value.Ok((long)v.Data, source) : Value.Missing<long>(v.Status, v.Source, v.Detail);
     }
 
+    /// <summary>
+    /// A bit mask (NVML clocks event reasons). Every bit pattern is a valid answer, including 0 ("nothing is limiting"), so only the result code
+    /// decides: a reading that did not happen is Unsupported/Denied/Timeout/Error with the reason and never a mask of 0.
+    /// </summary>
+    public static Value<ulong> Mask(VendorApi api, ulong bits, int code, string source) =>
+        code != 0
+            ? Value.Missing<ulong>(StatusOf(api, code), source, Describe(api, code))
+            : Value.Ok(bits, source);
+
     public static Value<string> Text(VendorApi api, string? text, int code, string source)
     {
         if (code != 0)

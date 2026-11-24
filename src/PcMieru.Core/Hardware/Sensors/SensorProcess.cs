@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using PcMieru.Core.Hardware.Model;
 
@@ -23,6 +24,12 @@ internal interface ISensorProcess : IDisposable
     /// <summary>Closes standard input. SensorHost treats that as "the parent is gone" and exits by itself.</summary>
     void CloseInput();
 
+    /// <summary>
+    /// Asks the running SensorHost to take frames every <paramref name="periodMs"/> ms (1000 or 2000) from its next sampling boundary.
+    /// Never waits: the request is handed to a writer and the latest one wins. A request to a process that is gone is dropped.
+    /// </summary>
+    void SetPeriod(int periodMs);
+
     bool WaitForExit(int milliseconds);
 
     void Kill();
@@ -30,8 +37,11 @@ internal interface ISensorProcess : IDisposable
 
 internal interface ISensorProcessFactory
 {
-    /// <summary>Starts a new SensorHost. Throws <see cref="FileNotFoundException"/> when the executable is missing.</summary>
-    ISensorProcess Start();
+    /// <summary>
+    /// Starts a new SensorHost taking frames every <paramref name="intervalMs"/> ms from the start (<c>--interval-ms</c>) and numbering its
+    /// frames with <paramref name="generation"/> (<c>--generation</c>). Throws <see cref="FileNotFoundException"/> when the executable is missing.
+    /// </summary>
+    ISensorProcess Start(int intervalMs, long generation);
 }
 
 /// <summary>Launches PCMieru.SensorHost.exe hidden, with its three standard streams redirected. Never through a shell and never elevated.</summary>
@@ -41,7 +51,7 @@ internal sealed class SystemSensorProcessFactory(string exePath) : ISensorProces
 
     public static string DefaultPath() => Path.Combine(AppContext.BaseDirectory, ExeName);
 
-    public ISensorProcess Start()
+    public ISensorProcess Start(int intervalMs, long generation)
     {
         if (!File.Exists(exePath))
         {
@@ -61,6 +71,10 @@ internal sealed class SystemSensorProcessFactory(string exePath) : ISensorProces
             StandardErrorEncoding = utf8,
             WorkingDirectory = Path.GetDirectoryName(exePath) ?? AppContext.BaseDirectory,
         };
+        info.ArgumentList.Add("--interval-ms");
+        info.ArgumentList.Add(intervalMs.ToString(CultureInfo.InvariantCulture));
+        info.ArgumentList.Add("--generation");
+        info.ArgumentList.Add(generation.ToString(CultureInfo.InvariantCulture));
         var process = Process.Start(info) ?? throw new Win32Exception("the process did not start");
         return new SystemSensorProcess(process);
     }
@@ -74,6 +88,8 @@ internal sealed class SystemSensorProcess : ISensorProcess
     private readonly Process _process;
     private readonly Queue<string> _tail = new();
     private readonly object _tailGate = new();
+    private int _requestedMs;
+    private int _writing;
 
     public int? LivePid => HasExited ? null : _process.Id;
 
@@ -154,6 +170,40 @@ internal sealed class SystemSensorProcess : ISensorProcess
         }
     }
 
+    public void SetPeriod(int periodMs)
+    {
+        // Latest wins, and the pipe write happens on a pool thread: a caller (the UI thread releasing a recording lease, the watchdog)
+        // never waits on the child's stdin.
+        Volatile.Write(ref _requestedMs, periodMs);
+        if (Interlocked.Exchange(ref _writing, 1) == 0)
+        {
+            _ = Task.Run(DrainRequests);
+        }
+    }
+
+    private void DrainRequests()
+    {
+        do
+        {
+            var ms = Interlocked.Exchange(ref _requestedMs, 0);
+            if (ms != 0)
+            {
+                try
+                {
+                    _process.StandardInput.WriteLine(SensorCadence.Line(ms));
+                    _process.StandardInput.Flush();
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+                {
+                    // The child is gone or its input is closed: the watchdog notices that on its own.
+                }
+            }
+
+            Volatile.Write(ref _writing, 0);
+        }
+        while (Volatile.Read(ref _requestedMs) != 0 && Interlocked.Exchange(ref _writing, 1) == 0);
+    }
+
     public bool WaitForExit(int milliseconds)
     {
         try
@@ -190,10 +240,15 @@ internal static class SensorFrameParser
     /// <summary>A frame for a handful of GPUs is a few KB. Anything near this size is not a frame.</summary>
     public const int MaxLineChars = 256 * 1024;
 
-    public static bool TryParse(string line, out SensorFrame? frame, out string error)
+    public static bool TryParse(string line, out SensorFrame? frame, out string error) => TryParse(line, out frame, out error, out _);
+
+    /// <param name="incompatible">True when the line is a well-formed frame of ANOTHER schema version: a SensorHost that does not belong to
+    /// this app. Retrying cannot help, so the client reports it as a standing failure instead of restarting the child again and again.</param>
+    public static bool TryParse(string line, out SensorFrame? frame, out string error, out bool incompatible)
     {
         frame = null;
         error = string.Empty;
+        incompatible = false;
         if (line.Length > MaxLineChars)
         {
             error = "an output line was far longer than any reading";
@@ -212,6 +267,14 @@ internal static class SensorFrameParser
             if (parsed.SchemaVersion != SensorFrame.CurrentSchemaVersion)
             {
                 error = $"SensorHost speaks schema {parsed.SchemaVersion}, this app expects {SensorFrame.CurrentSchemaVersion}";
+                incompatible = true;
+                return false;
+            }
+
+            // Schema 2 frames always say which acquisition they are. A frame without them is not a schema 2 frame whatever it calls itself.
+            if (parsed.Sequence <= 0 || parsed.PeriodMs <= 0 || parsed.MonotonicUs <= 0)
+            {
+                error = "a SensorHost frame came without its sequence, period or capture time";
                 return false;
             }
 

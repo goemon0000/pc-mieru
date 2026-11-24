@@ -87,6 +87,9 @@ public sealed class PcMieruServices : IDisposable
     /// </summary>
     public SamplerLoop Sampler => _registry.Get<SamplerLoop>();
 
+    /// <summary>The recording side of <see cref="Sampler"/>: leases and the one-second samples (the same object).</summary>
+    public IRecordingSamples Recording => _registry.Get<IRecordingSamples>();
+
     public IProcessDetailsProvider ProcessDetails => _registry.Get<IProcessDetailsProvider>();
 
     public IProcessGroupSource ProcessGroups => _registry.Get<IProcessGroupSource>();

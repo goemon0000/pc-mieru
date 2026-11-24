@@ -154,6 +154,9 @@ internal sealed record GpuReading(
     string? ProcessDetail,
     Value<int> State)
 {
+    /// <summary>When the PDH collection behind the values finished (Stopwatch ticks); 0 when this reading holds no counter values.</summary>
+    public long AcquiredTicks { get; init; }
+
     public static GpuReading Off(IReadOnlyList<GpuInfo> gpus) =>
         new(gpus, new Dictionary<uint, double>(), false, GpuSampler.OffDetail, GpuSampler.ListState(gpus, ValueStatus.NotCollected, GpuSampler.OffDetail));
 }
@@ -179,6 +182,7 @@ internal sealed class GpuSampler : IDisposable
     private nint _engine;
     private nint _dedicated;
     private nint _shared;
+    private readonly GpuAdapterCatalog _catalog = new(GpuAdapters.Enumerate, static () => Environment.TickCount64);
     private IReadOnlyList<GpuAdapter>? _adapters;
     private long _lastCollect;
     private long _idleSince;
@@ -199,7 +203,7 @@ internal sealed class GpuSampler : IDisposable
         }
 
         _idleSince = 0;
-        _adapters ??= GpuAdapters.Enumerate();
+        _adapters = _catalog.Adapters;
         if (!EnsureQuery())
         {
             var detail = _unsupported ?? "GPU counters could not be opened";
@@ -233,6 +237,12 @@ internal sealed class GpuSampler : IDisposable
         _ = ReadInto(_shared, (n, v, s) => _aggregator.AddAdapterMemory(n, v, s, dedicated: false));
         _aggregator.Finish();
 
+        // A driver restart gives an adapter a new LUID: PDH reports it at once, DXGI has to be asked again (at most every 10 s, see the catalog).
+        if (_catalog.Observe(_aggregator.Adapters.Keys.ToArray()))
+        {
+            _adapters = _catalog.Adapters;
+        }
+
         if (!engineOk)
         {
             var unreadable = $"GPU Engine counter could not be read (PDH 0x{engineStatus:X8})";
@@ -242,14 +252,17 @@ internal sealed class GpuSampler : IDisposable
 
         _lastGpus = _primedGpus = Describe(_adapters, _aggregator, primed: true, null, ValueStatus.NotCollected);
         var note = _aggregator.Unrecognized > 0 ? $"{_aggregator.Unrecognized} GPU instance(s) in an unknown name format were ignored" : null;
-        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource));
+        return new GpuReading(_lastGpus, new Dictionary<uint, double>(_aggregator.ProcessBusiest), true, note, Value.Ok(_lastGpus.Count, EngineSource))
+        {
+            AcquiredTicks = _lastCollect,
+        };
     }
 
     public void Dispose() => CloseQuery();
 
     /// <summary>
-    /// One GpuInfo per adapter DXGI lists (minus software adapters) plus any adapter that only PDH knows and that has engine
-    /// activity. Pure so it can be tested with a hand-filled aggregator.
+    /// One GpuInfo per physical adapter DXGI lists (minus software adapters, virtual copies of a card, and a LUID listed twice) plus any adapter
+    /// that only PDH knows and that has engine activity. Pure so it can be tested with a hand-filled aggregator.
     /// </summary>
     internal static IReadOnlyList<GpuInfo> Describe(
         IReadOnlyList<GpuAdapter> adapters,
@@ -262,7 +275,9 @@ internal sealed class GpuSampler : IDisposable
         var seen = new HashSet<ulong>();
         foreach (var adapter in adapters)
         {
-            if (adapter.IsSoftware)
+            // A LUID is one adapter: a second entry under it (and a virtual copy of the card) would be a second row for the same card, with the same
+            // sensor reading printed on both, in every sample of a recording from the very first.
+            if (adapter.IsSoftware || adapter.IsAlias || seen.Contains(adapter.Luid))
             {
                 continue;
             }
@@ -410,6 +425,16 @@ internal sealed class GpuSampler : IDisposable
             ClockMhz = Value.Missing<double>(status, "SensorHost", detail),
         }).ToArray();
 
+    /// <summary>
+    /// <see cref="Failed"/> for a GPU stage that did not answer in time. The vendor values of that tick are stamped as a failed read (with the period that was
+    /// asked for and no frame), not left unstamped: an unstamped GPU is read as "SensorHost never started", which is only true before the first frame.
+    /// </summary>
+    internal static IReadOnlyList<GpuInfo> TimedOut(IReadOnlyList<GpuInfo> known, ValueStatus status, string detail, int periodMs)
+    {
+        var origin = SourceOrigin.Missing(SourceGap.ReadFailed, periodMs);
+        return Failed(known, status, detail).Select(g => g with { VendorOrigin = origin }).ToArray();
+    }
+
     private bool EnsureQuery()
     {
         if (_query is not null)
@@ -482,35 +507,61 @@ internal sealed class GpuSampler : IDisposable
     }
 }
 
-/// <summary>Adds the vendor-API sensors (temperature, power, fan, clock) onto GPU infos by adapter id, falling back to the name.</summary>
+/// <summary>
+/// Adds the vendor-API sensors (temperature, power, fan, clock) onto GPU infos by adapter id, falling back to the name for an adapter that no reading names by id.
+/// One-to-one: a reading belongs to one adapter, so two adapters of one model never both get the reading of one card.
+/// </summary>
 internal static class GpuSensorMerge
 {
-    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors)
+    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors) => Apply(gpus, sensors, null);
+
+    /// <param name="origin">Which SensorHost frame (and when, and at which period) <paramref name="sensors"/> is from. Every merged adapter keeps it as <see cref="GpuInfo.VendorOrigin"/>, so the recorder can tell where each vendor value came from after the merge.</param>
+    public static IReadOnlyList<GpuInfo> Apply(IReadOnlyList<GpuInfo> gpus, Value<IReadOnlyList<GpuSensorReading>> sensors, SourceOrigin? origin)
     {
         if (gpus.Count == 0)
         {
             return gpus;
         }
 
+        var matches = sensors.IsOk && sensors.Data is not null ? MatchAll(sensors.Data, gpus) : null;
         var result = new GpuInfo[gpus.Count];
         for (var i = 0; i < gpus.Count; i++)
         {
             var gpu = gpus[i];
-            if (!sensors.IsOk || sensors.Data is null)
+            if (matches is null)
             {
                 // The sensor client's own answer (Unsupported, Timeout, ...) is what the user should read.
                 var status = sensors.IsOk ? ValueStatus.Error : sensors.Status;
                 var detail = sensors.IsOk ? "the sensor client returned no data" : sensors.Detail;
                 Value<double> same() => Value.Missing<double>(status, sensors.Source, detail);
-                result[i] = gpu with { TemperatureC = same(), PowerWatts = same(), FanPercent = same(), ClockMhz = same(), TemperatureLimitC = same() };
+                result[i] = gpu with
+                {
+                    TemperatureC = same(),
+                    PowerWatts = same(),
+                    FanPercent = same(),
+                    ClockMhz = same(),
+                    TemperatureLimitC = same(),
+                    LimitReasons = Value.Missing<ulong>(status, sensors.Source, detail),
+                    VendorOrigin = origin,
+                };
                 continue;
             }
 
-            var match = Find(sensors.Data, gpu);
+            var match = matches[i];
             if (match is null)
             {
-                Value<double> none() => Value.Unsupported<double>(sensors.Source, "no sensor reading for this adapter");
-                result[i] = gpu with { TemperatureC = none(), PowerWatts = none(), FanPercent = none(), ClockMhz = none(), TemperatureLimitC = none() };
+                const string why = "no sensor reading for this adapter";
+                Value<double> none() => Value.Unsupported<double>(sensors.Source, why);
+                result[i] = gpu with
+                {
+                    TemperatureC = none(),
+                    PowerWatts = none(),
+                    FanPercent = none(),
+                    ClockMhz = none(),
+                    TemperatureLimitC = none(),
+                    LimitReasons = Value.Unsupported<ulong>(sensors.Source, why),
+                    VendorOrigin = origin,
+                };
                 continue;
             }
 
@@ -521,30 +572,56 @@ internal static class GpuSensorMerge
                 FanPercent = match.FanPercent,
                 ClockMhz = match.ClockMhz,
                 TemperatureLimitC = match.Extras?.TemperatureLimitC ?? Value.NotCollected<double>("none"),
+                LimitReasons = match.Extras?.ClocksEventReasons ?? Value.NotCollected<ulong>("none"),
+                VendorOrigin = origin,
             };
         }
 
         return result;
     }
 
-    private static GpuSensorReading? Find(IReadOnlyList<GpuSensorReading> readings, GpuInfo gpu)
+    /// <summary>
+    /// Which reading belongs to which adapter, each reading to at most one. By id first (the LUID is what the reading was made for); then, only for an
+    /// adapter no reading named by id, by name among the readings still free. An adapter left with nothing says "no sensor reading".
+    /// The name fallback has a limit with identical cards: two adapters with the same name and no reading named by id are paired with the free readings in
+    /// list order, so their readings can be swapped. It never drops one (each reading goes to at most one adapter and an adapter is never left without
+    /// one while a free reading of its name exists), and the id match above is what makes the pairing right in the normal case.
+    /// </summary>
+    internal static GpuSensorReading?[] MatchAll(IReadOnlyList<GpuSensorReading> readings, IReadOnlyList<GpuInfo> gpus)
     {
-        foreach (var r in readings)
+        var match = new GpuSensorReading?[gpus.Count];
+        var used = new bool[readings.Count];
+        for (var i = 0; i < gpus.Count; i++)
         {
-            if (string.Equals(r.Id, gpu.Id, StringComparison.OrdinalIgnoreCase))
+            for (var j = 0; j < readings.Count; j++)
             {
-                return r;
+                if (!used[j] && string.Equals(readings[j].Id, gpus[i].Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    match[i] = readings[j];
+                    used[j] = true;
+                    break;
+                }
             }
         }
 
-        foreach (var r in readings)
+        for (var i = 0; i < gpus.Count; i++)
         {
-            if (string.Equals(r.Name.Trim(), gpu.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+            if (match[i] is not null)
             {
-                return r;
+                continue;
+            }
+
+            for (var j = 0; j < readings.Count; j++)
+            {
+                if (!used[j] && string.Equals(readings[j].Name.Trim(), gpus[i].Name.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    match[i] = readings[j];
+                    used[j] = true;
+                    break;
+                }
             }
         }
 
-        return null;
+        return match;
     }
 }
