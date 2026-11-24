@@ -841,17 +841,52 @@ public class BuildCodeUiTests
         Assert.Equal(BuildCodeDialog.CodeLines, dialog.CodeLinesShown);
         Assert.True(fitted <= available, $"{fitted} px in {available} px");
 
-        // No room at all: the list and the box stop at their least, and the window is as low as it can be.
-        var least = dialog.FitToHeight(0);
+        // Room for exactly the usual floors (three rows, three lines); a pixel less goes on below them, again the list first.
+        var floor = dialog.FitToHeight(full - (7 * rowHeight) - (2 * dialog.CodeLineHeight));
         Assert.Equal(3, dialog.PartRowsShown);
         Assert.Equal(3, dialog.CodeLinesShown);
-        Assert.True(least < full);
+        var belowFloor = dialog.FitToHeight(floor - 1);
+        Assert.Equal(2, dialog.PartRowsShown);
+        Assert.Equal(3, dialog.CodeLinesShown);
+        Assert.True(belowFloor <= floor - 1, $"{belowFloor} px in {floor - 1} px");
+
+        // No room at all: the list and the box stop at their least (one row, two lines), and the window is as low as it can be.
+        var least = dialog.FitToHeight(0);
+        Assert.Equal(1, dialog.PartRowsShown);
+        Assert.Equal(2, dialog.CodeLinesShown);
+        Assert.True(least < floor);
         Assert.Equal(dialog.CodeBoxClientHeight, dialog.CodeBox.ClientSize.Height);
 
         // A roomier screen: everything comes back.
         Assert.Equal(full, dialog.FitToHeight(int.MaxValue));
         Assert.Equal(10, dialog.PartRowsShown);
         Assert.Equal(BuildCodeDialog.CodeLines, dialog.CodeLinesShown);
+    }
+
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    public async Task A_work_area_lower_than_the_usual_floors_is_met_by_the_list_and_the_box_and_the_whole_row_still_ends_the_list(Language language)
+    {
+        using var rig = new Rig(language);
+        using var dialog = new BuildCodeDialog(rig.Theme, await TrimmedResult(), _ => true);
+        var grid = dialog.PartsList;
+        var full = dialog.FitToHeight(int.MaxValue);
+        var least = dialog.FitToHeight(0);
+        Assert.True(least < full);
+
+        // Every work area from the window's least to its full height (what 200% on a 1080-line screen leaves is near the low end): the window is
+        // never higher than the area, and the list is a whole number of rows high under its header, the box a whole number of lines.
+        var rowHeight = grid.MeasuredRowHeight;
+        for (var area = least; area <= full + rowHeight; area += (rowHeight / 2) + 1)
+        {
+            var height = dialog.FitToHeight(area);
+            Assert.True(height <= area, $"{height} px in a work area of {area} px");
+            Assert.InRange(dialog.PartRowsShown, 1, 10);
+            Assert.Equal(grid.HeightForRows(dialog.PartRowsShown), grid.Height);
+            Assert.Equal(dialog.CodeBoxClientHeight, dialog.CodeBox.ClientSize.Height);
+            Assert.Equal(height, dialog.PreferredHeight);
+        }
     }
 
     [Theory]
