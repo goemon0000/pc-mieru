@@ -1,5 +1,7 @@
 using PcMieru.Update.Bundle;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Transaction;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui;
 
@@ -35,13 +37,23 @@ internal static class UpdateComposition
 
         var service = new DeferredUpdateService(
             () => InstallId.StateFolder(localFolder, programFile) is { } folder
-                ? new UpdateService(new UpdateServiceOptions { Running = running, StateFolder = folder })
+                ? new UpdateService(OptionsFor(running, folder, InstallGate.InstallFolderOf(programFile)))
                 : GateIsThere(programFile)
                     ? new UnavailableUpdateService(UpdateRefusal.StateUnavailable, "the gate file of this install has no id")
                     : new UnavailableUpdateService(UpdateRefusal.GateMissing, "there is no gate file beside this program"),
             () => settings.UpdateMode);
         return new UpdateWiring(new UpdateController(service, settings, timers, () => PlacementOf(programFile), running), null);
     }
+
+    internal static UpdateServiceOptions OptionsFor(AppVersion running, string state, string install) => new()
+    {
+        Running = running,
+        StateFolder = state,
+        InstallFolder = install,
+        BlockedTags = BlockedTags.Read(new TxPaths(install).Blocked)
+            .Select(blocked => AppVersion.TryParse(blocked.Version, out var version) ? version.Tag : null)
+            .OfType<string>().ToArray(),
+    };
 
     /// <summary>The gate file is beside the program (it can still fail to open, which is a state problem and not a missing file).</summary>
     private static bool GateIsThere(string programFile) => InstallId.GateFileOf(programFile) is { } gate && File.Exists(gate);
@@ -66,6 +78,9 @@ internal sealed class DeferredUpdateService(Func<IUpdateService> make, Func<Upda
 
     public UpdateStatus ReadStatus() =>
         !_inner.IsValueCreated && mode is not null && !UpdateModes.MayUseNetwork(mode()) ? UpdateStatus.Empty : _inner.Value.ReadStatus();
+
+    public Task<UpdateStageResult> StageAsync(UpdateMode mode, UpdateCheck candidate, CancellationToken ct) =>
+        mode == UpdateMode.Automatic ? _inner.Value.StageAsync(mode, candidate, ct) : Task.FromResult(UpdateStageResult.NotAttempted("automatic updates are off"));
 }
 
 /// <summary>A service that cannot check (this PC cannot say who it is, or what version it is): it refuses with the reason and asks nobody.</summary>
@@ -87,6 +102,7 @@ internal sealed class FakeUpdateService(AppVersion running, TimeProvider? clock 
     private readonly object _gate = new();
     private UpdateStatus _status = UpdateStatus.Empty;
     private int _calls;
+    private int _stageCalls;
 
     /// <summary>What a check answers: gets the mode and whether it was asked for by hand. Default: nothing newer.</summary>
     public Func<UpdateMode, bool, UpdateCheck> Answer { get; set; } = static (_, _) => UpdateCheck.NoCandidate(fetched: true);
@@ -109,6 +125,18 @@ internal sealed class FakeUpdateService(AppVersion running, TimeProvider? clock 
         var result = Answer(mode, manual);
         Remember(result);
         return Task.FromResult(result);
+    }
+
+    /// <summary>What a stage answers (a test sets it; the sample service of <c>--fakes</c> never stages). Default: nothing was done.</summary>
+    public Func<UpdateStageResult>? StageAnswer { get; set; }
+
+    /// <summary>How many times the controller asked to stage (it must not in Notify, Ask and Off).</summary>
+    public int StageCalls => Volatile.Read(ref _stageCalls);
+
+    public Task<UpdateStageResult> StageAsync(UpdateMode mode, UpdateCheck candidate, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _stageCalls);
+        return Task.FromResult(StageAnswer?.Invoke() ?? UpdateStageResult.NotAttempted("the fake service does not stage"));
     }
 
     public UpdateStatus ReadStatus()

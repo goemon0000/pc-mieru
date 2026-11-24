@@ -40,7 +40,7 @@ public static class CollectionModule
         var source = new WindowsSnapshotSource(
             options.Clock,
             settings,
-            () => registry.TryGet<ISensorClient>(out var sensors) ? sensors : null,
+            () => !options.InProcessOnly && registry.TryGet<ISensorClient>(out var sensors) ? sensors : null,
             verifier,
             () => registry.TryGet<INetMeterControl>(out var control) ? control : null);
         var details = new ProcessMetadataProvider(

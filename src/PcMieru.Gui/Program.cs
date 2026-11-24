@@ -1,3 +1,6 @@
+using PcMieru.Update.Launch;
+using PcMieru.Wire.Gate;
+
 namespace PcMieru.Gui;
 
 internal static class Program
@@ -5,6 +8,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (Array.IndexOf(args, VerifyAdmission.Option) >= 0)
+        {
+            return VerifyUpdate.Run(args);
+        }
+
         var startedAt = DateTime.Now;
         if (!GuiArgs.TryParse(args, out var options, out var problem))
         {
@@ -75,7 +83,9 @@ internal static class Program
 
         using var services = PcMieruServices.Create(options.CoreOptions);
         using var pump = new SnapshotPump(services, settings.IntervalMs);
-        var context = new GuiContext(services, pump, theme, settings, measure: marks);
+        var readResult = options.MeasureOutput is null && options.SmokeOutput is null && !options.ForceFakes;
+        var context = new GuiContext(services, pump, theme, settings, measure: marks, lastUpdate: readResult
+            ? () => UpdateResultNote.Read(InstallGate.InstallFolderOf(Environment.ProcessPath!)) : null);
         using var form = new MainForm(context);
 
         if (options.StartPage is { } page && !form.ShowPage(page))
@@ -92,8 +102,6 @@ internal static class Program
         // The update check starts only in a real run, once the window is up: never in a smoke run (it drives the fake service itself), never in a
         // measurement and never under --fakes (fake data must not show the first-run choice nor store an answer; settings are in memory there, see GuiSettings.ForRun).
         // With the mode still "not chosen" the first-run choice comes first; nothing is asked of the network before 「決定」 saved it.
-        // STEP 5 (the install step): its verification-only start, which looks at the real folder without installing, is a run like these and must be excluded
-        // right here too (and in GuiSettings.ForRun), or it would show the dialog and write the owner's gui.ini.
         if (options.MeasureOutput is null && !options.ForceFakes)
         {
             form.Shown += (_, _) => form.BeginInvoke(form.StartUpdates);

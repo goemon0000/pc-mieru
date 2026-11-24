@@ -1,0 +1,132 @@
+using System.Runtime.InteropServices;
+using PcMieru.Update.Feed;
+using PcMieru.Update.Launch;
+
+namespace PcMieru.Gui;
+
+internal enum RecordingActivity { Idle, Preparing, Recording, Stopping }
+
+internal readonly record struct UpdateIdleFacts(
+    uint? LastInput, bool Dialog, bool Menu, bool Drag, bool Check, RecordingActivity Recording, bool PendingUac, bool Elevated);
+
+internal enum GateHolders { Clear, Pcmi, Other, Unknown, ReadOnly }
+
+internal readonly record struct UpdateDeferral(GateHolders Holders, ApplyRefusal? Refusal = null)
+{
+    public string Text => Refusal is { } refusal
+        ? Strings.Current == Language.Ja ? ApplyAnswer.Ja(refusal) : ApplyAnswer.En(refusal)
+        : Strings.Get("gui.update.defer." + Holders.ToString().ToLowerInvariant());
+}
+
+/// <summary>Checks the gate on a worker, then checks the live facts again on the window's thread before handing over.</summary>
+internal sealed class UpdateHandOff(
+    Func<(UpdateMode Mode, StagedUpdate? Stage)> candidate,
+    Func<UpdateIdleFacts> facts,
+    Func<GateHolders> holders,
+    Func<StagedUpdate, ApplyHandOffResult> handOff,
+    Action<UpdateDeferral?> defer,
+    Action close,
+    Func<uint>? tick = null)
+{
+    private bool _trying;
+
+    public async Task TryAsync()
+    {
+        if (_trying)
+        {
+            return;
+        }
+
+        var (mode, staged) = candidate();
+        if (mode != UpdateMode.Automatic || staged is null)
+        {
+            defer(null);
+            return;
+        }
+
+        if (!Idle())
+        {
+            return;
+        }
+
+        _trying = true;
+        try
+        {
+            var held = await Task.Run(holders).ConfigureAwait(true);
+            if (candidate() != (mode, staged) || !Idle())
+            {
+                return;
+            }
+
+            if (held != GateHolders.Clear)
+            {
+                defer(new UpdateDeferral(held));
+                return;
+            }
+
+            // Keep the UI sequence together: after the runner accepts, it is already waiting for this process to exit.
+            var reply = handOff(staged);
+            if (reply.Accepted)
+            {
+                close();
+            }
+            else
+            {
+                defer(new UpdateDeferral(GateHolders.Clear, reply.Refusal));
+            }
+        }
+        finally
+        {
+            _trying = false;
+        }
+    }
+
+    private bool Idle()
+    {
+        var state = facts();
+        return state.LastInput is { } last && unchecked((tick?.Invoke() ?? (uint)Environment.TickCount) - last) >= 60_000
+            && !state.Dialog && !state.Menu && !state.Drag && !state.Check
+            && state.Recording == RecordingActivity.Idle && !state.PendingUac && !state.Elevated;
+    }
+
+    public static UpdateIdleFacts ReadFacts(Form form, bool menu, bool check, RecordingActivity recording, bool pendingUac, bool elevated)
+    {
+        var input = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };
+        var gui = new GuiThreadInfo { Size = (uint)Marshal.SizeOf<GuiThreadInfo>() };
+        var threadKnown = GetGUIThreadInfo(GetCurrentThreadId(), ref gui);
+        return new UpdateIdleFacts(
+            threadKnown && GetLastInputInfo(ref input) ? input.Tick : null,
+            form.IsDisposed || !IsWindowEnabled(form.Handle) || Application.OpenForms.Cast<Form>().Any(window => window.Modal),
+            menu || (gui.Flags & 0x1C) != 0, // menu mode, system menu, popup menu
+            gui.Capture != 0 || (gui.Flags & 0x02) != 0, // mouse capture or a move/resize
+            check, recording, pendingUac, elevated);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LastInputInfo
+    {
+        public uint Size;
+        public uint Tick;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo
+    {
+        public uint Size;
+        public uint Flags;
+        public nint Active, Focus, Capture, MenuOwner, MoveSize, Caret;
+        public Rectangle CaretRect;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LastInputInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(nint window);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+}

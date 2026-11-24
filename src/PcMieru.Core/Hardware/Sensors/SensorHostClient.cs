@@ -61,6 +61,17 @@ public sealed class SensorHostClient : ISensorClient
     {
     }
 
+    internal int? LivePid
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _process?.LivePid;
+            }
+        }
+    }
+
     internal SensorHostClient(ISensorProcessFactory factory, SensorHostOptions options, Func<long>? nowMs = null)
     {
         _factory = factory;

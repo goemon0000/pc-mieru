@@ -30,6 +30,7 @@ internal sealed partial class SettingsPage
     private readonly Label _updateCandidate = new() { AutoSize = true, Name = "settingsUpdateCandidate" };
     private readonly Label _updateStatusLabel = new() { AutoSize = true };
     private readonly ToneLabel _updateStatus = new() { AutoSize = true, Name = "settingsUpdateStatus" };
+    private readonly ToneLabel _updateResult = new() { AutoSize = true, Name = "settingsUpdateResult", Visible = false };
     private readonly Button _updateCheckNow = new() { AutoSize = true, Name = "settingsUpdateCheckNow" };
     private readonly Button _updateNotes = new() { AutoSize = true, Name = "settingsUpdateNotes" };
     private readonly ToneLabel _updateCheckNowReason = new() { AutoSize = true, Name = "settingsUpdateCheckNowReason" };
@@ -87,6 +88,8 @@ internal sealed partial class SettingsPage
         AddUpdateRow(grid, _updateCandidateLabel, _updateCandidate, row + 5);
         _updateStatus.MaximumSize = new Size(Px(520), 0);
         AddUpdateRow(grid, _updateStatusLabel, _updateStatus, row + 6);
+        _updateResult.MaximumSize = new Size(Px(520), 0);
+        grid.Controls.Add(_updateResult, 1, row + 7);
 
         var buttons = new FlowLayoutPanel
         {
@@ -120,13 +123,13 @@ internal sealed partial class SettingsPage
             buttons.Controls.Add(column);
         }
 
-        grid.Controls.Add(buttons, 0, row + 7);
+        grid.Controls.Add(buttons, 0, row + 8);
         grid.SetColumnSpan(buttons, 2);
 
         _updateMode.TabIndex = 8;
         _updateCheckNow.TabIndex = 9;
         _updateNotes.TabIndex = 10;
-        return row + 8;
+        return row + 9;
     }
 
     /// <summary>The rows of this section are closer together than the ones above: eight more rows must still fit a normal window.</summary>
@@ -227,8 +230,16 @@ internal sealed partial class SettingsPage
         }
 
         var line = UpdateText.Describe(updates.Mode, updates.Allowed, updates.Checking, updates.Last, status, updates.Running, now);
-        _updateStatus.Text = line.Text;
-        _updateStatus.SetTone(line.Tone);
+        _updateStatus.Text = updates.Deferral?.Text ?? (updates.StageRefusal is { } refusal
+            ? Strings.Format("gui.update.stage.failed", Fmt.Dict(("reason", UpdateText.RefusalText(refusal))))
+            : line.Text);
+        _updateStatus.SetTone(updates.StageRefusal is not null ? CellTone.Warning : line.Tone);
+        var result = Context.LastUpdate.Value;
+        ShowReason(_updateResult, result?.Text ?? string.Empty);
+        if (result is not null && Context.Settings.GetValue(result.Key) != result.Stamp)
+        {
+            Context.Settings.SetValue(result.Key, result.Stamp);
+        }
 
         // Ask and Off never ask the network, so the button that would is off; so is it during a wait GitHub asked for and while a check runs. Each off button says why.
         var checkReason = UpdateText.CheckNowReason(updates.Mode, updates.Allowed, updates.Checking, updates.Last, status, now);

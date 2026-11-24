@@ -2,6 +2,7 @@ using PcMieru.Core.Hardware;
 using PcMieru.Core.Management;
 using PcMieru.Core.Reporting;
 using PcMieru.Core.Collection;
+using PcMieru.Core.Hardware.Sensors;
 
 namespace PcMieru.Core;
 
@@ -19,6 +20,9 @@ public sealed record PcMieruOptions
     /// stays in memory. Only the GUI's <c>--measure</c> run sets it, so a measurement neither depends on nor changes what the owner has saved.
     /// </summary>
     public bool NoStateFiles { get; init; }
+
+    /// <summary>The update verification window samples in this process while the runner holds the install gate.</summary>
+    public bool InProcessOnly { get; init; }
 
     /// <summary>Clock for Fakes and for anything time-stamped in tests. Real code uses it too instead of DateTime.UtcNow.</summary>
     public Func<DateTime> Clock { get; init; } = static () => DateTime.UtcNow;
@@ -111,6 +115,26 @@ public sealed class PcMieruServices : IDisposable
     public ISessionProvider Sessions => _registry.Get<ISessionProvider>();
 
     public IHelperClient Helper => _registry.Get<IHelperClient>();
+
+    /// <summary>A privileged Helper operation may still be waiting on the elevation prompt.</summary>
+    public bool HelperBusy => Helper is HelperClient { Running: true };
+
+    /// <summary>The install gate users owned by this instance, identified by their live process handles.</summary>
+    public HashSet<int> OwnedChildPids()
+    {
+        HashSet<int> ids = Helper is HelperClient helper ? [.. helper.LivePids()] : [];
+        if (Sensors is SensorHostClient { LivePid: { } sensor })
+        {
+            ids.Add(sensor);
+        }
+
+        if (NetMeter is NetMeterControl { LivePid: { } meter })
+        {
+            ids.Add(meter);
+        }
+
+        return ids;
+    }
 
     public ITaskLauncher Tasks => _registry.Get<ITaskLauncher>();
 

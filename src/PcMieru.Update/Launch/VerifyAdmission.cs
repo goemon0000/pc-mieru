@@ -20,6 +20,9 @@ public static class VerifyExit
 
     /// <summary>The journal on disk is not a VerifyPending of the same transaction.</summary>
     public const int NotWaitingForVerification = 67;
+
+    /// <summary>The window closed before the runner finished the check.</summary>
+    public const int Interrupted = 68;
 }
 
 /// <summary>What <see cref="VerifyAdmission.Admit"/> let in: the gate the swapper handed down (held for the whole run), the pipe, and the transaction id.</summary>
@@ -167,6 +170,9 @@ public sealed class VerifySession : IDisposable
     /// <summary>Starts answering. Called once the window exists (a ping that comes earlier waits in the pipe).</summary>
     public void Start() => _reader.Start();
 
+    /// <summary>Read on the UI thread after the message loop exits.</summary>
+    public bool Completed { get; private set; }
+
     /// <summary>Tells the runner the window is shown and painted. Called from the UI thread, after the first paint.</summary>
     public void ReportDrawn() => _channel.Send(VerifyProtocol.Drawn);
 
@@ -193,7 +199,11 @@ public sealed class VerifySession : IDisposable
             }
             else if (line == VerifyProtocol.Done)
             {
-                _postToUi(_close);
+                _postToUi(() =>
+                {
+                    Completed = true;
+                    _close();
+                });
                 return;
             }
         }

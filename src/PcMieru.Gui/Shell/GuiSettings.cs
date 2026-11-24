@@ -136,8 +136,8 @@ internal sealed class GuiSettings
     /// <summary>
     /// The settings of this run. A normal start reads the user's file (and saves to it). A smoke run, a <c>--measure</c> run and a run with <c>--fakes</c> (fake
     /// data for a trial) get the defaults in memory: nothing is read from <paramref name="path"/>, and since the store has no file <see cref="Save"/> writes
-    /// nothing, on close or ever. A measurement or a trial therefore neither depends on what the owner chose nor changes it. (Step 5's verification-only start
-    /// of the installer must be listed here as well: it is not the owner's session.)
+    /// nothing, on close or ever. A measurement or a trial therefore neither depends on what the owner chose nor changes it. (The update's verification start,
+    /// <c>--verify-update</c>, is not the owner's session either: <see cref="VerifyUpdate"/> makes its own in-memory settings and never gets here.)
     /// </summary>
     internal static GuiSettings ForRun(GuiOptions options, string path) =>
         options.SmokeOutput is null && options.MeasureOutput is null && !options.ForceFakes ? Load(path) : new GuiSettings();

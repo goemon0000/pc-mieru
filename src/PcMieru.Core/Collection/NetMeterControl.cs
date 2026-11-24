@@ -45,6 +45,17 @@ internal sealed record NetMeterTimings(TimeSpan Connect, TimeSpan FirstRead, Tim
 /// </summary>
 public sealed class NetMeterControl : INetMeterControl, INetMeterReader, IDisposable
 {
+    internal int? LivePid
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _session?.Process is { HasExited: false } process ? (int)process.Id : null;
+            }
+        }
+    }
+
     /// <summary>The exe that sits next to the app.</summary>
     public const string ExeName = "PCMieru.NetMeter.exe";
 

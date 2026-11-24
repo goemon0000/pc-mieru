@@ -15,6 +15,17 @@ internal static class UpdateStrings
 {
     public static readonly StringEntry[] All =
     [
+        new("gui.update.defer.pcmi", "AI アプリが pcmi を使っているため、更新を待っています。", "Waiting to update because an AI app is using pcmi."),
+        new("gui.update.defer.other", "ほかの PCミエルが開いているため、更新を待っています。", "Waiting to update because another PC Mieru is open."),
+        new("gui.update.defer.unknown", "PCミエルを使っているアプリを確かめられなかったため、更新を待っています。", "Waiting to update because PC Mieru could not check which apps are using its files."),
+        new("gui.update.defer.readonly", "この配置には書き込めないため、更新を通知します。", "This installation cannot be written to, so PC Mieru will only notify you about updates."),
+        new("gui.update.result.committed", "{to} に更新しました。", "Updated to {to}."),
+        new("gui.update.result.blocked", "{to} は起動を確かめられなかったため、元の {from} に戻しました。この版は今後入れません。",
+            "{to} could not be started, so PC Mieru went back to {from}. This version will not be installed again."),
+        new("gui.update.result.retry", "{to} に更新できなかったため、元の {from} に戻しました。あとでもう一度試します。",
+            "{to} could not be installed, so PC Mieru went back to {from}. It will try again later."),
+        new("gui.update.stage.failed", "更新を準備できませんでした: {reason}。", "The update could not be prepared: {reason}."),
+
         // --- the four modes (one key per UpdateMode member: a test keeps the two in step) ---
         new("gui.update.mode.ask", "あとで選ぶ（確認しません）", "Choose later (no checks)"),
         new("gui.update.mode.automatic", "自動", "Automatic"),

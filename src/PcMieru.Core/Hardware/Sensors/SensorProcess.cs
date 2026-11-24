@@ -13,6 +13,8 @@ internal interface ISensorProcess : IDisposable
 
     bool HasExited { get; }
 
+    int? LivePid => null;
+
     int? ExitCode { get; }
 
     /// <summary>The last few lines the process wrote to its error output (for the reason shown when it fails).</summary>
@@ -72,6 +74,8 @@ internal sealed class SystemSensorProcess : ISensorProcess
     private readonly Process _process;
     private readonly Queue<string> _tail = new();
     private readonly object _tailGate = new();
+
+    public int? LivePid => HasExited ? null : _process.Id;
 
     public SystemSensorProcess(Process process)
     {

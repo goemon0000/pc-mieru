@@ -1,5 +1,8 @@
 using System.Globalization;
 using PcMieru.Update.Feed;
+using PcMieru.Update.Launch;
+using PcMieru.Update.Transaction;
+using PcMieru.Wire.Gate;
 
 namespace PcMieru.Gui;
 
@@ -26,6 +29,8 @@ internal sealed class MainForm : Form
     private int _current = -1;
     private bool _rebuildingNav;
     private bool _updatesStarted;
+    private System.Windows.Forms.Timer? _handOffTimer;
+    private Action? _syncHandOffTimer;
 
     /// <summary>
     /// The pause button and the interval box are the same height and centred in the bar. A docked combo box would stay at
@@ -44,6 +49,7 @@ internal sealed class MainForm : Form
     public MainForm(GuiContext context)
     {
         _context = context;
+        Enabled = !context.Verifying;
         _closeGuard = new CheckCloseGuard(
             context.Checks,
             () => Dialogs.Confirm(
@@ -262,7 +268,7 @@ internal sealed class MainForm : Form
         _context.Pump.SetPaused(_context.Settings.Paused);
         _context.Pump.Start();
         ShowPumpState();
-        if (_context.Settings.NetMeterAutostart)
+        if (!_context.Verifying && _context.Settings.NetMeterAutostart)
         {
             StartNetMeterAtLaunch();
         }
@@ -275,7 +281,7 @@ internal sealed class MainForm : Form
     /// </summary>
     internal void StartUpdates()
     {
-        if (IsDisposed || _updatesStarted)
+        if (IsDisposed || _updatesStarted || _context.Verifying)
         {
             return;
         }
@@ -287,7 +293,48 @@ internal sealed class MainForm : Form
         {
             UpdateChoiceDialog.Open(this, _context.Theme, updates);
         }
+
+        if (!IsDisposed && !_context.Services.Options.ForceFakes && Environment.ProcessPath is { } executable)
+        {
+            StartHandOff(executable);
+        }
     }
+
+    private void StartHandOff(string executable)
+    {
+        var install = InstallGate.InstallFolderOf(executable);
+        var gateFile = Path.Combine(install, GateFile.FileName);
+        var updates = _context.Updates;
+        var handOff = new UpdateHandOff(
+            () => !IsDisposed && !Disposing && updates.Allowed ? (updates.Mode, updates.Status().Staged) : (UpdateMode.Off, null),
+            () => UpdateHandOff.ReadFacts(this, HasOpenMenu(this), _context.Checks.IsBusy || updates.Checking
+                || PageById("diagnose") is DiagnosePage { IsRunning: true },
+                // The test recording (DESIGN-B §8) is not in the window yet: when it is, its preparing / recording / stopping states go here instead of Idle.
+                RecordingActivity.Idle, _context.PendingUac, ProcessElevation.IsElevated()),
+            () =>
+            {
+                if (!InstallPlacement.Check(install).CanSwap)
+                {
+                    return GateHolders.ReadOnly;
+                }
+
+                var holders = RestartManager.ReadHolders(gateFile);
+                var own = _context.Services.OwnedChildPids();
+                own.Add(Environment.ProcessId);
+                return RestartManager.Classify(holders, own);
+            },
+            stage => GuiHandOff.Run(install, stage), updates.SetDeferral, Close);
+
+        _handOffTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
+        _handOffTimer.Tick += async (_, _) => await handOff.TryAsync().ConfigureAwait(true);
+        _syncHandOffTimer = () => _handOffTimer.Enabled = updates.Allowed && updates.Mode == UpdateMode.Automatic;
+        updates.Changed += _syncHandOffTimer;
+        _syncHandOffTimer();
+    }
+
+    private static bool HasOpenMenu(Control control) =>
+        control.ContextMenuStrip is { Visible: true } || control is ComboBox { DroppedDown: true }
+        || control.Controls.Cast<Control>().Any(HasOpenMenu);
 
     /// <summary>
     /// The "start measuring when the app opens" setting: asks for administrator permission once, off the UI thread, so the
@@ -329,6 +376,12 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_context.Verifying)
+        {
+            base.OnFormClosing(e);
+            return;
+        }
+
         // A check is running (DESIGN-A §7): the first request is cancelled and asked about; on yes the stop and its save are awaited and the window is
         // closed again, and nothing below runs until then. Windows ending the session cannot be asked: the stop is requested and the close goes on.
         if (!_closeGuard.OnCloseRequested(e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
@@ -354,6 +407,8 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _context.Updates.Changed -= _syncHandOffTimer;
+        _handOffTimer?.Dispose();
         _context.Pump.Stop();
         _context.Updates.Dispose();
         _context.Checks.Dispose();

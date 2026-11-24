@@ -7,7 +7,7 @@ namespace PcMieru.Gui;
 /// bar say about it. Owned by <see cref="GuiContext"/>, like the check run: the page comes and goes while a check runs.
 ///
 /// **What runs depends on the mode, and in Ask and Off nothing does.** No timer is made, the service is never called, no HTTP client exists. Only Notify and
-/// Automatic start the timers (Automatic behaves like Notify in this step: nothing is downloaded, nothing is installed). A choice that could not be written
+/// Automatic start the timers. A choice that could not be written
 /// to gui.ini is Ask (<see cref="GuiSettings.TrySaveUpdateMode"/> leaves the mode unchanged), and a choice of "off" that could not be written still stops
 /// the network for the rest of this run.
 ///
@@ -74,6 +74,19 @@ internal sealed class UpdateController : IDisposable
     public bool Allowed => !_blocked && !_disposed && UpdateModes.MayUseNetwork(Mode);
 
     public bool Checking => _checking is not null;
+
+    internal UpdateDeferral? Deferral { get; private set; }
+
+    internal UpdateRefusal? StageRefusal { get; private set; }
+
+    internal void SetDeferral(UpdateDeferral? deferral)
+    {
+        if (Deferral != deferral)
+        {
+            Deferral = deferral;
+            Changed?.Invoke();
+        }
+    }
 
     /// <summary>The timers exist (Notify or Automatic, started). A test checks that Ask and Off never have them.</summary>
     public bool TimersRunning => _first is not null || _poll is not null;
@@ -219,6 +232,12 @@ internal sealed class UpdateController : IDisposable
     /// <summary>Makes the timers or drops them, as the mode says. True when the network is allowed.</summary>
     private bool Apply()
     {
+        if (Mode != UpdateMode.Automatic || !Allowed)
+        {
+            Deferral = null;
+            StageRefusal = null;
+        }
+
         if (!Allowed)
         {
             StopTimers();
@@ -282,12 +301,19 @@ internal sealed class UpdateController : IDisposable
         }
 
         UpdateCheck? result = null;
+        UpdateStageResult? stage = null;
         var cancelled = false;
         try
         {
             // Off the UI thread: the lock, state.json, the handler and the proxy lookup of the service all run on a worker. ConfigureAwait(true): back on the UI thread
             // (the caller's context) for what follows, which touches the controls.
             result = await Task.Run(() => _service.CheckAsync(mode, manual, source.Token), source.Token).ConfigureAwait(true);
+            if (mode == UpdateMode.Automatic && Allowed && Mode == mode && !source.IsCancellationRequested
+                && result.Kind == UpdateCheckKind.Candidate)
+            {
+                var candidate = result;
+                stage = await Task.Run(() => _service.StageAsync(mode, candidate, source.Token), source.Token).ConfigureAwait(true);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -316,6 +342,17 @@ internal sealed class UpdateController : IDisposable
         }
 
         var shown = manual;
+        if (stage is not null)
+        {
+            StageRefusal = stage.Kind == UpdateStageKind.Refused ? stage.Reason : null;
+            shown = true;
+        }
+        else if (result.Kind != UpdateCheckKind.Candidate && IsShown(result, manual))
+        {
+            // A check that judged something other than a candidate leaves nothing to stage: an earlier refusal to stage no longer applies.
+            StageRefusal = null;
+        }
+
         if (IsShown(result, manual))
         {
             // A check that really asked GitHub always changes what is shown; an answer that asked nobody (a wait still in force) only when it differs from the last.

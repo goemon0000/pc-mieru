@@ -11,13 +11,16 @@ internal sealed class GuiContext
     /// <param name="buildCode">The maker of the configuration code (PCB1). Null: the Windows one, or the sample one with <c>--fakes</c> (making either reads nothing). A test passes its own.</param>
     /// <param name="measure">The measurement marks of <c>--measure</c>. Null (every normal start): the process list watches nothing and nothing is written.</param>
     /// <param name="updates">The window's update check. Null: the real one, or the fake one with <c>--fakes</c> (making either reads nothing, starts no timer and makes no HTTP client, see <see cref="UpdateComposition"/>). A test passes its own.</param>
-    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null, UpdateController? updates = null)
+    public GuiContext(PcMieruServices services, SnapshotPump pump, ThemeService theme, GuiSettings settings, INetMeterControl? netMeter = null, CheckController? checks = null, IBuildCodeProvider? buildCode = null, MeasureMarks? measure = null, UpdateController? updates = null, bool verifying = false, Func<UpdateResultNote?>? lastUpdate = null)
     {
         Measure = measure;
         Services = services;
         Pump = pump;
         Theme = theme;
         Settings = settings;
+        Verifying = verifying;
+        LastUpdate = new Lazy<UpdateResultNote?>(() =>
+            lastUpdate?.Invoke() is { } result && settings.GetValue(result.Key) != result.Stamp ? result : null);
         NetMeter = netMeter ?? services.NetMeter;
         if (checks is null && services.Options.ForceFakes)
         {
@@ -49,6 +52,10 @@ internal sealed class GuiContext
     }
 
     public PcMieruServices Services { get; }
+
+    internal bool Verifying { get; }
+
+    internal Lazy<UpdateResultNote?> LastUpdate { get; }
 
     /// <summary>The marks of a <c>--measure</c> run; null in a normal start (DESIGN-A 10, <see cref="MeasureMarks"/>).</summary>
     public MeasureMarks? Measure { get; }
@@ -93,22 +100,25 @@ internal sealed class GuiContext
     /// <see cref="UpdateController.Candidate"/> says): it stays through a failed check that learned nothing about the release, and goes when the candidate is
     /// cleared by a check that did judge a release, or when the mode is Ask or Off.
     /// </summary>
-    internal string? UpdateNotice => _noticeVersion is { } version ? Strings.Format("gui.update.notice", Fmt.Dict(("version", version.ToString()))) : null;
+    internal string? UpdateNotice => Updates.Deferral?.Text ??
+        (_noticeVersion is { } version ? Strings.Format("gui.update.notice", Fmt.Dict(("version", version.ToString()))) : null);
 
     /// <summary>Raised when <see cref="UpdateNotice"/> appeared, went or names another version. (A language change is not one: the shell writes the notice again then.)</summary>
     internal event Action? UpdateNoticeChanged;
 
     private AppVersion? _noticeVersion;
+    private UpdateDeferral? _noticeDeferral;
 
     private void RefreshNotice()
     {
         var wanted = Updates.Candidate()?.Version;
-        if (wanted == _noticeVersion)
+        if (wanted == _noticeVersion && Updates.Deferral == _noticeDeferral)
         {
             return;
         }
 
         _noticeVersion = wanted;
+        _noticeDeferral = Updates.Deferral;
         UpdateNoticeChanged?.Invoke();
     }
 
@@ -219,7 +229,22 @@ internal sealed class GuiContext
     /// Starts the network meter. The call runs on a pool thread: it waits for the UAC prompt, and the window must keep
     /// painting meanwhile. The meter reports where it is through <see cref="INetMeterControl.StateChanged"/>.
     /// </summary>
-    public Task<NetMeterState> StartNetMeterAsync() => Task.Run(() => NetMeter.StartAsync());
+    private int _netMeterStarts;
+
+    internal bool PendingUac => _netMeterStarts != 0 || Services.HelperBusy;
+
+    public async Task<NetMeterState> StartNetMeterAsync()
+    {
+        Interlocked.Increment(ref _netMeterStarts);
+        try
+        {
+            return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _netMeterStarts);
+        }
+    }
 
     public Task StopNetMeterAsync() => Task.Run(NetMeter.Stop);
 

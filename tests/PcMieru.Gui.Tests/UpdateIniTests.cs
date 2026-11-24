@@ -299,12 +299,20 @@ public sealed class UpdateIniTests
     }
 
     [Fact]
-    public void A_run_on_fakes_does_not_start_the_update_check_that_would_show_the_dialog_and_the_start_says_step_5_must_be_excluded_too()
+    public void A_run_on_fakes_does_not_start_the_update_check_that_would_show_the_dialog_and_the_verification_start_never_reaches_it()
     {
         // Settings of a --fakes run are in memory (above); the window must not even ask for a choice in that run. The start is in Program.Main, which no test can call.
         var source = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
 
         Assert.Matches(@"if \(options\.MeasureOutput is null && !options\.ForceFakes\)\s*\{\s*form\.Shown \+= \(_, _\) => form\.BeginInvoke\(form\.StartUpdates\);", source);
-        Assert.Contains("STEP 5", source);
+
+        // The update's verification start (--verify-update) is not the owner's session: Main hands it over before it parses anything or reads gui.ini, and the window it makes has
+        // in-memory settings, no start gate and no update check (DESIGN-B 5; the start of the checks is in MainForm.StartUpdates, which the verification never schedules).
+        Assert.Matches(@"static int Main\(string\[\] args\)\s*\{\s*if \(Array\.IndexOf\(args, VerifyAdmission\.Option\) >= 0\)\s*\{\s*return VerifyUpdate\.Run\(args\);", source);
+        var verify = File.ReadAllText(Path.Combine(Harness.GuiSource, "Update", "VerifyUpdate.cs"));
+        Assert.Contains("new GuiSettings()", verify);
+        Assert.DoesNotContain("StartUpdates", verify);
+        Assert.DoesNotContain("GuiSettings.Load", verify);
+        Assert.DoesNotContain("StartGateScreen", verify);
     }
 }
