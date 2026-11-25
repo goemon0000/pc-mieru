@@ -21,7 +21,9 @@ internal static class CpuSocketMap
             var topology = CpuTopology.Read();
             return topology is not null && TryMap(topology, logicalCount, out var sockets, out _) ? sockets : null;
         }
-        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException)
+        // Sockets are optional: a topology that cannot be read or parsed means "total only", never a failed collection.
+        // The sampler caches this in a Lazy, so an escaping exception would be rethrown on every tick.
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return null;
         }

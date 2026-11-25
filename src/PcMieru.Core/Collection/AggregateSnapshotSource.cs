@@ -168,6 +168,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             {
                 TemperatureC = WindowsSnapshotSource.NoCpuTemperature,
                 PackagePowerWatts = pdh.PackageWatts,
+                Sockets = _cpu.Sockets,
             },
             memory,
             pdh.Disks,
