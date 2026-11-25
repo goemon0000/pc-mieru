@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using PcMieru.Core.Hardware.Collectors;
 
 namespace PcMieru.Core.Collection;
 
@@ -31,12 +32,21 @@ internal sealed class SystemCpuSampler
     private int _previousCount;
     private bool _hasBaseline;
 
+    private readonly Lazy<CpuSockets?> _sockets;
+
     public SystemCpuSampler()
     {
         LogicalProcessors = Math.Max(1, (int)Win32.GetActiveProcessorCount(Win32.AllProcessorGroups));
+        _sockets = new Lazy<CpuSockets?>(() => CpuSocketMap.ReadMachine(LogicalProcessors), LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public int LogicalProcessors { get; }
+
+    /// <summary>
+    /// Which entries of <see cref="CpuReading.PerLogical"/> belong to which package, read from Windows once on first use; null when the
+    /// mapping cannot be confirmed (see <see cref="CpuSocketMap"/>). A source puts it on <c>CpuInfo.Sockets</c>.
+    /// </summary>
+    public CpuSockets? Sockets => _sockets.Value;
 
     public void Reset() => _hasBaseline = false;
 

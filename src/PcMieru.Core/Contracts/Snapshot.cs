@@ -73,6 +73,14 @@ public sealed record CpuInfo(
     /// the reason when this PC's Windows has no such counters: never 0 W.
     /// </summary>
     public Value<double> PackagePowerWatts { get; init; } = Value.NotCollected<double>("none");
+
+    /// <summary>
+    /// Which entries of <see cref="PerLogicalPercent"/> belong to which CPU package, only when Core confirmed that mapping; null otherwise
+    /// (unknown, or not collected by the source). Public because the Parts Life board (another assembly) reads it; kept out of the JSON with an
+    /// attribute, like <see cref="GpuInfo.PciBus"/>, so the pcmi JSON, the recordings and the snapshot schema are exactly what they were without it.
+    /// </summary>
+    [JsonIgnore]
+    public CpuSockets? Sockets { get; init; }
 }
 
 public sealed record MemoryInfo(

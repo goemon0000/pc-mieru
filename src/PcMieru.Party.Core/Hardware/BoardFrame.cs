@@ -8,6 +8,13 @@ namespace PcMieru.Party.Hardware;
 /// <param name="PciBus">The PCI bus number the kernel gave the adapter; null when it has none or Core could not read it. Tells two cards of one model apart across boots (the LUID cannot).</param>
 public sealed record BoardGpu(string Id, string Name, double? Percent, long? VramUsedBytes, long? VramTotalBytes, uint? PciBus = null);
 
+/// <summary>
+/// One CPU package (socket) as the board reads it. Key on the board: cpu#i, i = the position in <see cref="BoardFrame.Sockets"/> (Windows' package order).
+/// </summary>
+/// <param name="Percent">Mean load of this socket's logical CPUs that gave a number (the whole-machine total when the machine has one socket), 0..100; null when none of them did, never 0.</param>
+/// <param name="LogicalProcessors">How many logical CPUs sit in this socket.</param>
+public sealed record BoardCpuSocket(double? Percent, int LogicalProcessors);
+
 /// <summary>Memory in use. Only built when the total is positive and the available number is inside it.</summary>
 /// <param name="Percent">Used over total, 0..100.</param>
 public sealed record BoardMemory(long UsedBytes, long TotalBytes, double Percent);
@@ -26,9 +33,11 @@ public sealed record BoardNet(double? SendBytesPerSec, double? ReceiveBytesPerSe
 /// A value that Core could not read is missing here too (null, or a null list), never 0. The rules layer depends on that: the old
 /// ExpRate adds experience even at zero load, so a missing value turned into 0 would still pay out.
 ///
-/// TODO (DESIGN-C 2.3, not in this unit): per-socket CPU load and logical-CPU counts (needs Core's processor-group to socket mapping from
-/// CpuTopology; until it is confirmed only the total is sent, never the total repeated for each socket), disk-type (NVMe, SSD, HDD) split
-/// and the fullest local volume.
+/// Per-socket CPU load (<see cref="Sockets"/>) is only sent when Core confirmed which logical CPUs sit in which package (<see cref="CpuInfo.Sockets"/>)
+/// and that map covers every logical CPU exactly once; otherwise <see cref="Sockets"/> is null, the caller shows the total only, and no socket
+/// earns experience from a total repeated for each of them.
+///
+/// TODO (DESIGN-C 2.3, not in this unit): disk-type (NVMe, SSD, HDD) split and the fullest local volume.
 /// </summary>
 /// <param name="LogicalProcessors">How many logical CPUs Core counted; 0 when it did not say.</param>
 /// <param name="CpuPercent">Total CPU load, 0..100; null while Core has no baseline or could not read it.</param>
@@ -57,6 +66,13 @@ public sealed record BoardFrame(
     /// </summary>
     public IReadOnlyList<BoardGpu>? AllGpus { get; init; }
 
+    /// <summary>
+    /// Per-socket CPU, in package order (the board keys cpu#0, cpu#1, ...). Null unless Core's package map is known AND covers every logical CPU
+    /// exactly once (no index out of range, none twice, none left out, no empty socket). A machine with one package gives one socket whose
+    /// percent is the total. Null means "show the total only", never "every socket has the total".
+    /// </summary>
+    public IReadOnlyList<BoardCpuSocket>? Sockets { get; init; }
+
     public static BoardFrame Project(Snapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -73,7 +89,77 @@ public sealed record BoardFrame(
             NetOf(system))
         {
             AllGpus = all,
+            Sockets = SocketsOf(system.Cpu),
         };
+    }
+
+    private static BoardCpuSocket[]? SocketsOf(CpuInfo cpu)
+    {
+        var map = cpu.Sockets?.LogicalIndexesBySocket;
+        var logical = cpu.LogicalProcessors;
+        if (map is null || map.Count == 0 || logical <= 0)
+        {
+            return null;
+        }
+
+        // The map must cover logical CPUs 0..logical-1 exactly once. Anything else (an index out of range, a CPU in two sockets, a CPU in none,
+        // an empty socket) means the mapping is not trustworthy, so no socket is sent.
+        var seen = new bool[logical];
+        var covered = 0;
+        foreach (var indexes in map)
+        {
+            if (indexes is null || indexes.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (var i in indexes)
+            {
+                if (i < 0 || i >= logical || seen[i])
+                {
+                    return null;
+                }
+
+                seen[i] = true;
+                covered++;
+            }
+        }
+
+        if (covered != logical)
+        {
+            return null;
+        }
+
+        // One package holds every CPU: its load is the total (Core weights the total by elapsed CPU time, and the per-logical list may be shorter).
+        if (map.Count == 1)
+        {
+            return [new BoardCpuSocket(Percent(cpu.TotalPercent), map[0].Count)];
+        }
+
+        var perLogical = cpu.PerLogicalPercent;
+        if (perLogical.Count != logical)
+        {
+            return null;
+        }
+
+        var sockets = new BoardCpuSocket[map.Count];
+        for (var s = 0; s < map.Count; s++)
+        {
+            double sum = 0;
+            var counted = 0;
+            foreach (var i in map[s])
+            {
+                if (Percent(perLogical[i]) is { } p)
+                {
+                    sum += p;
+                    counted++;
+                }
+            }
+
+            sockets[s] = new BoardCpuSocket(counted == 0 ? null : sum / counted, map[s].Count);
+        }
+
+        return sockets;
     }
 
     private static double? Percent(Value<double> value) =>

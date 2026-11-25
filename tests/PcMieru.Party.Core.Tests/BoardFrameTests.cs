@@ -325,4 +325,122 @@ public class BoardFrameTests
         Assert.Equal(frame.Gpus.Select(g => g.Id), frame.AllGpus.Take(6).Select(g => g.Id));
         Assert.Null(BoardFrame.Project(Snap(gpusState: Value.NotCollected<int>("test", "off"))).AllGpus);
     }
+
+    // ---- per-socket CPU (DESIGN-C 2.3) ----
+
+    private static CpuInfo SocketCpu(int[][]? sockets, Value<double>[] perLogical, Value<double>? total = null, int? logical = null) =>
+        new(logical ?? perLogical.Length, total ?? Ok(50), perLogical, Gone())
+        {
+            Sockets = sockets is null ? null : new CpuSockets([.. sockets.Select(static s => (IReadOnlyList<int>)s)]),
+        };
+
+    private static Value<double>[] Loads(params double?[] percents) =>
+        [.. percents.Select(static p => p is { } v ? Ok(v) : Gone())];
+
+    [Fact]
+    public void No_socket_map_means_no_sockets_and_the_total_is_not_repeated()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu(null, Loads(10, 20, 30, 40))));
+
+        Assert.Null(frame.Sockets);
+        Assert.Equal(50, frame.CpuPercent);
+        Assert.Null(BoardFrame.Project(Snap(Cpu(Ok(33)))).Sockets); // a source that never asked leaves it null
+    }
+
+    [Fact]
+    public void Two_sockets_are_the_mean_of_their_own_logical_cpus()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(10, 20, 60, 100))));
+
+        var sockets = frame.Sockets!;
+        Assert.Equal(2, sockets.Count);
+        Assert.Equal(new BoardCpuSocket(15, 2), sockets[0]);
+        Assert.Equal(new BoardCpuSocket(80, 2), sockets[1]);
+        Assert.Equal(50, frame.CpuPercent);
+    }
+
+    [Fact]
+    public void Index_lists_may_interleave()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0, 2], [1, 3]], Loads(0, 100, 20, 80))));
+
+        Assert.Equal(new[] { new BoardCpuSocket(10, 2), new BoardCpuSocket(90, 2) }, frame.Sockets!.ToArray());
+    }
+
+    [Fact]
+    public void A_cpu_without_a_number_is_left_out_of_the_mean_not_counted_as_zero()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(40, null, 10, 30))));
+
+        Assert.Equal(new[] { new BoardCpuSocket(40, 2), new BoardCpuSocket(20, 2) }, frame.Sockets!.ToArray());
+    }
+
+    [Fact]
+    public void A_socket_whose_cpus_all_lack_numbers_is_missing_never_zero()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(null, null, 10, 30))));
+
+        var sockets = frame.Sockets!;
+        Assert.Null(sockets[0].Percent);
+        Assert.Equal(2, sockets[0].LogicalProcessors);
+        Assert.Equal(20, sockets[1].Percent);
+
+        var noBaseline = BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(null, null, null, null), total: Gone())));
+        Assert.All(noBaseline.Sockets!, s => Assert.Null(s.Percent));
+        Assert.Null(noBaseline.CpuPercent);
+    }
+
+    [Fact]
+    public void One_package_is_one_socket_equal_to_the_total_even_when_per_logical_numbers_are_missing()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0, 1, 2, 3]], Loads(10, 20, 30, 40), total: Ok(27.5))));
+        var socket = Assert.Single(frame.Sockets!);
+        Assert.Equal(new BoardCpuSocket(27.5, 4), socket);
+
+        var fewValues = BoardFrame.Project(Snap(SocketCpu([[0, 1, 2, 3]], [], total: Ok(12), logical: 4)));
+        Assert.Equal(new BoardCpuSocket(12, 4), Assert.Single(fewValues.Sockets!));
+
+        var noTotal = BoardFrame.Project(Snap(SocketCpu([[0, 1, 2, 3]], Loads(null, null, null, null), total: Gone())));
+        Assert.Null(Assert.Single(noTotal.Sockets!).Percent);
+    }
+
+    [Fact]
+    public void A_map_that_does_not_cover_every_logical_cpu_gives_no_sockets()
+    {
+        var loads = Loads(10, 20, 30, 40);
+
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2]], loads))).Sockets);          // cpu 3 in no socket
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1]], loads))).Sockets);               // half the machine
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3, 4]], loads))).Sockets);   // an index that does not exist
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3, -1]], loads))).Sockets);
+    }
+
+    [Fact]
+    public void A_map_with_an_overlap_or_an_empty_socket_gives_no_sockets()
+    {
+        var loads = Loads(10, 20, 30, 40);
+
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1, 2], [2, 3]], loads))).Sockets);     // cpu 2 twice
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [1, 2], [3]], loads))).Sockets);   // cpu 1 twice
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1, 2, 3], []], loads))).Sockets);      // an empty socket
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 0], [1, 2, 3]], loads))).Sockets);     // twice inside one socket
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([], loads))).Sockets);                      // no sockets at all
+    }
+
+    [Fact]
+    public void A_per_logical_list_of_another_length_than_the_cpu_count_gives_no_sockets_for_several_packages()
+    {
+        // The map covers 4 cpus, but the snapshot's per-logical list holds only 2 numbers: which numbers belong to which socket is unclear.
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(10, 20), logical: 4))).Sockets);
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(10, 20, 30, 40), logical: 0))).Sockets);
+        Assert.Null(BoardFrame.Project(Snap(SocketCpu([[0, 1], [2, 3]], Loads(10, 20, 30, 40), logical: 8))).Sockets);
+    }
+
+    [Fact]
+    public void Socket_percentages_are_clamped_like_the_total()
+    {
+        var frame = BoardFrame.Project(Snap(SocketCpu([[0], [1]], Loads(130, -5))));
+
+        Assert.Equal(new[] { new BoardCpuSocket(100, 1), new BoardCpuSocket(0, 1) }, frame.Sockets!.ToArray());
+    }
 }
