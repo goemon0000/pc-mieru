@@ -165,6 +165,12 @@ internal sealed class GuiContext
     /// <summary>Raised after the network unit changed. Every page that writes a network rate shows it again at once.</summary>
     public event Action? NetworkUnitChanged;
 
+    /// <summary>
+    /// Tells the Parts Life window that the language changed (DESIGN-C 3 item 4): a message to its window, which reads gui.ini again. Set only by a real run; the smoke, the
+    /// measure run, the fakes and every test leave it null, so none of them ever messages a window of the machine.
+    /// </summary>
+    internal Action? SiblingLanguageNotifier { get; set; }
+
     public void SetLanguage(Language language)
     {
         if (Settings.Language == language && Strings.Current == language)
@@ -175,6 +181,7 @@ internal sealed class GuiContext
         Settings.Language = language;
         Strings.Current = language;
         Settings.Save();
+        SiblingLanguageNotifier?.Invoke();
         LanguageChanged?.Invoke();
     }
 

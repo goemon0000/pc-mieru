@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using PcMieru.Core.Siblings;
 using PcMieru.Party.Game;
 using PcMieru.Party.Hardware;
 using PcMieru.Party.I18n;
@@ -106,14 +108,18 @@ internal sealed partial class PartyWindow : Window
     /// 固定の並びにしていたため、GPU が2枚の機械でも GPU くんが1体しか立たなかった。
     /// </summary>
     private List<PartySlot> _slots = new();
+    private readonly Func<string?>? _readGuiLanguage;
+    private HwndSource? _hwndSource;
 
     /// <param name="language">この回の言語。--lang があればそれ、無ければ保存の言語、無ければ OS（Program が決める）。保存へは書き戻さない（切り替えボタンを押したときだけ書く）。</param>
     /// <param name="state">進み。smoke は <see cref="PartyState.Fresh"/>。</param>
     /// <param name="feed">数字の出どころ。</param>
     /// <param name="writer">保存の書き手。null なら一切保存しない。</param>
-    public PartyWindow(PartyLanguage language, PartyState state, IBoardFeed feed, PartySaveWriter? writer = null)
+    /// <param name="guiLanguage">gui.ini の language を読む手（"ja" / "en" / 読めなければ null）。PCMieru.LanguageChanged.v1 を受けたときだけ呼ぶ。null なら何もしない（smoke と試験は null: 実機の設定を読まない）。</param>
+    public PartyWindow(PartyLanguage language, PartyState state, IBoardFeed feed, PartySaveWriter? writer = null, Func<string?>? guiLanguage = null)
     {
         _state = state;
+        _readGuiLanguage = guiLanguage;
         _slotMap = new GpuSlotMap(state.GpuSlots);
         _feed = feed;
         _writer = writer;
@@ -161,6 +167,8 @@ internal sealed partial class PartyWindow : Window
             _sensorTimer.Stop();
             _autosaveTimer.Stop();
             _hoverTip.IsOpen = false;
+            _hwndSource?.RemoveHook(OnWindowMessage);
+            _hwndSource = null;
         };
         // 窓を動かしたり後ろに回ったりしたら、吹き出しは畳む。
         // Popup は常に最前面に出るので、置き去りにすると独りで浮いて残る
@@ -734,10 +742,66 @@ internal sealed partial class PartyWindow : Window
         return index < _slots.Count ? index : -1;
     }
 
-    /// <summary>「点検」の窓を開く。</summary>
-    private static void OpenChecks()
+    /// <summary>
+    /// 「点検」を開く（DESIGN-C 3 item 3）。同じ階層の PCMieru.exe の窓が開いていれば PCMieru.OpenChecks.v1 を送るだけ（前に出す許可つき）。無ければ
+    /// 同じフォルダの PCMieru.exe を --open-checks で起こす。見つからない・起こせないときは一言出す。
+    /// </summary>
+    private void OpenChecks()
     {
-        // step 4b: PCMieru.OpenChecks.v1
+        const string mainExe = "PCMieru.exe";
+        if (SiblingWindows.Notify(mainExe, MieruMessages.OpenChecks, allowForeground: true) > 0) return;
+
+        var path = System.IO.Path.Combine(AppContext.BaseDirectory, mainExe);
+        if (!System.IO.File.Exists(path))
+        {
+            ShowNotice(Strings.ChecksUnavailable);
+            return;
+        }
+
+        try
+        {
+            using var started = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path, "--open-checks")
+            {
+                UseShellExecute = false,
+                WorkingDirectory = AppContext.BaseDirectory,
+            });
+            if (started is null) ShowNotice(Strings.ChecksUnavailable);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or System.IO.IOException)
+        {
+            ShowNotice(Strings.ChecksUnavailable);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PCMieru.LanguageChanged.v1（DESIGN-C 3 item 4）: 受けたら gui.ini の language だけを読み直して追う
+    // -----------------------------------------------------------------------
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        _hwndSource?.AddHook(OnWindowMessage);
+    }
+
+    private nint OnWindowMessage(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        // wParam・lParam は見ない。送り主も確かめない: 受けてすることは「設定ファイルを読み直す」ただ一つ。
+        if (MieruMessages.ForParty((uint)msg) == MieruMessageAction.ReloadLanguage)
+        {
+            FollowGuiLanguage();
+            handled = true;
+        }
+
+        return 0;
+    }
+
+    /// <summary>gui.ini の language に合わせる。読めない・無い・今と同じなら何もしない。この回の見た目だけを変え、保存（_state.Lang）には書かない。</summary>
+    internal void FollowGuiLanguage()
+    {
+        var lang = _readGuiLanguage?.Invoke();
+        if (lang is not ("ja" or "en") || lang == Strings.Lang) return;
+        SetWindowLanguage(lang, persist: false);
     }
 
     private void ConfirmReset(string ask, Action apply, string? title = null)

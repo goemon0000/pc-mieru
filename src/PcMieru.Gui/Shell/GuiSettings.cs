@@ -92,8 +92,7 @@ internal sealed class GuiSettings
     /// </summary>
     internal event Action<UpdateMode>? UpdateModeAdopted;
 
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PCMieru", "gui.ini");
+    public static string DefaultPath => PcMieru.Core.Siblings.GuiIniFile.DefaultPath;
 
     public static int Snap(int intervalMs)
     {

@@ -90,6 +90,12 @@ internal static class Program
         var context = new GuiContext(services, pump, theme, settings, measure: marks, lastUpdate: readResult
             ? () => UpdateResultNote.Read(InstallGate.InstallFolderOf(Environment.ProcessPath!)) : null,
             recording: MeasureRecording.CreateHub(services, options.MeasureRecord));
+        if (readResult)
+        {
+            context.SiblingLanguageNotifier = static () => PcMieru.Core.Siblings.SiblingWindows.Notify(
+                PartyLauncher.ExeName, PcMieru.Core.Siblings.MieruMessages.LanguageChanged, allowForeground: false);
+        }
+
         using var form = new MainForm(context);
 
         // --measure-record (test-only, with --measure): one recording started without a click, into the folder the script gave (see MeasureRecordPlan).
@@ -198,6 +204,7 @@ internal static class GuiArgs
         var dpi = 0;
         TextSize? textSize = null;
         var netMeter = false;
+        var openChecks = false;
         string? measure = null;
         var measureRecord = new Dictionary<string, string>(StringComparer.Ordinal);
         problem = string.Empty;
@@ -245,6 +252,10 @@ internal static class GuiArgs
                         return false;
                     }
 
+                    break;
+                case "--open-checks":
+                    // What the Parts Life window starts this exe with when no main window is open (DESIGN-C 3 item 3): the same as --page checks.
+                    openChecks = true;
                     break;
                 case "--smoke":
                     smoke = Next();
@@ -330,6 +341,17 @@ internal static class GuiArgs
                     problem = "unknown argument: " + args[i];
                     return false;
             }
+        }
+
+        if (openChecks)
+        {
+            if (page is not null && !string.Equals(page, "checks", StringComparison.Ordinal))
+            {
+                problem = "--open-checks is --page checks and is not combined with another --page";
+                return false;
+            }
+
+            page = "checks";
         }
 
         if (measure is not null && (smoke is not null || page is not null))

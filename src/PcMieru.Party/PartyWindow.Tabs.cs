@@ -100,15 +100,18 @@ internal sealed partial class PartyWindow
         SaveState();
     }
 
-    private void ToggleLanguage()
+    private void ToggleLanguage() => SetWindowLanguage(Strings.Lang == "ja" ? "en" : "ja", persist: true);
+
+    /// <param name="persist">切り替えボタンだけ true（保存の Lang に書く）。--lang と、PCMieru の言語に追う外からの切り替えは false（この回の見た目だけで、保存には書かない）。</param>
+    private void SetWindowLanguage(string lang, bool persist)
     {
-        Strings.Lang = Strings.Lang == "ja" ? "en" : "ja";
-        _state.Lang = Strings.Lang;        // 押したときだけ書く（--lang は書き戻さない）
-        Title = PartyStrings.Title(Strings.Lang == "ja" ? PartyLanguage.Ja : PartyLanguage.En);
+        Strings.Lang = lang;
+        if (persist) _state.Lang = lang;
+        Title = PartyStrings.Title(lang == "ja" ? PartyLanguage.Ja : PartyLanguage.En);
         _slots = _frame is { } f ? PartyComposition.Build(f, _gpuFrame, Strings.Lang) : _slots;
         ApplyLanguage();
         _lastSignature = 0;
-        SaveState();
+        if (persist) SaveState();
     }
 
     private void SetLabels(Labels mode)

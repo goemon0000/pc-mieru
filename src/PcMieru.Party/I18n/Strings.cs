@@ -96,6 +96,7 @@ public static class Strings
     public static string Level    => T("Lv", "Lv");
     public static string Gear     => T("装備", "Gear");
 
+    public static string ChecksUnavailable => T("点検を開けませんでした（PCMieru.exe が同じフォルダにありません）", "Could not open the checks (PCMieru.exe is not in the same folder)");
     public static string SaveFailedTitle => T("保存できませんでした", "Could not save");
     public static string SaveFailedAsk(string reason) => T(
         $"進みを保存できませんでした。\n\n{reason}\n\n「はい」でもう一度保存します。「いいえ」は保存せずに閉じます（前回の保存からの進みは失われます）。",

@@ -481,10 +481,32 @@ internal sealed class MainForm : Form
     internal void ClickRecordingIndicator() =>
         typeof(Control).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(_recording, [EventArgs.Empty]);
 
+    /// <summary>
+    /// The one window message the Parts Life window may send (DESIGN-C 2.2): show the checks page, restore the window if it is minimised and bring it to the front. wParam and lParam are
+    /// not looked at and nothing else is done. True when the message was that one (the caller then does not pass it on).
+    /// </summary>
+    internal bool HandleSiblingMessage(uint message)
+    {
+        if (PcMieru.Core.Siblings.MieruMessages.ForMainWindow(message) != PcMieru.Core.Siblings.MieruMessageAction.ShowChecks)
+        {
+            return false;
+        }
+
+        ShowPage("checks");
+        PcMieru.Core.Siblings.SiblingWindows.RestoreIfMinimized(Handle);
+        Activate();
+        return true;
+    }
+
     protected override void WndProc(ref Message m)
     {
         // A plugged or removed device makes the hardware facts stale (B.md 6). Cheap: it only drops the provider's cache.
         _ = DeviceChange.Handle(m, _context.Services.Hardware);
+        if (HandleSiblingMessage((uint)m.Msg))
+        {
+            return;
+        }
+
         base.WndProc(ref m);
     }
 
