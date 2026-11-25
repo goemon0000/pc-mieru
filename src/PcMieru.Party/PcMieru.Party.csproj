@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PCMieru.Party.exe: the second window of the product, Parts Life (docs/unify/DESIGN-C.md 3). A WPF program of its own, so the WinForms main window never loads WPF.
+    Runs as the logged-in user and asks for nothing more (asInvoker). There is no App.xaml and no StartupUri on purpose: Program.Main is explicit, because the start gate
+    (DESIGN-B 4) and the single-resident mutex (DESIGN-C 3.2) must be passed before the first WPF object exists.
+    tests/PcMieru.PartyStub has the same AssemblyName (a test-only stand-in, never shipped); the two are never in one folder: each builds into its own bin\.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>PCMieru.Party</AssemblyName>
+    <RootNamespace>PcMieru.Party</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PcMieru.Wire\PcMieru.Wire.csproj" />
+    <ProjectReference Include="..\PcMieru.Party.Core\PcMieru.Party.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Dev builds: the start gate file beside the exe (see build/GateNextToExe.targets). -->
+  <Import Project="..\..\build\GateNextToExe.targets" />
+
+</Project>
