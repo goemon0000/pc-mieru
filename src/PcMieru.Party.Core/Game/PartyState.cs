@@ -207,7 +207,8 @@ public sealed class PartyState
     /// <summary>改名前の保存先。**消さずに引き継ぐ。**育てた分が消えたら台無しなので。</summary>
     private static string LegacyFilePath => Path.Combine(AppData, "PartsParty", "state.json");
 
-    private static readonly JsonSerializerOptions Opts = new()
+    /// <summary>保存の読み書きの設定。取り込み（Import/StateImport）が同じ読み方で検査するため internal。</summary>
+    internal static readonly JsonSerializerOptions Opts = new()
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
