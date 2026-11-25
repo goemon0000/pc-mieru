@@ -137,6 +137,7 @@ public sealed class AdventureEngine
         var measured = new HashSet<string>(StringComparer.Ordinal);
         foreach (var sl in slots)
         {
+            if (GpuSlotKeys.IsDisplayOnly(sl.Key)) continue;   // 席の無い GPU は絵だけ。装備も経験も持たない（保存に何も作らない）
             if (!seen.Add(sl.Key)) continue;
             list.Add(new Member(sl.Key, sl.CharacterId));
             if (sl.Measured) measured.Add(sl.Key);
@@ -211,6 +212,19 @@ public sealed class AdventureEngine
             if (m.Key.AsSpan().StartsWith(kind, StringComparison.Ordinal)) kindHere = true;
         }
         return kindHere;
+    }
+
+    /// <summary>
+    /// その鍵の装備をすべて持ち物へ戻し、装備の記録を消す（GPU の番号を空けるとき: 経験は消えるが、装備は捨てずに返す）。
+    /// 入りきらない分は <see cref="ReturnToBag"/> と同じく売れて <see cref="AdventureState.Loot"/> になる。記録が無ければ何もせず false。
+    /// </summary>
+    public bool ReturnGearOf(string key)
+    {
+        var s = S;
+        if (s.Equipped is not { } worn || !worn.TryGetValue(key, out var gear)) return false;
+        if (gear is not null) ReturnToBag(gear);
+        worn.Remove(key);
+        return true;
     }
 
     private void ReturnToBag(string[] gear)

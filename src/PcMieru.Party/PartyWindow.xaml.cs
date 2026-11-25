@@ -26,6 +26,13 @@ internal sealed partial class PartyWindow : Window
     private readonly PartyState _state;
     private readonly Director _director;
 
+    // GPU の番号（席）。窓が 1 つ持ち、標本ごとに ApplyTo で決める。_state の変更は全部 UI スレッド（SamplerFeed は Latest を出すだけ）
+    private readonly GpuSlotMap _slotMap;
+    private GpuSlotFrame _gpuFrame = new([], [], false);
+    /// <summary>GPU の一覧が読めた標本を一度でも処理したか（または持ち主が明示で変えたか）。それまでは何も保存しない（番号を決める前の状態で、保存を書き換えない）。</summary>
+    private bool _saveAllowed;
+    private Action? _noticeOk;
+
     private readonly DispatcherTimer _noticeTimer = new();
 
     /// <summary>
@@ -107,6 +114,7 @@ internal sealed partial class PartyWindow : Window
     public PartyWindow(PartyLanguage language, PartyState state, IBoardFeed feed, PartySaveWriter? writer = null)
     {
         _state = state;
+        _slotMap = new GpuSlotMap(state.GpuSlots);
         _feed = feed;
         _writer = writer;
         Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
@@ -165,7 +173,7 @@ internal sealed partial class PartyWindow : Window
         LangButton.Click += (_, _) => ToggleLanguage();
         TopmostButton.Click += (_, _) => ToggleTopmost();
         CloseButton.Click += (_, _) => Close();
-        NoticeClose.Click += (_, _) => HideNotice();
+        NoticeClose.Click += (_, _) => OnNoticeCloseClicked();
         _noticeTimer.Tick += (_, _) => HideNotice();
 
         Grip.DragDelta += OnGripDrag;
@@ -180,7 +188,7 @@ internal sealed partial class PartyWindow : Window
         // ただし黙って握りつぶすだけにはしない: 最初の 1 件は FirstFailure に残し、smoke の判定が見る。
         _frameTimer.Tick += (_, _) => Guarded(() => Redraw());
         _sensorTimer.Tick += (_, _) => Guarded(OnSensorTick);
-        _autosaveTimer.Tick += (_, _) => Guarded(SaveState);
+        _autosaveTimer.Tick += (_, _) => Guarded(() => SaveState());
     }
 
     /// <summary>窓が実際に一度描かれた（作っただけでなく）。smoke が「ok」と言う条件。</summary>
@@ -240,6 +248,13 @@ internal sealed partial class PartyWindow : Window
         _autosaveTimer.Start();
         // Windows の終了・サインアウトでは、Closing が来ないことがある。ここで最後の保存を試みる
         if (Application.Current is { } app) app.SessionEnding += OnSessionEnding;
+        // 保存の GPU の番号が壊れていたとき: 一度だけ知らせる。OK を押すまで印は残る（押さなければ次の起動でも出る）
+        if (_state.GpuSlotsRepaired)
+            ShowNoticeWithOk(Strings.GpuSlotsRepairedNotice, () =>
+            {
+                _state.GpuSlotsRepaired = false;
+                SaveState(force: true);
+            });
     }
 
     /// <summary>
@@ -249,7 +264,7 @@ internal sealed partial class PartyWindow : Window
     private void OnSessionEnding(object? sender, SessionEndingCancelEventArgs e)
     {
         _sessionEnding = true;
-        if (_writer is null) return;
+        if (_writer is null || !_saveAllowed) return;
         try
         {
             _frameTimer.Stop();
@@ -273,9 +288,19 @@ internal sealed partial class PartyWindow : Window
     {
         NoticeText.Text = text;
         NoticeText.ToolTip = text;
+        NoticeClose.Content = "✕";
+        _noticeOk = null;
         NoticeBar.Visibility = Visibility.Visible;
         _noticeTimer.Stop();
         if (hideAfter is { } h) { _noticeTimer.Interval = h; _noticeTimer.Start(); }
+    }
+
+    /// <summary>OK を押すまで出し続けるお知らせ。押したときだけ <paramref name="onOk"/> を実行する（✕ ではなく OK の釦になる）。</summary>
+    internal void ShowNoticeWithOk(string text, Action onOk)
+    {
+        ShowNotice(text);
+        NoticeClose.Content = Strings.NoticeOk;
+        _noticeOk = onOk;
     }
 
     internal void HideNotice()
@@ -284,14 +309,27 @@ internal sealed partial class PartyWindow : Window
         NoticeBar.Visibility = Visibility.Collapsed;
     }
 
+    private void OnNoticeCloseClicked()
+    {
+        Dispatcher.VerifyAccess();
+        var ok = _noticeOk;
+        _noticeOk = null;
+        HideNotice();
+        ok?.Invoke();
+    }
+
     // -----------------------------------------------------------------------
     // 保存（本文を取るのは UI スレッド。書くのは PartySaveWriter）
     // -----------------------------------------------------------------------
 
     /// <summary>いまの進みを書き手へ渡す。すぐ戻る。writer が無ければ何もしない。</summary>
-    private void SaveState()
+    private void SaveState(bool force = false)
     {
+        Dispatcher.VerifyAccess();      // 本文を取るのは UI スレッドだけ（変更と同じ操作の中で取る）
         if (_writer is null) return;
+        // 番号を決める前（GPU の一覧が読めた標本がまだ無い）は書かない。持ち主が明示で変えたとき（リセット・手放す・OK）だけは書く
+        if (force) _saveAllowed = true;
+        if (!_saveAllowed) return;
 
         _state.Zoom = _scale;
         if (WindowState == WindowState.Normal && !double.IsNaN(Left) && !double.IsNaN(Top))
@@ -309,7 +347,7 @@ internal sealed partial class PartyWindow : Window
     /// </summary>
     private void SaveOnClose()
     {
-        if (_writer is null) return;
+        if (_writer is null || !_saveAllowed) return;     // 一覧が読めないまま閉じたら、保存は元のまま（変わっていない状態を書き戻さない）
         if (_sessionEnding)
         {
             // Windows の終了・サインアウト中。箱は出せない（出すと終了が止まる）。SessionEnding で書いた分に、最後の分を短く足すだけ
@@ -572,6 +610,7 @@ internal sealed partial class PartyWindow : Window
     // -----------------------------------------------------------------------
     private void OnSensorTick()
     {
+        Dispatcher.VerifyAccess();      // ApplyTo と Tick は _state を変える: UI スレッドだけ
         if (_feed.Latest is not { } latest) return;
         var frame = latest.Frame;
         // 古さも順序も dt も単調時計の印だけで決める（壁時計が戻っても、新しい標本が古く見えて固まることがない）
@@ -586,8 +625,12 @@ internal sealed partial class PartyWindow : Window
         _lastStamp = latest.Stamp;
 
         _frame = frame;
-        _work = PartyComposition.WorkOf(frame);
-        _slots = PartyComposition.Build(frame, Strings.Lang);
+        // 席を先に決める（Build / Tick より前）。GPU の鍵と「育てていい GPU」はここで決まる
+        _gpuFrame = _slotMap.ApplyTo(_state, frame);
+        if (frame.AllGpus is not null) _saveAllowed = true;
+        if (_gpuFrame.SlotsChanged) SaveState();
+        _work = PartyComposition.WorkOf(frame, _gpuFrame);
+        _slots = PartyComposition.Build(frame, _gpuFrame, Strings.Lang);
 
         int levelsBefore = LevelSum();
         var produced = _director.Tick(dt, _work, _slots, Strings.Lang);
@@ -695,18 +738,19 @@ internal sealed partial class PartyWindow : Window
         // step 4b: PCMieru.OpenChecks.v1
     }
 
-    private void ConfirmReset(string ask, Action apply)
+    private void ConfirmReset(string ask, Action apply, string? title = null)
     {
+        Dispatcher.VerifyAccess();       // apply は _state を変える: UI スレッドだけ。本文も同じ操作の中で取る
         bool wasTopmost = Topmost;
         Topmost = false;                 // 確認の窓が最前面の後ろに隠れないように
-        var answer = MessageBox.Show(this, ask, Strings.ResetTitle,
+        var answer = MessageBox.Show(this, ask, title ?? Strings.ResetTitle,
                                      MessageBoxButton.OKCancel, MessageBoxImage.Warning,
                                      MessageBoxResult.Cancel);
         Topmost = wasTopmost;
         if (answer != MessageBoxResult.OK) return;
 
         apply();
-        SaveState();                     // すぐ書き戻す。ここで落ちても戻らないように
+        SaveState(force: true);          // すぐ書き戻す。ここで落ちても戻らないように
         _lastSignature = 0;
         UpdateStoryText();
         Redraw(force: true);

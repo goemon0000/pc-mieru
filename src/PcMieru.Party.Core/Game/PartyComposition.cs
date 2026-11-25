@@ -18,10 +18,14 @@ public static class PartyComposition
     /// <summary>値が無いときの Detail。</summary>
     public const string Missing = "—";
 
-    /// <summary>frame から盤に立つ席を組み立てる。lang は "en" 以外なら日本語。</summary>
-    public static List<PartySlot> Build(BoardFrame frame, string lang)
+    /// <summary>
+    /// frame から盤に立つ席を組み立てる。lang は "en" 以外なら日本語。
+    /// <paramref name="gpuSlots"/> は <see cref="GpuSlotKeys.ApplyTo"/> がこの frame に対して決めた GPU の席。GPU の鍵と「育てていい GPU」はここから取る。
+    /// </summary>
+    public static List<PartySlot> Build(BoardFrame frame, GpuSlotFrame gpuSlots, string lang)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(gpuSlots);
         var slots = new List<PartySlot>();
 
         // --- CPU（ソケットごと。ソケットの割り当てが無ければ全体で 1 体） ---
@@ -45,13 +49,22 @@ public static class PartyComposition
             mem is null ? null : Ratio(mem.Percent),
             _ => $"{Gb(mem!.UsedBytes):0.0} / {Gb(mem.TotalBytes):0.0} GB"));
 
-        // --- GPU（取れた順。Gpus が null は「わからない」なので 1 体も立てない） ---
-        var gpus = frame.Gpus ?? [];
-        for (int i = 0; i < Math.Min(gpus.Count, BoardFrame.MaxGpus); i++)
+        // --- GPU（取れた順。AllGpus が null は「わからない」なので 1 体も立てない） ---
+        // **鍵は番号の席（gpu#N）で決める。並びの i ではない。** カードが抜けても挿し替わっても、経験値と装備は席についてくる。
+        // 席の無い GPU（曖昧・未確定）も絵には出すが、鍵は保存に作らない表示だけの鍵にする。
+        // 席があっても、いま測れた値が無い（または曖昧な）GPU は Measured=false: 育てない。
+        var all = frame.AllGpus ?? [];
+        var adapters = gpuSlots.Adapters;
+        int gpuCount = Math.Min(all.Count, adapters.Count);
+        var earning = new HashSet<string>(gpuSlots.EarningKeys, StringComparer.Ordinal);
+        for (int i = 0; i < Math.Min(gpuCount, BoardFrame.MaxGpus); i++)
         {
-            var g = gpus[i];
-            slots.Add(Slot($"gpu#{i}", "gpu", SlotKind.Pcie, gpus.Count > 1 ? $"GPU{i}" : "GPU",
-                Ratio(g.Percent), l => $"{l * 100:0}%  {g.Name}"));
+            var g = all[i];
+            var a = adapters[i];
+            string key = a.Key ?? GpuSlotKeys.DisplayKeyOf(i);
+            string title = gpuCount <= 1 ? "GPU" : a.Slot is { } n ? $"GPU{n}" : "GPU?";
+            double? load = a.Key is { } k && earning.Contains(k) ? Ratio(g.Percent) : null;
+            slots.Add(Slot(key, "gpu", SlotKind.Pcie, title, load, l => $"{l * 100:0}%  {g.Name}"));
         }
 
         // --- 記憶装置（有る種類だけ） ---
@@ -78,7 +91,7 @@ public static class PartyComposition
 
         // --- 電源（全員に配る側。誰かが働けば、その分だけ働いている。入力が 1 つでも測れていれば測れている） ---
         double? cpu = Ratio(frame.CpuPercent);
-        double? gpu = Ratio(frame.GpuMaxPercent);
+        double? gpu = Ratio(GpuWorkPercent(frame, gpuSlots));
         double? disk = DiskWork(frame);
         if (cpu is null && gpu is null && disk is null)
         {
@@ -98,10 +111,11 @@ public static class PartyComposition
     /// 物語（旅程）へ渡す仕事量。値が無いチャンネルは 0 にして <see cref="Work.Present"/> に立てない
     /// （<see cref="Director.JourneyRate"/> は式に入れず、アイドル判定にも使わない）。
     /// </summary>
-    public static Work WorkOf(BoardFrame frame)
+    public static Work WorkOf(BoardFrame frame, GpuSlotFrame gpuSlots)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        double? cpu = Ratio(frame.CpuPercent), gpu = Ratio(frame.GpuMaxPercent), memory = Ratio(frame.Memory?.Percent);
+        ArgumentNullException.ThrowIfNull(gpuSlots);
+        double? cpu = Ratio(frame.CpuPercent), gpu = Ratio(GpuWorkPercent(frame, gpuSlots)), memory = Ratio(frame.Memory?.Percent);
         double? disk = DiskWork(frame), fullest = Ratio(frame.FullestVolumePercent);
         var present = WorkChannels.None;
         if (cpu is not null) present |= WorkChannels.Cpu;
@@ -110,6 +124,23 @@ public static class PartyComposition
         if (disk is not null) present |= WorkChannels.Disk;
         if (fullest is not null) present |= WorkChannels.DiskFullest;
         return new Work(cpu ?? 0, gpu ?? 0, memory ?? 0, disk ?? 0, fullest ?? 0, present);
+    }
+
+    /// <summary>
+    /// 物語と電源に渡す GPU の仕事量（0..100）: **育てていい GPU（席があり、曖昧でなく、値が読めた物）だけ**の最大。
+    /// 席の無い GPU の負荷は、物語を動かさない（その子は育たないので、仕事だけ数えると辻褄が合わない）。無ければ null。
+    /// </summary>
+    private static double? GpuWorkPercent(BoardFrame frame, GpuSlotFrame gpuSlots)
+    {
+        if (frame.AllGpus is not { } all) return null;
+        double? max = null;
+        int n = Math.Min(all.Count, gpuSlots.Adapters.Count);
+        for (int i = 0; i < n; i++)
+        {
+            if (gpuSlots.Adapters[i].Key is not { } key || !gpuSlots.EarningKeys.Contains(key)) continue;
+            if (all[i].Percent is { } p && double.IsFinite(p) && (max is null || p > max)) max = p;
+        }
+        return max;
     }
 
     private static double? DiskWork(BoardFrame frame) =>

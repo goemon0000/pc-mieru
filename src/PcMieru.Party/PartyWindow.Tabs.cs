@@ -105,7 +105,7 @@ internal sealed partial class PartyWindow
         Strings.Lang = Strings.Lang == "ja" ? "en" : "ja";
         _state.Lang = Strings.Lang;        // 押したときだけ書く（--lang は書き戻さない）
         Title = PartyStrings.Title(Strings.Lang == "ja" ? PartyLanguage.Ja : PartyLanguage.En);
-        _slots = _frame is { } f ? PartyComposition.Build(f, Strings.Lang) : _slots;
+        _slots = _frame is { } f ? PartyComposition.Build(f, _gpuFrame, Strings.Lang) : _slots;
         ApplyLanguage();
         _lastSignature = 0;
         SaveState();
@@ -301,6 +301,50 @@ internal sealed partial class PartyWindow
             row.Children.Add(ActionButton(HeaderOf(command), () => Execute(command)));
         }
         SettingsStack.Children.Add(row);
+        BuildGpuSlots();
+    }
+
+    /// <summary>
+    /// GPU の番号の一覧。番号・名前・メモリ・状態だけ（シリアルやバス番号は出さない）。
+    /// 取り置いていない番号には「手放す」、取り置いた番号には「リセット」（確認 → 経験値を消し、装備は持ち物へ → 保存）。
+    /// </summary>
+    private void BuildGpuSlots()
+    {
+        SettingsStack.Children.Add(Heading(Strings.GpuSlotsHeader));
+        SettingsStack.Children.Add(Note(Strings.GpuSlotsAbout));
+        if (_slotMap.Records.Count == 0)
+        {
+            SettingsStack.Children.Add(Note(Strings.GpuSlotsNone));
+            return;
+        }
+
+        var present = _gpuFrame.Adapters.Where(a => a.Slot is not null).Select(a => a.Slot!.Value).ToHashSet();
+        foreach (var r in _slotMap.Records.OrderBy(r => r.Slot))
+        {
+            int slot = r.Slot;
+            string state = r.Retired ? Strings.GpuStateRetired : present.Contains(slot) ? Strings.GpuStateInUse : Strings.GpuStateAbsent;
+            string memory = r.VramBytes > 0 ? $"{r.VramBytes / 1073741824.0:0.#} GB" : "—";
+            string name = string.IsNullOrEmpty(r.Name) ? "—" : r.Name;
+            var row = Row();
+            row.Children.Add(new TextBlock
+            {
+                Text = $"GPU{slot}  {name}  {memory}  {state}", FontSize = 11, Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center, Foreground = (System.Windows.Media.Brush)FindResource("Accent"),
+            });
+            if (r.Retired)
+                row.Children.Add(ActionButton(Strings.GpuReset, () => ConfirmReset(Strings.GpuResetAsk(slot), () =>
+                {
+                    _slotMap.ResetSlotKeepingGear(_state, _director.Adventure, slot);
+                    RefreshSettings();
+                }, Strings.GpuResetTitle)));
+            else
+                row.Children.Add(ActionButton(Strings.GpuForget, () => ConfirmReset(Strings.GpuForgetAsk(slot), () =>
+                {
+                    _slotMap.ForgetSlot(_state, slot);
+                    RefreshSettings();
+                }, Strings.GpuForgetTitle)));
+            SettingsStack.Children.Add(row);
+        }
     }
 
     // --- 欄の部品 ---

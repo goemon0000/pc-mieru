@@ -61,6 +61,30 @@ public static class Strings
         "物語もレベルも最初に戻します。窓の位置と言語の設定は残ります。\n\nこの操作は取り消せません。",
         "Both the story and every level go back to the start. Window position and language are kept.\n\nThis cannot be undone.");
 
+    // --- GPU の番号（設定 > データ） ---
+    public static string NoticeOk          => T("OK", "OK");
+    public static string GpuSlotsRepairedNotice => T(
+        "保存の中の GPU の番号の一部が壊れていました。進みは残し、その番号は他のカードに引き継がれないよう取り置きました。設定 > データの「GPU の番号」で手放せます。",
+        "Some GPU numbers in the save were damaged. Their progress was kept and those numbers were reserved so no other card takes it over. You can release them in Settings > GPU slots.");
+    public static string GpuSlotsHeader    => T("GPU の番号", "GPU slots");
+    public static string GpuSlotsAbout     => T(
+        "カードごとに番号があり、経験値と装備はその番号につきます。外したカードは「手放す」で番号を閉じ、「リセット」で経験値を消して番号を空けます。",
+        "Each card has a number; its experience and gear belong to that number. Forget closes the number of a card you removed; Reset removes its experience and frees the number.");
+    public static string GpuSlotsNone      => T("GPU はまだ見つかっていません", "No GPU recorded yet");
+    public static string GpuStateInUse     => T("使用中", "in use");
+    public static string GpuStateAbsent    => T("見当たらない", "not found");
+    public static string GpuStateRetired   => T("取り置き", "reserved");
+    public static string GpuForget         => T("手放す", "Forget");
+    public static string GpuReset          => T("リセット", "Reset");
+    public static string GpuForgetTitle    => T("この番号を手放しますか", "Forget this number?");
+    public static string GpuResetTitle     => T("この番号をリセットしますか", "Reset this number?");
+    public static string GpuForgetAsk(int slot) => T(
+        $"GPU{slot} の番号を閉じます。経験値と装備は残り、新しいカードがこの番号を使うことはありません。\n\n後から「リセット」で消せます。",
+        $"GPU{slot}'s number is closed. Its experience and gear are kept, and no new card will take this number.\n\nYou can remove them later with Reset.");
+    public static string GpuResetAsk(int slot) => T(
+        $"GPU{slot} の経験値を消し、装備は持ち物へ戻します（入りきらない分は売れます）。番号は空き、次に来たカードがこの番号を使います。\n\nこの操作は取り消せません。",
+        $"GPU{slot}'s experience is removed and its gear goes to the bag (what doesn't fit is sold). The number is freed for the next card.\n\nThis cannot be undone.");
+
     public static string CoresSuffix(int n) => T($"{n} 論理コア", $"{n} logical cores");
     public static string NoGpu    => T("GPUが見つかりません", "No GPU detected");
     public static string Vram     => T("VRAM", "VRAM");

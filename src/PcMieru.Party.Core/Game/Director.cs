@@ -133,6 +133,7 @@ public sealed class Director
             var slot = slots[i];
             // 測れていない席（値が無い）は育てない。0 で渡すと「測れて 0%」と区別がつかない（DESIGN-C 2.3）。
             if (!slot.Measured) continue;
+            if (GpuSlotKeys.IsDisplayOnly(slot.Key)) continue;   // 席の無い GPU は育てない（保存に鍵を作らない）
             int before = _state.Level(slot.Key);
             _state.AddExp(slot.Key, ExpRate(slot.Load) * dt);
             int after = _state.Level(slot.Key);

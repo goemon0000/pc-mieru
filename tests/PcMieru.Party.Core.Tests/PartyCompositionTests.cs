@@ -18,6 +18,7 @@ public sealed class PartyCompositionTests
         double? gpuMax = gpus is null ? null : gpus.Select(g => g.Percent).Where(p => p is not null).DefaultIfEmpty(null).Max();
         return new BoardFrame(logical, cpu, mem, gpus, gpuMax, new BoardDisk(bytesPerSec, false), new BoardNet(0, 0, false))
         {
+            AllGpus = gpus,
             Sockets = sockets,
             DiskKinds = kinds,
         };
@@ -30,7 +31,7 @@ public sealed class PartyCompositionTests
             [new BoardGpu("g0", "RTX", 25, null, null)], 100 * MiB,
             [new BoardDiskKind(DiskKind.Nvme, 1, 100 * MiB, false, 500 * GiB, 100 * GiB, 500 * GiB)]);
 
-        var slots = PartyComposition.Build(frame, "ja");
+        var slots = Comp.Build(frame, "ja");
 
         Assert.Equal(new[] { "cpu#0", "cpu-cooler#0", "memory", "gpu#0", "m2", "psu" }, slots.Select(s => s.Key));
         Assert.Equal(new[] { "CPU", "FAN", "MEM", "GPU", "M.2", "PSU" }, slots.Select(s => s.Title));
@@ -58,7 +59,7 @@ public sealed class PartyCompositionTests
              new BoardDiskKind(DiskKind.Hdd, 1, 12 * MiB, false, null, null, null)],
             [new BoardCpuSocket(20, 8), new BoardCpuSocket(60, 8)]);
 
-        var slots = PartyComposition.Build(frame, "en");
+        var slots = Comp.Build(frame, "en");
 
         Assert.Equal(
             new[] { "cpu#0", "cpu-cooler#0", "cpu#1", "cpu-cooler#1", "memory", "gpu#0", "gpu#1", "m2", "hdd", "psu" },
@@ -78,7 +79,7 @@ public sealed class PartyCompositionTests
     {
         var frame = Frame(50, new BoardMemory(GiB, 2 * GiB, 50), [new BoardGpu("g0", "RTX", null, null, null)], 10 * MiB);
 
-        var gpu = PartyComposition.Build(frame, "ja").Single(s => s.Key == "gpu#0");
+        var gpu = Comp.Build(frame, "ja").Single(s => s.Key == "gpu#0");
 
         Assert.False(gpu.Measured);
         Assert.Equal(0, gpu.Load);
@@ -89,20 +90,20 @@ public sealed class PartyCompositionTests
     public void A_missing_disk_value_is_unmeasured_and_without_a_kind_list_one_plain_disk_stands()
     {
         var withKinds = Frame(10, null, [], 1 * MiB, [new BoardDiskKind(DiskKind.Ssd, 1, null, true, null, null, null)]);
-        var ssd = PartyComposition.Build(withKinds, "ja").Single(s => s.Key == "ssd");
+        var ssd = Comp.Build(withKinds, "ja").Single(s => s.Key == "ssd");
         Assert.False(ssd.Measured);
         Assert.Equal(PartyComposition.Missing, ssd.Detail);
 
-        var plain = PartyComposition.Build(Frame(10, null, [], 100 * MiB), "ja").Single(s => s.Key == "ssd");
+        var plain = Comp.Build(Frame(10, null, [], 100 * MiB), "ja").Single(s => s.Key == "ssd");
         Assert.Equal("DISK", plain.Title);
         Assert.True(plain.Measured);
-        Assert.False(PartyComposition.Build(Frame(10, null, [], null), "ja").Single(s => s.Key == "ssd").Measured);
+        Assert.False(Comp.Build(Frame(10, null, [], null), "ja").Single(s => s.Key == "ssd").Measured);
     }
 
     [Fact]
     public void Nothing_known_makes_nothing_measured_and_the_psu_is_unmeasured_too()
     {
-        var slots = PartyComposition.Build(Frame(null, null, null, null), "ja");
+        var slots = Comp.Build(Frame(null, null, null, null), "ja");
 
         Assert.DoesNotContain(slots, s => s.Key.StartsWith("gpu"));
         Assert.All(slots, s => Assert.False(s.Measured));
@@ -115,19 +116,19 @@ public sealed class PartyCompositionTests
         var state = new PartyState();
         state.Migrate();
         var director = new Director(TestData.Story, state, null, new Random(1), () => 1_800_000_000);
-        var missing = PartyComposition.Build(
+        var missing = Comp.Build(
             Frame(50, null, [new BoardGpu("g0", "RTX", null, null, null)], null,
                 [new BoardDiskKind(DiskKind.Nvme, 1, null, true, null, null, null)]), "ja");
-        var zero = PartyComposition.Build(
+        var zero = Comp.Build(
             Frame(50, null, [new BoardGpu("g0", "RTX", 0, null, null)], 0,
                 [new BoardDiskKind(DiskKind.Nvme, 1, 0, false, null, null, null)]), "ja");
 
-        for (int i = 0; i < 600; i++) director.Tick(1, PartyComposition.WorkOf(Frame(50, null, null, null)), missing, "ja");
+        for (int i = 0; i < 600; i++) director.Tick(1, Comp.WorkOf(Frame(50, null, null, null)), missing, "ja");
         Assert.Equal(0, state.Experience.GetValueOrDefault("gpu#0"));
         Assert.Equal(0, state.Experience.GetValueOrDefault("m2"));
         Assert.True(state.Experience.GetValueOrDefault("cpu#0") > 0);
 
-        for (int i = 0; i < 600; i++) director.Tick(1, PartyComposition.WorkOf(Frame(50, null, null, null)), zero, "ja");
+        for (int i = 0; i < 600; i++) director.Tick(1, Comp.WorkOf(Frame(50, null, null, null)), zero, "ja");
         // A measured idle GPU is a real zero: it is not skipped, and at 0 load it adds whatever the rule gives for 0 (never negative).
         Assert.True(state.Experience.GetValueOrDefault("gpu#0") >= 0);
     }
@@ -135,7 +136,7 @@ public sealed class PartyCompositionTests
     [Fact]
     public void WorkOf_uses_the_frame_values_and_marks_a_missing_channel_as_missing()
     {
-        var work = PartyComposition.WorkOf(Frame(50, new BoardMemory(GiB, 2 * GiB, 50), [new BoardGpu("g0", "x", 20, null, null)], 100 * MiB));
+        var work = Comp.WorkOf(Frame(50, new BoardMemory(GiB, 2 * GiB, 50), [new BoardGpu("g0", "x", 20, null, null)], 100 * MiB));
 
         Assert.Equal(0.5, work.Cpu, 6);
         Assert.Equal(0.2, work.Gpu, 6);

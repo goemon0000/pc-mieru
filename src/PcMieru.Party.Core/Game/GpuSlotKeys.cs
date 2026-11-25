@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PcMieru.Party.Adventure;
 using PcMieru.Party.Hardware;
 
 namespace PcMieru.Party.Game;
@@ -26,6 +27,45 @@ public static class GpuSlotKeys
 {
     /// <summary>The key experience and equipment are stored under for a slot (the old save's <c>gpu#i</c>; the same text as <see cref="GpuSlotAssignment.Key"/>).</summary>
     public static string KeyOf(int slot) => "gpu#" + slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The prefix of a DISPLAY-ONLY key: what the board gives a GPU that holds no slot (ambiguous or unknown), so it can still be drawn. It is never stored: no
+    /// experience, no gear and no entry in any state dictionary may be made under it (<see cref="Director"/> and the adventure engine skip such a key). It has no
+    /// <c>#</c>, so it can never be read as a numbered key such as <c>gpu#3</c>.
+    /// </summary>
+    public const string DisplayOnlyPrefix = "gpu~";
+
+    /// <summary>The display-only key of the adapter at this index of the frame's GPU list.</summary>
+    public static string DisplayKeyOf(int adapterIndex) => DisplayOnlyPrefix + adapterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>True for a key made by <see cref="DisplayKeyOf"/>: the slot is drawn but owns nothing.</summary>
+    public static bool IsDisplayOnly(string? key) => key is not null && key.StartsWith(DisplayOnlyPrefix, StringComparison.Ordinal);
+
+    /// <summary>True when the map holds a retired record for the slot (the only kind <see cref="ResetSlot"/> accepts).</summary>
+    public static bool IsRetired(this GpuSlotMap map, int slot)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        return slot is >= 0 and < GpuSlotMap.MaxSlots && map.Records.Any(r => r.Slot == slot && r.Retired);
+    }
+
+    /// <summary>
+    /// The owner's reset of a retired number with the gear kept: the gear under the slot's key goes back to the bag (<see cref="AdventureEngine.ReturnGearOf"/>;
+    /// what does not fit is sold), then <see cref="ResetSlot"/> removes the experience and frees the number. Nothing is returned for a slot that cannot be reset
+    /// (not retired), so the gear is never taken from a card that is still in use. <paramref name="adventure"/> null (no adventure book) just resets.
+    /// </summary>
+    public static bool ResetSlotKeepingGear(this GpuSlotMap map, PartyState state, AdventureEngine? adventure, int slot)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!map.IsRetired(slot))
+        {
+            return false;
+        }
+
+        adventure?.ReturnGearOf(KeyOf(slot));
+        return map.ResetSlot(state, slot);
+    }
 
     /// <summary>
     /// Assigns the slots of the frame's GPUs, writes the remembered slots into <paramref name="state"/> when they changed (the only part of the state this

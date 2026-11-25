@@ -52,7 +52,7 @@ public sealed class FeedRulesTests
     [Fact]
     public void WorkOf_marks_the_channels_the_frame_does_not_have()
     {
-        var frame = PartyComposition.WorkOf(new BoardFrame(16, null, null, null, null, new BoardDisk(null, false), new BoardNet(0, 0, false)));
+        var frame = Comp.WorkOf(new BoardFrame(16, null, null, null, null, new BoardDisk(null, false), new BoardNet(0, 0, false)));
 
         Assert.False(frame.Has(WorkChannels.Cpu));
         Assert.False(frame.Has(WorkChannels.Gpu));
