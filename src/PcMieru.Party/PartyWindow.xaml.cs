@@ -55,7 +55,18 @@ internal sealed partial class PartyWindow : Window
 
     /// <summary>前回 Director を進めた標本の時刻。同じ標本では二度進めない。</summary>
     private DateTime? _lastSampleUtc;
-    private DateTime _lastSave = DateTime.UtcNow;
+
+    /// <summary>
+    /// 60 秒ごとの保存。**標本を受け取る処理とは別の時計**で回す（フィードが止まったり同じ標本を繰り返したりして標本の処理が早く戻っても、
+    /// 溜まった進みと窓の位置は保存される）。
+    /// </summary>
+    private readonly DispatcherTimer _autosaveTimer = new() { Interval = TimeSpan.FromSeconds(60) };
+
+    /// <summary>Windows の終了・サインアウトが始まった。閉じるときの箱を出さない。</summary>
+    private bool _sessionEnding;
+
+    /// <summary>終了・サインアウトのときに最後の保存を待つ上限（箱は出せないので短く）。</summary>
+    private static readonly TimeSpan SessionEndFlush = TimeSpan.FromSeconds(2);
 
     /// <summary>コマ送りの時計。**モーションごとの速さは絵の側が決めている。**</summary>
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
@@ -128,13 +139,16 @@ internal sealed partial class PartyWindow : Window
             // 最後の保存の間に次の読み取りが割り込まないよう、先に止める
             _frameTimer.Stop();
             _sensorTimer.Stop();
+            _autosaveTimer.Stop();
             SaveOnClose();
         };
         Closed += (_, _) =>
         {
+            if (Application.Current is { } app) app.SessionEnding -= OnSessionEnding;
             _noticeTimer.Stop();
             _frameTimer.Stop();
             _sensorTimer.Stop();
+            _autosaveTimer.Stop();
             _hoverTip.IsOpen = false;
         };
         // 窓を動かしたり後ろに回ったりしたら、吹き出しは畳む。
@@ -163,6 +177,7 @@ internal sealed partial class PartyWindow : Window
         // ただし黙って握りつぶすだけにはしない: 最初の 1 件は FirstFailure に残し、smoke の判定が見る。
         _frameTimer.Tick += (_, _) => Guarded(() => Redraw());
         _sensorTimer.Tick += (_, _) => Guarded(OnSensorTick);
+        _autosaveTimer.Tick += (_, _) => Guarded(SaveState);
     }
 
     /// <summary>窓が実際に一度描かれた（作っただけでなく）。smoke が「ok」と言う条件。</summary>
@@ -219,6 +234,31 @@ internal sealed partial class PartyWindow : Window
         PlaceWindow();
         _frameTimer.Start();
         _sensorTimer.Start();
+        _autosaveTimer.Start();
+        // Windows の終了・サインアウトでは、Closing が来ないことがある。ここで最後の保存を試みる
+        if (Application.Current is { } app) app.SessionEnding += OnSessionEnding;
+    }
+
+    /// <summary>
+    /// Windows の終了・サインアウト。**UI スレッドで本文を取り**（SaveState）、短い上限（2 秒）で書き切るのを待つ。箱は出さない。
+    /// 取り消さない（終了を止めるのは我々の仕事ではない）。
+    /// </summary>
+    private void OnSessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        _sessionEnding = true;
+        if (_writer is null) return;
+        try
+        {
+            _frameTimer.Stop();
+            _sensorTimer.Stop();
+            _autosaveTimer.Stop();
+            SaveState();
+            _writer.Flush(SessionEndFlush);
+        }
+        catch (Exception ex)
+        {
+            FirstFailure ??= ex.ToString();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -258,7 +298,6 @@ internal sealed partial class PartyWindow : Window
         }
         _state.LastSeenUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         _writer.Submit(_state.ToJson(), _state.SavePath);
-        _lastSave = DateTime.UtcNow;
     }
 
     /// <summary>
@@ -268,11 +307,31 @@ internal sealed partial class PartyWindow : Window
     private void SaveOnClose()
     {
         if (_writer is null) return;
+        if (_sessionEnding)
+        {
+            // Windows の終了・サインアウト中。箱は出せない（出すと終了が止まる）。SessionEnding で書いた分に、最後の分を短く足すだけ
+            SaveState();
+            _writer.Flush(SessionEndFlush);
+            return;
+        }
+
         while (true)
         {
             SaveState();
             var result = _writer.Flush(TimeSpan.FromSeconds(5));
             if (result.Ok) return;
+            if (result.Blocked)
+            {
+                // 保存を止めてある回。書けなかったのではなく書かないので、「もう一度」は意味が無い。伝えるだけ（OK のみ・一度だけ）
+                bool top = Topmost;
+                Topmost = false;             // 確認の窓が最前面の後ろに隠れないように
+                try
+                {
+                    MessageBox.Show(this, Strings.SaveBlockedNote, Strings.SaveBlockedTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally { Topmost = top; }
+                return;
+            }
 
             bool wasTopmost = Topmost;
             Topmost = false;                 // 確認の窓が最前面の後ろに隠れないように
@@ -518,9 +577,9 @@ internal sealed partial class PartyWindow : Window
         var produced = _director.Tick(dt, _work, _slots, Strings.Lang);
         UpdateStoryText();
 
-        // 変わったとき（レベルが上がった・物語の行が出た）と 60 秒ごとに保存する
+        // 変わったとき（レベルが上がった・物語の行が出た）に保存する。60 秒ごとの保存は _autosaveTimer（標本とは別の時計）
         bool changed = produced.Count > 0 || LevelSum() != levelsBefore;
-        if (changed || (DateTime.UtcNow - _lastSave).TotalSeconds >= 60) SaveState();
+        if (changed) SaveState();
 
         UpdateDetail();
     }

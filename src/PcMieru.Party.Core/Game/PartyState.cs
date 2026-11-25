@@ -292,33 +292,47 @@ public sealed class PartyState
     ///   - 丸ごと読めない → state.json.bad-日時 へ退けてから、最初から始める（控えは新しい物を3つ）
     ///   - 退けられない・読み出せない → 最初から始めるが、この回は保存しない
     /// </summary>
-    public static PartyState Load(string dir, string? legacyFile = null)
+    public static PartyState Load(string dir, string? legacyFile = null) => Load(dir, legacyFile, KeepBadCopy);
+
+    /// <summary>試験用: 控えを作る処理（path, move → 作れたか）を差し替える（作れなかった場合を作るため）。</summary>
+    internal static PartyState Load(string dir, string? legacyFile, Func<string, bool, bool> keepBadCopy)
     {
         string path = Path.Combine(dir, "state.json");
-        string from = File.Exists(path) ? path
-                    : legacyFile is not null && File.Exists(legacyFile) ? legacyFile   // 「パーツパーティ」時代の進行
-                    : "";
+        // **「無い」と決めるのは、開こうとして FileNotFound / DirectoryNotFound が返ったときだけ。**
+        // File.Exists は、置き場（リダイレクト先など）が一時的に開けないときも偽を返す。そのまま最初から始めて保存すると、
+        // 開けるようになった後の 60 秒で本物の保存を空の進みが潰す。
+        string from = path;
+        var read = TryReadText(path, out string text);
+        if (read == ReadOutcome.Missing && legacyFile is not null)
+        {
+            from = legacyFile;   // 「パーツパーティ」時代の進行
+            read = TryReadText(legacyFile, out text);
+        }
+
         PartyState state;
-        if (from.Length == 0)
-            state = Fresh();
-        else if (!TryReadText(from, out string text))
+        if (read == ReadOutcome.Missing)
         {
             state = Fresh();
-            state.SaveBlocked = from == path;
+        }
+        else if (read == ReadOutcome.Failed)
+        {
+            state = Fresh();
+            state.SaveBlocked = true;   // 在るのに読めない（権限・共有違反・I/O エラー）。空の進みで上書きしない
         }
         else
         {
             try
             {
                 state = FromJson(text, out bool repaired);
-                // 直して読んだときは、直す前の本文を控えに写しておく（読めなかった欄を後から拾えるように）
-                if (repaired && from == path) KeepBadCopy(path, move: false);
+                // 直して読んだときは、直す前の本文を控えに写しておく（読めなかった欄を後から拾えるように）。
+                // 控えが作れなかったなら、次の保存が元の本文を消してしまうので保存を止める
+                if (repaired && from == path && !keepBadCopy(path, false)) state.SaveBlocked = true;
             }
             catch (Exception e) when (LenientJson.IsReadError(e))
             {
                 state = Fresh();
                 // 改名前の保存先には書かないので、そちらは退けなくても上書きされない
-                if (from == path && !KeepBadCopy(path, move: true)) state.SaveBlocked = true;
+                if (from == path && !keepBadCopy(path, true)) state.SaveBlocked = true;
             }
         }
         state._path = path;
@@ -333,19 +347,29 @@ public sealed class PartyState
         return fresh;
     }
 
-    /// <summary>読み出す。ウイルス対策ソフト等が一瞬掴んでいることがあるので、少しだけ待ってやり直す。</summary>
-    private static bool TryReadText(string path, out string text)
+    private enum ReadOutcome { Read, Missing, Failed }
+
+    /// <summary>
+    /// 読み出す。ウイルス対策ソフト等が一瞬掴んでいることがあるので、少しだけ待ってやり直す。
+    /// Missing は FileNotFound / DirectoryNotFound だけ（在るかを先に尋ねず、開いて確かめる）。それ以外の失敗は Failed。
+    /// </summary>
+    private static ReadOutcome TryReadText(string path, out string text)
     {
         for (int attempt = 0; ; attempt++)
         {
             try
             {
                 text = File.ReadAllText(path);
-                return true;
+                return ReadOutcome.Read;
+            }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                text = "";
+                return ReadOutcome.Missing;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                if (attempt >= 2) { text = ""; return false; }
+                if (attempt >= 2) { text = ""; return ReadOutcome.Failed; }
                 Thread.Sleep(200);
             }
         }

@@ -104,7 +104,10 @@ public sealed class PartySaveWriterTests : IDisposable
 
         writer.Submit("{}", StatePath);
 
-        Assert.True(writer.Flush(TimeSpan.FromSeconds(10)).Ok);
+        // 止めてある書き手は「成功」と言わない（閉じるときに、この回の進みが保存されないと伝えるため）
+        var flushed = writer.Flush(TimeSpan.FromSeconds(10));
+        Assert.False(flushed.Ok);
+        Assert.True(flushed.Blocked);
         Assert.False(File.Exists(StatePath));
         Assert.False(File.Exists(StatePath + ".tmp"));
         Assert.Null(writer.LastSavedUtc);

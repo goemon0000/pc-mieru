@@ -77,6 +77,14 @@ public static class Strings
         $"進みを保存できませんでした。\n\n{reason}\n\n「はい」でもう一度保存します。「いいえ」は保存せずに閉じます（前回の保存からの進みは失われます）。",
         $"Your progress could not be saved.\n\n{reason}\n\nYes tries saving again. No closes without saving (progress since the last save is lost).");
 
+    // 保存を止めてある回（前回の保存が読めなかった・控えを作れなかった）。閉じるとき、その旨を一度だけ伝える（はい／いいえは要らない）
+    public static string SaveBlockedTitle => T("この回の進みは保存されません", "This session's progress is not saved");
+    public static string SaveBlockedNote => T(
+        "前回の保存を読めなかった（他のプログラムが開いている・保存先に入れない・壊れている等）ため、この回の進みは保存されません。\n\n" +
+        "空の進みで前回の保存を上書きしないよう、保存を止めています。前回の保存はそのまま残っています。原因を取り除いてから、もう一度起動してください。",
+        "The previous save could not be read (another program has it open, the folder is not reachable, or the file is damaged), so this session's progress is not saved.\n\n" +
+        "Saving is off so that an empty state never overwrites it. The previous save is left as it was. Fix the cause and start again.");
+
     public static string Disclaimer => T(
         "※ 規格・相性・物語はすべてお遊びです。購入や設定の判断には使えません。",
         "Note: the specs, compatibility marks and story here are all for fun — not a reference for purchases or settings.");
