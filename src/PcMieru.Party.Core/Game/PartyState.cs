@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PcMieru.Party.Adventure;
+using PcMieru.Party.Hardware;
 
 namespace PcMieru.Party.Game;
 
@@ -27,6 +28,16 @@ public sealed class PartyState
 
     /// <summary>キャラid → 経験値。**その子自身の仕事でしか増えない。**</summary>
     public Dictionary<string, double> Experience { get; set; } = new();
+
+    /// <summary>
+    /// GPU の席（gpu#0〜gpu#5）の覚え書き。どの席にどの名前・メモリ・PCI バスの GPU がいたか。
+    /// **この欄の無い古い保存は空**（最初の起動で並び順どおりに番号が振られ、旧版の gpu#i と同じになる）。
+    /// 差す・抜くで番号を詰めず、決められない GPU（同型が2枚でバスが読めない等）には席を与えない
+    /// （<see cref="GpuSlotMap"/>、DESIGN-C 2.3）。**自動では消さない**（取り外した GPU の席は穴として残る。
+    /// 消すのは <see cref="GpuSlotMap.Forget"/> だけで、経験値と装備は別に扱う）。
+    /// バスと容量が分からなかった記録は null / 0 のまま書く（0 や既定値を作らない）。
+    /// </summary>
+    public List<GpuSlotRecord> GpuSlots { get; set; } = new();
 
     /// <summary>旅程。物語が進む距離。全体の仕事量から貯まる。</summary>
     public double Journey { get; set; }
@@ -139,6 +150,7 @@ public sealed class PartyState
     public void Migrate()
     {
         Experience ??= new Dictionary<string, double>();
+        GpuSlots ??= new List<GpuSlotRecord>();
         Log ??= new List<string>();
         LastEventAt ??= new Dictionary<string, long>();
         RecentVignettes ??= new List<string>();
