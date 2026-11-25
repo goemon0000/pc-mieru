@@ -233,11 +233,16 @@ public sealed class PartyState
     // ---------------------------------------------------------------------
     private static string AppData =>
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-    private static string Dir => Path.Combine(AppData, "PartsLife");
+
+    /// <summary>
+    /// 新しい保存先 %APPDATA%\PCMieru\party（DESIGN-C 4.1）。**旧製品の %APPDATA%\PartsLife と %APPDATA%\PartsParty には触らない。**
+    /// 旧製品の保存を引き継ぐのは取り込み（step 5、Import/）だけで、引数なしの <see cref="Load()"/> は新しい保存先しか読まない。
+    /// </summary>
+    internal static string Dir => Path.Combine(AppData, "PCMieru", "party");
     private static string FilePath => Path.Combine(Dir, "state.json");
 
-    /// <summary>改名前の保存先。**消さずに引き継ぐ。**育てた分が消えたら台無しなので。</summary>
-    private static string LegacyFilePath => Path.Combine(AppData, "PartsParty", "state.json");
+    /// <summary>この進みを書き戻す先（<see cref="Load(string, string?)"/> が決めた場所）。保存の係（<see cref="PartySaveWriter"/>）へ渡す。</summary>
+    [JsonIgnore] public string SavePath => _path ?? FilePath;
 
     /// <summary>保存の読み書きの設定。取り込み（Import/StateImport）が同じ読み方で検査するため internal。</summary>
     internal static readonly JsonSerializerOptions Opts = new()
@@ -276,7 +281,7 @@ public sealed class PartyState
     /// </summary>
     [JsonIgnore] public bool SaveBlocked { get; private set; }
 
-    public static PartyState Load() => Load(Dir, LegacyFilePath);
+    public static PartyState Load() => Load(Dir);
 
     /// <summary>
     /// dir の state.json を読む（無ければ legacyFile を）。試験では一時フォルダを渡す。
@@ -320,7 +325,8 @@ public sealed class PartyState
         return state;
     }
 
-    private static PartyState Fresh()
+    /// <summary>何も読まない最初の進み（保存先は持たない）。--smoke がこれを使う。</summary>
+    public static PartyState Fresh()
     {
         var fresh = new PartyState();
         fresh.Migrate();
@@ -434,21 +440,28 @@ public sealed class PartyState
         if (SaveBlocked) return;   // 読めなかった保存を、空の進みで上書きしない
         try
         {
-            string path = _path ?? FilePath;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            // 書き途中で電源が落ちても壊れないよう、別名で書いてから置き換える
-            string tmp = path + ".tmp";
-            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var w = new StreamWriter(fs, new System.Text.UTF8Encoding(false)))
-            {
-                w.Write(ToJson());
-                w.Flush();
-                // 置き換える前に中身を円盤まで書き切る。これが無いと、置き換えの直後に電源が落ちたとき
-                // state.json が中身の無いファイルになりうる（点検: 読めない物は退避されて最初からになる）
-                fs.Flush(flushToDisk: true);
-            }
-            File.Move(tmp, path, overwrite: true);
+            WriteAtomic(SavePath, ToJson());
         }
         catch { /* 保存できなくても動作は続ける */ }
+    }
+
+    /// <summary>
+    /// 保存の本文を path へ書く。書き途中で電源が落ちても壊れないよう、別名で書いてから置き換える。
+    /// <see cref="Save"/> と <see cref="PartySaveWriter"/> が同じ書き方を使うための 1 か所。失敗は例外のまま返す（呼ぶ側が決める）。
+    /// </summary>
+    internal static void WriteAtomic(string path, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string tmp = path + ".tmp";
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var w = new StreamWriter(fs, new System.Text.UTF8Encoding(false)))
+        {
+            w.Write(text);
+            w.Flush();
+            // 置き換える前に中身を円盤まで書き切る。これが無いと、置き換えの直後に電源が落ちたとき
+            // state.json が中身の無いファイルになりうる（点検: 読めない物は退避されて最初からになる）
+            fs.Flush(flushToDisk: true);
+        }
+        File.Move(tmp, path, overwrite: true);
     }
 }
