@@ -123,10 +123,15 @@ public static class GpuSlotKeys
 
     /// <summary>
     /// How the GpuSlots field stood in the saved text: absent, or present (as an array of this length, or as something that is not an array, null included).
-    /// <paramref name="SlotLost"/> is true when an element of the array is an object with no integer <c>Slot</c> property: the deserializer reads such a record
-    /// as slot 0, which is a guess, not what the text said.
+    /// <paramref name="Lost"/> holds the elements of the array that are objects with no integer <c>Slot</c> property, by their index in the array: the
+    /// deserializer reads such a record as slot 0 (or drops it), which is a guess, not what the text said. Each value is what the TEXT said about that
+    /// element (name, memory, bus, retired; the slot is -1), so the identity of a row that was discarded can still be compared after the reader dropped it.
     /// </summary>
-    internal readonly record struct RawGpuSlots(bool Present, int? ArrayLength, bool SlotLost = false);
+    internal readonly record struct RawGpuSlots(bool Present, int? ArrayLength, IReadOnlyDictionary<int, GpuSlotRecord>? Lost = null)
+    {
+        /// <summary>True when an element of the array has no integer <c>Slot</c>.</summary>
+        public bool SlotLost => Lost is { Count: > 0 };
+    }
 
     /// <summary>
     /// Reads from the saved text only whether the GpuSlots field is there and what shape it has (the deserializer cannot say: it turns an absent field, a null
@@ -150,7 +155,7 @@ public static class GpuSlotKeys
                 if (string.Equals(p.Name, nameof(PartyState.GpuSlots), StringComparison.Ordinal))
                 {
                     var isArray = p.Value.ValueKind == JsonValueKind.Array;
-                    found = new RawGpuSlots(true, isArray ? p.Value.GetArrayLength() : null, isArray && p.Value.EnumerateArray().Any(LacksSlot));
+                    found = new RawGpuSlots(true, isArray ? p.Value.GetArrayLength() : null, isArray ? LostRows(p.Value) : null);
                 }
             }
 
@@ -160,6 +165,56 @@ public static class GpuSlotKeys
         {
             return new RawGpuSlots(true, null);
         }
+    }
+
+    /// <summary>
+    /// The elements of the array (by index) that are objects with no integer <c>Slot</c>, each with what its text said about the card. An element that is not
+    /// an object produced no record at all and is not listed.
+    /// </summary>
+    private static Dictionary<int, GpuSlotRecord> LostRows(JsonElement array)
+    {
+        var lost = new Dictionary<int, GpuSlotRecord>();
+        var index = 0;
+        foreach (var element in array.EnumerateArray())
+        {
+            if (LacksSlot(element))
+            {
+                lost[index] = RawIdentity(element);
+            }
+
+            index++;
+        }
+
+        return lost;
+    }
+
+    /// <summary>The name, memory, bus and retired flag an object says (ordinal names, the last one wins); a value of the wrong kind counts as absent. Slot -1: it has none.</summary>
+    private static GpuSlotRecord RawIdentity(JsonElement element)
+    {
+        var name = string.Empty;
+        long vram = 0;
+        uint? bus = null;
+        var retired = false;
+        foreach (var p in element.EnumerateObject())
+        {
+            switch (p.Name)
+            {
+                case nameof(GpuSlotRecord.Name):
+                    name = p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? string.Empty : string.Empty;
+                    break;
+                case nameof(GpuSlotRecord.VramBytes):
+                    vram = p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt64(out var v) ? Math.Max(0, v) : 0;
+                    break;
+                case nameof(GpuSlotRecord.PciBus):
+                    bus = p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetUInt32(out var b) ? b : null;
+                    break;
+                case nameof(GpuSlotRecord.Retired):
+                    retired = p.Value.ValueKind == JsonValueKind.True;
+                    break;
+            }
+        }
+
+        return new GpuSlotRecord(-1, name, vram, bus, retired);
     }
 
     /// <summary>
@@ -193,7 +248,10 @@ public static class GpuSlotKeys
     /// (b) the field is PRESENT but broken: null, not an array, an element that could not be read (or is null), an element with no integer Slot (it would be
     ///     read as slot 0), a slot number outside 0..5 (negative included), one slot number twice, or two live (not retired) records with the same exact
     ///     identity. Then the records that are valid and unambiguous are kept; two records of one identity are kept too, as DISPUTED (they block matching
-    ///     and keep their numbers closed, see <see cref="GpuSlotRecord.Disputed"/>; dropping them would make both cards look new on the next run); and for every
+    ///     and keep their numbers closed, see <see cref="GpuSlotRecord.Disputed"/>; dropping them would make both cards look new on the next run). A kept
+    ///     record is disputed as well when a row that was discarded (no integer Slot, or a slot number claimed twice) said the same identity: the discarded
+    ///     row may be this card's twin, and which of the two owns the number is not known. A row that is null or out of range has no usable identity and is
+    ///     not compared. And for every
     ///     <c>gpu#i</c> that holds experience or equipment and has no kept record, a RETIRED placeholder is added (<see cref="UnrecordedProgress"/>), so that
     ///     number is reserved and no card inherits what is stored under it. Progress is never dropped. <see cref="PartyState.GpuSlotsRepaired"/> is set.
     ///
@@ -213,7 +271,7 @@ public static class GpuSlotKeys
         state.GpuSlots ??= new List<GpuSlotRecord>();
         // A field that is not an array, or an array whose elements were dropped while reading, has fewer records here than the text had.
         var shapeBroken = raw.ArrayLength != state.GpuSlots.Count;
-        var (kept, listBroken) = Sort(state.GpuSlots, raw.SlotLost);
+        var (kept, listBroken) = Sort(state.GpuSlots, raw, shapeBroken);
         var broken = shapeBroken || listBroken;
         var reserved = UnrecordedProgress(state, kept).Select(Placeholder).ToList();
         if (!broken && reserved.Count == 0)
@@ -255,20 +313,31 @@ public static class GpuSlotKeys
         || (state.Adventure?.Equipped is { } worn && worn.TryGetValue(key, out var gear) && gear is not null && gear.Any(static id => !string.IsNullOrEmpty(id)));
 
     /// <summary>
-    /// The records that can be trusted (by slot number), and whether anything was wrong. A slot number that is claimed twice is trusted for none; so is
-    /// slot 0 when an element had no integer Slot (<paramref name="slotLost"/>: the 0 the deserializer put there is a guess). Two live records of one exact
-    /// identity are KEPT, marked disputed: the save cannot say which card is which, and a record that vanished would let both cards be taken for new ones.
-    /// Retired and already disputed records are not compared (so a repaired list reads back without being repaired again).
+    /// The records that can be trusted (by slot number), and whether anything was wrong. A slot number that is claimed twice is trusted for none. A row with
+    /// no integer Slot is discarded: when the list that was read has as many rows as the text (<paramref name="shapeBroken"/> false) the rows line up with
+    /// the text, so exactly the rows the text marked are discarded and a genuine <c>Slot</c> 0 stays; otherwise the alignment is unknown, so slot 0 is
+    /// doubtful (the 0 the deserializer put there may be a guess). Two live records of one exact identity are KEPT, marked disputed: the save cannot say which
+    /// card is which, and a record that vanished would let both cards be taken for new ones. So is a live record whose identity a DISCARDED row had too (see
+    /// <see cref="RepairLoaded"/>), because the discarded row may be its twin. Retired and already disputed records are not compared (so a repaired list
+    /// reads back without being repaired again), and neither is a retired discarded row.
     /// </summary>
-    private static (List<GpuSlotRecord> Kept, bool Broken) Sort(IEnumerable<GpuSlotRecord?> raw, bool slotLost)
+    private static (List<GpuSlotRecord> Kept, bool Broken) Sort(IReadOnlyList<GpuSlotRecord?> raw, RawGpuSlots probe, bool shapeBroken)
     {
         var broken = false;
+        var lost = probe.Lost ?? new Dictionary<int, GpuSlotRecord>();
         var inRange = new List<GpuSlotRecord>();
-        foreach (var r in raw)
+        for (var i = 0; i < raw.Count; i++)
         {
+            var r = raw[i];
             if (r is null || r.Slot is < 0 or >= GpuSlotMap.MaxSlots)
             {
                 broken = true;
+                continue;
+            }
+
+            if (!shapeBroken && lost.ContainsKey(i))
+            {
+                broken = true;    // the row has no Slot of its own; what its text said is in `lost`
                 continue;
             }
 
@@ -276,7 +345,7 @@ public static class GpuSlotKeys
         }
 
         var doubtful = new HashSet<int>();
-        if (slotLost)
+        if (shapeBroken && lost.Count > 0)
         {
             doubtful.Add(0);
         }
@@ -286,11 +355,19 @@ public static class GpuSlotKeys
             doubtful.Add(g.Key);
         }
 
+        // The identities of the rows thrown away: those with no Slot (as the text said them, they may be gone from the list) and those whose number is doubtful.
+        var discarded = lost.Values.Concat(inRange.Where(r => doubtful.Contains(r.Slot))).Where(static r => !r.Retired).ToList();
+
         // At most one record per remaining slot, so at most six to compare.
         var disputed = new HashSet<int>();
         var live = inRange.Where(r => !r.Retired && !r.Disputed && !doubtful.Contains(r.Slot)).ToList();
         for (var i = 0; i < live.Count; i++)
         {
+            if (discarded.Any(d => SameIdentity(live[i], d)))
+            {
+                disputed.Add(live[i].Slot);
+            }
+
             for (var j = i + 1; j < live.Count; j++)
             {
                 if (SameIdentity(live[i], live[j]))

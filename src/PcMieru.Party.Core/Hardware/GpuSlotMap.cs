@@ -63,6 +63,11 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 ///        could not be read never matches a record whose bus was not known either;
 ///    (c) name and dedicated memory equal while the bus differs or is unknown on either side (the bus moved, or could not be read), only when that is
 ///        the one remembered slot it can be and it is the one adapter that can be that slot. A memory size of 0 (unknown) on either side matches any size.
+///    Before (b), an adapter that fits a DISPUTED record (<see cref="GpuSlotRecord.Disputed"/>) is ambiguous at once: same model (the memory rule of (c)),
+///    and a bus that is unknown on either side or equal. Its candidate slots are that disputed slot, and the live slots it would be a candidate for in
+///    (b) (in (c) when (b) has none); they are blocked this call, so no other adapter takes them. Without this, a card whose memory is unknown would
+///    exactly match its live record and never see that the disputed one fits it just as well. An adapter whose known bus differs from the disputed
+///    record's known bus does not fit it and goes through the tiers as usual.
 ///    A match is mutual and unique, or it is not a match: when two adapters could be the same slot (twin cards whose bus is unknown or changed),
 ///    or one adapter could be two slots (two remembered twins and one survivor whose bus cannot tell which), all of them are
 ///    <see cref="GpuSlotAssignment.Ambiguous"/>, take no slot, and the slots they could be stay blocked this call (no new card takes them). An
@@ -175,6 +180,7 @@ public sealed class GpuSlotMap
         else
         {
             MatchSession(pass);
+            BlockDisputedFits(pass);
             Match(pass, Exact);
             Match(pass, SameModel);
             GiveNewCards(pass);
@@ -285,6 +291,62 @@ public sealed class GpuSlotMap
                 pass.Give(i, s);
             }
         }
+    }
+
+    /// <summary>
+    /// Rule 2, the disputed records. An adapter that fits a disputed record (<see cref="FitsDisputed"/>) is ambiguous now, before any tier can hand it a live
+    /// record that it fits only because its memory is unknown. What it could be is blocked for this call: the disputed slots it fits, and the live slots
+    /// it would be a candidate for in the normal tiers (the exact ones, or when there is none, the same-model ones). A live record of another bus that the
+    /// adapter could only be by its unknown memory is not blocked while an exact one exists: the card that owns it still gets it. Decided on one snapshot
+    /// (the adapters still open after rule 2a), so the order of the adapters cannot change the outcome.
+    /// </summary>
+    private void BlockDisputedFits(Pass pass)
+    {
+        var disputed = Enumerable.Range(0, MaxSlots).Where(s => _records[s] is { Retired: false, Disputed: true }).ToArray();
+        if (disputed.Length == 0)
+        {
+            return;
+        }
+
+        var toBlock = new List<int>();
+        foreach (var i in pass.Open.ToArray())
+        {
+            var g = pass.Adapters[i];
+            var fits = disputed.Where(s => FitsDisputed(g, _records[s]!)).ToArray();
+            if (fits.Length == 0)
+            {
+                continue;
+            }
+
+            pass.Ambiguous[i] = true;
+            toBlock.AddRange(fits);
+            var live = LiveCandidates(pass, g, Exact);
+            toBlock.AddRange(live.Count > 0 ? live : LiveCandidates(pass, g, SameModel));
+        }
+
+        foreach (var s in toBlock)
+        {
+            pass.Blocked[s] = true;
+        }
+    }
+
+    /// <summary>The same model as the disputed record (memory as in <see cref="SameModel"/>), and a bus that is unknown on either side or equal.</summary>
+    private static bool FitsDisputed(BoardGpu g, GpuSlotRecord r) =>
+        SameModel(g, r) && (g.PciBus is null || r.PciBus is null || g.PciBus == r.PciBus);
+
+    /// <summary>The live (not retired, not disputed) slots nobody took yet that <paramref name="same"/> says the adapter could be.</summary>
+    private List<int> LiveCandidates(Pass pass, BoardGpu g, Func<BoardGpu, GpuSlotRecord, bool> same)
+    {
+        var list = new List<int>();
+        for (var s = 0; s < MaxSlots; s++)
+        {
+            if (_records[s] is { Retired: false, Disputed: false } r && !pass.Claimed[s] && same(g, r))
+            {
+                list.Add(s);
+            }
+        }
+
+        return list;
     }
 
     /// <summary>

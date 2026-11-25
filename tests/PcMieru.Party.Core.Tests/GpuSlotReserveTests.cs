@@ -400,4 +400,191 @@ public class GpuSlotReserveTests
         Assert.Equal(ImportStatus.Acceptable, verdict.Status);
         Assert.DoesNotContain("GpuSlotsRepaired", Encoding.UTF8.GetString(verdict.Converted!));
     }
+
+    // ---- codex review of 7155917..d6a6d40, item 1: an exact match with unknown memory must not beat a disputed record ----
+
+    // slot 0: a live record with unknown memory; slot 1: a disputed record of the same model and bus with the memory known; slot 2: another card of the same
+    // model on a different known bus, with its own exact record
+    private static GpuSlotRecord[] UnknownMemoryNextToDisputed() =>
+        [Rec(0, "N", 0, 5u), new GpuSlotRecord(1, "N", GiB, 5u, Disputed: true), Rec(2, "N", GiB, 9u)];
+
+    private static PartyState SavedAndLoaded(GpuSlotRecord[] records, out bool repaired)
+    {
+        var state = new PartyState();
+        state.Migrate();
+        state.GpuSlots = [.. records];
+        return PartyState.FromJson(state.ToJson(), out repaired);
+    }
+
+    [Fact]
+    public void A_card_with_unknown_memory_that_fits_a_live_record_exactly_and_a_disputed_one_too_is_ambiguous_and_the_live_slot_is_taken_by_no_one()
+    {
+        var back = SavedAndLoaded(UnknownMemoryNextToDisputed(), out var repaired);
+        Assert.False(repaired);
+        Assert.Equal(UnknownMemoryNextToDisputed(), back.GpuSlots);
+
+        foreach (var records in new GpuSlotRecord[][] { UnknownMemoryNextToDisputed(), [.. back.GpuSlots] })
+        {
+            var r = new GpuSlotMap(records).Assign([Gpu("x", "N", 0, 5u), Gpu("q", "Q", GiB, 1u)]);
+
+            Assert.Null(r.Adapters[0].Slot);
+            Assert.True(r.Adapters[0].Ambiguous);
+            Assert.Equal(3, r.Adapters[1].Slot);                                    // a new card: not slot 0, which is blocked, and not 1 or 2
+            Assert.Equal(Rec(0, "N", 0, 5u), r.Records.Single(static x => x.Slot == 0));
+            Assert.True(r.Records.Single(static x => x.Slot == 1).Disputed);
+        }
+
+        // the same through the frame: it earns nothing, and the record is not rewritten to the card
+        var state = SavedAndLoaded(UnknownMemoryNextToDisputed(), out _);
+        var frame = new GpuSlotMap(state.GpuSlots).ApplyTo(state, Frame(Gpu("x", "N", 0, 5u)));
+        Assert.Empty(frame.EarningKeys);
+        Assert.Equal(Rec(0, "N", 0, 5u), state.GpuSlots.Single(static x => x.Slot == 0));
+    }
+
+    [Fact]
+    public void A_third_card_of_the_same_model_on_another_known_bus_still_gets_its_own_slot_whatever_the_order()
+    {
+        var back = SavedAndLoaded(UnknownMemoryNextToDisputed(), out _);
+        var adapters = new[] { Gpu("x", "N", 0, 5u), Gpu("y", "N", GiB, 9u), Gpu("q", "Q", GiB, 1u) };
+
+        foreach (var records in new GpuSlotRecord[][] { UnknownMemoryNextToDisputed(), [.. back.GpuSlots] })
+        {
+            foreach (var order in Permutations(adapters))
+            {
+                var r = new GpuSlotMap(records).Assign(order);
+                var byId = order.Select((g, i) => (g.Id, r.Adapters[i])).ToDictionary(static x => x.Id, static x => x.Item2);
+
+                Assert.Null(byId["x"].Slot);
+                Assert.True(byId["x"].Ambiguous);
+                Assert.Equal(2, byId["y"].Slot);
+                Assert.False(byId["y"].Ambiguous);
+                Assert.Equal(3, byId["q"].Slot);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_card_on_a_known_bus_that_differs_from_the_disputed_one_does_not_fit_it_and_goes_through_the_tiers_as_usual()
+    {
+        var map = new GpuSlotMap([new GpuSlotRecord(0, "N", GiB, 5u, Disputed: true), Rec(1, "N", GiB, 9u)]);
+
+        var r = map.Assign([Gpu("y", "N", GiB, 9u), Gpu("z", "N", GiB, 7u)]);
+
+        Assert.Equal(1, r.Adapters[0].Slot);    // the exact fit is its own, not blocked by the disputed record of another bus
+        Assert.False(r.Adapters[0].Ambiguous);
+        Assert.Null(r.Adapters[1].Slot);        // nothing exact; its only candidate is the disputed record, which is never taken
+        Assert.True(r.Adapters[1].Ambiguous);
+    }
+
+    // ---- item 2: a discarded row still says whose twin it may be ----
+
+    private const string NoProgress = "\"SaveVersion\":1,\"Experience\":{\"cpu#0\":1}";
+
+    [Theory]
+    [InlineData("{\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}")]                        // no Slot: read as slot 0, then discarded
+    [InlineData("{\"Slot\":\"x\",\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}")]         // not a number: the reader drops it, the text still says who it was
+    public void A_valid_record_with_a_twin_row_that_has_no_Slot_is_disputed_and_a_matching_card_is_ambiguous(string twin)
+    {
+        var state = PartyState.FromJson("{" + NoProgress + ",\"GpuSlots\":[{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}," + twin + "]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.True(state.GpuSlotsRepaired);
+        Assert.Equal([new GpuSlotRecord(1, "T", 1024, 5u, Disputed: true)], state.GpuSlots);
+
+        var frame = new GpuSlotMap(state.GpuSlots).ApplyTo(state, Frame(Gpu("t", "T", 1024, 5u)));
+        Assert.Equal([null], frame.Adapters.Select(static a => a.Slot).ToArray());
+        Assert.True(frame.Adapters[0].Ambiguous);
+        Assert.Empty(frame.EarningKeys);
+
+        // the repaired list is not repaired again
+        var again = PartyState.FromJson(state.ToJson(), out var repairedAgain);
+        Assert.False(repairedAgain);
+        Assert.Equal(state.GpuSlots, again.GpuSlots);
+    }
+
+    [Fact]
+    public void A_valid_record_next_to_two_rows_that_share_another_slot_is_disputed_when_one_of_them_has_its_identity()
+    {
+        var state = PartyState.FromJson(
+            "{" + NoProgress + ",\"GpuSlots\":[{\"Slot\":0,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},"
+            + "{\"Slot\":3,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},{\"Slot\":3,\"Name\":\"U\",\"VramBytes\":2048,\"PciBus\":6}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.Equal([new GpuSlotRecord(0, "T", 1024, 5u, Disputed: true)], state.GpuSlots);    // slot 3 is trusted for neither row
+
+        var frame = new GpuSlotMap(state.GpuSlots).ApplyTo(state, Frame(Gpu("t", "T", 1024, 5u)));
+        Assert.True(frame.Adapters[0].Ambiguous);
+        Assert.Empty(frame.EarningKeys);
+    }
+
+    [Fact]
+    public void A_discarded_row_with_another_identity_disputes_nothing_and_neither_does_a_row_that_is_null_or_out_of_range()
+    {
+        const string Valid = "{\"Slot\":0,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}";
+        var keep = new[] { Rec(0, "T", 1024, 5u) };
+
+        var noSlot = PartyState.FromJson("{" + NoProgress + ",\"GpuSlots\":[" + Valid + ",{\"Name\":\"U\",\"VramBytes\":1024,\"PciBus\":5}]}", out var r1);
+        var twice = PartyState.FromJson(
+            "{" + NoProgress + ",\"GpuSlots\":[" + Valid + ",{\"Slot\":2,\"Name\":\"U\",\"VramBytes\":1,\"PciBus\":5},{\"Slot\":2,\"Name\":\"T\",\"VramBytes\":2048,\"PciBus\":5}]}", out var r2);
+        var outOfRange = PartyState.FromJson(
+            "{" + NoProgress + ",\"GpuSlots\":[" + Valid + ",{\"Slot\":9,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},null]}", out var r3);
+
+        Assert.True(r1);
+        Assert.True(r2);
+        Assert.True(r3);
+        Assert.Equal(keep, noSlot.GpuSlots);
+        Assert.Equal(keep, twice.GpuSlots);       // same name and bus, but another memory: another card
+        Assert.Equal(keep, outOfRange.GpuSlots);  // no usable identity
+    }
+
+    [Fact]
+    public void A_retired_row_that_is_discarded_does_not_dispute_a_live_record()
+    {
+        var state = PartyState.FromJson(
+            "{" + NoProgress + ",\"GpuSlots\":[{\"Slot\":0,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},{\"Retired\":true,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.Equal([Rec(0, "T", 1024, 5u)], state.GpuSlots);
+    }
+
+    // ---- item 3: one row with no Slot does not discard a genuine slot 0 ----
+
+    [Fact]
+    public void A_row_with_no_Slot_next_to_a_genuine_slot_0_discards_only_that_row_and_the_save_is_still_reported_repaired()
+    {
+        var back = PartyState.FromJson(
+            "{" + Progress0 + ",\"GpuSlots\":[{\"Name\":\"B\",\"VramBytes\":2048,\"PciBus\":2},{\"Slot\":0,\"Name\":\"A\",\"VramBytes\":1024,\"PciBus\":1}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.True(back.GpuSlotsRepaired);
+        Assert.Equal([Rec(0, "A", 1024, 1u)], back.GpuSlots);    // the genuine slot 0 stays, and holds its progress
+
+        var r = new GpuSlotMap(back.GpuSlots).ApplyTo(back, Frame(Gpu("a", "A", 1024, 1u)));
+        Assert.Equal(["gpu#0"], r.EarningKeys);
+        Assert.Equal(7, back.Experience["gpu#0"]);
+    }
+
+    [Fact]
+    public void A_row_with_no_Slot_in_the_middle_of_several_discards_only_that_row()
+    {
+        var back = PartyState.FromJson(
+            "{" + NoProgress + ",\"GpuSlots\":[{\"Slot\":2,\"Name\":\"C\",\"VramBytes\":3,\"PciBus\":3},{\"Slot\":0,\"Name\":\"A\",\"VramBytes\":1,\"PciBus\":1},"
+            + "{\"Name\":\"B\",\"VramBytes\":2,\"PciBus\":2},{\"Slot\":1,\"Name\":\"D\",\"VramBytes\":4,\"PciBus\":4}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.Equal([Rec(0, "A", 1, 1u), Rec(1, "D", 4, 4u), Rec(2, "C", 3, 3u)], back.GpuSlots);
+    }
+
+    [Fact]
+    public void When_the_reader_dropped_a_row_the_rows_no_longer_line_up_and_slot_0_stays_doubtful()
+    {
+        // "Slot":"x" makes the reader drop that row: the list has fewer rows than the text, so which row is which is unknown
+        var back = PartyState.FromJson(
+            "{" + Progress0 + ",\"GpuSlots\":[{\"Slot\":\"x\",\"Name\":\"B\",\"VramBytes\":2048,\"PciBus\":2},{\"Slot\":0,\"Name\":\"A\",\"VramBytes\":1024,\"PciBus\":1}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.True(back.GpuSlotsRepaired);
+        Assert.Equal([Closed(0)], back.GpuSlots);
+        Assert.Equal(7, back.Experience["gpu#0"]);
+    }
 }
