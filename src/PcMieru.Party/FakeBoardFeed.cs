@@ -11,15 +11,22 @@ internal sealed class FakeBoardFeed : IBoardFeed
 {
     private const long GiB = 1024L * 1024 * 1024;
     private const double MiB = 1024.0 * 1024;
-    private readonly DateTime _start = DateTime.UtcNow;
+    private readonly long _startStamp = System.Diagnostics.Stopwatch.GetTimestamp();
 
-    public (BoardFrame Frame, DateTime SampledUtc)? Latest
+    /// <summary>A new sample on every ask (the window asks once a second); the frame follows the monotonic clock, not the wall clock.</summary>
+    public BoardSample? Latest
     {
         get
         {
-            var now = DateTime.UtcNow;
-            return (FrameAt((int)(now - _start).TotalSeconds), now);
+            long stamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            return new BoardSample(FrameAt((int)BoardSample.SecondsBetween(_startStamp, stamp)), DateTime.UtcNow, stamp);
         }
+    }
+
+    public TimeSpan Period => TimeSpan.FromSeconds(1);
+
+    public void SetFolded(bool folded)
+    {
     }
 
     /// <summary>The frame for second <paramref name="t"/> (a pure function, so a test or a screenshot can ask for any second).</summary>

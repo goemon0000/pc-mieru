@@ -126,7 +126,7 @@ public sealed class AdventureEngine
         int sig = slots.Count;
         unchecked
         {
-            for (int i = 0; i < slots.Count; i++) sig = sig * 31 + slots[i].Key.GetHashCode();
+            for (int i = 0; i < slots.Count; i++) sig = HashCode.Combine(sig, slots[i].Key, slots[i].Measured);   // 測れた/測れないの変わり目でも並べ直す
         }
         if (sig == _membersSig && _members.Length > 0 && ReferenceEquals(_seenState, S)) return;
         _membersSig = sig;
@@ -134,10 +134,17 @@ public sealed class AdventureEngine
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var list = new List<Member>(slots.Count);
+        var measured = new HashSet<string>(StringComparer.Ordinal);
         foreach (var sl in slots)
-            if (seen.Add(sl.Key)) list.Add(new Member(sl.Key, sl.CharacterId));
+        {
+            if (!seen.Add(sl.Key)) continue;
+            list.Add(new Member(sl.Key, sl.CharacterId));
+            if (sl.Measured) measured.Add(sl.Key);
+        }
         _members = Equipment.SortMembers(list);
-        foreach (var m in _members) Equipment.GiveStarters(_book, S, m);
+        // 測れていない席（検出はしたが値が無い）には、まだ配らない。最初に測れた秒に配る（上の署名が変わるので、ここへ戻ってくる）
+        foreach (var m in _members)
+            if (measured.Contains(m.Key)) Equipment.GiveStarters(_book, S, m);
     }
 
     // ---------------------------------------------------------------------

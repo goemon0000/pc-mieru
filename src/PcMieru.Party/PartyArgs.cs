@@ -61,6 +61,14 @@ internal static class PartyArgs
                         return false;
                     }
 
+                    // A live file (state.json, a legacy save) must never be handed in as the shot: an absolute path that ends in .png, and Program creates it
+                    // with CreateNew (it never overwrites). Pure string work.
+                    if (!System.IO.Path.IsPathFullyQualified(shot) || !shot.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                    {
+                        problem = "--shot needs an absolute path that ends in .png";
+                        return false;
+                    }
+
                     break;
                 default:
                     problem = "unknown argument: " + args[i];

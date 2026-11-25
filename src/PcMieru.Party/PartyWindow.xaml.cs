@@ -53,8 +53,11 @@ internal sealed partial class PartyWindow : Window
     private readonly DispatcherTimer _frameTimer = new() { Interval = TimeSpan.FromMilliseconds(140) };
     private readonly DispatcherTimer _sensorTimer = new() { Interval = TimeSpan.FromSeconds(SensorPeriodSeconds) };
 
-    /// <summary>前回 Director を進めた標本の時刻。同じ標本では二度進めない。</summary>
-    private DateTime? _lastSampleUtc;
+    /// <summary>前回 Director を進めた標本の印（単調時計）。同じ標本では二度進めない。順序も dt もこれだけで決める。</summary>
+    private long? _lastStamp;
+
+    /// <summary>標本が古い（max(3 × 周期, 6 秒)）。値を薄くして見せている。</summary>
+    private bool _stale;
 
     /// <summary>
     /// 60 秒ごとの保存。**標本を受け取る処理とは別の時計**で回す（フィードが止まったり同じ標本を繰り返したりして標本の処理が早く戻っても、
@@ -356,30 +359,41 @@ internal sealed partial class PartyWindow : Window
     /// </summary>
     private void PlaceWindow()
     {
-        if (_state.WindowLeft is { } sl && _state.WindowTop is { } st && IsOnScreen(sl, st))
+        var area = SystemParameters.WorkArea;
+        if (_state.WindowLeft is { } sl && _state.WindowTop is { } st)
         {
-            Left = sl;
-            Top = st;
+            if (IsOnScreen(sl, st))
+            {
+                Left = sl;
+                Top = st;
+                return;
+            }
+
+            // 覚えていた位置が、いまのどのモニタの作業領域にも掛からない（モニタを外した）。主モニタの真ん中へ戻す
+            Left = area.Left + Math.Max(0, (area.Width - ActualWidth) / 2);
+            Top = area.Top + Math.Max(0, (area.Height - ActualHeight) / 2);
             return;
         }
-        var area = SystemParameters.WorkArea;
         Left = area.Right - ActualWidth - 16;
         Top = area.Top + 16;
     }
 
     /// <summary>その位置に窓の頭が見えているか。モニタを外したあとに行方不明にならないよう確かめる。</summary>
-    private static bool IsOnScreen(double left, double top)
+    private bool IsOnScreen(double left, double top)
     {
-        double vl = SystemParameters.VirtualScreenLeft, vt = SystemParameters.VirtualScreenTop;
-        double vr = vl + SystemParameters.VirtualScreenWidth, vb = vt + SystemParameters.VirtualScreenHeight;
-        // 掴める分（頭 80x40）が画面内に残っていれば良しとする
-        return left + 80 > vl && left < vr - 20 && top + 40 > vt && top < vb - 20;
+        // 掴める分（頭 80x40）が、**どれかのモニタの作業領域**に掛かっていれば良しとする。
+        // 仮想デスクトップの外枠で見ると、モニタを外した後の「どのモニタにも無い隙間」に窓が残って掴めなくなる
+        double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        return Monitors.IntersectsWorkArea(
+            (int)Math.Floor(left * scale), (int)Math.Floor(top * scale),
+            (int)Math.Ceiling((left + 80) * scale), (int)Math.Ceiling((top + 40) * scale));
     }
 
     private void SetExpanded(bool value)
     {
         _expanded = value;
         _state.Expanded = value;
+        _feed.SetFolded(!value);   // 畳んでいる間は採取が 2 秒に 1 回（止めはしない）
         DetailPanel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
         ExpandButton.Content = value ? "▲" : "▼";
         ExpandButton.ToolTip = value ? Strings.CollapseTip : Strings.ExpandTip;
@@ -559,15 +573,17 @@ internal sealed partial class PartyWindow : Window
     private void OnSensorTick()
     {
         if (_feed.Latest is not { } latest) return;
-        var (frame, sampled) = latest;
+        var frame = latest.Frame;
+        // 古さも順序も dt も単調時計の印だけで決める（壁時計が戻っても、新しい標本が古く見えて固まることがない）
+        SetStale(latest.AgeSeconds > IBoardFeed.StaleAfter(_feed.Period).TotalSeconds);
         // 同じ標本で二度は進めない（時間だけが進んだことになり、経験値が二重に入る）
-        if (_lastSampleUtc is { } previous && sampled <= previous) return;
+        if (_lastStamp is { } previous && latest.Stamp <= previous) return;
 
         // dt は標本と標本の間隔。最初の 1 枚は 0。止まっていた後に大きく入らないよう、周期の 2 倍までに丸める
-        double dt = _lastSampleUtc is { } p
-            ? Math.Clamp((sampled - p).TotalSeconds, 0, 2 * SensorPeriodSeconds)
+        double dt = _lastStamp is { } p
+            ? Math.Clamp(BoardSample.SecondsBetween(p, latest.Stamp), 0, 2 * _feed.Period.TotalSeconds)
             : 0;
-        _lastSampleUtc = sampled;
+        _lastStamp = latest.Stamp;
 
         _frame = frame;
         _work = PartyComposition.WorkOf(frame);
@@ -582,6 +598,16 @@ internal sealed partial class PartyWindow : Window
         if (changed) SaveState();
 
         UpdateDetail();
+    }
+
+    /// <summary>古い標本の値は薄く見せる（最新だと思わせない）。</summary>
+    private void SetStale(bool stale)
+    {
+        if (stale == _stale) return;
+        _stale = stale;
+        double opacity = stale ? 0.45 : 1.0;
+        BoardHost.Opacity = opacity;
+        DetailPanel.Opacity = opacity;
     }
 
     private int LevelSum()

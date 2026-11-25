@@ -54,15 +54,20 @@ internal static class Program
     {
         // The state, the feed and the writer (DESIGN-C 3 item 6, 8 step 4a). A smoke run never reads or writes a save file: an in-memory fresh state and NO writer.
         // A normal start reads only the new home (PartyState.Load() with no arguments) and saves through one background writer.
-        IBoardFeed feed = new FakeBoardFeed();   // step 4b: real feed (PCMieru.exe's snapshot over the Wire); the smoke run keeps the fake one for good
+        // The smoke run keeps the fake feed for good. A normal start samples this machine itself (SamplerFeed), and gives it back when the window closes.
+        IBoardFeed feed;
         PartyState state;
         PartySaveWriter? writer = null;
         if (options.Smoke)
         {
+            feed = new FakeBoardFeed();
             state = PartyState.Fresh();
         }
         else
         {
+            var sampler = new SamplerFeed();
+            sampler.Start();
+            feed = sampler;
             state = PartyState.Load();
             writer = new PartySaveWriter(state.SaveBlocked);
         }
@@ -75,6 +80,7 @@ internal static class Program
 
         // A smoke run has to end on its own and to fail loudly: an exception on the UI thread is kept for the verdict instead of the default (a crash box nobody can click).
         string? failure = null;
+        var shotWritten = false;
         if (options.Smoke)
         {
             app.DispatcherUnhandledException += (_, e) =>
@@ -95,6 +101,7 @@ internal static class Program
                     try
                     {
                         WriteShot(window.RenderShot(expanded: true, scale: 2.0), shot);
+                        shotWritten = true;
                     }
                     catch (Exception ex)
                     {
@@ -116,7 +123,14 @@ internal static class Program
             }
         }
 
-        app.Run(window);
+        try
+        {
+            app.Run(window);
+        }
+        finally
+        {
+            (feed as IDisposable)?.Dispose();
+        }
 
         if (!options.Smoke)
         {
@@ -128,6 +142,12 @@ internal static class Program
         if (failure is null && !window.Rendered)
         {
             failure = "the window was closed before it was drawn";
+        }
+
+        // A shot run passes only when the PNG was written (the window may be closed after the first render and before the capture).
+        if (failure is null && options.ShotPath is not null && !shotWritten)
+        {
+            failure = "the window was closed before the shot was written";
         }
 
         if (failure is not null)
@@ -146,7 +166,8 @@ internal static class Program
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
-        using var file = File.Create(full);
+        // CreateNew: an existing file (a save, anything) is never overwritten or truncated.
+        using var file = new FileStream(full, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         encoder.Save(file);
     }
 

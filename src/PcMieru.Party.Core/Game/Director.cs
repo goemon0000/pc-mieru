@@ -2,13 +2,34 @@ using PcMieru.Party.Adventure;
 
 namespace PcMieru.Party.Game;
 
-/// <summary>実測から作った、1秒ぶんの「働き」。</summary>
+/// <summary>どのチャンネルが測れていたか（<see cref="Work.Present"/>）。</summary>
+[Flags]
+public enum WorkChannels
+{
+    None = 0,
+    Cpu = 1,
+    Gpu = 2,
+    Memory = 4,
+    Disk = 8,
+    DiskFullest = 16,
+    All = Cpu | Gpu | Memory | Disk | DiskFullest,
+}
+
+/// <summary>
+/// 実測から作った、1秒ぶんの「働き」。
+/// 測れていないチャンネルは値が 0 のままだが、<see cref="Present"/> に立たない（0 と読ませない）。既定は全部あり。
+/// </summary>
 public sealed record Work(
     double Cpu,          // 0..1
     double Gpu,          // 0..1（最も忙しいGPU）
     double Memory,       // 0..1
     double Disk,         // 0..1 に丸めた読み書き
-    double DiskFullest); // 0..1 一番埋まっているドライブ
+    double DiskFullest,  // 0..1 一番埋まっているドライブ
+    WorkChannels Present = WorkChannels.All)
+{
+    /// <summary>そのチャンネルが測れていたか。</summary>
+    public bool Has(WorkChannels channel) => (Present & channel) == channel;
+}
 
 /// <summary>
 /// 実機の稼働を、経験値と物語に変える係。
@@ -79,8 +100,16 @@ public sealed class Director
     public static double ExpRate(double load) => 0.6 + Math.Clamp(load, 0, 1) * 11.0;
 
     /// <summary>1秒あたりの旅程。待機 0.15、全力で 1.4 前後。</summary>
-    public static double JourneyRate(Work w) =>
-        0.15 + (w.Cpu + w.Gpu + w.Memory * 0.3 + w.Disk * 0.5) * 0.62;
+    public static double JourneyRate(Work w)
+    {
+        // 測れていないチャンネルは式に入れない（0 として読まない）。全部測れているフレームでは旧版と同じ数（足す順も同じ）
+        double sum = 0;
+        if (w.Has(WorkChannels.Cpu)) sum += w.Cpu;
+        if (w.Has(WorkChannels.Gpu)) sum += w.Gpu;
+        if (w.Has(WorkChannels.Memory)) sum += w.Memory * 0.3;
+        if (w.Has(WorkChannels.Disk)) sum += w.Disk * 0.5;
+        return 0.15 + sum * 0.62;
+    }
 
     // ---------------------------------------------------------------------
     // 進行
@@ -280,7 +309,7 @@ public sealed class Director
             TryFire(kind, now, lang, world, output);
         }
 
-        _idleSeconds = w.Cpu <= 0.05 ? _idleSeconds + dt : 0;
+        _idleSeconds = w.Has(WorkChannels.Cpu) && w.Cpu <= 0.05 ? _idleSeconds + dt : 0;   // CPU が測れていないのは「暇」ではない
 
         // いま満たしている状況の種類
         if (w.Cpu >= 0.90) TryFire("cpu-very-high", now, lang, world, output);

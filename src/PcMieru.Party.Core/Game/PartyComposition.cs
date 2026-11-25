@@ -95,18 +95,21 @@ public static class PartyComposition
     }
 
     /// <summary>
-    /// 物語（旅程）へ渡す仕事量。値が無いチャンネルは今は 0 にしている。
+    /// 物語（旅程）へ渡す仕事量。値が無いチャンネルは 0 にして <see cref="Work.Present"/> に立てない
+    /// （<see cref="Director.JourneyRate"/> は式に入れず、アイドル判定にも使わない）。
     /// </summary>
     public static Work WorkOf(BoardFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        // TODO(step 4b): leave missing channels out of JourneyRate
-        return new Work(
-            Cpu: Ratio(frame.CpuPercent) ?? 0,
-            Gpu: Ratio(frame.GpuMaxPercent) ?? 0,
-            Memory: Ratio(frame.Memory?.Percent) ?? 0,
-            Disk: DiskWork(frame) ?? 0,
-            DiskFullest: Ratio(frame.FullestVolumePercent) ?? 0);
+        double? cpu = Ratio(frame.CpuPercent), gpu = Ratio(frame.GpuMaxPercent), memory = Ratio(frame.Memory?.Percent);
+        double? disk = DiskWork(frame), fullest = Ratio(frame.FullestVolumePercent);
+        var present = WorkChannels.None;
+        if (cpu is not null) present |= WorkChannels.Cpu;
+        if (gpu is not null) present |= WorkChannels.Gpu;
+        if (memory is not null) present |= WorkChannels.Memory;
+        if (disk is not null) present |= WorkChannels.Disk;
+        if (fullest is not null) present |= WorkChannels.DiskFullest;
+        return new Work(cpu ?? 0, gpu ?? 0, memory ?? 0, disk ?? 0, fullest ?? 0, present);
     }
 
     private static double? DiskWork(BoardFrame frame) =>

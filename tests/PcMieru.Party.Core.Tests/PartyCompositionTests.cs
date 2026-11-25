@@ -133,7 +133,7 @@ public sealed class PartyCompositionTests
     }
 
     [Fact]
-    public void WorkOf_uses_the_frame_values_and_passes_zero_for_a_missing_channel_for_now()
+    public void WorkOf_uses_the_frame_values_and_marks_a_missing_channel_as_missing()
     {
         var work = PartyComposition.WorkOf(Frame(50, new BoardMemory(GiB, 2 * GiB, 50), [new BoardGpu("g0", "x", 20, null, null)], 100 * MiB));
 
@@ -142,5 +142,7 @@ public sealed class PartyCompositionTests
         Assert.Equal(0.5, work.Memory, 6);
         Assert.Equal(0.5, work.Disk, 6);
         Assert.Equal(0, work.DiskFullest);
+        Assert.False(work.Has(WorkChannels.DiskFullest));   // 値が 0 なのは「無い」から。式には入れない
+        Assert.True(work.Has(WorkChannels.Cpu | WorkChannels.Gpu | WorkChannels.Memory | WorkChannels.Disk));
     }
 }
