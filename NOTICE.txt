@@ -4,9 +4,10 @@ PC Mieru - third-party notices
 This folder is self-contained: it carries the .NET runtime, so no separate
 .NET installation is needed.
 
-.NET runtime and Windows Desktop runtime (WinForms)
+.NET runtime and Windows Desktop runtime (WinForms and WPF)
   Copyright (c) .NET Foundation and Contributors. MIT License.
-  https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
+  https://github.com/dotnet/runtime , https://github.com/dotnet/winforms ,
+  https://github.com/dotnet/wpf
 
 System.Management and System.CodeDom (the WMI questions of the system check)
   Copyright (c) .NET Foundation and Contributors. MIT License.
@@ -227,6 +228,17 @@ goemon0000/parts-life and the owner's pl-sensors helper
       Documents\PartsLife\runs folder it lived in, so that the old runs can be
       listed and read (never written), from the owner's pl-sensors
       src/PartsLife.Checks/Recording/RunStore.cs
+  src/PcMieru.Party.Core (Adventure, Game, Hardware/GpuRoster.cs,
+  Hardware/GpuCounterName.cs, Shared, Ui) and assets/party/story.json and
+  adventure.json
+      the rules layer of Parts Life v0.7.4, moved whole with the namespace
+      renamed, from src/PartsLife.Core and assets of goemon0000/parts-life
+      (tag v0.7.4). The files below still name the old app in their text:
+  src/PcMieru.Party.Core/Game/PartyState.cs
+  src/PcMieru.Party.Core/Shared/GpuAliasRule.cs
+  src/PcMieru.Party/ResidentInstance.cs
+      the single-resident mutex name shared with the last Parts Life release,
+      so that the old app and the new window never run at the same time
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART
