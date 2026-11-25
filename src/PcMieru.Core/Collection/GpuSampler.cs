@@ -39,6 +39,9 @@ internal sealed class GpuAggregator
     private readonly Dictionary<string, string> _typeNames = [];
     private readonly Dictionary<string, string>.AlternateLookup<ReadOnlySpan<char>> _typeLookup;
 
+    /// <summary>Aggregate mode only: adapters that have at least one engine row whose name parsed, valid or not (who a row belongs to is not the same as whether its value is usable).</summary>
+    private readonly HashSet<ulong> _engineRowAdapters = [];
+
     private readonly bool _trackProcesses;
     private readonly bool _flagUnreadable;
 
@@ -50,7 +53,7 @@ internal sealed class GpuAggregator
     /// True for the aggregate-only source: an adapter whose load could not be read is marked <see cref="GpuAdapterUsage.EngineUnreadable"/> instead of
     /// reading as idle (Parts Life must never earn on a load it could not read). That is an engine instance with an invalid status, and any adapter
     /// that ends with no usable engine instance while the array held an instance whose name could not be parsed (that instance has no adapter to
-    /// blame, so it may have been this one's) or held no usable engine instance for any adapter at all (see <see cref="Finish"/>). The default
+    /// blame, so it may have been this one's) or held no engine row (valid or not) for any other adapter (see <see cref="Finish"/>). The default
     /// leaves the adapter table as it always was.
     /// </param>
     public GpuAggregator(bool trackProcesses = true, bool flagUnreadableEngines = false)
@@ -85,6 +88,7 @@ internal sealed class GpuAggregator
         Unrecognized = 0;
         UnrecognizedEngines = 0;
         Invalid = 0;
+        _engineRowAdapters.Clear();
     }
 
     public void AddEngine(ReadOnlySpan<char> instance, double value, uint cstatus)
@@ -94,6 +98,11 @@ internal sealed class GpuAggregator
             Unrecognized++;
             UnrecognizedEngines++;
             return;
+        }
+
+        if (_flagUnreadable)
+        {
+            _engineRowAdapters.Add(key.Luid);
         }
 
         if (cstatus is not (Pdh.CStatusValidData or Pdh.CStatusNewData) || !double.IsFinite(value) || value < 0)
@@ -146,8 +155,10 @@ internal sealed class GpuAggregator
     /// <summary>
     /// Call once after all instances were added. In the aggregate-only mode an adapter that ends with no usable engine instance is marked unreadable
     /// unless the array can be trusted to have had none for it: it must have been read cleanly (no instance whose name could not be parsed, because
-    /// that instance could have been this adapter's) and have held a usable engine instance for some other adapter (an array that lists no engine at
-    /// all, while the memory counters answer, is not an array that shows an idle machine).
+    /// that instance could have been this adapter's), it must have no engine row of its own (an invalid one already marked it), and the array must
+    /// have listed an engine row, valid or not, for some other adapter (an array that lists no engine at all, while the memory counters answer, is
+    /// not an array that shows an idle machine). Whose row it is and whether its value can be used are two questions: a row that parsed names its
+    /// adapter even when its value is invalid, so the other adapters' invalid rows do not turn a genuinely idle card into a missing one.
     /// </summary>
     public void Finish()
     {
@@ -162,10 +173,19 @@ internal sealed class GpuAggregator
 
         if (_flagUnreadable)
         {
-            var trusted = UnrecognizedEngines == 0 && _engines.Count > 0;
-            foreach (var usage in _adapters.Values)
+            var clean = UnrecognizedEngines == 0;
+            foreach (var (luid, usage) in _adapters)
             {
-                if (usage.EngineInstances == 0 && !trusted)
+                if (usage.EngineInstances != 0)
+                {
+                    continue;
+                }
+
+                // Its own rows, all invalid (already flagged when they were added), or a name somewhere that could have been its own, or no engine row
+                // for anybody: no proof of idleness. Otherwise the array named other adapters and none of them was this one.
+                var ownRows = _engineRowAdapters.Contains(luid);
+                var othersListed = _engineRowAdapters.Count > (ownRows ? 1 : 0);
+                if (ownRows || !clean || !othersListed)
                 {
                     usage.EngineUnreadable = true;
                 }

@@ -150,6 +150,84 @@ public sealed class AggregateGpuUnreadableLoadTests
     }
 
     [Fact]
+    public void A_card_with_memory_rows_and_no_engine_row_is_idle_when_the_other_adapters_engine_rows_are_all_invalid_but_named_in_aggregate_mode()
+    {
+        // Every engine row in the array is invalid, yet each one parsed and names the first adapter: the array does say who it is about, and the second
+        // adapter is not in it. The first one cannot be read; the second one is idle.
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 0, InvalidData);
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 1, "Copy"), 0, InvalidData);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        var gpus = GpuSampler.Describe([Adapter, Adapter1], a, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(0, a.UnrecognizedEngines);
+        Assert.False(gpus[0].UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpus[0].UtilizationPercent.Status);
+        Assert.True(gpus[1].UtilizationPercent.IsOk);
+        Assert.Equal(0.0, gpus[1].UtilizationPercent.Data);
+        Assert.Equal(512, gpus[1].DedicatedUsedBytes.Data);
+    }
+
+    [Fact]
+    public void An_adapter_that_has_engine_rows_but_none_valid_stays_missing_next_to_a_usable_one_in_aggregate_mode()
+    {
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 12, Valid);
+        a.AddEngine(GpuNames.Engine(10, Gpu1, 0, 0, "3D"), 0, InvalidData);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        var gpus = GpuSampler.Describe([Adapter, Adapter1], a, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(12.0, gpus[0].UtilizationPercent.Data);
+        Assert.False(gpus[1].UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpus[1].UtilizationPercent.Status);
+    }
+
+    [Fact]
+    public void An_unparsable_engine_name_keeps_an_adapter_with_no_engine_row_missing_even_when_the_other_rows_are_invalid_in_aggregate_mode()
+    {
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 0, InvalidData);
+        a.AddEngine("pid_10_a_name_this_parser_does_not_know", 55, Valid);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        var gpus = GpuSampler.Describe([Adapter, Adapter1], a, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(1, a.UnrecognizedEngines);
+        Assert.False(gpus[0].UtilizationPercent.IsOk);
+        Assert.False(gpus[1].UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpus[1].UtilizationPercent.Status);
+    }
+
+    [Fact]
+    public void The_engine_rows_seen_are_forgotten_at_the_next_tick_in_aggregate_mode()
+    {
+        // A tick whose array named only the first adapter must not make a later tick's empty array look like "others were listed".
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 0, InvalidData);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+        Assert.False(a.Adapters[Gpu1].EngineUnreadable);
+
+        a.Begin();
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        Assert.True(a.Adapters[Gpu1].EngineUnreadable);
+    }
+
+    [Fact]
     public void An_array_with_no_usable_engine_for_any_adapter_does_not_read_as_an_idle_machine_in_aggregate_mode()
     {
         // Memory counters answer but the engine array lists nothing at all: not proof that nothing runs (every machine has a compositor on its display adapter).
@@ -355,28 +433,44 @@ public sealed class AggregateSnapshotSourceStageTests
     [Fact]
     public async Task A_gpu_stage_given_up_on_before_it_sampled_never_samples_and_the_next_stage_resets_then_reads_no_rate_from_it()
     {
-        var hold = new ManualResetEventSlim();
-        var gpu = new FakeGpu { HoldFirstReset = hold };
-        using var source = Make(gpu, () => new FakePdh(), timeoutSeconds: 0.5);
-
-        // Stage 1 is scheduled with the reset and sits inside it; its join gives up (stage 1 times out).
-        source.ResetBaseline();
-        var first = await source.SampleAsync();
-        Assert.Equal(ValueStatus.Timeout, first.System.GpusState.Status);
-
-        // Stage 1 comes back late. It must not sample: that would move the baseline stage 2 is about to read.
-        hold.Set();
-        for (var i = 0; i < 100 && !gpu.Log.Contains("start 1"); i++)
+        // The scenario needs stage 1 to be inside its reset when the join gives up. The stage is a thread-pool task: on a starved pool it can start
+        // after the join's limit, and then it correctly skips the reset (it was given up on before it got going), which is a different scenario.
+        // So the test waits on the fake's own signal (the first reset has been entered) and runs the scenario again on a fresh source when it
+        // was not, instead of asserting on a log that depends on how quickly the pool started the worker.
+        const int Attempts = 5;
+        for (var attempt = 1; attempt <= Attempts; attempt++)
         {
-            _ = await source.SampleAsync();
-            await Task.Delay(20);
+            var hold = new ManualResetEventSlim();
+            var gpu = new FakeGpu { HoldFirstReset = hold };
+            using var source = Make(gpu, () => new FakePdh(), timeoutSeconds: 0.5);
+
+            // Stage 1 is scheduled with the reset and sits inside it; its join gives up (stage 1 times out).
+            source.ResetBaseline();
+            var first = await source.SampleAsync();
+            Assert.Equal(ValueStatus.Timeout, first.System.GpusState.Status);
+            if (!gpu.FirstResetEntered.IsSet)
+            {
+                hold.Set();
+                continue;
+            }
+
+            // Stage 1 comes back late. It must not sample: that would move the baseline stage 2 is about to read.
+            hold.Set();
+            for (var i = 0; i < 100 && !gpu.Log.Contains("start 1"); i++)
+            {
+                _ = await source.SampleAsync();
+                await Task.Delay(20);
+            }
+
+            Assert.True(SpinWait.SpinUntil(() => gpu.Log.Contains("end 1"), TimeSpan.FromSeconds(10)));
+
+            // Stage 1's reset, then (stage 1 skipped its sample) stage 2: reset, then its first sample, which builds on nothing.
+            Assert.Equal(["reset", "reset", "start 1", "end 1"], gpu.Log.Take(4));
+            Assert.Equal("1 builds on nothing", gpu.Rates.First());
+            return;
         }
 
-        Assert.True(SpinWait.SpinUntil(() => gpu.Log.Contains("end 1"), TimeSpan.FromSeconds(10)));
-
-        // Stage 1's reset, then (stage 1 skipped its sample) stage 2: reset, then its first sample, which builds on nothing.
-        Assert.Equal(["reset", "reset", "start 1", "end 1"], gpu.Log.Take(4));
-        Assert.Equal("1 builds on nothing", gpu.Rates.First());
+        Assert.Fail($"The GPU stage never reached its reset before the join gave up, in {Attempts} tries (the thread pool was starved).");
     }
 
     [Fact]
@@ -485,6 +579,9 @@ public sealed class AggregateSnapshotSourceStageTests
 
         public ManualResetEventSlim? HoldFirstReset { get; init; }
 
+        /// <summary>Set when the first <see cref="Reset"/> call has been entered (before it waits on <see cref="HoldFirstReset"/>).</summary>
+        public ManualResetEventSlim FirstResetEntered { get; } = new();
+
         public GpuReading? Result { get; init; }
 
         public ConcurrentQueue<string> Log { get; } = new();
@@ -501,6 +598,7 @@ public sealed class AggregateSnapshotSourceStageTests
             Volatile.Write(ref _baselineFrom, 0);
             if (n == 1)
             {
+                FirstResetEntered.Set();
                 _ = HoldFirstReset?.Wait(TimeSpan.FromSeconds(30));
             }
         }
@@ -642,11 +740,18 @@ public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
     /// <summary>
     /// Whether this machine has a hardware GPU, told by DXGI alone (the adapter list), not by the GPU counters the tests below are about. xunit 2 cannot
     /// skip at run time, so a machine without one returns early with a line in the output; that is the only no-op path. On a machine with one, a
-    /// missing usable reading is a failure.
+    /// missing usable reading is a failure. An enumeration that failed (DXGI missing, a call that returned an error) is not "no GPU": it fails the
+    /// test with the reason, so a broken DXGI cannot turn every real-machine test into a quiet no-op.
     /// </summary>
     private static bool HasHardwareGpu(ITestOutputHelper output)
     {
-        var hardware = GpuAdapters.Enumerate().Where(static a => !a.IsSoftware && !a.IsAlias).ToArray();
+        var listed = GpuAdapters.EnumerateChecked(out var failure);
+        if (failure is not null)
+        {
+            Assert.Fail("DXGI adapter enumeration failed, so it cannot be said whether this machine has a GPU: " + failure);
+        }
+
+        var hardware = listed.Where(static a => !a.IsSoftware && !a.IsAlias).ToArray();
         if (hardware.Length == 0)
         {
             output.WriteLine("NO-OP: DXGI lists no hardware GPU on this machine, so there is no GPU reading to assert on.");

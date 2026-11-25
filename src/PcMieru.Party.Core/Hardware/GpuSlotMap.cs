@@ -39,8 +39,9 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 /// 2. Afterwards an adapter is matched, strongest first, to a remembered slot by
 ///    (a) the id it had earlier in this run (a LUID is stable inside one run, so a card that was settled stays settled even when its bus later
 ///        fails to read; LUIDs change at every boot, so they are never stored);
-///    (b) name, dedicated memory and PCI bus all equal, every one of them known on both sides (a memory size above 0, a bus that is not null): an
-///        unknown is never "equal" to another unknown, so a card whose bus could not be read never matches a record whose bus was not known either;
+///    (b) name and PCI bus equal and known on both sides (a bus that is not null), and dedicated memory equal and above 0 or unknown (0) on both
+///        sides (then the memory is simply not part of the identity): an unknown bus is never "equal" to another unknown, so a card whose bus
+///        could not be read never matches a record whose bus was not known either;
 ///    (c) name and dedicated memory equal while the bus differs or is unknown on either side (the bus moved, or could not be read), only when that is
 ///        the one remembered slot it can be and it is the one adapter that can be that slot. A memory size of 0 (unknown) on either side matches any size.
 ///    A match is mutual and unique, or it is not a match: when two adapters could be the same slot (twin cards whose bus is unknown or changed),
@@ -151,13 +152,15 @@ public sealed class GpuSlotMap
     private static long VramOf(BoardGpu g) => g.VramTotalBytes is { } v && v > 0 ? v : 0;
 
     /// <summary>
-    /// Every identity field is known on both sides and equal: a name, a memory size above 0 and a bus. An unknown (null or 0) on either side is not
-    /// "equal to an unknown": two unknowns say nothing, so such a pair is left to <see cref="SameModel"/>, which only ever settles a unique pair.
+    /// A name and a bus that are known on both sides and equal, and a memory size that does not contradict them: equal and above 0, or unknown (0) on
+    /// both sides, in which case the memory is simply not part of this card's identity (some adapters never report any, and twins of such a model
+    /// still differ by their bus). An unknown name or bus is never "equal to an unknown", and a memory size known on one side only is not an exact
+    /// match: such a pair is left to <see cref="SameModel"/>, which only ever settles a unique pair.
     /// </summary>
     private static bool Exact(BoardGpu g, GpuSlotRecord r) =>
         !string.IsNullOrEmpty(g.Name) && string.Equals(g.Name, r.Name, StringComparison.Ordinal)
-        && VramOf(g) > 0 && VramOf(g) == r.VramBytes
-        && g.PciBus is { } bus && r.PciBus is { } remembered && bus == remembered;
+        && g.PciBus is { } bus && r.PciBus is { } remembered && bus == remembered
+        && (VramOf(g) > 0 ? VramOf(g) == r.VramBytes : r.VramBytes == 0);
 
     private static bool SameModel(BoardGpu g, GpuSlotRecord r) =>
         string.Equals(g.Name, r.Name, StringComparison.Ordinal) && (VramOf(g) == r.VramBytes || VramOf(g) == 0 || r.VramBytes == 0);

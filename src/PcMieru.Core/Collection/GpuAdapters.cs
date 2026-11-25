@@ -45,14 +45,23 @@ internal static unsafe partial class GpuAdapters
     private static partial int CreateDXGIFactory1(in Guid riid, out nint factory);
 
     /// <summary>All adapters DXGI lists. Empty (never an exception) when DXGI is missing or fails.</summary>
-    public static IReadOnlyList<GpuAdapter> Enumerate()
+    public static IReadOnlyList<GpuAdapter> Enumerate() => EnumerateChecked(out _);
+
+    /// <summary>
+    /// <see cref="Enumerate"/>, and why it came back short. <paramref name="failure"/> is null when DXGI answered to the end (an empty list then really
+    /// means "no adapter"); otherwise it says what failed, so a failed enumeration is not taken for a machine with no GPU.
+    /// </summary>
+    internal static IReadOnlyList<GpuAdapter> EnumerateChecked(out string? failure)
     {
+        failure = null;
         var result = new List<GpuAdapter>();
         nint factory = 0;
         try
         {
-            if (CreateDXGIFactory1(FactoryIid, out factory) < 0 || factory == 0)
+            var created = CreateDXGIFactory1(FactoryIid, out factory);
+            if (created < 0 || factory == 0)
             {
+                failure = $"CreateDXGIFactory1 failed (0x{created:X8})";
                 return result;
             }
 
@@ -63,8 +72,14 @@ internal static unsafe partial class GpuAdapters
             {
                 nint adapter;
                 var hr = enumAdapters1(factory, i, &adapter);
-                if (hr == NotFound || hr < 0)
+                if (hr == NotFound)
                 {
+                    break;
+                }
+
+                if (hr < 0)
+                {
+                    failure = $"IDXGIFactory1::EnumAdapters1({i}) failed (0x{hr:X8})";
                     break;
                 }
 
@@ -74,9 +89,14 @@ internal static unsafe partial class GpuAdapters
                     var getDesc1 = (delegate* unmanaged[Stdcall]<nint, byte*, int>)(*(nint**)adapter)[10];
                     fixed (byte* d = desc)
                     {
-                        if (getDesc1(adapter, d) >= 0)
+                        var described = getDesc1(adapter, d);
+                        if (described >= 0)
                         {
                             result.Add(ParseDesc1(desc));
+                        }
+                        else
+                        {
+                            failure ??= $"IDXGIAdapter1::GetDesc1 failed for adapter {i} (0x{described:X8})";
                         }
                     }
                 }
@@ -89,6 +109,7 @@ internal static unsafe partial class GpuAdapters
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
         {
             result.Clear();
+            failure = $"DXGI could not be loaded ({ex.GetType().Name})";
         }
         finally
         {

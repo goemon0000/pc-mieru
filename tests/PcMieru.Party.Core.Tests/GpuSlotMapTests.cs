@@ -381,14 +381,61 @@ public class GpuSlotMapTests
     }
 
     [Fact]
-    public void An_unknown_memory_size_is_not_an_exact_match_even_with_the_same_bus_so_twins_stay_ambiguous()
+    public void An_unknown_memory_size_on_one_side_only_is_not_an_exact_match_even_with_the_same_bus_so_twins_stay_ambiguous()
     {
-        var map = Remembered(new GpuSlotRecord(0, "Twin", 0, 3), new GpuSlotRecord(1, "Twin", 0, 9));
+        // The record knows its size, the adapter does not (or the other way round): the size says nothing either way, and one bus is not enough to
+        // call it settled while the twin could just as well be this one.
+        var known = Remembered(new GpuSlotRecord(0, "Twin", 8 * GiB, 3), new GpuSlotRecord(1, "Twin", 8 * GiB, 9));
+        var unknown = Remembered(new GpuSlotRecord(0, "Twin", 0, 3), new GpuSlotRecord(1, "Twin", 0, 9));
 
-        var result = map.Assign([Card("n1", "Twin", 0, 3)]);
+        var forgotten = known.Assign([Card("n1", "Twin", 0, 3)]);
+        var learned = unknown.Assign([Card("n2", "Twin", 8 * GiB, 3)]);
 
-        Assert.Equal(new int?[] { null }, Slots(result));
-        Assert.True(result.Adapters[0].Ambiguous);
+        Assert.Equal(new int?[] { null }, Slots(forgotten));
+        Assert.True(forgotten.Adapters[0].Ambiguous);
+        Assert.Equal(new int?[] { null }, Slots(learned));
+        Assert.True(learned.Adapters[0].Ambiguous);
+    }
+
+    [Fact]
+    public void Twins_with_no_memory_size_on_either_side_keep_their_slots_by_their_known_buses_in_any_order()
+    {
+        // An adapter that reports no dedicated memory (0 on both sides): the memory is not part of its identity, the bus is. Each twin has exactly one
+        // remembered slot with its bus, so both settle after a restart, whatever order the adapters come in and whatever their new ids are.
+        var map = new GpuSlotMap();
+        var first = map.Assign([Card("t1", "Twin", 0, 3), Card("t2", "Twin", 0, 9)]);
+        Assert.Equal(new int?[] { 0, 1 }, Slots(first));
+        Assert.Equal(new GpuSlotRecord(1, "Twin", 0, 9), first.Records[1]);
+
+        foreach (var order in Permutations(new[] { Card("n9", "Twin", 0, 9), Card("n3", "Twin", 0, 3) }))
+        {
+            var after = Reboot(map).Assign(order);
+            var byId = after.Adapters.ToDictionary(a => a.Id, a => (a.Slot, a.Ambiguous));
+
+            Assert.Equal(((int?)1, false), byId["n9"]);
+            Assert.Equal(((int?)0, false), byId["n3"]);
+            Assert.Equal(first.Records, after.Records);
+        }
+    }
+
+    [Fact]
+    public void Zero_memory_twins_whose_buses_moved_or_do_not_read_are_still_ambiguous()
+    {
+        var records = new[] { new GpuSlotRecord(0, "Twin", 0, 3), new GpuSlotRecord(1, "Twin", 0, 9) };
+
+        // Buses unknown: nothing tells them apart.
+        var blind = Remembered(records).Assign([Card("n1", "Twin", 0, null), Card("n2", "Twin", 0, null)]);
+        // Both moved to buses no record has: the same.
+        var moved = Remembered(records).Assign([Card("n1", "Twin", 0, 5), Card("n2", "Twin", 0, 6)]);
+        // Both claim the same remembered bus: neither is the only one it can be.
+        var clash = Remembered(records).Assign([Card("n1", "Twin", 0, 3), Card("n2", "Twin", 0, 3)]);
+
+        Assert.All(new[] { blind, moved, clash }, r =>
+        {
+            Assert.All(r.Adapters, a => Assert.True(a.Ambiguous));
+            Assert.All(r.Adapters, a => Assert.Null(a.Slot));
+            Assert.Equal(records, r.Records);
+        });
     }
 
     [Fact]
