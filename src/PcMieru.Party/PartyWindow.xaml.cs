@@ -29,7 +29,7 @@ internal sealed partial class PartyWindow : Window
     // GPU の番号（席）。窓が 1 つ持ち、標本ごとに ApplyTo で決める。_state の変更は全部 UI スレッド（SamplerFeed は Latest を出すだけ）
     private readonly GpuSlotMap _slotMap;
     private GpuSlotFrame _gpuFrame = new([], [], false);
-    /// <summary>GPU の一覧が読めた標本を一度でも処理したか（または持ち主が明示で変えたか）。それまでは何も保存しない（番号を決める前の状態で、保存を書き換えない）。</summary>
+    /// <summary>標本を一度でも処理したか（席を決める処理を通したか）（または持ち主が明示で変えたか）。それまでは何も保存しない（番号を決める前の状態で、保存を書き換えない）。</summary>
     private bool _saveAllowed;
     private Action? _noticeOk;
 
@@ -327,7 +327,7 @@ internal sealed partial class PartyWindow : Window
     {
         Dispatcher.VerifyAccess();      // 本文を取るのは UI スレッドだけ（変更と同じ操作の中で取る）
         if (_writer is null) return;
-        // 番号を決める前（GPU の一覧が読めた標本がまだ無い）は書かない。持ち主が明示で変えたとき（リセット・手放す・OK）だけは書く
+        // 番号を決める前（標本がまだ 1 枚も無い）は書かない。持ち主が明示で変えたとき（リセット・手放す・OK）だけは書く
         if (force) _saveAllowed = true;
         if (!_saveAllowed) return;
 
@@ -347,7 +347,7 @@ internal sealed partial class PartyWindow : Window
     /// </summary>
     private void SaveOnClose()
     {
-        if (_writer is null || !_saveAllowed) return;     // 一覧が読めないまま閉じたら、保存は元のまま（変わっていない状態を書き戻さない）
+        if (_writer is null || !_saveAllowed) return;     // 標本が 1 枚も来ないまま閉じたら、保存は元のまま（変わっていない状態を書き戻さない）
         if (_sessionEnding)
         {
             // Windows の終了・サインアウト中。箱は出せない（出すと終了が止まる）。SessionEnding で書いた分に、最後の分を短く足すだけ
@@ -627,7 +627,9 @@ internal sealed partial class PartyWindow : Window
         _frame = frame;
         // 席を先に決める（Build / Tick より前）。GPU の鍵と「育てていい GPU」はここで決まる
         _gpuFrame = _slotMap.ApplyTo(_state, frame);
-        if (frame.AllGpus is not null) _saveAllowed = true;
+        // 席を決める処理を 1 回通した後なら保存してよい。一覧が読めない枚（AllGpus null）は席に触れないので、それでも書いて安全
+        // （一覧を待つと、GPU の一覧が読めない機械では CPU などの育成も一度も保存されない）
+        _saveAllowed = true;
         if (_gpuFrame.SlotsChanged) SaveState();
         _work = PartyComposition.WorkOf(frame, _gpuFrame);
         _slots = PartyComposition.Build(frame, _gpuFrame, Strings.Lang);
