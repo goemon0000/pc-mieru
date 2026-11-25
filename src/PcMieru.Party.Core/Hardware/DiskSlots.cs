@@ -9,9 +9,12 @@ namespace PcMieru.Party.Hardware;
 /// <param name="FullScaleBytesPerSec">The read + write rate (bytes per second) that counts as full load for this slot.</param>
 public sealed record DiskSlotSpec(string Key, string CharacterId, string Title, double FullScaleBytesPerSec)
 {
-    /// <summary>The share of full load, 0..1, for a read + write rate. A negative or non-finite rate is 0 here; callers pass a missing rate as "missing" and never reach this.</summary>
-    public double Load(double bytesPerSec) =>
-        double.IsFinite(bytesPerSec) ? Math.Clamp(bytesPerSec / FullScaleBytesPerSec, 0, 1) : 0;
+    /// <summary>
+    /// The share of full load, 0..1, for a read + write rate. A rate that is not a rate (NaN, infinite or negative) is null, never 0: a bad number
+    /// is missing, and a caller keeps it missing instead of drawing an idle disk. Zero is a real rate and gives 0.
+    /// </summary>
+    public double? Load(double bytesPerSec) =>
+        double.IsFinite(bytesPerSec) && bytesPerSec >= 0 ? Math.Clamp(bytesPerSec / FullScaleBytesPerSec, 0, 1) : null;
 }
 
 /// <summary>
