@@ -188,6 +188,24 @@ public static class GpuSlotKeys
         return lost;
     }
 
+    /// <summary>A name the text says; empty when it is not a string or cannot be decoded (an unpaired surrogate escape): an empty name is an unknown identity, which disputes nothing.</summary>
+    private static string ReadName(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return value.GetString() ?? string.Empty;
+        }
+        catch (Exception e) when (LenientJson.IsReadError(e))
+        {
+            return string.Empty;
+        }
+    }
+
     /// <summary>The name, memory, bus and retired flag an object says (ordinal names, the last one wins); a value of the wrong kind counts as absent. Slot -1: it has none.</summary>
     private static GpuSlotRecord RawIdentity(JsonElement element)
     {
@@ -200,7 +218,7 @@ public static class GpuSlotKeys
             switch (p.Name)
             {
                 case nameof(GpuSlotRecord.Name):
-                    name = p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? string.Empty : string.Empty;
+                    name = ReadName(p.Value);
                     break;
                 case nameof(GpuSlotRecord.VramBytes):
                     vram = p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt64(out var v) ? Math.Max(0, v) : 0;
@@ -317,7 +335,8 @@ public static class GpuSlotKeys
     /// no integer Slot is discarded: when the list that was read has as many rows as the text (<paramref name="shapeBroken"/> false) the rows line up with
     /// the text, so exactly the rows the text marked are discarded and a genuine <c>Slot</c> 0 stays; otherwise the alignment is unknown, so slot 0 is
     /// doubtful (the 0 the deserializer put there may be a guess). Two live records of one exact identity are KEPT, marked disputed: the save cannot say which
-    /// card is which, and a record that vanished would let both cards be taken for new ones. So is a live record whose identity a DISCARDED row had too (see
+    /// card is which, and a record that vanished would let both cards be taken for new ones. So is a live record whose identity a DISCARDED row had too (the
+    /// memory counts as equal when it is 0 = unknown on either side, see <see cref="SameDiscardedIdentity"/>; see
     /// <see cref="RepairLoaded"/>), because the discarded row may be its twin. Retired and already disputed records are not compared (so a repaired list
     /// reads back without being repaired again), and neither is a retired discarded row.
     /// </summary>
@@ -363,7 +382,7 @@ public static class GpuSlotKeys
         var live = inRange.Where(r => !r.Retired && !r.Disputed && !doubtful.Contains(r.Slot)).ToList();
         for (var i = 0; i < live.Count; i++)
         {
-            if (discarded.Any(d => SameIdentity(live[i], d)))
+            if (discarded.Any(d => SameDiscardedIdentity(live[i], d)))
             {
                 disputed.Add(live[i].Slot);
             }
@@ -386,6 +405,16 @@ public static class GpuSlotKeys
             .ToList();
         return (kept, broken);
     }
+
+    /// <summary>
+    /// A discarded row against a kept record: the same name and the same known bus, and a memory that does not contradict them (equal, or 0 = unknown on either
+    /// side). A row that was lost or doubtful may have lost its memory too, so unknown memory is not a reason to trust the kept record (the map's exact match
+    /// also lets an unknown memory through when the bus is the same).
+    /// </summary>
+    private static bool SameDiscardedIdentity(GpuSlotRecord kept, GpuSlotRecord discarded) =>
+        !string.IsNullOrEmpty(kept.Name) && string.Equals(kept.Name, discarded.Name, StringComparison.Ordinal)
+        && kept.PciBus is { } x && discarded.PciBus is { } y && x == y
+        && (kept.VramBytes == discarded.VramBytes || kept.VramBytes == 0 || discarded.VramBytes == 0);
 
     /// <summary>The same name, the same known bus and the same memory: two such records are one card as far as the map can tell (see GpuSlotMap's exact match).</summary>
     private static bool SameIdentity(GpuSlotRecord a, GpuSlotRecord b) =>

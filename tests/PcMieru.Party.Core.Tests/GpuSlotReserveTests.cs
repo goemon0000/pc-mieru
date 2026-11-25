@@ -404,9 +404,9 @@ public class GpuSlotReserveTests
     // ---- codex review of 7155917..d6a6d40, item 1: an exact match with unknown memory must not beat a disputed record ----
 
     // slot 0: a live record with unknown memory; slot 1: a disputed record of the same model and bus with the memory known; slot 2: another card of the same
-    // model on a different known bus, with its own exact record
+    // model on a different known bus, with its own exact record and a memory (2 GiB) that is not the disputed record's
     private static GpuSlotRecord[] UnknownMemoryNextToDisputed() =>
-        [Rec(0, "N", 0, 5u), new GpuSlotRecord(1, "N", GiB, 5u, Disputed: true), Rec(2, "N", GiB, 9u)];
+        [Rec(0, "N", 0, 5u), new GpuSlotRecord(1, "N", GiB, 5u, Disputed: true), Rec(2, "N", 2 * GiB, 9u)];
 
     private static PartyState SavedAndLoaded(GpuSlotRecord[] records, out bool repaired)
     {
@@ -442,10 +442,11 @@ public class GpuSlotReserveTests
     }
 
     [Fact]
-    public void A_third_card_of_the_same_model_on_another_known_bus_still_gets_its_own_slot_whatever_the_order()
+    public void A_third_card_of_the_same_model_still_gets_its_own_slot_when_no_card_that_fits_the_disputed_record_could_be_that_slot()
     {
+        // x (1 GiB, bus 5) fits the disputed record and could be the unknown-memory record of slot 0, but not slot 2 (another memory): slot 2 stays open to y
         var back = SavedAndLoaded(UnknownMemoryNextToDisputed(), out _);
-        var adapters = new[] { Gpu("x", "N", 0, 5u), Gpu("y", "N", GiB, 9u), Gpu("q", "Q", GiB, 1u) };
+        var adapters = new[] { Gpu("x", "N", GiB, 5u), Gpu("y", "N", 2 * GiB, 9u), Gpu("q", "Q", GiB, 1u) };
 
         foreach (var records in new GpuSlotRecord[][] { UnknownMemoryNextToDisputed(), [.. back.GpuSlots] })
         {
@@ -461,6 +462,39 @@ public class GpuSlotReserveTests
                 Assert.Equal(3, byId["q"].Slot);
             }
         }
+    }
+
+    [Fact]
+    public void A_card_that_moved_to_the_disputed_bus_stops_every_slot_it_could_be_so_a_newcomer_on_its_old_bus_does_not_inherit_the_old_one()
+    {
+        // slot 0: live, bus 5, memory unknown; slot 1: disputed, bus 5; slot 2: the card's old slot on bus 9. The card moved from bus 9 to bus 5 (it fits slot 0
+        // exactly and the disputed one too); a different card of the model now sits on bus 9 and would exactly match slot 2.
+        var records = new[] { Rec(0, "N", 0, 5u), new GpuSlotRecord(1, "N", GiB, 5u, Disputed: true), Rec(2, "N", 0, 9u) };
+        var state = SavedAndLoaded(records, out var repaired);
+        Assert.False(repaired);
+        var adapters = new[] { Gpu("moved", "N", 0, 5u), Gpu("newcomer", "N", 0, 9u), Gpu("q", "Q", GiB, 1u) };
+
+        foreach (var order in Permutations(adapters))
+        {
+            var r = new GpuSlotMap(state.GpuSlots).Assign(order);
+            var byId = order.Select((g, i) => (g.Id, r.Adapters[i])).ToDictionary(static x => x.Id, static x => x.Item2);
+
+            Assert.Null(byId["moved"].Slot);
+            Assert.True(byId["moved"].Ambiguous);
+            Assert.Null(byId["newcomer"].Slot);        // stopped, not given slot 2: the progress under it is never handed on
+            Assert.True(byId["newcomer"].Ambiguous);
+            Assert.Equal(3, byId["q"].Slot);
+            Assert.Equal(records[0], r.Records.Single(static x => x.Slot == 0));
+            Assert.Equal(records[2], r.Records.Single(static x => x.Slot == 2));
+        }
+
+        // nothing earns while it stands, and the owner's ForgetSlot of the disputed record clears it: each card then finds its own slot
+        var map = new GpuSlotMap(state.GpuSlots);
+        Assert.Empty(map.ApplyTo(state, Frame(adapters[0], adapters[1])).EarningKeys);
+        Assert.True(map.ForgetSlot(state, 1));
+        var cleared = map.ApplyTo(state, Frame(adapters[0], adapters[1]));
+        Assert.Equal([0, 2], cleared.Adapters.Select(static a => a.Slot ?? -1).ToArray());
+        Assert.All(cleared.Adapters, static a => Assert.False(a.Ambiguous));
     }
 
     [Fact]
@@ -547,6 +581,22 @@ public class GpuSlotReserveTests
         Assert.Equal([Rec(0, "T", 1024, 5u)], state.GpuSlots);
     }
 
+    // a discarded row that lost its memory (or a kept record that never had it) is still the same card when the name and the known bus are the same
+    [Theory]
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", "{\"Name\":\"T\",\"PciBus\":5}", true)]
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":0,\"PciBus\":5}", "{\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", true)]
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", "{\"Slot\":\"x\",\"Name\":\"T\",\"VramBytes\":0,\"PciBus\":5}", true)]
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", "{\"Name\":\"T\",\"VramBytes\":2048,\"PciBus\":5}", false)]    // two known sizes that differ
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", "{\"Name\":\"T\",\"VramBytes\":0,\"PciBus\":6}", false)]       // another known bus
+    [InlineData("{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5}", "{\"Name\":\"T\",\"VramBytes\":0}", false)]                       // an unknown bus is never equal
+    public void An_unknown_memory_on_either_side_does_not_hide_a_discarded_twin(string kept, string twin, bool disputed)
+    {
+        var state = PartyState.FromJson("{" + NoProgress + ",\"GpuSlots\":[" + kept + "," + twin + "]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.Equal(disputed, state.GpuSlots.Single(static r => r.Slot == 1).Disputed);
+    }
+
     // ---- item 3: one row with no Slot does not discard a genuine slot 0 ----
 
     [Fact]
@@ -561,6 +611,19 @@ public class GpuSlotReserveTests
 
         var r = new GpuSlotMap(back.GpuSlots).ApplyTo(back, Frame(Gpu("a", "A", 1024, 1u)));
         Assert.Equal(["gpu#0"], r.EarningKeys);
+        Assert.Equal(7, back.Experience["gpu#0"]);
+    }
+
+    [Fact]
+    public void A_slotless_row_whose_name_cannot_be_decoded_is_discarded_with_an_unknown_identity_and_the_save_still_loads()
+    {
+        // the name is an unpaired surrogate escape: the text is valid JSON, but the name cannot be turned into a string
+        var back = PartyState.FromJson(
+            "{" + Progress0 + ",\"GpuSlots\":[{\"Slot\":1,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},{\"Name\":\"\\ud800\",\"VramBytes\":1024,\"PciBus\":5}]}", out var repaired);
+
+        Assert.True(repaired);
+        Assert.True(back.GpuSlotsRepaired);
+        Assert.Equal([Closed(0), Rec(1, "T", 1024, 5u)], back.GpuSlots);    // the unknown identity disputes nothing; gpu#0 keeps its number closed
         Assert.Equal(7, back.Experience["gpu#0"]);
     }
 

@@ -64,10 +64,12 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 ///    (c) name and dedicated memory equal while the bus differs or is unknown on either side (the bus moved, or could not be read), only when that is
 ///        the one remembered slot it can be and it is the one adapter that can be that slot. A memory size of 0 (unknown) on either side matches any size.
 ///    Before (b), an adapter that fits a DISPUTED record (<see cref="GpuSlotRecord.Disputed"/>) is ambiguous at once: same model (the memory rule of (c)),
-///    and a bus that is unknown on either side or equal. Its candidate slots are that disputed slot, and the live slots it would be a candidate for in
-///    (b) (in (c) when (b) has none); they are blocked this call, so no other adapter takes them. Without this, a card whose memory is unknown would
-///    exactly match its live record and never see that the disputed one fits it just as well. An adapter whose known bus differs from the disputed
-///    record's known bus does not fit it and goes through the tiers as usual.
+///    and a bus that is unknown on either side or equal. Its candidate slots are that disputed slot and EVERY live slot it could be by (c) (the exact ones
+///    are among them); they are blocked this call, so no other adapter takes them. Without this, a card whose memory is unknown would exactly match its
+///    live record and never see that the disputed one fits it just as well, and a different card of the model that now sits on the bus of another
+///    candidate would inherit that candidate's number. The price is that a third card of the same model can be stopped (ambiguous, no slot, no earning)
+///    for as long as a disputed record stands and a card fits it; the owner's <see cref="GpuSlotKeys.ForgetSlot"/> of the disputed record clears it.
+///    An adapter whose known bus differs from the disputed record's known bus does not fit it and goes through the tiers as usual.
 ///    A match is mutual and unique, or it is not a match: when two adapters could be the same slot (twin cards whose bus is unknown or changed),
 ///    or one adapter could be two slots (two remembered twins and one survivor whose bus cannot tell which), all of them are
 ///    <see cref="GpuSlotAssignment.Ambiguous"/>, take no slot, and the slots they could be stay blocked this call (no new card takes them). An
@@ -295,10 +297,13 @@ public sealed class GpuSlotMap
 
     /// <summary>
     /// Rule 2, the disputed records. An adapter that fits a disputed record (<see cref="FitsDisputed"/>) is ambiguous now, before any tier can hand it a live
-    /// record that it fits only because its memory is unknown. What it could be is blocked for this call: the disputed slots it fits, and the live slots
-    /// it would be a candidate for in the normal tiers (the exact ones, or when there is none, the same-model ones). A live record of another bus that the
-    /// adapter could only be by its unknown memory is not blocked while an exact one exists: the card that owns it still gets it. Decided on one snapshot
-    /// (the adapters still open after rule 2a), so the order of the adapters cannot change the outcome.
+    /// record that it fits only because its memory is unknown. Everything it could be is blocked for this call: the disputed slots it fits and ALL the live
+    /// slots it could be by <see cref="SameModel"/>, the exact ones included. An exact one is not safe to leave open: the card may just have moved to
+    /// the bus of the disputed record (so it exactly fits a record of the new bus), and a different card of the model that now sits on its old bus would
+    /// take its old number through Exact. Stopping is the safe side (an ambiguous card shows, earns nothing and takes nothing). So a third card of the same
+    /// model is stopped too while a disputed record stands and an adapter fits it; a live record that no fitting adapter could be by <see cref="SameModel"/>
+    /// stays open to its own card. <see cref="GpuSlotKeys.ForgetSlot"/> of the disputed record ends it. Decided on one snapshot (the adapters still open
+    /// after rule 2a), so the order of the adapters cannot change the outcome.
     /// </summary>
     private void BlockDisputedFits(Pass pass)
     {
@@ -320,8 +325,7 @@ public sealed class GpuSlotMap
 
             pass.Ambiguous[i] = true;
             toBlock.AddRange(fits);
-            var live = LiveCandidates(pass, g, Exact);
-            toBlock.AddRange(live.Count > 0 ? live : LiveCandidates(pass, g, SameModel));
+            toBlock.AddRange(LiveCandidates(pass, g, SameModel));
         }
 
         foreach (var s in toBlock)
