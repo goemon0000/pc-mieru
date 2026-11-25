@@ -13,7 +13,10 @@ internal enum PartyLanguage
 /// <c>--smoke</c>: unattended. Every message goes to stderr instead of a box nobody can click, the window closes by itself after a short while,
 /// "party smoke ok" is written to stdout and the exit code is 0.
 /// </param>
-internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke);
+/// <param name="ShotPath">
+/// <c>--shot &lt;png&gt;</c>, valid only together with <c>--smoke</c>: after the first render the window is written as a PNG and the program exits 0.
+/// </param>
+internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null);
 
 /// <summary>
 /// Command line of PCMieru.Party.exe. Parsed by hand like the one of PCMieru.exe (src/PcMieru.Gui/Program.cs): <c>--lang</c> takes ja or en, an argument nobody knows is refused,
@@ -25,6 +28,7 @@ internal static class PartyArgs
     {
         PartyLanguage? language = null;
         var smoke = false;
+        string? shot = null;
         problem = string.Empty;
         options = new PartyOptions(null, false);
 
@@ -49,13 +53,28 @@ internal static class PartyArgs
                 case "--smoke":
                     smoke = true;
                     break;
+                case "--shot":
+                    shot = i + 1 < args.Length ? args[++i] : null;
+                    if (string.IsNullOrWhiteSpace(shot))
+                    {
+                        problem = "--shot needs a png path";
+                        return false;
+                    }
+
+                    break;
                 default:
                     problem = "unknown argument: " + args[i];
                     return false;
             }
         }
 
-        options = new PartyOptions(language, smoke);
+        if (shot is not null && !smoke)
+        {
+            problem = "--shot is valid only together with --smoke";
+            return false;
+        }
+
+        options = new PartyOptions(language, smoke, shot);
         return true;
     }
 }
