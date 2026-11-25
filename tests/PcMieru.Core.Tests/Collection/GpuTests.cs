@@ -824,3 +824,94 @@ public sealed class GpuAdaptersTests
         Assert.Equal(adapters.Count, adapters.Select(a => a.Luid).Distinct().Count());
     }
 }
+
+/// <summary>
+/// The PCI bus of an adapter (for the Parts Life board, which tells two cards of one model apart with it). It is asked once per enumeration, rides on
+/// <see cref="GpuInfo.PciBus"/>, and is never written out: the JSON of a snapshot is what it was before the property existed.
+/// </summary>
+public sealed class GpuPciBusTests
+{
+    private const long GiB = 1L << 30;
+
+    private static PcMieru.Core.Hardware.Native.KmtAdapterInfo Kmt(uint bus) => new(bus, 0, 0, null, null);
+
+    private static readonly PcMieru.Core.Hardware.Native.KmtAdapterInfo NoAddress =
+        new(uint.MaxValue, ushort.MaxValue, ushort.MaxValue, null, null);
+
+    [Fact]
+    public void Resolve_puts_the_bus_on_each_adapter_and_asks_the_kernel_once_per_adapter()
+    {
+        var one = new GpuAdapter(1, "NVIDIA GeForce RTX 3080 Ti", 12 * GiB, 0x10DE, false);
+        var two = new GpuAdapter(2, "NVIDIA GeForce RTX 3080 Ti", 12 * GiB, 0x10DE, false);
+        var asked = new List<ulong>();
+
+        var resolved = GpuAdapters.Resolve([one, two], a =>
+        {
+            asked.Add(a.Luid);
+            return Kmt(a.Luid == 1 ? 9u : 3u);
+        });
+
+        Assert.Equal(new uint?[] { 9, 3 }, resolved.Select(a => a.PciBus).ToArray());
+        Assert.Equal(new ulong[] { 1, 2 }, asked.ToArray());
+        Assert.All(resolved, a => Assert.False(a.IsAlias)); // two cards of one model with addresses: both stay
+    }
+
+    [Fact]
+    public void A_copy_without_a_pci_address_gets_no_bus_and_is_still_marked_as_an_alias()
+    {
+        var real = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var copy = new GpuAdapter(2, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+
+        var resolved = GpuAdapters.Resolve([real, copy], a => a.Luid == 1 ? Kmt(1) : NoAddress);
+
+        Assert.Equal(1u, resolved[0].PciBus);
+        Assert.Null(resolved[1].PciBus);
+        Assert.False(resolved[0].IsAlias);
+        Assert.True(resolved[1].IsAlias);
+    }
+
+    [Fact]
+    public void An_adapter_the_kernel_could_not_be_asked_about_has_no_bus_and_is_not_called_an_alias()
+    {
+        var real = new GpuAdapter(1, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+        var unknown = new GpuAdapter(2, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false);
+
+        var resolved = GpuAdapters.Resolve([real, unknown], a => a.Luid == 1 ? Kmt(1) : null);
+
+        Assert.Equal(1u, resolved[0].PciBus);
+        Assert.Null(resolved[1].PciBus);
+        Assert.All(resolved, a => Assert.False(a.IsAlias));
+    }
+
+    [Fact]
+    public void The_bus_reaches_the_gpu_info_and_survives_a_tick_without_fresh_counters()
+    {
+        var adapter = new GpuAdapter(0x166CA, "NVIDIA GeForce RTX 5070", 12 * GiB, 0x10DE, false) { PciBus = 7 };
+
+        var primedLike = GpuSampler.Describe([adapter], null, primed: false, "no baseline yet", ValueStatus.NotCollected);
+        var failed = GpuSampler.Interim(primedLike, [adapter], ValueStatus.Error, "collect failed");
+
+        Assert.Equal(7u, Assert.Single(primedLike).PciBus);
+        Assert.Equal(7u, Assert.Single(failed).PciBus);
+        Assert.Null(Assert.Single(GpuSampler.Describe([adapter with { PciBus = null }], null, primed: false, "x", ValueStatus.NotCollected)).PciBus);
+    }
+
+    [Fact]
+    public void The_bus_is_never_serialized_so_the_json_of_a_snapshot_is_unchanged()
+    {
+        var snapshot = FakeSnapshots.Create(Fixture.FixedTime, tick: 2);
+        Assert.NotEmpty(snapshot.System.Gpus);
+
+        var withBus = snapshot with
+        {
+            System = snapshot.System with { Gpus = snapshot.System.Gpus.Select((g, i) => g with { PciBus = (uint)(i + 7) }).ToArray() },
+        };
+
+        Assert.All(withBus.System.Gpus, g => Assert.NotNull(g.PciBus));
+        var plain = PcMieruJson.Serialize(snapshot);
+        var json = PcMieruJson.Serialize(withBus);
+        Assert.Equal(plain, json);
+        Assert.DoesNotContain("pcibus", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(PcMieruJson.Deserialize<Snapshot>(json)!.System.Gpus[0].PciBus);
+    }
+}

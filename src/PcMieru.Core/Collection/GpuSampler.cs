@@ -345,7 +345,7 @@ internal sealed class GpuSampler : IGpuSampling
             }
 
             seen.Add(adapter.Luid);
-            result.Add(Info(adapter.Id, adapter.Name, adapter.DedicatedBytes, data, usage, primed, missingDetail, missingStatus));
+            result.Add(Info(adapter.Id, adapter.Name, adapter.DedicatedBytes, adapter.PciBus, data, usage, primed, missingDetail, missingStatus));
         }
 
         if (primed && data is not null)
@@ -355,7 +355,7 @@ internal sealed class GpuSampler : IGpuSampling
             {
                 if (!known.Contains(luid) && usage.EngineInstances > 0 && seen.Add(luid))
                 {
-                    result.Add(Info(GpuCounterName.AdapterId(luid), "GPU " + GpuCounterName.AdapterId(luid), 0, data, usage, primed, missingDetail, missingStatus));
+                    result.Add(Info(GpuCounterName.AdapterId(luid), "GPU " + GpuCounterName.AdapterId(luid), 0, null, data, usage, primed, missingDetail, missingStatus));
                 }
             }
         }
@@ -381,7 +381,7 @@ internal sealed class GpuSampler : IGpuSampling
             ? Failed(lastPrimed, status, detail)
             : Describe(adapters, null, primed: false, detail, status);
 
-    private static GpuInfo Info(string id, string name, long dedicatedTotal, GpuAggregator? data, GpuAdapterUsage? usage, bool primed, string? missingDetail, ValueStatus missingStatus)
+    private static GpuInfo Info(string id, string name, long dedicatedTotal, uint? pciBus, GpuAggregator? data, GpuAdapterUsage? usage, bool primed, string? missingDetail, ValueStatus missingStatus)
     {
         Value<double> Missing(string source) => Value.Missing<double>(missingStatus, source, missingDetail);
 
@@ -435,7 +435,10 @@ internal sealed class GpuSampler : IGpuSampling
             Value.NotCollected<double>("SensorHost", "not read yet"),
             Value.NotCollected<double>("SensorHost", "not read yet"),
             Value.NotCollected<double>("SensorHost", "not read yet"),
-            Value.NotCollected<double>("SensorHost", "not read yet"));
+            Value.NotCollected<double>("SensorHost", "not read yet"))
+        {
+            PciBus = pciBus,
+        };
     }
 
     private GpuReading SampleOff()

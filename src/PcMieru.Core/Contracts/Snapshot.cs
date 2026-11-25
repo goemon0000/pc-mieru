@@ -128,6 +128,15 @@ public sealed record GpuInfo(
 
     /// <summary>Where the vendor values (temperature, power, fan, clock, limits) of this adapter came from. Null when none were merged. Never serialized.</summary>
     internal SourceOrigin? VendorOrigin { get; init; }
+
+    /// <summary>
+    /// The PCI bus number the kernel reports for this adapter (read once per adapter-list enumeration, not per tick). Null when the adapter has no PCI
+    /// address (a virtual copy) or the kernel could not be asked. Public because the Parts Life board (another assembly) tells two cards of one model apart
+    /// with it; unlike <see cref="VendorOrigin"/> it must cross the assembly line, so it is kept out of the JSON with an attribute instead of with
+    /// <c>internal</c>. Never serialized: the pcmi JSON, the recordings and the snapshot schema are exactly what they were without it.
+    /// </summary>
+    [JsonIgnore]
+    public uint? PciBus { get; init; }
 }
 
 public sealed record GpuEngineInfo(string Type, Value<double> Percent);

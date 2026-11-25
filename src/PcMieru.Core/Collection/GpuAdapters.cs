@@ -10,6 +10,12 @@ internal sealed record GpuAdapter(ulong Luid, string Name, long DedicatedBytes, 
     public string Id => GpuCounterName.AdapterId(Luid);
 
     /// <summary>
+    /// The PCI bus number from the kernel (D3DKMT), asked once per enumeration. Null when the adapter has no PCI address (a virtual copy) or the kernel
+    /// could not be asked. Two cards of one model differ only by this (and by a LUID that changes at every boot).
+    /// </summary>
+    public uint? PciBus { get; init; }
+
+    /// <summary>
     /// A virtual copy of a card that another DXGI entry already stands for (a virtual display driver lists the card again under a LUID of its own, with no PCI
     /// address). It is not a GPU anyone looks at: <see cref="GpuSampler.Describe"/> leaves it out.
     /// </summary>
@@ -92,7 +98,25 @@ internal static unsafe partial class GpuAdapters
             }
         }
 
-        return MarkAliases(result, static a => Dxgi.QueryKmt((uint)a.Luid, (int)(a.Luid >> 32)) is { } kmt ? kmt.HasPciAddress : null);
+        return Resolve(result, static a => Dxgi.QueryKmt((uint)a.Luid, (int)(a.Luid >> 32)));
+    }
+
+    /// <summary>
+    /// Asks the kernel once per adapter, then does two things with the one answer: puts the bus on the adapter (only when the kernel gave a real PCI
+    /// address) and marks the aliases (<see cref="MarkAliases"/>). One question per adapter per enumeration, never one per tick.
+    /// </summary>
+    internal static List<GpuAdapter> Resolve(IReadOnlyList<GpuAdapter> listed, Func<GpuAdapter, KmtAdapterInfo?> query)
+    {
+        var address = new bool?[listed.Count];
+        var withBus = new List<GpuAdapter>(listed.Count);
+        for (var i = 0; i < listed.Count; i++)
+        {
+            var kmt = query(listed[i]);
+            address[i] = kmt?.HasPciAddress;
+            withBus.Add(kmt is { HasPciAddress: true } ? listed[i] with { PciBus = kmt.Bus } : listed[i]);
+        }
+
+        return MarkAliases(withBus, address);
     }
 
     /// <summary>
@@ -110,6 +134,11 @@ internal static unsafe partial class GpuAdapters
             address[i] = hasPciAddress(adapters[i]);
         }
 
+        return MarkAliases(adapters, address);
+    }
+
+    private static List<GpuAdapter> MarkAliases(IReadOnlyList<GpuAdapter> adapters, bool?[] address)
+    {
         var result = new List<GpuAdapter>(adapters.Count);
         for (var i = 0; i < adapters.Count; i++)
         {
