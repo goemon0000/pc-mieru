@@ -155,6 +155,9 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         }
 
         _storage?.Start();
+
+        // The topology this tick may use is the one published before the PDH window below is collected, never one that lands after it.
+        var storageAtStart = _storage?.Capture();
         var timeout = _stageTimeout ?? (_hasPrevious ? WindowsSnapshotSource.StageTimeout : WindowsSnapshotSource.FirstStageTimeout);
         _ = _pdhStage.Start(RunPdhStage);
         _ = _nicStage.Start(RunNicStage);
@@ -172,10 +175,9 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         var pdh = JoinPdh(timeout);
         var nics = JoinNics(timeout);
         var gpu = JoinGpu(timeout);
-        if (pdh.DisksState.IsOk)
-        {
-            _storage?.NoteDisks(pdh.Disks);
-        }
+
+        // An unreadable PDH window counts as "no rows", so a drive swapped during an outage is a change when the rows come back.
+        _storage?.NoteDisks(pdh.DisksState.IsOk ? pdh.Disks : []);
 
         var nominal = (int)(_beat?.Invoke() ?? _control.EffectiveInterval).TotalMilliseconds;
         var intervalMs = _hasPrevious ? (int)Math.Max(1, Math.Round(elapsedSeconds * 1000)) : nominal;
@@ -196,7 +198,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             gpu.State)
         {
             Power = BatteryCollector.ReadPower(),
-            Storage = _storage?.Settled,
+            Storage = _storage?.SettledFor(storageAtStart),
         };
 
         // No Provenance: that is the recorder's input, and this source is never recorded.
