@@ -5,7 +5,8 @@ namespace PcMieru.Party.Hardware;
 /// <summary>One GPU as the board reads it. A missing number is null, never 0 (DESIGN-C 2.3: a zero would still earn experience).</summary>
 /// <param name="Id">Core's adapter id (the LUID); stable while the adapter stays, so the board can keep a slot on it.</param>
 /// <param name="Percent">Busiest-engine utilization, 0..100.</param>
-public sealed record BoardGpu(string Id, string Name, double? Percent, long? VramUsedBytes, long? VramTotalBytes);
+/// <param name="PciBus">The PCI bus number the kernel gave the adapter; null when it has none or Core could not read it. Tells two cards of one model apart across boots (the LUID cannot).</param>
+public sealed record BoardGpu(string Id, string Name, double? Percent, long? VramUsedBytes, long? VramTotalBytes, uint? PciBus = null);
 
 /// <summary>Memory in use. Only built when the total is positive and the available number is inside it.</summary>
 /// <param name="Percent">Used over total, 0..100.</param>
@@ -34,7 +35,8 @@ public sealed record BoardNet(double? SendBytesPerSec, double? ReceiveBytesPerSe
 /// <param name="Memory">Null unless the total is positive and the available number is inside it.</param>
 /// <param name="Gpus">
 /// In board order, at most <see cref="MaxGpus"/>. Null when Core could not read the adapter list; an empty list only means "no GPU" when
-/// Core said it read the list.
+/// Core said it read the list. This is the old board's fixed top six; with the slot map (<see cref="GpuSlotMap"/>) the caller feeds it
+/// <see cref="AllGpus"/> instead, so a card pushed past the sixth place by a new card is still recognized.
 /// </param>
 /// <param name="GpuMaxPercent">The busiest of all listed GPUs (not only the first six); null when none has a utilization.</param>
 public sealed record BoardFrame(
@@ -49,19 +51,29 @@ public sealed record BoardFrame(
     /// <summary>The board never shows more than this many GPUs (the old Parts Life limit).</summary>
     public const int MaxGpus = 6;
 
+    /// <summary>
+    /// Every GPU Core listed, in board order, not cut at <see cref="MaxGpus"/>; null exactly when <see cref="Gpus"/> is. The input of
+    /// <see cref="GpuSlotMap.Assign"/>: the map decides who gets one of the six slots, so it has to see all of them.
+    /// </summary>
+    public IReadOnlyList<BoardGpu>? AllGpus { get; init; }
+
     public static BoardFrame Project(Snapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var system = snapshot.System;
         var ordered = OrderedGpus(system);
+        var all = ordered?.Select(ToBoardGpu).ToArray();
         return new BoardFrame(
             Math.Max(0, system.Cpu.LogicalProcessors),
             Percent(system.Cpu.TotalPercent),
             MemoryOf(system.Memory),
-            ordered is null ? null : ordered.Take(MaxGpus).Select(ToBoardGpu).ToArray(),
+            all?.Take(MaxGpus).ToArray(),
             ordered is null ? null : MaxPercent(ordered),
             DiskOf(system),
-            NetOf(system));
+            NetOf(system))
+        {
+            AllGpus = all,
+        };
     }
 
     private static double? Percent(Value<double> value) =>
@@ -82,8 +94,9 @@ public sealed record BoardFrame(
 
     /// <summary>
     /// The GPUs in the old board's order. Core has already left out software adapters, copies of a card and a LUID listed twice, so this only
-    /// sorts, with the roster's own sort (VRAM descending, PCI bus, name, LUID). Core's snapshot carries no PCI bus yet, so that step ties
-    /// and the order falls through to name and LUID; TODO when Core exposes the bus (DESIGN-C 2.3).
+    /// sorts, with the roster's own sort (<see cref="GpuRoster.Order"/>: VRAM descending, PCI bus, name, LUID). The bus is Core's
+    /// <see cref="GpuInfo.PciBus"/>; a card whose bus Core could not read sorts after the ones that have one, as in the old roster. The roster's
+    /// alias rule is not run again here: it takes "no bus" for "no PCI address", and Core's null also means "could not be asked".
     /// </summary>
     private static List<GpuInfo>? OrderedGpus(SystemInfo system)
     {
@@ -104,10 +117,10 @@ public sealed record BoardFrame(
             }
 
             var vram = g.DedicatedTotalBytes.TryGet(out var bytes) && bytes > 0 ? (ulong)bytes : 0UL;
-            adapters.Add(new GpuAdapterInfo(g.Id, g.Name.Length > 0 ? g.Name : g.Id, vram, null, false));
+            adapters.Add(new GpuAdapterInfo(g.Id, g.Name.Length > 0 ? g.Name : g.Id, vram, g.PciBus, false));
         }
 
-        return GpuRoster.Real(adapters).Select(a => byId[a.LuidKey]).ToList();
+        return GpuRoster.Order(adapters).Select(a => byId[a.LuidKey]).ToList();
     }
 
     private static BoardGpu ToBoardGpu(GpuInfo g) => new(
@@ -115,7 +128,8 @@ public sealed record BoardFrame(
         g.Name,
         Percent(g.UtilizationPercent),
         Bytes(g.DedicatedUsedBytes),
-        Bytes(g.DedicatedTotalBytes));
+        Bytes(g.DedicatedTotalBytes),
+        g.PciBus);
 
     private static long? Bytes(Value<long> value) => value.TryGet(out var v) && v >= 0 ? v : null;
 

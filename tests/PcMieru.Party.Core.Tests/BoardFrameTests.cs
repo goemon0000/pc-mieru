@@ -293,4 +293,36 @@ public class BoardFrameTests
         Assert.Equal(one.Net, two.Net);
         Assert.Equal(one.Gpus!.Select(g => g.Id), two.Gpus!.Select(g => g.Id));
     }
+
+    [Fact]
+    public void Cards_with_equal_vram_are_ordered_by_pci_bus_like_the_old_roster_whatever_the_listing_order()
+    {
+        // Same name, same memory: only the bus tells them apart, and the LUIDs here would put them the other way round.
+        var lowBus = Gpu("luid_0x00000000_0x00000099", "GeForce RTX 3080 Ti", 12 * GiB) with { PciBus = 3 };
+        var highBus = Gpu("luid_0x00000000_0x00000001", "GeForce RTX 3080 Ti", 12 * GiB) with { PciBus = 9 };
+        var noBus = Gpu("luid_0x00000000_0x00000000", "GeForce RTX 3080 Ti", 12 * GiB);
+
+        var one = BoardFrame.Project(Snap(gpus: [highBus, noBus, lowBus]));
+        var two = BoardFrame.Project(Snap(gpus: [noBus, lowBus, highBus]));
+
+        var expected = new[] { lowBus.Id, highBus.Id, noBus.Id }; // a card whose bus is unknown goes after the ones that have one
+        Assert.Equal(expected, one.Gpus!.Select(g => g.Id).ToArray());
+        Assert.Equal(expected, two.Gpus!.Select(g => g.Id).ToArray());
+        Assert.Equal(new uint?[] { 3, 9, null }, one.Gpus!.Select(g => g.PciBus).ToArray());
+    }
+
+    [Fact]
+    public void All_gpus_is_not_cut_at_six_while_gpus_is()
+    {
+        var cards = Enumerable.Range(0, 8)
+            .Select(i => Gpu("g" + i, "Card", (20 - i) * GiB) with { PciBus = (uint)i })
+            .ToArray();
+
+        var frame = BoardFrame.Project(Snap(gpus: cards));
+
+        Assert.Equal(6, frame.Gpus!.Count);
+        Assert.Equal(8, frame.AllGpus!.Count);
+        Assert.Equal(frame.Gpus.Select(g => g.Id), frame.AllGpus.Take(6).Select(g => g.Id));
+        Assert.Null(BoardFrame.Project(Snap(gpusState: Value.NotCollected<int>("test", "off"))).AllGpus);
+    }
 }

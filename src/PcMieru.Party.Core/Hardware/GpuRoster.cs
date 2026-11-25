@@ -42,15 +42,24 @@ public static class GpuRoster
     public static List<GpuAdapterInfo> Real(IReadOnlyList<GpuAdapterInfo> adapters)
     {
         var hardware = adapters.Where(a => !a.Software).ToList();
-        return GpuAliasRule.WithoutAliases(hardware, a => a.Name, a => a.DedicatedBytes, a => a.HasPciAddress)
+        var kept = GpuAliasRule.WithoutAliases(hardware, a => a.Name, a => a.DedicatedBytes, a => a.HasPciAddress)
             // 名前も VRAM も番地も無い物（中身の無い仮想ディスプレイ）は、GPU として数えない
-            .Where(a => a.HasPciAddress || a.Name.Length > 0 || a.DedicatedBytes > 0)
+            .Where(a => a.HasPciAddress || a.Name.Length > 0 || a.DedicatedBytes > 0);
+        return Order(kept);
+    }
+
+    /// <summary>
+    /// 並び順だけ（除く決まりは <see cref="Real"/>）。VRAM の多い順、同じなら PCI のバス番号順、名前、LUID。
+    /// 盤の組み立て（BoardFrame）は、Core がもう別名とソフトウェアのアダプタを除いてあるので、これだけを使う
+    /// （番地を持たない物を別名として除く決まりを、Core の「番地が読めなかった物」にまで当てないため）。
+    /// </summary>
+    public static List<GpuAdapterInfo> Order(IEnumerable<GpuAdapterInfo> adapters) =>
+        adapters
             .OrderByDescending(a => a.DedicatedBytes)
             .ThenBy(a => a.PciBus ?? uint.MaxValue)
             .ThenBy(a => a.Name, StringComparer.Ordinal)
             .ThenBy(a => a.LuidKey, StringComparer.Ordinal)
             .ToList();
-    }
 
     /// <summary>
     /// その秒の行。<paramref name="real"/> は <see cref="Real"/> の結果、<paramref name="enumerated"/> は
