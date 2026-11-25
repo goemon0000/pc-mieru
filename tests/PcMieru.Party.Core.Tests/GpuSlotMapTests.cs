@@ -322,6 +322,121 @@ public class GpuSlotMapTests
         Assert.Equal(a.Adapters.ToDictionary(x => x.Id, x => x.Slot), b.Adapters.ToDictionary(x => x.Id, x => x.Slot));
     }
 
+    private static GpuSlotMap Remembered(params GpuSlotRecord[] records) => new(records);
+
+    private static IEnumerable<T[]> Permutations<T>(T[] items) =>
+        items.Length <= 1
+            ? [items]
+            : items.SelectMany((item, i) => Permutations(items.Where((_, j) => j != i).ToArray()).Select(rest => new[] { item }.Concat(rest).ToArray()));
+
+    [Fact]
+    public void A_surviving_twin_with_an_unreadable_bus_does_not_inherit_the_absent_twins_slot_whose_bus_was_never_known()
+    {
+        // Twin A was remembered with its bus, twin B was not (its bus did not read that time). After a reboot one twin is left and its bus does not read.
+        var map = Remembered(new GpuSlotRecord(0, "Twin", 8 * GiB, 3), new GpuSlotRecord(1, "Twin", 8 * GiB, null));
+
+        var result = map.Assign([Card("n1", "Twin", 8 * GiB, null)]);
+
+        Assert.Equal(new int?[] { null }, Slots(result));
+        Assert.True(result.Adapters[0].Ambiguous); // null == null used to hand it slot 1 as an "exact" match
+        Assert.Equal(2, result.Records.Count);
+        Assert.Null(result.Records[1].PciBus);
+    }
+
+    [Fact]
+    public void The_same_survivor_with_the_other_twin_unknown_is_ambiguous_too_and_one_with_a_known_bus_is_still_settled()
+    {
+        // The other way round: the remembered twin with the unknown bus comes first.
+        var records = new[] { new GpuSlotRecord(0, "Twin", 8 * GiB, null), new GpuSlotRecord(1, "Twin", 8 * GiB, 9) };
+
+        var blind = Remembered(records).Assign([Card("n1", "Twin", 8 * GiB, null)]);
+        var known = Remembered(records).Assign([Card("n2", "Twin", 8 * GiB, 9)]);
+
+        Assert.Equal(new int?[] { null }, Slots(blind));
+        Assert.True(blind.Adapters[0].Ambiguous);
+        Assert.Equal(new int?[] { 1 }, Slots(known)); // known on both sides and equal: exact
+        Assert.False(known.Adapters[0].Ambiguous);
+    }
+
+    [Fact]
+    public void A_remembered_twin_with_no_bus_does_not_make_the_known_bus_survivor_lose_its_exact_slot()
+    {
+        var records = new[] { new GpuSlotRecord(0, "Twin", 8 * GiB, 3), new GpuSlotRecord(1, "Twin", 8 * GiB, null) };
+
+        var result = Remembered(records).Assign([Card("n1", "Twin", 8 * GiB, 3)]);
+
+        Assert.Equal(new int?[] { 0 }, Slots(result));
+        Assert.False(result.Adapters[0].Ambiguous);
+    }
+
+    [Fact]
+    public void A_name_and_memory_match_with_no_bus_on_either_side_still_settles_when_it_is_unique()
+    {
+        var map = Remembered(new GpuSlotRecord(3, "Lone", 4 * GiB, null));
+
+        var result = map.Assign([Card("n1", "Lone", 4 * GiB, null)]);
+
+        Assert.Equal(new int?[] { 3 }, Slots(result));
+        Assert.False(result.Adapters[0].Ambiguous);
+    }
+
+    [Fact]
+    public void An_unknown_memory_size_is_not_an_exact_match_even_with_the_same_bus_so_twins_stay_ambiguous()
+    {
+        var map = Remembered(new GpuSlotRecord(0, "Twin", 0, 3), new GpuSlotRecord(1, "Twin", 0, 9));
+
+        var result = map.Assign([Card("n1", "Twin", 0, 3)]);
+
+        Assert.Equal(new int?[] { null }, Slots(result));
+        Assert.True(result.Adapters[0].Ambiguous);
+    }
+
+    [Fact]
+    public void An_adapter_whose_only_candidates_were_blocked_by_an_ambiguous_match_is_ambiguous_never_a_new_card_in_any_order()
+    {
+        // Two remembered twins share one bus (a bus that moved onto the other's). n1 matches both exactly, so both slots are held back; n2 (another
+        // bus) could be either of them, so it is not "a new card" either. Only the third card, which no record knows, takes a free slot.
+        var records = new[] { new GpuSlotRecord(0, "Twin", 8 * GiB, 3), new GpuSlotRecord(1, "Twin", 8 * GiB, 3) };
+        var adapters = new[] { Card("n1", "Twin", 8 * GiB, 3), Card("n2", "Twin", 8 * GiB, 7), Ti("k") };
+
+        Dictionary<string, (int? Slot, bool Ambiguous)>? first = null;
+        foreach (var order in Permutations(adapters))
+        {
+            var result = Remembered(records).Assign(order);
+            var byId = result.Adapters.ToDictionary(a => a.Id, a => (a.Slot, a.Ambiguous));
+
+            Assert.Equal((null, true), byId["n1"]);
+            Assert.Equal((null, true), byId["n2"]);
+            Assert.Equal(((int?)2, false), byId["k"]); // not slot 2 for n2 and k to fight over by their order
+            Assert.Equal(3, result.Records.Count);
+            first ??= byId;
+            Assert.Equal(first, byId);
+        }
+    }
+
+    [Fact]
+    public void An_adapter_that_could_be_a_blocked_slot_or_a_free_one_is_ambiguous_and_the_result_ignores_the_order()
+    {
+        // Slots 0 and 1 hold the same twin identity (blocked by n1's exact double match); n2 also fits slot 2, a third twin of the same model
+        // remembered with another bus. n2 could be slot 0, 1 or 2, so it takes none.
+        var records = new[]
+        {
+            new GpuSlotRecord(0, "Twin", 8 * GiB, 3),
+            new GpuSlotRecord(1, "Twin", 8 * GiB, 3),
+            new GpuSlotRecord(2, "Twin", 8 * GiB, 9),
+        };
+        var adapters = new[] { Card("n1", "Twin", 8 * GiB, 3), Card("n2", "Twin", 8 * GiB, 12) };
+
+        foreach (var order in Permutations(adapters))
+        {
+            var result = Remembered(records).Assign(order);
+            var byId = result.Adapters.ToDictionary(a => a.Id, a => (a.Slot, a.Ambiguous));
+
+            Assert.Equal((null, true), byId["n1"]);
+            Assert.Equal((null, true), byId["n2"]);
+        }
+    }
+
     [Fact]
     public void An_id_listed_twice_gets_one_slot_and_the_copy_gets_none()
     {

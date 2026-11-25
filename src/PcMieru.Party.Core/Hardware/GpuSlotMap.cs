@@ -39,15 +39,17 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 /// 2. Afterwards an adapter is matched, strongest first, to a remembered slot by
 ///    (a) the id it had earlier in this run (a LUID is stable inside one run, so a card that was settled stays settled even when its bus later
 ///        fails to read; LUIDs change at every boot, so they are never stored);
-///    (b) name, dedicated memory and PCI bus all equal;
-///    (c) name and dedicated memory equal while the bus differs or is unknown (the bus moved, or could not be read), only when that is the one
-///        remembered slot it can be and it is the one adapter that can be that slot. A memory size of 0 (unknown) on either side matches any size.
+///    (b) name, dedicated memory and PCI bus all equal, every one of them known on both sides (a memory size above 0, a bus that is not null): an
+///        unknown is never "equal" to another unknown, so a card whose bus could not be read never matches a record whose bus was not known either;
+///    (c) name and dedicated memory equal while the bus differs or is unknown on either side (the bus moved, or could not be read), only when that is
+///        the one remembered slot it can be and it is the one adapter that can be that slot. A memory size of 0 (unknown) on either side matches any size.
 ///    A match is mutual and unique, or it is not a match: when two adapters could be the same slot (twin cards whose bus is unknown or changed),
-///    or one adapter could be two slots, all of them are <see cref="GpuSlotAssignment.Ambiguous"/>, take no slot, and the slots they could be stay
-///    blocked this call (no new card takes them).
+///    or one adapter could be two slots (two remembered twins and one survivor whose bus cannot tell which), all of them are
+///    <see cref="GpuSlotAssignment.Ambiguous"/>, take no slot, and the slots they could be stay blocked this call (no new card takes them). An
+///    adapter that could be one of those blocked slots is ambiguous as well: having a candidate, blocked or not, it is never a new card.
 /// 3. A card that is gone leaves its slot reserved (a hole): the others keep theirs, and a replugged card gets its old slot back by (b).
-/// 4. An adapter that matches nothing is a new card. It takes the lowest slot that was never used by any card (a hole is "used"); with none left it
-///    has no slot.
+/// 4. An adapter that has no candidate slot at all is a new card. It takes the lowest slot that was never used by any card (a hole is "used"); with
+///    none left it has no slot.
 ///
 /// Names are compared as the driver gave them: a renamed card (a driver that changes the string) is a new card, not a guess.
 /// A card of the same model put in the place of a gone one is the same card to this map; nothing in (name, memory, bus) can tell them apart.
@@ -148,8 +150,14 @@ public sealed class GpuSlotMap
 
     private static long VramOf(BoardGpu g) => g.VramTotalBytes is { } v && v > 0 ? v : 0;
 
+    /// <summary>
+    /// Every identity field is known on both sides and equal: a name, a memory size above 0 and a bus. An unknown (null or 0) on either side is not
+    /// "equal to an unknown": two unknowns say nothing, so such a pair is left to <see cref="SameModel"/>, which only ever settles a unique pair.
+    /// </summary>
     private static bool Exact(BoardGpu g, GpuSlotRecord r) =>
-        string.Equals(g.Name, r.Name, StringComparison.Ordinal) && VramOf(g) == r.VramBytes && g.PciBus == r.PciBus;
+        !string.IsNullOrEmpty(g.Name) && string.Equals(g.Name, r.Name, StringComparison.Ordinal)
+        && VramOf(g) > 0 && VramOf(g) == r.VramBytes
+        && g.PciBus is { } bus && r.PciBus is { } remembered && bus == remembered;
 
     private static bool SameModel(BoardGpu g, GpuSlotRecord r) =>
         string.Equals(g.Name, r.Name, StringComparison.Ordinal) && (VramOf(g) == r.VramBytes || VramOf(g) == 0 || r.VramBytes == 0);
@@ -182,7 +190,9 @@ public sealed class GpuSlotMap
 
     /// <summary>
     /// Rules 2b and 2c, one tier. Decided on one snapshot, so the order of the adapters cannot change the outcome: an adapter with exactly one
-    /// candidate slot that no other open adapter is a candidate for takes it; one with any other non-empty set of candidates is ambiguous.
+    /// candidate slot that no other open adapter is a candidate for, and that an earlier tier did not block, takes it; one with any other
+    /// non-empty set of candidates is ambiguous. A blocked slot still counts as a candidate: an adapter that could be one of the slots an
+    /// ambiguous match holds is ambiguous too, never a new card (only an adapter with no candidate at all is one).
     /// </summary>
     private void Match(Pass pass, Func<BoardGpu, GpuSlotRecord, bool> same)
     {
@@ -194,7 +204,7 @@ public sealed class GpuSlotMap
             var list = new List<int>();
             for (var s = 0; s < MaxSlots; s++)
             {
-                if (_records[s] is { } r && !pass.Claimed[s] && !pass.Blocked[s] && same(pass.Adapters[i], r))
+                if (_records[s] is { } r && !pass.Claimed[s] && same(pass.Adapters[i], r))
                 {
                     list.Add(s);
                     claimants[s]++;
@@ -213,7 +223,7 @@ public sealed class GpuSlotMap
                 continue;
             }
 
-            if (list.Count == 1 && claimants[list[0]] == 1)
+            if (list.Count == 1 && claimants[list[0]] == 1 && !pass.Blocked[list[0]])
             {
                 pass.Give(i, list[0]);
             }
