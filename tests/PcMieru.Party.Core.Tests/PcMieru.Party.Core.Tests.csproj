@@ -2,7 +2,7 @@
 
   <!-- Tests of the rules layer (PcMieru.Party.Core). No Windows needed: dotnet test tests/PcMieru.Party.Core.Tests -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>PcMieru.Party.Core.Tests</RootNamespace>
@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PcMieru.Party.Core\PcMieru.Party.Core.csproj" />
+    <ProjectReference Include="..\..\src\PcMieru.Core\PcMieru.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

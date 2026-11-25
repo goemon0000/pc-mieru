@@ -1,14 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Rules layer of Parts Life (ported from v0.7.4): story, levels, adventure, equipment, save-state shapes.
-    No Windows and no WPF reference on purpose, so the whole layer is testable on a machine without a desktop.
-    Sampling and drawing live in other projects.
+    Rules layer of Parts Life (ported from v0.7.4): story, levels, adventure, equipment, save-state shapes, and the pure projection from a
+    Core Snapshot to what the board reads (Hardware/BoardFrame.cs, DESIGN-C 2.3).
+    No WPF reference and no Windows API on purpose, so the whole layer is testable on a machine without a desktop. The target is net10.0-windows
+    only because it reads Core's data shapes (Snapshot, Value), and a net10.0 project cannot reference a net10.0-windows one; it adds no Windows
+    reference of its own. Sampling itself (AggregateSnapshotSource) lives in Core, drawing in PcMieru.Party.
   -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>PcMieru.Party</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PcMieru.Core\PcMieru.Core.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="PcMieru.Party.Core.Tests" />
