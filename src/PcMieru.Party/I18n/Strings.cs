@@ -72,6 +72,11 @@ public static class Strings
     public static string Level    => T("Lv", "Lv");
     public static string Gear     => T("装備", "Gear");
 
+    public static string SaveFailedTitle => T("保存できませんでした", "Could not save");
+    public static string SaveFailedAsk(string reason) => T(
+        $"進みを保存できませんでした。\n\n{reason}\n\n「はい」でもう一度保存します。「いいえ」は保存せずに閉じます（前回の保存からの進みは失われます）。",
+        $"Your progress could not be saved.\n\n{reason}\n\nYes tries saving again. No closes without saving (progress since the last save is lost).");
+
     public static string Disclaimer => T(
         "※ 規格・相性・物語はすべてお遊びです。購入や設定の判断には使えません。",
         "Note: the specs, compatibility marks and story here are all for fun — not a reference for purchases or settings.");

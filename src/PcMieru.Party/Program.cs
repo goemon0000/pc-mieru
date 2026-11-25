@@ -1,5 +1,8 @@
 using System.Windows;
+using System.IO;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PcMieru.Party.Game;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Party;
@@ -8,6 +11,9 @@ internal static class Program
 {
     /// <summary>How long a smoke run keeps its window open before it closes it by itself.</summary>
     internal static readonly TimeSpan SmokeOpenFor = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>With --shot: how long after the first render the window is written (the feed ticks once a second, the story needs a few ticks to say its first lines).</summary>
+    internal static readonly TimeSpan ShotAfter = TimeSpan.FromMilliseconds(3200);
 
     // Exit codes: 0 = ran and ended normally, 1 = did not start (bad command line, the start gate said no, a smoke run that failed), 2 = another Parts Life is the resident.
     [STAThread]
@@ -41,13 +47,31 @@ internal static class Program
         }
 
         // 3. Only now WPF.
-        return Run(options, language);
+        return Run(options);
     }
 
-    private static int Run(PartyOptions options, PartyLanguage language)
+    private static int Run(PartyOptions options)
     {
+        // The state, the feed and the writer (DESIGN-C 3 item 6, 8 step 4a). A smoke run never reads or writes a save file: an in-memory fresh state and NO writer.
+        // A normal start reads only the new home (PartyState.Load() with no arguments) and saves through one background writer.
+        IBoardFeed feed = new FakeBoardFeed();   // step 4b: real feed (PCMieru.exe's snapshot over the Wire); the smoke run keeps the fake one for good
+        PartyState state;
+        PartySaveWriter? writer = null;
+        if (options.Smoke)
+        {
+            state = PartyState.Fresh();
+        }
+        else
+        {
+            state = PartyState.Load();
+            writer = new PartySaveWriter(state.SaveBlocked);
+        }
+
+        // --lang wins for this run and is NOT written back into the state; without it the language saved in the state, then the OS (DESIGN-C 3 item 4).
+        var language = PartyStrings.ForWindow(options.Language, state.Lang);
+
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-        var window = new PartyWindow(language);
+        var window = new PartyWindow(language, state, feed, writer);
 
         // A smoke run has to end on its own and to fail loudly: an exception on the UI thread is kept for the verdict instead of the default (a crash box nobody can click).
         string? failure = null;
@@ -59,13 +83,37 @@ internal static class Program
                 e.Handled = true;
                 window.Close();
             };
-            var timer = new DispatcherTimer { Interval = SmokeOpenFor };
-            timer.Tick += (_, _) =>
+
+            if (options.ShotPath is { } shot)
             {
-                timer.Stop();
-                window.Close();
-            };
-            window.Loaded += (_, _) => timer.Start();
+                // After the first render (and a few ticks of the feed, so the story has its lines) the window itself is written as a PNG; then the run ends.
+                var wait = new DispatcherTimer { Interval = ShotAfter };
+                window.ContentRendered += (_, _) => wait.Start();
+                wait.Tick += (_, _) =>
+                {
+                    wait.Stop();
+                    try
+                    {
+                        WriteShot(window.RenderShot(expanded: true, scale: 2.0), shot);
+                    }
+                    catch (Exception ex)
+                    {
+                        failure ??= "the shot could not be written: " + ex;
+                    }
+
+                    window.Close();
+                };
+            }
+            else
+            {
+                var timer = new DispatcherTimer { Interval = SmokeOpenFor };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    window.Close();
+                };
+                window.Loaded += (_, _) => timer.Start();
+            }
         }
 
         app.Run(window);
@@ -75,6 +123,8 @@ internal static class Program
             return 0;
         }
 
+        // A failure swallowed by the guarded timers of the window counts too: a smoke run that "ok"s over a swallowed exception checks nothing.
+        failure ??= window.FirstFailure;
         if (failure is null && !window.Rendered)
         {
             failure = "the window was closed before it was drawn";
@@ -88,6 +138,16 @@ internal static class Program
 
         Console.Out.WriteLine("party smoke ok");
         return 0;
+    }
+
+    private static void WriteShot(BitmapSource image, string path)
+    {
+        var full = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var file = File.Create(full);
+        encoder.Save(file);
     }
 
     /// <summary>A message of the shell before or instead of the window: a box for a person, one line on stderr for a run nobody watches (--smoke).</summary>

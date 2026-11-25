@@ -13,6 +13,15 @@ internal static class PartyStrings
     public static PartyLanguage Resolve(PartyLanguage? chosen) =>
         chosen ?? (string.Equals(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, "ja", StringComparison.OrdinalIgnoreCase) ? PartyLanguage.Ja : PartyLanguage.En);
 
+    /// <summary>The language of the window (DESIGN-C 3 item 4): --lang wins for this run, else the language saved in the state ("ja"/"en"), else the OS. Nothing is written back from here.</summary>
+    public static PartyLanguage ForWindow(PartyLanguage? chosen, string stateLang) =>
+        chosen ?? stateLang switch
+        {
+            "ja" => PartyLanguage.Ja,
+            "en" => PartyLanguage.En,
+            _ => Resolve(null),
+        };
+
     public static string Title(PartyLanguage language) => language == PartyLanguage.Ja ? "パーツぐらし" : "Parts Life";
 
     public static string AlreadyRunning(PartyLanguage language) =>
