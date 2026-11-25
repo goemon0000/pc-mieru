@@ -239,6 +239,15 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Party/ResidentInstance.cs
       the single-resident mutex name shared with the last Parts Life release,
       so that the old app and the new window never run at the same time
+  src/PcMieru.Party (Rendering, Game/GameAssets.cs, I18n/Strings.cs and
+  PartyWindow.xaml with its .cs files) and assets/party/characters.png,
+  marks.png, atlas.json and PartsLife.ico
+      the board renderer, the window, its texts and the art of Parts Life
+      v0.7.4, ported to the new data source, from src/PartsLife and assets of
+      goemon0000/parts-life (tag v0.7.4). The art is under
+      assets/party/LICENSE-ART.
+  src/PcMieru.Party/PcMieru.Party.csproj
+      embeds those assets; the icon keeps its old file name
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART
