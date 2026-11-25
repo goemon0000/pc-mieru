@@ -26,30 +26,38 @@ internal interface IStorageTopologyReader
 internal sealed record VolumeProbe(string Guid, string Label, bool Fixed, long? Total, long? Free, IReadOnlyList<int>? Drives);
 
 /// <summary>
-/// What the reader remembers of a drive between passes, keyed by its identity (model and serial): the seek-penalty answer and the size. Neither
-/// changes while the same drive stays, so after the first pass only the descriptor is asked again. An answer that was not given is not
-/// remembered (it is asked again next time), and a drive with no serial has no identity to trust, so it is never remembered at all.
+/// What the reader remembers of a drive between passes, keyed by its identity (model and serial): only the seek-penalty answer, because a disk
+/// never changes between spinning and not spinning while it stays. The size is not remembered (a RAID logical disk can grow without a new model
+/// or serial), so it is asked every pass. An answer that was not given is not remembered (it is asked again next time), and a drive that is
+/// not <paramref name="cacheable"/> (no serial, or a bus where the serial does not name the disk) is never remembered at all.
 /// </summary>
-internal sealed class DriveFactCache
+internal sealed class SeekPenaltyCache
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, (bool? Seek, long? Size)> _facts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool> _seek = new(StringComparer.Ordinal);
 
-    /// <summary>Returns the seek answer and the size of the drive, asking only for what is not already known.</summary>
-    public (bool? Seek, long? Size) Resolve(string identity, bool cacheable, Func<bool?> askSeek, Func<long?> askSize)
+    /// <summary>Returns the seek-penalty answer of the drive, asking only when it is not already known.</summary>
+    public bool? Resolve(string identity, bool cacheable, Func<bool?> askSeek)
     {
         if (!cacheable)
         {
-            return (askSeek(), askSize());
+            return askSeek();
         }
 
         lock (_gate)
         {
-            _facts.TryGetValue(identity, out var known);
-            var seek = known.Seek ?? askSeek();
-            var size = known.Size ?? askSize();
-            _facts[identity] = (seek, size);
-            return (seek, size);
+            if (_seek.TryGetValue(identity, out var known))
+            {
+                return known;
+            }
+
+            var seek = askSeek();
+            if (seek is { } answer)
+            {
+                _seek[identity] = answer;
+            }
+
+            return seek;
         }
     }
 }
@@ -57,14 +65,15 @@ internal sealed class DriveFactCache
 /// <summary>
 /// Reads the topology with the same access-0 IOCTLs the hardware page uses, so it needs no elevation. Every query here is a property query
 /// answered by the storage stack (the device descriptor, the seek-penalty property, the geometry, the volume's disk extents, the volume's free
-/// space as the file system keeps it): none of them reads the media or wakes a sleeping disk. The drive facts that never change while the drive
-/// stays (seek penalty, size) are asked once per drive and remembered, so a 60-second pass sends one query per drive.
+/// space as the file system keeps it): none of them reads the media or wakes a sleeping disk. The seek penalty is asked once per drive (on the
+/// buses where the serial names the disk) and remembered, so a 60-second pass sends the descriptor and geometry queries per drive and the seek
+/// query only for a drive not seen before.
 /// </summary>
 internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
 {
     private const uint DriveFixed = 3;
 
-    private readonly DriveFactCache _facts = new();
+    private readonly SeekPenaltyCache _seekCache = new();
 
     public IReadOnlyList<StorageDrive>? ReadDrives()
     {
@@ -118,7 +127,7 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
         return Describe(
             number,
             desc,
-            _facts,
+            _seekCache,
             () =>
             {
                 var seekRaw = Ioctl.Call(handle, Ioctl.QueryProperty, StorageProtocol.BuildPropertyQuery(StorageProtocol.StorageDeviceSeekPenaltyProperty), 64, out _);
@@ -134,23 +143,31 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
     /// <summary>
     /// A drive from its device descriptor, asking the seek-penalty and size probes only when they are needed. A removable drive, and a bus that is
     /// Unknown whatever the seek answer, is Unknown at once and neither probe is sent; a bus whose kind does not depend on the seek answer (NVMe)
-    /// is not asked for it. What was asked before for the same identity (<paramref name="facts"/>) is not asked again.
+    /// is not asked for it. The seek answer of a drive seen before (<paramref name="seekCache"/>) is not asked again, but only on a bus where
+    /// the serial names the disk itself and only with a serial; the size is asked every pass, since a logical disk can grow under the same name.
     /// </summary>
-    internal static StorageDrive Describe(int number, DeviceDescriptor desc, DriveFactCache facts, Func<bool?> askSeek, Func<long?> askSize)
+    internal static StorageDrive Describe(int number, DeviceDescriptor desc, SeekPenaltyCache seekCache, Func<bool?> askSeek, Func<long?> askSize)
     {
-        var identity = $"{StorageProtocol.JoinVendorModel(desc.Vendor, desc.Product)}|{StorageProtocol.CleanSerial(desc.Serial)}";
+        var serial = StorageProtocol.CleanSerial(desc.Serial);
+        var identity = $"{StorageProtocol.JoinVendorModel(desc.Vendor, desc.Product)}|{serial}";
         var bus = StorageCollector.MapBus(desc.BusType);
         if (!HasLocalKind(bus, desc.Removable))
         {
             return new StorageDrive(number, DiskKind.Unknown, null, identity);
         }
 
-        var cacheable = StorageProtocol.CleanSerial(desc.Serial).Length > 0;
-        var (seek, size) = facts.Resolve(identity, cacheable, AsksSeekPenalty(bus) ? askSeek : static () => null, () => Positive(askSize()));
-        return new StorageDrive(number, Classify(bus, desc.Removable, seek), size, identity);
+        var seek = AsksSeekPenalty(bus) ? seekCache.Resolve(identity, serial.Length > 0 && SerialNamesTheDisk(bus), askSeek) : null;
+        return new StorageDrive(number, Classify(bus, desc.Removable, seek), Positive(askSize()), identity);
     }
 
     private static long? Positive(long? value) => value is > 0 ? value : null;
+
+    /// <summary>
+    /// True on the buses where the serial in the descriptor is the disk's own (NVMe, SATA, SCSI, RAID), so what was learned of that model and
+    /// serial holds for the disk. A USB bridge or an "other" bus can report one model and serial for every enclosure, so nothing is remembered there.
+    /// </summary>
+    internal static bool SerialNamesTheDisk(StorageBus bus) =>
+        bus is StorageBus.Nvme or StorageBus.Sata or StorageBus.Scsi or StorageBus.Raid;
 
     /// <summary>False for a drive <see cref="Classify"/> calls Unknown whatever the seek answer: removable media, and virtual, iSCSI, Storage Spaces and unknown buses.</summary>
     internal static bool HasLocalKind(StorageBus bus, bool removable) =>
@@ -185,7 +202,8 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
     /// Local fixed volumes with a readable size, one entry per volume GUID: the same volume under two letters, or a letter and a folder, is one
     /// volume and is counted once (the first one seen wins). A volume whose size could not be read is left out, not counted as empty. A volume
     /// whose drives could not be read stays, with no drive numbers: it counts for the fullest volume but belongs to no drive kind. Removable media
-    /// is not part of the board.
+    /// is not part of the board, and neither is a volume with no drive letter and no mount folder (<see cref="IsOnBoard"/>; the enumeration leaves
+    /// it out before it gets here).
     /// </summary>
     internal static IReadOnlyList<StorageVolumeUse> Fold(IEnumerable<VolumeProbe> volumes)
     {
@@ -209,6 +227,12 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
 
         return result;
     }
+
+    /// <summary>
+    /// False for a volume with no path names (no drive letter and no mount folder), which does not count; true when it has some, and true when
+    /// the names could not be read (<c>null</c>), because a volume that cannot be told is not dropped.
+    /// </summary>
+    internal static bool IsOnBoard(IReadOnlyList<string>? pathNames) => pathNames is null || pathNames.Count > 0;
 
     /// <summary>
     /// How a volume is shown: its first drive letter ("C:"), or else its first mount folder, or else its GUID path. The trailing backslash of a
@@ -269,7 +293,10 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
             do
             {
                 var length = Array.IndexOf(name, '\0');
-                list.Add(ProbeVolume(new string(name, 0, length < 0 ? name.Length : length)));
+                if (ProbeVolume(new string(name, 0, length < 0 ? name.Length : length)) is { } probe)
+                {
+                    list.Add(probe);
+                }
             }
             while (Kernel32.FindNextVolumeW(find, name, (uint)name.Length));
 
@@ -281,7 +308,12 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
         }
     }
 
-    private static VolumeProbe ProbeVolume(string guidPath)
+    /// <summary>
+    /// One volume, or null for a volume that is not on the board because it has no path names at all (no drive letter and no mount folder: the
+    /// recovery, system and other partitions nobody can open). A volume whose names could not be read is kept, labelled by its GUID: not being
+    /// able to tell is not the same as having none.
+    /// </summary>
+    private static VolumeProbe? ProbeVolume(string guidPath)
     {
         var type = Kernel32Errors.Quiet(() => Kernel32.GetDriveTypeW(guidPath));
         if (type != DriveFixed)
@@ -290,13 +322,19 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
             return new VolumeProbe(guidPath, guidPath, false, null, null, null);
         }
 
+        var pathNames = PathNames(guidPath);
+        if (!IsOnBoard(pathNames))
+        {
+            return null;
+        }
+
         ulong avail = 0;
         ulong tot = 0;
         ulong totFree = 0;
         var spaceOk = Kernel32Errors.Quiet(() => Kernel32.GetDiskFreeSpaceExW(guidPath, out avail, out tot, out totFree));
         long? total = spaceOk && tot <= long.MaxValue ? (long)tot : null;
         long? free = spaceOk && totFree <= long.MaxValue ? (long)totFree : null;
-        return new VolumeProbe(guidPath, DisplayLabel(PathNames(guidPath), guidPath), true, total, free, ReadDriveNumbers(guidPath));
+        return new VolumeProbe(guidPath, DisplayLabel(pathNames ?? [], guidPath), true, total, free, ReadDriveNumbers(guidPath));
     }
 
     /// <summary>The drives a volume has space on, ascending; null when they could not be read (the volume is then on no drive that is known).</summary>
@@ -314,8 +352,8 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
         return extents.Count == 0 ? null : extents.Select(static e => e.Disk).Distinct().Order().ToList();
     }
 
-    /// <summary>The drive letters and mount folders of a volume; empty when they could not be read (the GUID is the label then).</summary>
-    private static List<string> PathNames(string guidPath)
+    /// <summary>The drive letters and mount folders of a volume (empty when it has none); null when they could not be read.</summary>
+    private static List<string>? PathNames(string guidPath)
     {
         var buffer = new char[260];
         for (var attempt = 0; attempt < 2; attempt++)
@@ -333,6 +371,6 @@ internal sealed class WindowsStorageTopologyReader : IStorageTopologyReader
             buffer = new char[length];
         }
 
-        return [];
+        return null;
     }
 }

@@ -68,7 +68,7 @@ public sealed class StorageTopologyTests
 
         public long? SizeAnswer { get; set; } = 1000;
 
-        public StorageDrive Describe(DeviceDescriptor desc, DriveFactCache cache, int number = 0) =>
+        public StorageDrive Describe(DeviceDescriptor desc, SeekPenaltyCache cache, int number = 0) =>
             WindowsStorageTopologyReader.Describe(number, desc, cache, () => { SeekAsked++; return SeekAnswer; }, () => { SizeAsked++; return SizeAnswer; });
     }
 
@@ -79,6 +79,8 @@ public sealed class StorageTopologyTests
     private const int BusVirtual = 14;
     private const int BusSpaces = 16;
     private const int BusUnknown = 0;
+    private const int BusRaid = 8;
+    private const int BusOther = 12;
 
     private static DeviceDescriptor Desc(int busType, bool removable = false, string serial = "SN1", string product = "Model") =>
         new("", product, "1", serial, busType, removable, 0);
@@ -88,7 +90,7 @@ public sealed class StorageTopologyTests
     {
         var probes = new Probes();
 
-        var drive = probes.Describe(Desc(BusUsb, removable: true), new DriveFactCache(), number: 3);
+        var drive = probes.Describe(Desc(BusUsb, removable: true), new SeekPenaltyCache(), number: 3);
 
         Assert.Equal(new StorageDrive(3, DiskKind.Unknown, null, "Model|SN1"), drive);
         Assert.Equal((0, 0), (probes.SeekAsked, probes.SizeAsked));
@@ -103,7 +105,7 @@ public sealed class StorageTopologyTests
     {
         var probes = new Probes();
 
-        var drive = probes.Describe(Desc(busType), new DriveFactCache());
+        var drive = probes.Describe(Desc(busType), new SeekPenaltyCache());
 
         Assert.Equal(DiskKind.Unknown, drive.Kind);
         Assert.Null(drive.CapacityBytes);
@@ -112,24 +114,24 @@ public sealed class StorageTopologyTests
     }
 
     [Fact]
-    public void A_drive_seen_before_is_not_asked_again_so_only_the_descriptor_is_sent_after_the_first_pass()
+    public void A_drive_seen_before_is_not_asked_for_its_seek_penalty_again_but_its_size_is_asked_every_pass()
     {
         var probes = new Probes { SeekAnswer = true };
-        var cache = new DriveFactCache();
+        var cache = new SeekPenaltyCache();
 
         var first = probes.Describe(Desc(BusSata), cache);
         var second = probes.Describe(Desc(BusSata), cache);
 
         Assert.Equal(new StorageDrive(0, DiskKind.Hdd, 1000, "Model|SN1"), first);
         Assert.Equal(first, second);
-        Assert.Equal((1, 1), (probes.SeekAsked, probes.SizeAsked));
+        Assert.Equal((1, 2), (probes.SeekAsked, probes.SizeAsked));
     }
 
     [Fact]
     public void A_drive_with_no_serial_is_asked_every_time()
     {
         var probes = new Probes();
-        var cache = new DriveFactCache();
+        var cache = new SeekPenaltyCache();
 
         probes.Describe(Desc(BusSata, serial: ""), cache);
         probes.Describe(Desc(BusSata, serial: "  ."), cache);
@@ -142,21 +144,21 @@ public sealed class StorageTopologyTests
     public void Another_drive_is_asked_for_itself_and_a_new_serial_in_the_same_number_is_a_new_drive()
     {
         var probes = new Probes();
-        var cache = new DriveFactCache();
+        var cache = new SeekPenaltyCache();
 
         probes.Describe(Desc(BusSata, serial: "A"), cache);
         probes.Describe(Desc(BusSata, serial: "B"), cache);
         probes.Describe(Desc(BusSata, serial: "A"), cache);
         probes.Describe(Desc(BusSata, serial: "A", product: "Other"), cache);
 
-        Assert.Equal((3, 3), (probes.SeekAsked, probes.SizeAsked));
+        Assert.Equal((3, 4), (probes.SeekAsked, probes.SizeAsked));
     }
 
     [Fact]
-    public void An_answer_that_was_not_given_is_not_remembered_and_is_asked_again_until_it_is()
+    public void A_seek_answer_that_was_not_given_is_not_remembered_and_is_asked_again_until_it_is()
     {
         var probes = new Probes { SeekAnswer = null, SizeAnswer = null };
-        var cache = new DriveFactCache();
+        var cache = new SeekPenaltyCache();
 
         var missing = probes.Describe(Desc(BusSata), cache);
         Assert.Equal(new StorageDrive(0, DiskKind.Unknown, null, "Model|SN1"), missing);
@@ -171,7 +173,7 @@ public sealed class StorageTopologyTests
         Assert.Equal((2, 3), (probes.SeekAsked, probes.SizeAsked));
 
         probes.Describe(Desc(BusSata), cache);
-        Assert.Equal((2, 3), (probes.SeekAsked, probes.SizeAsked));
+        Assert.Equal((2, 4), (probes.SeekAsked, probes.SizeAsked));
     }
 
     [Fact]
@@ -179,20 +181,73 @@ public sealed class StorageTopologyTests
     {
         var probes = new Probes { SizeAnswer = 0 };
 
-        Assert.Null(probes.Describe(Desc(BusSata), new DriveFactCache()).CapacityBytes);
+        Assert.Null(probes.Describe(Desc(BusSata), new SeekPenaltyCache()).CapacityBytes);
     }
 
     [Fact]
-    public void An_nvme_drive_is_not_asked_for_a_seek_penalty_it_does_not_use_and_its_size_is_asked_once()
+    public void An_nvme_drive_is_not_asked_for_a_seek_penalty_it_does_not_use_and_its_size_is_asked_every_pass()
     {
         var probes = new Probes();
-        var cache = new DriveFactCache();
+        var cache = new SeekPenaltyCache();
 
         var first = probes.Describe(Desc(BusNvme), cache);
         probes.Describe(Desc(BusNvme), cache);
 
         Assert.Equal(new StorageDrive(0, DiskKind.Nvme, 1000, "Model|SN1"), first);
-        Assert.Equal((0, 1), (probes.SeekAsked, probes.SizeAsked));
+        Assert.Equal((0, 2), (probes.SeekAsked, probes.SizeAsked));
+    }
+
+    [Theory]
+    [InlineData(BusUsb)]
+    [InlineData(BusOther)]
+    public void Nothing_is_remembered_on_a_bus_where_the_serial_does_not_name_the_disk(int busType)
+    {
+        var probes = new Probes();
+        var cache = new SeekPenaltyCache();
+
+        probes.Describe(Desc(busType), cache);
+        probes.Describe(Desc(busType), cache);
+
+        Assert.Equal((2, 2), (probes.SeekAsked, probes.SizeAsked));
+    }
+
+    [Fact]
+    public void Two_usb_enclosures_with_the_same_model_and_serial_are_two_drives_each_asked_for_itself()
+    {
+        var probes = new Probes { SeekAnswer = true, SizeAnswer = 1000 };
+        var cache = new SeekPenaltyCache();
+        var first = probes.Describe(Desc(BusUsb), cache, number: 1);
+
+        probes.SeekAnswer = false;
+        probes.SizeAnswer = 2000;
+        var second = probes.Describe(Desc(BusUsb), cache, number: 2);
+
+        Assert.Equal(new StorageDrive(1, DiskKind.Hdd, 1000, "Model|SN1"), first);
+        Assert.Equal(new StorageDrive(2, DiskKind.Ssd, 2000, "Model|SN1"), second);
+    }
+
+    [Fact]
+    public void A_raid_disk_that_grew_under_the_same_model_and_serial_shows_its_new_size_and_keeps_its_remembered_seek_answer()
+    {
+        var probes = new Probes { SeekAnswer = true, SizeAnswer = 1000 };
+        var cache = new SeekPenaltyCache();
+        var before = probes.Describe(Desc(BusRaid), cache);
+
+        probes.SizeAnswer = 3000;
+        probes.SeekAnswer = null;
+        var after = probes.Describe(Desc(BusRaid), cache);
+
+        Assert.Equal(new StorageDrive(0, DiskKind.Hdd, 1000, "Model|SN1"), before);
+        Assert.Equal(new StorageDrive(0, DiskKind.Hdd, 3000, "Model|SN1"), after);
+        Assert.Equal((1, 2), (probes.SeekAsked, probes.SizeAsked));
+    }
+
+    [Fact]
+    public void Only_nvme_sata_scsi_and_raid_have_a_serial_that_names_the_disk()
+    {
+        var named = Enum.GetValues<StorageBus>().Where(WindowsStorageTopologyReader.SerialNamesTheDisk).Order().ToArray();
+
+        Assert.Equal([StorageBus.Nvme, StorageBus.Sata, StorageBus.Raid, StorageBus.Scsi], named);
     }
 
     // ---- the volumes ----
@@ -288,6 +343,16 @@ public sealed class StorageTopologyTests
         Assert.Equal(expected, WindowsStorageTopologyReader.DisplayLabel(names, guid));
 
     [Fact]
+    public void A_volume_with_no_path_names_does_not_count_but_one_whose_names_could_not_be_read_stays()
+    {
+        Assert.False(WindowsStorageTopologyReader.IsOnBoard([]));
+        Assert.True(WindowsStorageTopologyReader.IsOnBoard([@"C:\"]));
+        Assert.True(WindowsStorageTopologyReader.IsOnBoard([@"D:\Mounts\Data\"]));
+        Assert.True(WindowsStorageTopologyReader.IsOnBoard(null));
+        Assert.False(WindowsStorageTopologyReader.IsOnBoard(WindowsStorageTopologyReader.SplitMultiString("\0")));
+    }
+
+    [Fact]
     public void A_multi_string_buffer_is_split_at_the_nulls_and_empty_strings_are_dropped()
     {
         Assert.Equal([@"C:\", @"D:\Mounts\Data\"], WindowsStorageTopologyReader.SplitMultiString("C:\\\0D:\\Mounts\\Data\\\0\0\0\0"));
@@ -342,6 +407,9 @@ public sealed class StorageTopologyTests
         var system = Path.GetPathRoot(Environment.SystemDirectory)!.TrimEnd('\\');
         Assert.Contains(volumes, v => v.Letter.Equals(system, StringComparison.OrdinalIgnoreCase));
         Assert.All(volumes, static v => Assert.True(v.TotalBytes > 0 && v.FreeBytes >= 0 && v.FreeBytes <= v.TotalBytes));
+
+        // Recovery and system partitions have no letter and no folder; none of them is listed under its GUID.
+        Assert.DoesNotContain(volumes, static v => v.Letter.StartsWith(@"\\?\", StringComparison.Ordinal));
 
         var first = reader.ReadDrives();
         var second = reader.ReadDrives();
