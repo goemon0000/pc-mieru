@@ -2,6 +2,7 @@ using System.Windows;
 using System.IO;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PcMieru.Core.Siblings;
 using PcMieru.Party.Game;
 using PcMieru.Wire.Gate;
 
@@ -14,6 +15,9 @@ internal static class Program
 
     /// <summary>With --shot: how long after the first render the window is written (the feed ticks once a second, the story needs a few ticks to say its first lines).</summary>
     internal static readonly TimeSpan ShotAfter = TimeSpan.FromMilliseconds(3200);
+
+    /// <summary>This exe's own file name: the sibling a second start brings to the front (SiblingWindows looks for it beside the running exe).</summary>
+    internal const string PartyExeName = "PCMieru.Party.exe";
 
     // Exit codes: 0 = ran and ended normally, 1 = did not start (bad command line, the start gate said no, a smoke run that failed), 2 = another Parts Life is the resident.
     [STAThread]
@@ -43,7 +47,7 @@ internal static class Program
         using var resident = ResidentInstance.TryAcquire(ResidentInstance.CurrentName());
         if (resident is null)
         {
-            if (!options.Smoke && ResidentActivator.TryActivateExisting())
+            if (!options.Smoke && SiblingWindows.Activate(PartyExeName))
             {
                 return 0;
             }
@@ -82,7 +86,8 @@ internal static class Program
         var language = PartyStrings.ForWindow(options.Language, state.Lang);
 
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-        var window = new PartyWindow(language, state, feed, writer);
+        // The language follow reads gui.ini only in a normal start; a smoke run reads nothing of this machine.
+        var window = new PartyWindow(language, state, feed, writer, options.Smoke ? null : static () => GuiLanguage.Read());
 
         // A smoke run has to end on its own and to fail loudly: an exception on the UI thread is kept for the verdict instead of the default (a crash box nobody can click).
         string? failure = null;
