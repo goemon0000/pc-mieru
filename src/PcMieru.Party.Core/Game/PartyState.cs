@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using PcMieru.Party.Adventure;
 using PcMieru.Party.Hardware;
 
@@ -37,8 +38,10 @@ public sealed class PartyState
     /// 手放すのは <see cref="GpuSlotMap.Forget"/>（記録を「引退」にして番号を塞ぐ。経験値と装備は残る）で、
     /// 番号を空けるのは <see cref="GpuSlotKeys.ResetSlot"/>（その鍵の経験値と装備を消して記録も消す）だけ。
     /// バスと容量が分からなかった記録は null / 0 のまま書く（0 や既定値を作らない）。
-    /// **欄が有るのに壊れている**（null・配列でない・席の番号の重複や負・同一カードの記録が2つ）ときは、
+    /// **欄が有るのに壊れている**（null・配列でない・席の番号の重複や負・Slot の無い記録・同一カードの記録が2つ）ときは、
     /// 「欄が無い」とは別に扱う（<see cref="GpuSlotsRepaired"/>）。空として読むと、残った gpu#i の育成が別のカードに付く。
+    /// 同一カードの記録が2つのときは消さずに「係争」（<see cref="GpuSlotRecord.Disputed"/>）で残す: 一致するカードは決められないので席も経験値も付けない。
+    /// 欄が有って壊れていなくても（空の一覧も）、経験値か装備が残っているのに記録の無い席は「引退」の記録で塞ぐ（<see cref="GpuSlotKeys.RepairLoaded"/>）。
     /// </summary>
     public List<GpuSlotRecord> GpuSlots { get; set; } = new();
 
@@ -50,6 +53,9 @@ public sealed class PartyState
     /// 利用者は壊れたことに気づけない。派生（引退の記録があるか）にしないのは、引退は <see cref="GpuSlotMap.Forget"/> の
     /// 意図した結果でもあり、「壊れていた」と区別がつかなくなるため。
     /// 画面が知らせたら、呼ぶ側が false に戻す（この欄は自動では戻らない）。欄が**無い**古い保存は壊れていない（false のまま）。
+    /// **false のときは保存に書かない**（ふつうの保存の形を変えない。<see cref="GpuSlotRecord.Retired"/> と同じ）。無ければ false に読む。
+    /// 属性の [JsonIgnore] ではなく読み書きの設定（<see cref="Opts"/>）で省く: 属性があると LenientJson・取り込みの欄の検査が
+    /// 「保存しない欄」とみなして読み飛ばし、欄ごとに読み直した保存でこの印が消える。
     /// </summary>
     public bool GpuSlotsRepaired { get; set; }
 
@@ -238,7 +244,25 @@ public sealed class PartyState
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver { Modifiers = { OmitUnusedGpuSlotFields } },
     };
+
+    /// <summary>
+    /// 席の欄の 2 つを、使っていないときは保存に書かない（ふつうの保存の形を変えない）。読むときは、無ければ既定（空の一覧・false）。
+    ///   <see cref="GpuSlotsRepaired"/> … false のとき書かない。
+    ///   <see cref="GpuSlots"/> … **空のとき書かない。** 空を書くと、一度も番号を振っていない古い保存が「欄が有って空」に変わり、
+    ///   次に読むとき gpu#i の経験値が全部「記録の無い席」とみなされて塞がれる（<see cref="GpuSlotKeys.RepairLoaded"/>）。
+    ///   空の一覧は「欄が無い」と同じ意味で足りる: 番号を振った後の一覧は空にならない（カードか、経験値のある席を塞ぐ記録が残る）。
+    /// </summary>
+    internal static void OmitUnusedGpuSlotFields(JsonTypeInfo info)
+    {
+        if (info.Type != typeof(PartyState)) return;
+        foreach (var p in info.Properties)
+        {
+            if (p.Name == nameof(GpuSlotsRepaired)) p.ShouldSerialize = static (_, value) => value is true;
+            else if (p.Name == nameof(GpuSlots)) p.ShouldSerialize = static (_, value) => value is List<GpuSlotRecord> { Count: > 0 };
+        }
+    }
 
     /// <summary>壊れて読めなかった保存の控えを、いくつまで残すか。</summary>
     public const int BadCopiesKept = 3;

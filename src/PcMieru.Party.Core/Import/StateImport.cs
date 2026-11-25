@@ -62,6 +62,9 @@ public static class StateImport
         {
             Modifiers =
             {
+                // The same omissions as the save itself (an empty GpuSlots and a false GpuSlotsRepaired are not written): the converted bytes must read back
+                // to the same state, and an old state must not turn into one with a "present" empty list.
+                PartyState.OmitUnusedGpuSlotFields,
                 static info =>
                 {
                     if (info.Type != typeof(PartyState)) return;

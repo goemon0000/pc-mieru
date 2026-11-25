@@ -17,9 +17,17 @@ namespace PcMieru.Party.Hardware;
 /// stored under <c>gpu#i</c> stays where it is until <see cref="GpuSlotKeys.ResetSlot"/> removes it together with the record. A save written before this
 /// field existed has none and reads as false. It is left out of the save while false, so an ordinary record keeps its old shape.
 /// </param>
+/// <param name="Disputed">
+/// True when the save held two or more live records of one exact identity (same name, memory and bus) and so cannot say which card owns which number
+/// (<see cref="GpuSlotKeys.RepairLoaded"/> keeps such records instead of dropping them). It is NOT <paramref name="Retired"/>: a retired record matches
+/// no adapter, so a matching card is a new one; a disputed record BLOCKS matching, so a card that fits it is ambiguous (no slot, no earning) and is never a
+/// new card. Its number is never handed out. Only the owner's <see cref="GpuSlotKeys.ForgetSlot"/> (which turns it into a retired record) and then
+/// <see cref="GpuSlotKeys.ResetSlot"/> free it. Left out of the save while false, like <paramref name="Retired"/>.
+/// </param>
 public sealed record GpuSlotRecord(
     int Slot, string Name, long VramBytes, uint? PciBus,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Retired = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Retired = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Disputed = false);
 
 /// <summary>What the map did with one adapter. <see cref="Slot"/> is null when it has none; <see cref="Ambiguous"/> says why (it is shown, but earns nothing).</summary>
 /// <param name="Id">Core's adapter id (LUID), as given to <see cref="GpuSlotMap.Assign"/>.</param>
@@ -63,6 +71,8 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 /// 4. An adapter that has no candidate slot at all is a new card. It takes the lowest slot that was never used by any card (a hole is "used", and so is
 ///    a retired slot, see <see cref="GpuSlotRecord.Retired"/>); with none left it has no slot. A card's progress is never handed to another card by
 ///    itself: a number the owner let go of (<see cref="Forget"/>) stays closed until <see cref="GpuSlotKeys.ResetSlot"/> has removed the progress under it.
+///    A disputed record (<see cref="GpuSlotRecord.Disputed"/>, two records of one identity that a damaged save left) is a candidate like any live one,
+///    but never a match: a card that fits it is <see cref="GpuSlotAssignment.Ambiguous"/>, and its number stays closed.
 ///
 /// Names are compared as the driver gave them: a renamed card (a driver that changes the string) is a new card, not a guess.
 /// A card of the same model put in the place of a gone one is the same card to this map; nothing in (name, memory, bus) can tell them apart.
@@ -77,7 +87,8 @@ public sealed class GpuSlotMap
 
     /// <param name="persisted">
     /// What the save remembered. Null or empty on the first run and with an old save. A record outside 0..5, and a second record for one slot, is ignored.
-    /// A save whose records are damaged is repaired before it gets here (<see cref="GpuSlotKeys.RepairLoaded"/>); this constructor trusts what it is given.
+    /// A save whose records are damaged is repaired before it gets here (<see cref="GpuSlotKeys.RepairLoaded"/>); this constructor trusts what it is given
+    /// (a record that is both retired and disputed counts as retired).
     /// </param>
     public GpuSlotMap(IEnumerable<GpuSlotRecord>? persisted = null)
     {
@@ -85,7 +96,7 @@ public sealed class GpuSlotMap
         {
             if (r is not null && r.Slot is >= 0 and < MaxSlots && _records[r.Slot] is null)
             {
-                _records[r.Slot] = r with { Name = r.Name ?? string.Empty, VramBytes = Math.Max(0, r.VramBytes) };
+                _records[r.Slot] = r with { Name = r.Name ?? string.Empty, VramBytes = Math.Max(0, r.VramBytes), Disputed = r.Disputed && !r.Retired };
             }
         }
     }
@@ -102,12 +113,13 @@ public sealed class GpuSlotMap
     /// <see cref="GpuSlotKeys.ResetSlot"/> has removed the progress under it together with the record.
     /// Returns the remembered slots after this call (the same list <see cref="Records"/> gives, for the save; <see cref="GpuSlotKeys.ForgetSlot"/> also
     /// writes it into the state); a slot outside 0..5, one with no record, and one that is already retired change nothing.
+    /// A DISPUTED record (<see cref="GpuSlotRecord.Disputed"/>) is let go the same way: the owner's decision turns it into a retired one.
     /// </summary>
     public IReadOnlyList<GpuSlotRecord> Forget(int slot)
     {
         if (slot is >= 0 and < MaxSlots && _records[slot] is { Retired: false } record)
         {
-            _records[slot] = record with { Retired = true };
+            _records[slot] = record with { Retired = true, Disputed = false };
             foreach (var id in _sessionSlots.Where(kv => kv.Value == slot).Select(static kv => kv.Key).ToArray())
             {
                 _sessionSlots.Remove(id);
@@ -130,6 +142,22 @@ public sealed class GpuSlotMap
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Closes every given number that has no record yet with a retired placeholder (<see cref="GpuSlotKeys.Placeholder"/>), so no card is given it. Used when
+    /// the list is first set up and numbers hold progress that no record claims (<see cref="GpuSlotKeys.UnrecordedProgress"/>); a number that has a record,
+    /// or is outside 0..5, changes nothing.
+    /// </summary>
+    internal void Reserve(IEnumerable<int> slots)
+    {
+        foreach (var s in slots)
+        {
+            if (s is >= 0 and < MaxSlots && _records[s] is null)
+            {
+                _records[s] = GpuSlotKeys.Placeholder(s);
+            }
+        }
     }
 
     /// <summary>
@@ -252,7 +280,7 @@ public sealed class GpuSlotMap
         foreach (var i in pass.Open.ToArray())
         {
             if (_sessionSlots.TryGetValue(pass.Adapters[i].Id, out var s)
-                && _records[s] is { Retired: false } r && !pass.Claimed[s] && SameModel(pass.Adapters[i], r))
+                && _records[s] is { Retired: false, Disputed: false } r && !pass.Claimed[s] && SameModel(pass.Adapters[i], r))
             {
                 pass.Give(i, s);
             }
@@ -263,7 +291,8 @@ public sealed class GpuSlotMap
     /// Rules 2b and 2c, one tier. Decided on one snapshot, so the order of the adapters cannot change the outcome: an adapter with exactly one
     /// candidate slot that no other open adapter is a candidate for, and that an earlier tier did not block, takes it; one with any other
     /// non-empty set of candidates is ambiguous. A blocked slot still counts as a candidate: an adapter that could be one of the slots an
-    /// ambiguous match holds is ambiguous too, never a new card (only an adapter with no candidate at all is one).
+    /// ambiguous match holds is ambiguous too, never a new card (only an adapter with no candidate at all is one). A DISPUTED record is a candidate
+    /// that can never be taken: the adapter that fits it is ambiguous, however clear the fit looks.
     /// </summary>
     private void Match(Pass pass, Func<BoardGpu, GpuSlotRecord, bool> same)
     {
@@ -294,7 +323,7 @@ public sealed class GpuSlotMap
                 continue;
             }
 
-            if (list.Count == 1 && claimants[list[0]] == 1 && !pass.Blocked[list[0]])
+            if (list.Count == 1 && claimants[list[0]] == 1 && !pass.Blocked[list[0]] && _records[list[0]] is { Disputed: false })
             {
                 pass.Give(i, list[0]);
             }

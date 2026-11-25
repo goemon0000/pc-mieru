@@ -151,13 +151,24 @@ public class GpuSlotRetireTests
     }
 
     [Fact]
-    public void A_present_empty_list_is_well_formed_and_is_left_alone()
+    public void A_present_empty_list_is_well_formed_and_is_not_reported()
+    {
+        var back = PartyState.FromJson("""{"SaveVersion":1,"Experience":{"cpu#0":7},"GpuSlots":[]}""", out var repaired);
+
+        Assert.False(repaired);
+        Assert.False(back.GpuSlotsRepaired);
+        Assert.Empty(back.GpuSlots);    // no gpu#i holds progress: nothing to reserve
+    }
+
+    [Fact]
+    public void A_present_empty_list_with_progress_is_not_reported_but_reserves_the_number_that_holds_it()
     {
         var back = PartyState.FromJson("""{"SaveVersion":1,"Experience":{"gpu#0":7},"GpuSlots":[]}""", out var repaired);
 
         Assert.False(repaired);
         Assert.False(back.GpuSlotsRepaired);
-        Assert.Empty(back.GpuSlots);
+        Assert.Equal([new GpuSlotRecord(0, "", 0, null, Retired: true)], back.GpuSlots);
+        Assert.Equal(7, back.Experience["gpu#0"]);
     }
 
     // ---- item 2: present but broken keeps the progress reserved ----
@@ -179,8 +190,7 @@ public class GpuSlotRetireTests
     // a negative slot (and one past the last)
     [InlineData("[{\"Slot\":-1,\"Name\":\"A\",\"VramBytes\":1,\"PciBus\":1},{\"Slot\":2,\"Name\":\"B\",\"VramBytes\":1,\"PciBus\":2}]", new[] { 2 }, new[] { 0, 3 })]
     [InlineData("[{\"Slot\":6,\"Name\":\"A\",\"VramBytes\":1,\"PciBus\":1},{\"Slot\":2,\"Name\":\"B\",\"VramBytes\":1,\"PciBus\":2}]", new[] { 2 }, new[] { 0, 3 })]
-    // two live records of one exact identity: the save cannot say which card is which, so neither is trusted
-    [InlineData("[{\"Slot\":0,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},{\"Slot\":2,\"Name\":\"T\",\"VramBytes\":1024,\"PciBus\":5},{\"Slot\":1,\"Name\":\"C\",\"VramBytes\":1,\"PciBus\":4}]", new[] { 1 }, new[] { 0, 2, 3 })]
+    // two live records of one exact identity are not here: they are kept as Disputed, not reserved as Retired (GpuSlotDisputedTests)
     public void A_broken_field_keeps_the_valid_records_reserves_every_number_that_holds_progress_and_never_drops_the_progress(
         string slotsJson, int[] keptSlots, int[] reserved)
     {
