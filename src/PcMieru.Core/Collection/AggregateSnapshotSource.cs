@@ -196,7 +196,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             gpu.State)
         {
             Power = BatteryCollector.ReadPower(),
-            Storage = _storage?.Current,
+            Storage = _storage?.Settled,
         };
 
         // No Provenance: that is the recorder's input, and this source is never recorded.

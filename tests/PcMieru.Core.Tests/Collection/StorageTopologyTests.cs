@@ -143,9 +143,13 @@ public sealed class StorageTopologyTests
 
         public int VolumeReads { get; private set; }
 
+        /// <summary>Runs inside <see cref="ReadDrives"/>, after the read has started: the moment a row can change under a read in flight.</summary>
+        public Action? DuringDriveRead { get; set; }
+
         public IReadOnlyList<StorageDrive>? ReadDrives()
         {
             DriveReads++;
+            DuringDriveRead?.Invoke();
             return Throw ? throw new InvalidOperationException("boom") : Drives;
         }
 
@@ -359,17 +363,263 @@ public sealed class StorageTopologyTests
         Assert.Null(refresher.Current);
     }
 
+    [Fact]
+    public void Dispose_during_the_drive_read_does_not_start_the_volume_read_and_publishes_nothing()
+    {
+        var reader = new DisposingReader();
+        var refresher = new StorageTopologyRefresher(reader, () => 0);
+        reader.Owner = refresher;
+
+        refresher.Step();
+
+        Assert.Equal((1, 0), (reader.DriveReads, reader.VolumeReads));
+        Assert.Null(refresher.Current);
+        Assert.Null(refresher.Settled);
+    }
+
+    [Fact]
+    public void Dispose_during_the_volume_read_publishes_nothing()
+    {
+        var reader = new DisposingReader { DisposeInVolumes = true };
+        var refresher = new StorageTopologyRefresher(reader, () => 0);
+        reader.Owner = refresher;
+
+        refresher.Step();
+
+        Assert.Equal((1, 1), (reader.DriveReads, reader.VolumeReads));
+        Assert.Null(refresher.Current);
+        Assert.Null(refresher.Settled);
+    }
+
+    [Fact]
+    public void After_dispose_the_published_topology_is_gone()
+    {
+        var refresher = new StorageTopologyRefresher(new FakeReader(), () => 0);
+        refresher.Step();
+        Assert.NotNull(refresher.Current);
+        Assert.NotNull(refresher.Settled);
+
+        refresher.Dispose();
+
+        Assert.Null(refresher.Current);
+        Assert.Null(refresher.Settled);
+    }
+
     private sealed class DisposingReader : IStorageTopologyReader
     {
         public StorageTopologyRefresher? Owner { get; set; }
 
+        public bool DisposeInVolumes { get; set; }
+
+        public int DriveReads { get; private set; }
+
+        public int VolumeReads { get; private set; }
+
         public IReadOnlyList<StorageDrive>? ReadDrives()
         {
-            Owner?.Dispose();
+            DriveReads++;
+            if (!DisposeInVolumes)
+            {
+                Owner?.Dispose();
+            }
+
             return [new StorageDrive(0, DiskKind.Nvme, 1, "a|1")];
         }
 
-        public IReadOnlyList<StorageVolumeUse>? ReadVolumes() => [];
+        public IReadOnlyList<StorageVolumeUse>? ReadVolumes()
+        {
+            VolumeReads++;
+            if (DisposeInVolumes)
+            {
+                Owner?.Dispose();
+            }
+
+            return [];
+        }
+    }
+
+    // ---- volumes are never read closer than thirty seconds, even when an invalidation forces the drives early ----
+
+    [Fact]
+    public void An_early_drive_read_does_not_read_the_volumes_and_publishes_them_as_unknown_until_they_are_due()
+    {
+        long now = 0;
+        var reader = new FakeReader();
+        using var refresher = new StorageTopologyRefresher(reader, () => now);
+        refresher.Step();
+        Assert.Equal((1, 1), (reader.DriveReads, reader.VolumeReads));
+        refresher.NoteDisks([Row(0)]);
+
+        reader.Drives = [new StorageDrive(0, DiskKind.Nvme, 1000, "a|1"), new StorageDrive(1, DiskKind.Hdd, 2000, "b|2")];
+        refresher.NoteDisks([Row(0), Row(1)]);
+        now = 10_000;
+        refresher.Step();
+
+        Assert.Equal((2, 1), (reader.DriveReads, reader.VolumeReads));
+        Assert.Equal(2, refresher.Current!.Drives.Count);
+        Assert.Null(refresher.Current.Volumes);
+
+        now = 29_999;
+        refresher.Step();
+        Assert.Equal((2, 1), (reader.DriveReads, reader.VolumeReads));
+        Assert.Null(refresher.Current.Volumes);
+
+        now = 30_000;
+        refresher.Step();
+        Assert.Equal((2, 2), (reader.DriveReads, reader.VolumeReads));
+        Assert.Equal("C:", Assert.Single(refresher.Current!.Volumes!).Letter);
+        Assert.Equal(2, refresher.Current.Drives.Count);
+    }
+
+    // ---- Settled: a drive number that changes hands never earns for the old kind ----
+
+    [Fact]
+    public void The_first_note_of_the_disks_nulls_nothing()
+    {
+        var reader = new FakeReader();
+        using var refresher = new StorageTopologyRefresher(reader, () => 0);
+        refresher.Step();
+
+        refresher.NoteDisks([Row(0)]);
+
+        Assert.NotNull(refresher.Settled);
+        Assert.Same(refresher.Current, refresher.Settled);
+
+        // Even a first look that disagrees with the known drives is only a request to read again, not a change since the last frame.
+        using var other = new StorageTopologyRefresher(new FakeReader(), () => 0);
+        other.Step();
+        other.NoteDisks([Row(0), Row(1)]);
+        Assert.Same(other.Current, other.Settled);
+    }
+
+    [Fact]
+    public void Unchanged_rows_leave_settled_equal_to_current_through_every_kind_of_pass()
+    {
+        long now = 0;
+        var reader = new FakeReader();
+        using var refresher = new StorageTopologyRefresher(reader, () => now);
+
+        foreach (var t in new long[] { 0, 1_000, 30_000, 60_000, 90_000, 120_000 })
+        {
+            now = t;
+            refresher.NoteDisks([Row(0)]);
+            refresher.Step();
+            Assert.NotNull(refresher.Settled);
+            Assert.Same(refresher.Current, refresher.Settled);
+        }
+
+        Assert.Equal(3, reader.DriveReads);
+    }
+
+    [Fact]
+    public void A_drive_number_that_vanishes_and_comes_back_is_unsettled_until_a_read_that_started_after_it_is_published()
+    {
+        long now = 0;
+        var reader = new FakeReader { Drives = [new StorageDrive(0, DiskKind.Nvme, 1000, "a|1"), new StorageDrive(1, DiskKind.Hdd, 2000, "old|9")] };
+        using var refresher = new StorageTopologyRefresher(reader, () => now);
+        refresher.Step();
+        refresher.NoteDisks([Row(0), Row(1)]);
+        Assert.Same(refresher.Current, refresher.Settled);
+
+        // The hard disk is pulled and another drive takes the number: the number is missing from one frame, then back.
+        now = 1_000;
+        refresher.NoteDisks([Row(0)]);
+        Assert.Null(refresher.Settled);
+        refresher.NoteDisks([Row(0), Row(1)]);
+        Assert.Null(refresher.Settled);
+        Assert.Equal(DiskKind.Hdd, refresher.Current!.Drives[1].Kind);
+
+        // Still inside the gap: nothing was read, so nothing is settled; the old answer is not served as settled either.
+        reader.Drives = [new StorageDrive(0, DiskKind.Nvme, 1000, "a|1"), new StorageDrive(1, DiskKind.Nvme, 4000, "new|7")];
+        now = 9_999;
+        refresher.Step();
+        Assert.Equal(1, reader.DriveReads);
+        Assert.Null(refresher.Settled);
+
+        now = 10_000;
+        refresher.Step();
+        Assert.Equal(2, reader.DriveReads);
+        var settled = refresher.Settled;
+        Assert.NotNull(settled);
+        Assert.Equal(DiskKind.Nvme, settled.Drives[1].Kind);
+        Assert.Equal("new|7", settled.Drives[1].Identity);
+
+        // And it stays settled while the rows stay as they are.
+        refresher.NoteDisks([Row(0), Row(1)]);
+        Assert.Same(refresher.Current, refresher.Settled);
+    }
+
+    [Fact]
+    public void A_read_that_started_before_a_change_and_was_published_after_it_stays_unsettled()
+    {
+        long now = 0;
+        var reader = new FakeReader { Drives = [new StorageDrive(0, DiskKind.Nvme, 1000, "a|1"), new StorageDrive(1, DiskKind.Hdd, 2000, "old|9")] };
+        using var refresher = new StorageTopologyRefresher(reader, () => now);
+        refresher.Step();
+        refresher.NoteDisks([Row(0), Row(1)]);
+
+        // The regular pass starts; while it is inside the OS call the number 1 vanishes from the rows. The read may have seen either side.
+        now = StorageTopologyRefresher.DriveEveryMs;
+        reader.DuringDriveRead = () => refresher.NoteDisks([Row(0)]);
+        refresher.Step();
+        reader.DuringDriveRead = null;
+
+        Assert.NotNull(refresher.Current);
+        Assert.Null(refresher.Settled);
+
+        // The change asked for another read (the flag was cleared before the read began, so this one is not lost); one that starts later settles it.
+        reader.Drives = [new StorageDrive(0, DiskKind.Nvme, 1000, "a|1")];
+        now += StorageTopologyRefresher.InvalidateGapMs;
+        refresher.Step();
+        Assert.Equal(3, reader.DriveReads);
+        Assert.Same(refresher.Current, refresher.Settled);
+        Assert.Single(refresher.Settled!.Drives);
+    }
+
+    [Fact]
+    public void A_volume_pass_does_not_settle_an_older_drive_read()
+    {
+        long now = 0;
+        var reader = new FakeReader();
+        using var refresher = new StorageTopologyRefresher(reader, () => now);
+        refresher.Step();
+        refresher.NoteDisks([Row(0)]);
+
+        // A change at 20 s: an early drive read at 25 s (volumes not due, so published as unknown).
+        now = 20_000;
+        refresher.NoteDisks([Row(0), Row(1)]);
+        now = 25_000;
+        refresher.Step();
+        Assert.Equal((2, 1), (reader.DriveReads, reader.VolumeReads));
+        Assert.Same(refresher.Current, refresher.Settled);
+
+        // Another change at 28 s, and at 30 s only the volumes are due (the drive gap has not passed): the new volume list does not settle the old read.
+        now = 28_000;
+        refresher.NoteDisks([Row(0)]);
+        now = 30_000;
+        refresher.Step();
+        Assert.Equal((2, 2), (reader.DriveReads, reader.VolumeReads));
+        Assert.NotNull(refresher.Current!.Volumes);
+        Assert.Null(refresher.Settled);
+
+        now = 35_000;
+        refresher.Step();
+        Assert.Equal(3, reader.DriveReads);
+        Assert.Same(refresher.Current, refresher.Settled);
+    }
+
+    [Fact]
+    public void A_change_noted_while_nothing_is_published_still_outdates_the_read_in_flight()
+    {
+        var reader = new FakeReader();
+        using var refresher = new StorageTopologyRefresher(reader, () => 0);
+        refresher.NoteDisks([Row(0)]);
+        reader.DuringDriveRead = () => refresher.NoteDisks([Row(0), Row(1)]);
+
+        refresher.Step();
+
+        Assert.NotNull(refresher.Current);
+        Assert.Null(refresher.Settled);
     }
 
     private static async Task WaitFor(Func<bool> condition)
