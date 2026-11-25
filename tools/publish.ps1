@@ -723,6 +723,9 @@ foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $folder $extra) }
 }
 
+# The CC BY 4.0 notice for the Party character art (assets\party\LICENSE-ART). It ships as LICENSE-ART.txt: the bundle name rules reject a bare LICENSE-ART.
+Copy-Item -LiteralPath (Join-Path $root 'assets\party\LICENSE-ART') -Destination (Join-Path $folder 'LICENSE-ART.txt')
+
 # The start gate file: the bytes of assets\PCMieru.gate.txt, copied as they are (no text conversion). The validator checks the exact SHA-256 (BundleFault.GateFileChanged),
 # so an asset that was changed by mistake stops the -Verify run; without -Verify the unit test of the asset (tests/PcMieru.Gate.Tests) is what stops it.
 Copy-Item -LiteralPath (Join-Path $root 'assets\PCMieru.gate.txt') -Destination (Join-Path $folder 'PCMieru.gate.txt')

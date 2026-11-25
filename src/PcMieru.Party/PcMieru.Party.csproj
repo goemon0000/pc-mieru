@@ -21,6 +21,16 @@
     <ProjectReference Include="..\PcMieru.Party.Core\PcMieru.Party.Core.csproj" />
   </ItemGroup>
 
+  <!-- The Party art and text, embedded as WPF resources (docs/unify/DESIGN-C.md 8 step 4). story.json and adventure.json are the old Parts Life files, byte for byte. -->
+  <ItemGroup>
+    <Resource Include="..\..\assets\party\characters.png" Link="Assets\characters.png" />
+    <Resource Include="..\..\assets\party\marks.png" Link="Assets\marks.png" />
+    <Resource Include="..\..\assets\party\atlas.json" Link="Assets\atlas.json" />
+    <Resource Include="..\..\assets\party\story.json" Link="Assets\story.json" />
+    <Resource Include="..\..\assets\party\adventure.json" Link="Assets\adventure.json" />
+    <Resource Include="..\..\assets\party\PartsLife.ico" Link="Assets\PartsLife.ico" />
+  </ItemGroup>
+
   <!-- Dev builds: the start gate file beside the exe (see build/GateNextToExe.targets). -->
   <Import Project="..\..\build\GateNextToExe.targets" />
 

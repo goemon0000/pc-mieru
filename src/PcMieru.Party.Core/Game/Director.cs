@@ -102,6 +102,8 @@ public sealed class Director
         for (int i = 0; i < slots.Count; i++)
         {
             var slot = slots[i];
+            // 測れていない席（値が無い）は育てない。0 で渡すと「測れて 0%」と区別がつかない（DESIGN-C 2.3）。
+            if (!slot.Measured) continue;
             int before = _state.Level(slot.Key);
             _state.AddExp(slot.Key, ExpRate(slot.Load) * dt);
             int after = _state.Level(slot.Key);

@@ -1,0 +1,29 @@
+# キャラクターの絵について / About the character artwork
+
+このリポジトリの **キャラクターのドット絵と、それを生成するコード**
+（`sprites/` 以下、および `assets/characters.png` `assets/marks.png`）は
+
+    Creative Commons Attribution 4.0 International (CC BY 4.0)
+    https://creativecommons.org/licenses/by/4.0/
+
+で提供します。**利用には作者名の表示が必要です。**
+
+    作者表示: Parts Party characters by web-autoai.com (CC BY 4.0)
+
+それ以外のソースコードは MIT ライセンス（`LICENSE`）です。
+改変も再配布も自由ですが、キャラクターを使う場合は上の表示を残してください。
+
+---
+
+The **character pixel art and the code that generates it**
+(everything under `sprites/`, plus `assets/characters.png` and
+`assets/marks.png`) is licensed under
+Creative Commons Attribution 4.0 International (CC BY 4.0).
+
+**Attribution is required:**
+
+    Parts Party characters by web-autoai.com (CC BY 4.0)
+
+All other source code in this repository is MIT licensed (see `LICENSE`).
+You are free to modify and redistribute, but keep the attribution above
+if you use the characters.
