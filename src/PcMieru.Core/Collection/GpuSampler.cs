@@ -33,7 +33,20 @@ internal sealed class GpuAggregator
     private readonly Dictionary<string, string> _typeNames = [];
     private readonly Dictionary<string, string>.AlternateLookup<ReadOnlySpan<char>> _typeLookup;
 
-    public GpuAggregator() => _typeLookup = _typeNames.GetAlternateLookup<ReadOnlySpan<char>>();
+    private readonly bool _trackProcesses;
+
+    /// <param name="trackProcesses">
+    /// False for the aggregate-only source (Parts Life): the per-process dictionary is never filled, so <see cref="ProcessBusiest"/> stays empty.
+    /// The engine and adapter numbers are the same either way.
+    /// </param>
+    public GpuAggregator(bool trackProcesses = true)
+    {
+        _trackProcesses = trackProcesses;
+        _typeLookup = _typeNames.GetAlternateLookup<ReadOnlySpan<char>>();
+    }
+
+    /// <summary>How many (process, engine) cells are held right now; always 0 when built without per-process tracking.</summary>
+    internal int PerProcessEntries => _perProcess.Count;
 
     /// <summary>Instances whose name was in a format this parser does not know. They are left out, and counted so the result can say so.</summary>
     public int Unrecognized { get; private set; }
@@ -72,8 +85,11 @@ internal sealed class GpuAggregator
         var typeName = _typeLookup.TryGetValue(type, out var known) ? known : Intern(type);
         _engines.TryGetValue(key, out var sum);
         _engines[key] = new EngineSum(sum.Value + value, typeName);
-        _perProcess.TryGetValue((pid, key), out var mine);
-        _perProcess[(pid, key)] = mine + value;
+        if (_trackProcesses)
+        {
+            _perProcess.TryGetValue((pid, key), out var mine);
+            _perProcess[(pid, key)] = mine + value;
+        }
     }
 
     public void AddAdapterMemory(ReadOnlySpan<char> instance, double value, uint cstatus, bool dedicated)
@@ -169,6 +185,20 @@ internal sealed record GpuReading(
 /// </summary>
 internal sealed class GpuSampler : IDisposable
 {
+    /// <param name="aggregateOnly">
+    /// True for the aggregate-only source (Parts Life): adapter totals only, no per-process dictionary at all. The default keeps the old behaviour.
+    /// </param>
+    public GpuSampler(bool aggregateOnly = false)
+    {
+        AggregateOnly = aggregateOnly;
+        _aggregator = new GpuAggregator(trackProcesses: !aggregateOnly);
+    }
+
+    public bool AggregateOnly { get; }
+
+    /// <summary>Per-process cells the last sample left in the aggregator (0 in aggregate mode, by construction). For tests.</summary>
+    internal int PerProcessEntries => _aggregator.PerProcessEntries;
+
     private const string EngineSource = "PDH GPU Engine";
     private const string MemorySource = "PDH GPU Adapter Memory";
     private const string AdapterSource = "DXGI";
@@ -176,7 +206,7 @@ internal sealed class GpuSampler : IDisposable
     private static readonly TimeSpan KeepQueryWhenIdle = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromSeconds(60);
 
-    private readonly GpuAggregator _aggregator = new();
+    private readonly GpuAggregator _aggregator;
     private readonly PdhArrayReader _reader = new();
     private PdhQuery? _query;
     private nint _engine;

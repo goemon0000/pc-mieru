@@ -18,20 +18,20 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private const int MaxAttempts = 8;
     private const int MaxInternedNames = 4096;
 
-    private static readonly Value<double> NoCpuTemperature = Value.Unsupported<double>(
+    internal static readonly Value<double> NoCpuTemperature = Value.Unsupported<double>(
         "none",
         "the CPU package temperature needs a kernel driver, which PC Mieru does not install");
 
     /// <summary>How long a tick waits for each counter stage. The first tick also pays for opening PDH and DXGI.</summary>
-    private static readonly TimeSpan StageTimeout = TimeSpan.FromSeconds(3);
+    internal static readonly TimeSpan StageTimeout = TimeSpan.FromSeconds(3);
 
-    private static readonly TimeSpan FirstStageTimeout = TimeSpan.FromSeconds(8);
+    internal static readonly TimeSpan FirstStageTimeout = TimeSpan.FromSeconds(8);
 
     /// <summary>The whole budget of one read from the network meter (it may reconnect once inside it); less than <see cref="StageTimeout"/> so the stage's own limit is only the backstop.</summary>
     private static readonly TimeSpan NetReadTimeout = TimeSpan.FromSeconds(2.5);
 
     /// <summary>A gap this much longer than the unbiased (awake) time means the machine slept; rates over it are meaningless.</summary>
-    private const long SleepThresholdTicks = 20_000_000; // 2 s in 100 ns units
+    internal const long SleepThresholdTicks = 20_000_000; // 2 s in 100 ns units
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Func<DateTime> _clock;
@@ -390,19 +390,27 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
             return reading;
         }
 
-        return new PdhSystemReading(
+        return PdhFailed(failure, failureStatus);
+    }
+
+    /// <summary>What the PDH part of a tick says when its stage did not answer: every value missing with the reason. Shared with the aggregate-only source.</summary>
+    internal static PdhSystemReading PdhFailed(string? failure, ValueStatus failureStatus) =>
+        new(
             [],
             Value.Missing<double>(failureStatus, "PDH Processor Information", failure),
             Value.Missing<int>(failureStatus, "PDH PhysicalDisk", failure))
         {
             PackageWatts = Value.Missing<double>(failureStatus, "PDH Energy Meter", failure),
         };
-    }
 
     private NicReading JoinNics(TimeSpan timeout) =>
         _nicStage.TryJoin(timeout, out var nics, out var failure, out var failureStatus) && nics is not null
             ? nics
-            : new NicReading([], Value.Missing<int>(failureStatus, "GetIfTable2", failure));
+            : NicsFailed(failure, failureStatus);
+
+    /// <summary>What the NIC part of a tick says when its stage did not answer. Shared with the aggregate-only source.</summary>
+    internal static NicReading NicsFailed(string? failure, ValueStatus failureStatus) =>
+        new([], Value.Missing<int>(failureStatus, "GetIfTable2", failure));
 
     private GpuTick JoinGpu(TimeSpan timeout, bool active)
     {
@@ -556,7 +564,7 @@ public sealed class WindowsSnapshotSource : ISnapshotSource, IProcessGroupSource
     private unsafe ulong BufferAddress() => (ulong)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(_buffer));
 
     /// <summary>Biased tick count (includes sleep) minus unbiased interrupt time (excludes it), in 100 ns units: grows only while asleep.</summary>
-    private static long SleepDebtTicks() =>
+    internal static long SleepDebtTicks() =>
         Win32.QueryUnbiasedInterruptTime(out var unbiased)
             ? (Environment.TickCount64 * 10_000) - (long)unbiased
             : 0;
