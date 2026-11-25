@@ -6,7 +6,8 @@ namespace PcMieru.Core.Tests.Hardware;
 
 /// <summary>
 /// The per-package part of the CPU topology: the parser keeps each package's GROUP_AFFINITY list and the per-group active counts, and the pure
-/// mapping turns them into "which PerLogicalPercent entries are in which socket", or says it cannot be confirmed.
+/// mapping confirms a socket only for one package in one group (it is every PerLogicalPercent entry); every multi-package or multi-group machine
+/// still parses but its mapping is unknown, with a reason, until a labelled per-processor source exists.
 /// </summary>
 public class CpuSocketMapTests
 {
@@ -155,19 +156,20 @@ public class CpuSocketMapTests
     // ---- mapping ----
 
     [Fact]
-    public void One_package_is_one_socket_with_every_cpu()
+    public void One_package_in_one_group_is_one_socket_with_every_cpu()
     {
         Assert.Equal([[0, 1, 2, 3, 4, 5, 6, 7]], Known(OnePackage(), 8));
     }
 
     [Fact]
-    public void One_package_needs_no_group_mapping_even_across_several_groups()
+    public void One_package_spanning_several_groups_is_unknown_because_the_per_logical_order_across_groups_is_not_confirmed()
     {
         var t = Parse(Package((ulong.MaxValue, 0), (0xFF, 1)), Groups(2, (64, ulong.MaxValue), (8, 0xFF)));
 
         Assert.Equal(2, t.ProcessorGroups);
-        var sockets = Known(t, 72);
-        Assert.Equal(Enumerable.Range(0, 72), Assert.Single(sockets));
+        Assert.Contains("2 processor groups", Unknown(t, 72));
+        // Even when the sampler counted only one group's worth, the package's other groups are not "nothing": still unknown.
+        Assert.Contains("2 processor groups", Unknown(t, 64));
     }
 
     [Fact]
@@ -177,83 +179,55 @@ public class CpuSocketMapTests
     }
 
     [Fact]
-    public void Two_packages_in_one_group_split_the_logical_cpus_by_their_masks()
+    public void Two_packages_are_unknown_even_in_one_group_because_the_rows_carry_no_processor_id()
     {
-        Assert.Equal([[0, 1, 2, 3], [4, 5, 6, 7]], Known(TwoPackages(), 8));
+        Assert.Contains("2 processor packages", Unknown(TwoPackages(), 8));
+        var interleaved = Parse(Package((0b01010101, 0)), Package((0b10101010, 0)), Groups(1, (8, 0xFF)));
+        Assert.Contains("2 processor packages", Unknown(interleaved, 8));
     }
 
     [Fact]
-    public void Interleaved_masks_give_ascending_index_lists()
+    public void Several_packages_in_several_groups_are_unknown()
     {
-        var t = Parse(Package((0b01010101, 0)), Package((0b10101010, 0)), Groups(1, (8, 0xFF)));
-
-        Assert.Equal([[0, 2, 4, 6], [1, 3, 5, 7]], Known(t, 8));
+        Assert.Contains("2 processor packages", Unknown(TwoGroups(), 8));
+        Assert.Contains("3 processor packages", Unknown(Parse(Package((0x0F, 0)), Package((0x0F, 1)), Package((0x0F, 2)), Groups(3, (4, 0x0F), (4, 0x0F), (4, 0x0F))), 12));
     }
 
     [Fact]
-    public void Several_processor_groups_are_unknown_because_the_per_logical_order_across_groups_is_not_confirmed()
+    public void One_package_whose_affinity_leaves_the_groups_active_set_or_has_no_affinity_is_unknown()
     {
-        Assert.Contains("2 processor groups", Unknown(TwoGroups(), 8));
-        Assert.Contains("3 processor groups", Unknown(Parse(Package((0x0F, 0)), Package((0x0F, 1)), Groups(3, (4, 0x0F), (4, 0x0F), (4, 0x0F))), 12));
+        var gap = Parse(Package((0x0F, 0)), Groups(1, (8, 0xFF)));
+        var outside = Parse(Package((0x1FF, 0)), Groups(1, (8, 0xFF)));
+        var otherGroup = Parse(Package((0xFF, 1)), Groups(1, (8, 0xFF)));
+        var none = Parse(Package(), Groups(1, (8, 0xFF)));
+
+        Assert.Contains("lists 4 logical processors", Unknown(gap, 8));
+        Assert.Contains("outside the one group", Unknown(outside, 8));
+        Assert.Contains("outside the one group", Unknown(otherGroup, 8));
+        Assert.Contains("lists 0 logical processors", Unknown(none, 8));
     }
 
     [Fact]
-    public void A_group_whose_active_processors_are_not_the_low_bits_is_unknown()
+    public void A_missing_record_or_count_is_unknown()
     {
-        var gap = Parse(Package((0x0F, 0)), Package((0xF0, 0)), Groups(1, (8, 0xF3)));
-
-        Assert.Contains("bits 0..7", Unknown(gap, 8));
-        Assert.Contains("do not match", Unknown(TwoPackages(), 6)); // the sampler counted fewer than the group has
-    }
-
-    [Fact]
-    public void Packages_that_overlap_leave_a_cpu_out_or_name_one_outside_the_group_are_unknown()
-    {
-        var overlap = Parse(Package((0x0F, 0)), Package((0x1E, 0)), Groups(1, (8, 0xFF)));
-        var leftOut = Parse(Package((0x0F, 0)), Package((0x70, 0)), Groups(1, (8, 0xFF)));
-        var outside = Parse(Package((0x0F, 0)), Package((0x1F0, 0)), Groups(1, (8, 0xFF)));
-        var otherGroup = Parse(Package((0x0F, 0)), Package((0xF0, 1)), Groups(1, (8, 0xFF)));
-
-        Assert.Contains("more than one package", Unknown(overlap, 8));
-        Assert.Contains("belongs to no package", Unknown(leftOut, 8));
-        Assert.Contains("outside group 0", Unknown(outside, 8));
-        Assert.Contains("outside group 0", Unknown(otherGroup, 8));
-    }
-
-    [Fact]
-    public void A_package_with_no_cpu_or_no_record_at_all_is_unknown()
-    {
-        var empty = Parse(Package((0xFF, 0)), Package(), Groups(1, (8, 0xFF)));
-
-        Assert.Contains("no logical processor", Unknown(empty, 8));
         Assert.Contains("no usable", Unknown(Parse(Groups(1, (8, 0xFF))), 8));
         Assert.Contains("no logical processor count", Unknown(OnePackage(), 0));
+        Assert.Contains("0 processor groups", Unknown(Parse(Package((0xFF, 0))), 8));
     }
 
     [Fact]
-    public void A_missing_group_record_makes_several_packages_unknown()
+    public void A_known_mapping_covers_every_index_exactly_once()
     {
-        Assert.Contains("0 processor groups", Unknown(Parse(Package((0x0F, 0)), Package((0xF0, 0))), 8));
-    }
-
-    [Fact]
-    public void The_mapping_covers_every_index_exactly_once_when_it_is_known()
-    {
-        foreach (var (topology, count) in new[] { (OnePackage(), 8), (TwoPackages(), 8) })
-        {
-            var all = Known(topology, count).SelectMany(static l => l).Order().ToArray();
-            Assert.Equal(Enumerable.Range(0, count), all);
-        }
+        var all = Known(OnePackage(), 8).SelectMany(static l => l).Order().ToArray();
+        Assert.Equal(Enumerable.Range(0, 8), all);
     }
 
     [Fact]
     public void A_full_group_of_64_is_a_valid_one_group_machine()
     {
-        var t = Parse(Package((0x0000_0000_FFFF_FFFF, 0)), Package((0xFFFF_FFFF_0000_0000, 0)), Groups(1, (64, ulong.MaxValue)));
+        var t = Parse(Package((ulong.MaxValue, 0)), Groups(1, (64, ulong.MaxValue)));
 
-        var sockets = Known(t, 64);
-        Assert.Equal(Enumerable.Range(0, 32), sockets[0]);
-        Assert.Equal(Enumerable.Range(32, 32), sockets[1]);
+        Assert.Equal(Enumerable.Range(0, 64), Assert.Single(Known(t, 64)));
     }
 
     // ---- the sampler and the contract ----

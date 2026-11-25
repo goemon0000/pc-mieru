@@ -5,10 +5,12 @@ namespace PcMieru.Core.Hardware.Collectors;
 
 /// <summary>
 /// Which entries of <c>CpuInfo.PerLogicalPercent</c> belong to which CPU package. The per-logical list comes from
-/// NtQuerySystemInformation(SystemProcessorPerformanceInformation) (<c>SystemCpuSampler</c>), one element per logical processor read by position, and
-/// the sampler's own comment says that on a machine with several processor groups the call "may describe only the caller's group". So the position is
-/// the processor number inside group 0 only when the machine has one group; with more groups nothing in the code says how the positions run across
-/// them, and the answer is "unknown" (null) rather than a guess. The total is never repeated for each socket: callers show the total only.
+/// NtQuerySystemInformation(SystemProcessorPerformanceInformation) (<c>SystemCpuSampler</c>): one element per logical processor read by position,
+/// with no processor id on the rows, and nothing in the code guarantees their order on a multi-socket machine (the sampler's own comment says that
+/// with several processor groups the call "may describe only the caller's group"). So a socket is confirmed only in the one case that needs no
+/// ordering at all: exactly one package, in exactly one processor group, whose active count is the sampler's count. That one socket is the whole
+/// machine. Every multi-package or multi-group machine is "unknown" (null, with a reason) rather than a guess. The total is never repeated for
+/// each socket: callers show the total only.
 /// Pure over <see cref="CpuTopology"/>; <see cref="ReadMachine"/> is the one call that asks Windows.
 /// </summary>
 internal static class CpuSocketMap
@@ -33,9 +35,12 @@ internal static class CpuSocketMap
         TryMap(topology, logicalCount, out var sockets, out _) ? sockets : null;
 
     /// <summary>
-    /// <paramref name="logicalCount"/> is the length of <c>PerLogicalPercent</c>. On success every index 0..logicalCount-1 is in exactly one socket.
-    /// On failure <paramref name="unknownReason"/> says why the mapping cannot be confirmed.
+    /// <paramref name="logicalCount"/> is the length of <c>PerLogicalPercent</c>. On success there is exactly one socket holding every index
+    /// 0..logicalCount-1. On failure <paramref name="unknownReason"/> says why the mapping cannot be confirmed.
     /// </summary>
+    // TODO: the multi-package and multi-group cases can be mapped once a labelled per-processor source feeds the sampler. The one to use is the PDH
+    // counter set "Processor Information", whose instances are named "<group>,<number>" (one per logical processor, plus "_Total" rows), so every
+    // row says which group and processor it is. Until then they stay unknown.
     public static bool TryMap(CpuTopology topology, int logicalCount, [NotNullWhen(true)] out CpuSockets? sockets, out string unknownReason)
     {
         sockets = null;
@@ -51,25 +56,10 @@ internal static class CpuSocketMap
             return false;
         }
 
-        if (topology.Packages == 1)
+        if (topology.Packages != 1)
         {
-            // One package holds every logical processor, in whatever group they sit, so no group-to-index mapping is needed. The package's own
-            // processor count must still agree with the number of per-logical entries.
-            var inPackage = 0;
-            foreach (var a in topology.PackageAffinities[0])
-            {
-                inPackage += BitOperations.PopCount(a.Mask);
-            }
-
-            if (inPackage != logicalCount)
-            {
-                unknownReason = $"the package lists {inPackage} logical processors but the sampler counts {logicalCount}";
-                return false;
-            }
-
-            sockets = new CpuSockets([Enumerable.Range(0, logicalCount).ToArray()]);
-            unknownReason = string.Empty;
-            return true;
+            unknownReason = $"{topology.Packages} processor packages: the per-logical rows carry no processor id, so which package each belongs to is not confirmed";
+            return false;
         }
 
         if (topology.ProcessorGroups != 1 || topology.GroupInfos.Count != 1)
@@ -78,66 +68,35 @@ internal static class CpuSocketMap
             return false;
         }
 
-        // One group: position i is processor number i of group 0, which holds only if the active processors are exactly bits 0..n-1.
         var group = topology.GroupInfos[0];
-        if (group.Group != 0 || group.ActiveProcessors != logicalCount || group.ActiveMask != LowBits(logicalCount))
+        if (group.ActiveProcessors != logicalCount)
         {
-            unknownReason = "the active processors of the one group are not bits 0.." + (logicalCount - 1) + " or do not match the sampler's count";
+            unknownReason = $"the one group has {group.ActiveProcessors} active processors but the sampler counts {logicalCount}";
             return false;
         }
 
-        var owner = new int[logicalCount];
-        Array.Fill(owner, -1);
-        var lists = new List<int[]>(topology.Packages);
-        for (var p = 0; p < topology.Packages; p++)
+        // The one package must be exactly that group's active processors: every affinity entry in the group, inside its active set, together
+        // holding as many processors as the sampler counted.
+        var inPackage = 0;
+        foreach (var a in topology.PackageAffinities[0])
         {
-            var indexes = new List<int>();
-            foreach (var a in topology.PackageAffinities[p])
+            if (a.Group != group.Group || (a.Mask & ~group.ActiveMask) != 0)
             {
-                if (a.Group != 0 || (a.Mask & ~group.ActiveMask) != 0)
-                {
-                    unknownReason = $"package {p} names processors outside group 0's active set";
-                    return false;
-                }
-
-                for (var bit = 0; bit < logicalCount; bit++)
-                {
-                    if ((a.Mask & (1UL << bit)) == 0)
-                    {
-                        continue;
-                    }
-
-                    if (owner[bit] >= 0)
-                    {
-                        unknownReason = $"logical processor {bit} belongs to more than one package";
-                        return false;
-                    }
-
-                    owner[bit] = p;
-                    indexes.Add(bit);
-                }
-            }
-
-            if (indexes.Count == 0)
-            {
-                unknownReason = $"package {p} has no logical processor";
+                unknownReason = "the package names processors outside the one group's active set";
                 return false;
             }
 
-            indexes.Sort();
-            lists.Add([.. indexes]);
+            inPackage += BitOperations.PopCount(a.Mask);
         }
 
-        if (Array.IndexOf(owner, -1) is var missing and >= 0)
+        if (inPackage != logicalCount)
         {
-            unknownReason = $"logical processor {missing} belongs to no package";
+            unknownReason = $"the package lists {inPackage} logical processors but the sampler counts {logicalCount}";
             return false;
         }
 
-        sockets = new CpuSockets(lists);
+        sockets = new CpuSockets([Enumerable.Range(0, logicalCount).ToArray()]);
         unknownReason = string.Empty;
         return true;
     }
-
-    private static ulong LowBits(int count) => count >= 64 ? ulong.MaxValue : (1UL << count) - 1;
 }
