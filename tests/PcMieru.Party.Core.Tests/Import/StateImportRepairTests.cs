@@ -190,10 +190,16 @@ public class StateImportRepairTests
         var rng = new Random(seed);
         int accepted = 0, repaired = 0, held = 0;
 
+        // every 10th round is not random at all: a known field of the wrong kind, so some rounds are always repairs
+        var damaged = Fixture(fixture);
+        damaged["Zoom"] = "big";
+        byte[] repairable = Bytes(damaged);
+
         for (int i = 0; i < 1500; i++)
         {
-            var b = (byte[])original.Clone();
-            int edits = 1 + rng.Next(3);
+            bool deterministicRepair = i % 10 == 0;
+            var b = (byte[])(deterministicRepair ? repairable : original).Clone();
+            int edits = deterministicRepair ? 0 : 1 + rng.Next(3);
             for (int e = 0; e < edits; e++)
             {
                 int pos = rng.Next(b.Length);
@@ -209,6 +215,7 @@ public class StateImportRepairTests
 
             var v = StateImport.Inspect(b);
             Assert.Equal(Sha(b), v.SourceSha256);
+            if (deterministicRepair) Assert.Equal(ImportStatus.NeedsRepair, v.Status);
             switch (v.Status)
             {
                 case ImportStatus.Hold:
@@ -228,6 +235,6 @@ public class StateImportRepairTests
             }
         }
         // the fuzz must exercise all three outcomes, or it proves little
-        Assert.True(held > 0 && accepted > 0, $"held {held}, accepted {accepted}, repaired {repaired}");
+        Assert.True(held > 0 && accepted > 0 && repaired > 0, $"held {held}, accepted {accepted}, repaired {repaired}");
     }
 }

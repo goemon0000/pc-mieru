@@ -1,7 +1,10 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.Unicode;
 using PcMieru.Party.Game;
 
@@ -17,13 +20,19 @@ namespace PcMieru.Party.Import;
 ///
 /// What is refused (<see cref="ImportStatus.Hold"/>): more than <see cref="MaxBytes"/>; nesting deeper than
 /// <see cref="MaxDepth"/>; broken JSON; a repeated key anywhere; a <c>SaveVersion</c> that is not an integer, is negative or is
-/// newer than <see cref="PartyState.CurrentVersion"/>; Experience or Journey/Chapter/Scene missing or unreadable.
+/// newer than <see cref="PartyState.CurrentVersion"/>; Experience or Journey/Chapter/Scene missing or unreadable; a converted
+/// state that would be larger than <see cref="MaxOutputBytes"/>.
 ///
 /// What is converted: a source without <c>SaveVersion</c> (or 0) gets the old key migration (cpu, cpu-cooler, gpu become #0; if
 /// the numbered name already exists it wins) and a default Adventure if it has none; a source with <c>SaveVersion</c> 1 is
 /// carried as it is. Either way the output says <c>SaveVersion</c> 1. Unknown fields at the root and inside Adventure
-/// round-trip untouched (JsonExtensionData). Known fields that cannot be read are replaced by defaults and listed in
-/// <see cref="ImportVerdict.RepairedFields"/> (status <see cref="ImportStatus.NeedsRepair"/>).
+/// round-trip untouched (JsonExtensionData), and so does a root field that only has the name of a runtime-only property
+/// (<c>SaveBlocked</c>): it is kept as an unknown field and never bound to the runtime flag. Known fields that cannot be read
+/// are replaced by defaults, and the repairs are applied to the output as well (see <see cref="StateNormalizer"/>); they are
+/// listed in <see cref="ImportVerdict.RepairedFields"/> (status <see cref="ImportStatus.NeedsRepair"/>).
+///
+/// The output is compact JSON written in one pass into a buffer capped at <see cref="MaxOutputBytes"/>. It is not indented:
+/// indentation makes deeply nested data many times larger than the source.
 ///
 /// <c>UpdateMode</c> is DROPPED from the converted state (and never audited): it was Parts Life's own update setting, DESIGN-C 4.2
 /// says it must not become a PC Mieru consent, and keeping a key of that name in the new file would invite exactly that mistake
@@ -38,26 +47,50 @@ public static class StateImport
     /// <summary>Upper limit of the JSON nesting depth; the top-level object is depth 1.</summary>
     public const int MaxDepth = 64;
 
+    /// <summary>Upper limit of the converted size (16 MiB). Escaping can make text larger than it was (a character outside the BMP: 4 bytes become 12).</summary>
+    public const int MaxOutputBytes = 16 * 1024 * 1024;
+
     private const string UpdateModeKey = "UpdateMode";
 
     private static readonly string[] StoryFields = ["Journey", "Chapter", "Scene"];
 
+    /// <summary>The state's own options, compact, and without UpdateMode (see the class comment).</summary>
+    private static readonly JsonSerializerOptions OutputOptions = new(PartyState.Opts)
+    {
+        WriteIndented = false,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                static info =>
+                {
+                    if (info.Type != typeof(PartyState)) return;
+                    foreach (var p in info.Properties)
+                        if (p.Name == UpdateModeKey) p.ShouldSerialize = static (_, _) => false;
+                },
+            },
+        },
+    };
+
     /// <summary>Inspect the source and, unless it must be held, convert it. Never throws.</summary>
-    public static ImportVerdict Inspect(ReadOnlySpan<byte> source)
+    public static ImportVerdict Inspect(ReadOnlySpan<byte> source) => Inspect(source, MaxOutputBytes);
+
+    /// <summary>The same with a chosen output cap (tests use a small one).</summary>
+    internal static ImportVerdict Inspect(ReadOnlySpan<byte> source, int maxOutputBytes)
     {
         string sha = Convert.ToHexStringLower(SHA256.HashData(source));
         try
         {
-            return InspectCore(source, sha);
+            return InspectCore(source, sha, maxOutputBytes);
         }
-        catch (Exception e) when (e is not OutOfMemoryException)
+        catch (Exception e)
         {
-            // Not expected. A hold is the safe answer: nothing gets written.
+            // Not expected (running out of memory included). A hold is the safe answer: nothing gets written.
             return Hold(sha, ImportReason.InternalError, e.GetType().Name);
         }
     }
 
-    private static ImportVerdict InspectCore(ReadOnlySpan<byte> source, string sha)
+    private static ImportVerdict InspectCore(ReadOnlySpan<byte> source, string sha, int maxOutputBytes)
     {
         if (source.Length > MaxBytes)
             return Hold(sha, ImportReason.TooLarge, $"{source.Length} bytes (limit {MaxBytes})");
@@ -88,34 +121,34 @@ public static class StateImport
         if (unreadable.Count > 0)
             return Hold(sha, ImportReason.MainFieldsUnreadable, string.Join(", ", unreadable), version);
 
-        // ---- convert ----
-        var dropped = new List<string>();
-        string text;
-        if (root.TryGetProperty(UpdateModeKey, out _))
-        {
-            // Take it out before reading, so that even a malformed UpdateMode neither blocks nor flags the import.
-            dropped.Add(UpdateModeKey);
-            var node = JsonNode.Parse(body.ToArray())!.AsObject();
-            node.Remove(UpdateModeKey);
-            text = node.ToJsonString();
-        }
-        else
-        {
-            text = Encoding.UTF8.GetString(body);
-        }
-
-        var broken = new List<string>();
-        using (var doc2 = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = MaxDepth }))
-            FieldAudit.AuditObject(doc2.RootElement, typeof(PartyState), "", PartyState.Opts, null, broken);
-
-        PartyState state;
-        bool lenient;
         try
         {
-            state = PartyState.FromJson(text, out lenient);
+            // ---- convert ----
+            var dropped = new List<string>();
+            string text;
+            if (root.TryGetProperty(UpdateModeKey, out _))
+            {
+                // Take it out before reading, so that even a malformed UpdateMode neither blocks nor flags the import.
+                dropped.Add(UpdateModeKey);
+                text = WithoutProperty(root, UpdateModeKey);
+            }
+            else
+            {
+                text = Encoding.UTF8.GetString(body);
+            }
+
+            var broken = new RepairSink();
+            using (var doc2 = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = MaxDepth }))
+                FieldAudit.AuditObject(doc2.RootElement, typeof(PartyState), "", PartyState.Opts, null, broken);
+
+            PartyState state = PartyState.FromJson(text, out bool lenient);
             if (state.SaveVersion != PartyState.CurrentVersion)
                 return Hold(sha, ImportReason.ConversionFailed, $"SaveVersion {state.SaveVersion} after migration", version);
-            byte[] converted = Write(state);
+
+            KeepIgnoredNames(state, root);
+            StateNormalizer.Run(state);
+            byte[] converted = Write(state, maxOutputBytes);
+
             if (lenient && broken.Count == 0)
                 broken.Add("<unidentified>");   // the audit missed something the lenient reader had to fix: never call that a success
             return new ImportVerdict
@@ -123,10 +156,14 @@ public static class StateImport
                 Status = broken.Count == 0 ? ImportStatus.Acceptable : ImportStatus.NeedsRepair,
                 SourceSha256 = sha,
                 SourceVersion = version,
-                RepairedFields = broken,
+                RepairedFields = broken.ToList(),
                 DroppedFields = dropped,
                 Converted = converted,
             };
+        }
+        catch (Exception e) when (e is OutputTooLargeException || e.InnerException is OutputTooLargeException)
+        {
+            return Hold(sha, ImportReason.OutputTooLarge, $"the converted state would be larger than {maxOutputBytes} bytes", version);
         }
         catch (Exception e) when (LenientJson.IsReadError(e))
         {
@@ -134,16 +171,57 @@ public static class StateImport
         }
     }
 
-    /// <summary>The new destination's bytes: UTF-8 without BOM, indented PascalCase, no <c>UpdateMode</c>.</summary>
-    private static byte[] Write(PartyState state)
+    /// <summary>
+    /// The source object without one property, copied value by value (no tree is built, so nothing grows beyond the
+    /// text itself).
+    /// </summary>
+    private static string WithoutProperty(JsonElement root, string name)
     {
-        var node = JsonNode.Parse(state.ToJson())!.AsObject();
-        node.Remove(UpdateModeKey);
-        return new UTF8Encoding(false).GetBytes(node.ToJsonString(OutputOptions));
+        var buffer = new CappedBuffer(MaxBytes * 8);
+        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions
+        {
+            Indented = false,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            MaxDepth = MaxDepth,
+        }))
+        {
+            w.WriteStartObject();
+            foreach (var p in root.EnumerateObject())
+                if (!p.NameEquals(name)) p.WriteTo(w);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.Written);
     }
 
-    /// <summary>The state's own options, with LF line ends so that the output does not depend on the platform (Environment.NewLine).</summary>
-    private static readonly JsonSerializerOptions OutputOptions = new(PartyState.Opts) { NewLine = "\n" };
+    /// <summary>
+    /// A root field whose name is that of a runtime-only property (<c>SaveBlocked</c>: [JsonIgnore], private setter) is never
+    /// bound by the serializer, so it would vanish without a trace. Keep it as the unknown field it is.
+    /// </summary>
+    private static void KeepIgnoredNames(PartyState state, JsonElement root)
+    {
+        foreach (var p in typeof(PartyState).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!p.IsDefined(typeof(JsonIgnoreAttribute))) continue;
+            if (!root.TryGetProperty(p.Name, out var value)) continue;
+            (state.Unknown ??= new Dictionary<string, JsonElement>(StringComparer.Ordinal))[p.Name] = value;
+        }
+    }
+
+    /// <summary>The new destination's bytes: UTF-8 without BOM, compact PascalCase, no <c>UpdateMode</c>, at most <paramref name="limit"/> bytes.</summary>
+    private static byte[] Write(PartyState state, int limit)
+    {
+        var buffer = new CappedBuffer(limit);
+        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions
+        {
+            Indented = false,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            MaxDepth = MaxDepth,
+        }))
+        {
+            JsonSerializer.Serialize(w, state, OutputOptions);
+        }
+        return buffer.ToArray();
+    }
 
     /// <summary>
     /// SaveVersion: absent means 0. Present must be an integer in 0..CurrentVersion.
@@ -187,9 +265,9 @@ public static class StateImport
     }
 
     /// <summary>
-    /// Experience must be an object (an empty one is a fresh game, but if it has entries at least one must be a number), and
-    /// Journey, Chapter and Scene must be numbers. A story position or a level table that reads as "zero" because it was
-    /// unreadable would be a silent loss of the whole continuation, so these hold instead of repairing.
+    /// Experience must be an object (an empty one is a fresh game, but if it has entries at least one must be a finite number),
+    /// and Journey, Chapter and Scene must be finite numbers. A story position or a level table that reads as "zero" because it
+    /// was unreadable would be a silent loss of the whole continuation, so these hold instead of repairing.
     /// </summary>
     private static List<string> UnreadableMainFields(JsonElement root)
     {
@@ -203,13 +281,14 @@ public static class StateImport
             foreach (var m in exp.EnumerateObject())
             {
                 total++;
-                if (m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetDouble(out _)) numeric++;
+                if (m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetDouble(out double d) && double.IsFinite(d)) numeric++;
             }
             if (total > 0 && numeric == 0) bad.Add("Experience");
         }
 
         foreach (string name in StoryFields)
-            if (!root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number || !v.TryGetDouble(out _))
+            if (!root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number
+                || !v.TryGetDouble(out double d) || !double.IsFinite(d))
                 bad.Add(name);
         return bad;
     }

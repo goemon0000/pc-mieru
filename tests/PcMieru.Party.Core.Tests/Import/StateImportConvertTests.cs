@@ -250,11 +250,15 @@ public class StateImportConvertTests
         var v = Inspect(src);
         Assert.Equal(ImportStatus.Acceptable, v.Status);
         Assert.Equal(AdventureState.StartingGold, Read(v).Adventure!.Gold);
+        // Read() would supply a default Adventure on its own, so look at the bytes: the object must really be there
+        Assert.IsType<JsonObject>(ConvertedJson(v)["Adventure"]);
+        Assert.Equal(AdventureState.StartingGold, (long?)ConvertedJson(v)["Adventure"]!["Gold"]);
 
         src["Adventure"] = null;   // null means "no adventure" for this field
         v = Inspect(src);
         Assert.Equal(ImportStatus.Acceptable, v.Status);
         Assert.Equal(AdventureMode.Town, Read(v).Adventure!.Mode);
+        Assert.IsType<JsonObject>(ConvertedJson(v)["Adventure"]);
     }
 
     [Fact]
@@ -438,7 +442,7 @@ public class StateImportConvertTests
         var v = Inspect("""{"Experience":{"memory":1},"Journey":1,"Chapter":1,"Scene":1,"X":""" + new string('[', 63) + new string(']', 63) + "}");
         Assert.Equal(ImportStatus.Acceptable, v.Status);
 
-        // the unknown field comes back with all 63 levels (the output is indented, so count them in the tree)
+        // the unknown field comes back with all 63 levels (count them in the tree)
         JsonNode? n = ConvertedJson(v)["X"];
         int levels = 0;
         while (n is JsonArray a) { levels++; n = a.Count > 0 ? a[0] : null; }
@@ -447,11 +451,12 @@ public class StateImportConvertTests
     }
 
     [Fact]
-    public void Converted_bytes_use_LF_whatever_the_platform_line_ending_is()
+    public void Converted_bytes_are_compact_so_no_line_ending_depends_on_the_platform()
     {
-        // a pure importer must give the same bytes on every machine
+        // a pure importer must give the same bytes on every machine, and indentation would only make deep data bigger
         var v = Inspect(V1());
         Assert.DoesNotContain((byte)'\r', v.Converted!);
-        Assert.Contains((byte)'\n', v.Converted!);
+        Assert.DoesNotContain((byte)'\n', v.Converted!);
+        Assert.Equal((byte)'{', v.Converted![0]);
     }
 }

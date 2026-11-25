@@ -268,12 +268,12 @@ public class StateImportHoldTests
         [
             ImportReason.TooLarge, ImportReason.BrokenJson, ImportReason.TooDeep, ImportReason.DuplicateKey, ImportReason.NotAnObject,
             ImportReason.VersionType, ImportReason.VersionNegative, ImportReason.VersionFuture, ImportReason.MainFieldsUnreadable,
-            ImportReason.ConversionFailed, ImportReason.InternalError,
+            ImportReason.ConversionFailed, ImportReason.InternalError, ImportReason.OutputTooLarge,
         ];
         Assert.Equal(all.Length, all.Distinct().Count());
         Assert.Equal(
             ["too-large", "broken-json", "too-deep", "duplicate-key", "not-an-object", "version-type", "version-negative",
-             "version-future", "main-fields-unreadable", "conversion-failed", "internal-error"],
+             "version-future", "main-fields-unreadable", "conversion-failed", "internal-error", "output-too-large"],
             all);
     }
 

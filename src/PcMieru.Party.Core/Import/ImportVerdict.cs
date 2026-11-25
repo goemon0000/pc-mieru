@@ -52,6 +52,9 @@ public static class ImportReason
 
     /// <summary>A bug in the importer. Nothing is converted.</summary>
     public const string InternalError = "internal-error";
+
+    /// <summary>The converted state would be larger than <see cref="StateImport.MaxOutputBytes"/> (escaping can make text larger than the source).</summary>
+    public const string OutputTooLarge = "output-too-large";
 }
 
 /// <summary>
@@ -80,7 +83,7 @@ public sealed class ImportVerdict
     public IReadOnlyList<string> DroppedFields { get; init; } = [];
 
     /// <summary>
-    /// The state for the new destination: UTF-8 without BOM, <c>SaveVersion</c> 1, PascalCase.
+    /// The state for the new destination: UTF-8 without BOM, <c>SaveVersion</c> 1, PascalCase, compact (not indented).
     /// Set for <see cref="ImportStatus.Acceptable"/> and <see cref="ImportStatus.NeedsRepair"/>; null for a hold.
     /// </summary>
     public byte[]? Converted { get; init; }
