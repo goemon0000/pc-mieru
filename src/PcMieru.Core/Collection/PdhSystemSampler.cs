@@ -20,7 +20,7 @@ internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<dou
 /// between its own two collections, so the first collection after start yields nothing and says so.
 /// Counter paths are English (PdhAddEnglishCounterW), so a Japanese Windows needs no name table.
 /// </summary>
-internal sealed class PdhSystemSampler : IDisposable
+internal sealed class PdhSystemSampler : IPdhSampling
 {
     private const string DiskSource = "PDH PhysicalDisk";
     private const string ClockSource = "PDH Processor Information";
@@ -90,9 +90,10 @@ internal sealed class PdhSystemSampler : IDisposable
         _lastStamp = Stopwatch.GetTimestamp();
         _baselineValid = true;
 
+        // Every counter array starts from nothing: a disk that one array leaves out has that reading missing, not the one of the last tick.
         foreach (var d in _disks.Values)
         {
-            d.Seen = false;
+            d.BeginTick();
         }
 
         ReadDisks(_idle, static (a, v) => a.Idle = v);
@@ -337,5 +338,12 @@ internal sealed class PdhSystemSampler : IDisposable
         public Reading Write { get; set; }
 
         public Reading Latency { get; set; }
+
+        /// <summary>Forgets everything the last tick read, so a counter array that omits this disk leaves its reading absent instead of stale.</summary>
+        public void BeginTick()
+        {
+            Seen = false;
+            Idle = Read = Write = Latency = default;
+        }
     }
 }

@@ -13,6 +13,9 @@ namespace PcMieru.Core.Collection;
 /// </summary>
 public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 {
+    /// <summary>How long after a failed PDH open the stage waits before it tries to open it again.</summary>
+    internal const long PdhRetryAfterMs = 30_000;
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Func<DateTime> _clock;
     private readonly ISamplerControl _control;
@@ -20,12 +23,22 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 
     // PDH, the adapter table and the GPU counters each run as a guarded stage, as in WindowsSnapshotSource: a hung counter costs that one
     // part of the snapshot (reported as a timeout), never the whole tick.
-    private readonly Task<PdhSystemSampler> _pdhInit;
+    private readonly Func<IPdhSampling> _openPdh;
+    private readonly Func<long> _nowMs;
+    private readonly TimeSpan? _stageTimeout;
     private readonly NicSampler _nic = new();
-    private readonly GpuSampler _gpu = new(aggregateOnly: true);
+    private readonly IGpuSampling _gpu;
     private readonly GuardedStage<PdhSystemReading> _pdhStage = new();
     private readonly GuardedStage<NicReading> _nicStage = new();
     private readonly GuardedStage<GpuReading> _gpuStage = new();
+
+    // The sample in progress and every stage body that is running count as users. Dispose only marks the source; the samplers are freed by
+    // whoever leaves last, so a counter call that is still running is never closed under itself, and one that finishes late is not leaked.
+    private readonly DeferredRelease _life;
+
+    // Owned by the PDH stage: only a stage body (one at a time) touches it, and ReleaseSamplers once no body can be running.
+    private IPdhSampling? _pdh;
+    private long? _pdhFailedAtMs;
 
     private volatile Func<TimeSpan>? _beat;
     private IReadOnlyList<GpuInfo> _gpuKnown = [];
@@ -36,7 +49,6 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     private volatile bool _pdhReset;
     private volatile bool _nicReset;
     private volatile bool _gpuReset;
-    private bool _disposed;
 
     /// <param name="clock">Wall clock for <see cref="Snapshot.TakenAtUtc"/> (tests inject their own).</param>
     /// <param name="control">
@@ -44,12 +56,27 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     /// The GPU counters are always collected here whatever <see cref="ISamplerControl.GpuActive"/> says: the source exists for them.
     /// </param>
     public AggregateSnapshotSource(Func<DateTime> clock, ISamplerControl? control = null)
+        : this(clock, control, static () => new PdhSystemSampler(), new GpuSampler(aggregateOnly: true), static () => Environment.TickCount64, null)
+    {
+    }
+
+    /// <summary>The seam for tests: the PDH sampler is opened by <paramref name="openPdh"/> inside its stage, and the GPU sampler is given.</summary>
+    /// <param name="stageTimeout">Overrides the join limit of every stage (tests only); null keeps the production limits.</param>
+    internal AggregateSnapshotSource(
+        Func<DateTime> clock,
+        ISamplerControl? control,
+        Func<IPdhSampling> openPdh,
+        IGpuSampling gpu,
+        Func<long> nowMs,
+        TimeSpan? stageTimeout)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _control = control ?? new SamplerSettings();
-
-        // Opening the PDH query takes a few hundred milliseconds once; do it off the caller's thread.
-        _pdhInit = Task.Run(static () => new PdhSystemSampler());
+        _openPdh = openPdh ?? throw new ArgumentNullException(nameof(openPdh));
+        _gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
+        _nowMs = nowMs ?? throw new ArgumentNullException(nameof(nowMs));
+        _stageTimeout = stageTimeout;
+        _life = new DeferredRelease(ReleaseSamplers);
     }
 
     public ISamplerControl Control => _control;
@@ -60,12 +87,23 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 
     public async Task<Snapshot> SampleAsync(CancellationToken ct = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(_life.IsRequested, this);
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            return await Task.Run(() => SampleCore(ct), ct).ConfigureAwait(false);
+            if (!_life.TryEnter())
+            {
+                throw new ObjectDisposedException(nameof(AggregateSnapshotSource));
+            }
+
+            try
+            {
+                return await Task.Run(() => SampleCore(ct), ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                _life.Exit();
+            }
         }
         finally
         {
@@ -73,28 +111,20 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         }
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Marks the source disposed at once and does not wait. The PDH and GPU samplers are closed by the last of the running sample and the
+    /// running stage calls to finish (right here when none is running).
+    /// </summary>
+    public void Dispose() => _life.Request();
+
+    private void ReleaseSamplers()
     {
-        if (_disposed)
+        try
         {
-            return;
+            _pdh?.Dispose();
+            _pdh = null;
         }
-
-        // Wait (briefly) for a running sample so nothing it uses is freed under it.
-        var entered = _gate.Wait(TimeSpan.FromSeconds(2));
-        _disposed = true;
-        if (entered)
-        {
-            _gate.Release();
-        }
-
-        // A counter call that is still stuck owns its sampler: closing a PDH query under it is worse than leaking one.
-        if (!_pdhStage.IsBusy && _pdhInit.IsCompletedSuccessfully)
-        {
-            _pdhInit.Result.Dispose();
-        }
-
-        if (!_gpuStage.IsBusy)
+        finally
         {
             _gpu.Dispose();
         }
@@ -112,7 +142,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             _pdhReset = _nicReset = _gpuReset = true;
         }
 
-        var timeout = _hasPrevious ? WindowsSnapshotSource.StageTimeout : WindowsSnapshotSource.FirstStageTimeout;
+        var timeout = _stageTimeout ?? (_hasPrevious ? WindowsSnapshotSource.StageTimeout : WindowsSnapshotSource.FirstStageTimeout);
         _ = _pdhStage.Start(RunPdhStage);
         _ = _nicStage.Start(RunNicStage);
         _ = _gpuStage.Start(RunGpuStage);
@@ -167,14 +197,66 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 
     private PdhSystemReading RunPdhStage()
     {
-        var sampler = _pdhInit.GetAwaiter().GetResult();
-        if (_pdhReset)
+        if (!_life.TryEnter())
         {
-            _pdhReset = false;
-            sampler.Reset();
+            throw new ObjectDisposedException(nameof(AggregateSnapshotSource));
         }
 
-        return sampler.Sample();
+        try
+        {
+            var sampler = EnsurePdh();
+            if (_pdhReset)
+            {
+                _pdhReset = false;
+                sampler.Reset();
+            }
+
+            return sampler.Sample();
+        }
+        finally
+        {
+            _life.Exit();
+        }
+    }
+
+    /// <summary>
+    /// The open PDH sampler. Opening it takes a few hundred milliseconds, so it happens here, inside the guarded stage. A failed open (the query
+    /// did not open, or the constructor threw) is closed and tried again later, at most once per <see cref="PdhRetryAfterMs"/>, instead of
+    /// switching the stage off for the life of the source.
+    /// </summary>
+    private IPdhSampling EnsurePdh()
+    {
+        if (_pdh is { IsOpen: true } open)
+        {
+            return open;
+        }
+
+        var now = _nowMs();
+        if (_pdhFailedAtMs is { } failedAt && now - failedAt < PdhRetryAfterMs)
+        {
+            throw new InvalidOperationException($"PDH could not be opened; trying again in {Math.Ceiling((PdhRetryAfterMs - (now - failedAt)) / 1000.0):0} s");
+        }
+
+        _pdh?.Dispose();
+        _pdh = null;
+        try
+        {
+            var sampler = _openPdh();
+            if (!sampler.IsOpen)
+            {
+                sampler.Dispose();
+                throw new InvalidOperationException("PDH could not be opened");
+            }
+
+            _pdh = sampler;
+            _pdhFailedAtMs = null;
+            return sampler;
+        }
+        catch
+        {
+            _pdhFailedAtMs = now;
+            throw;
+        }
     }
 
     private NicReading RunNicStage()
@@ -191,13 +273,27 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 
     private GpuReading RunGpuStage()
     {
-        if (_gpuReset)
+        if (!_life.TryEnter())
         {
-            _gpuReset = false;
-            _gpu.Reset();
+            throw new ObjectDisposedException(nameof(AggregateSnapshotSource));
         }
 
-        return _gpu.Sample(active: true);
+        try
+        {
+            // A reset asked for after a failed join is applied here. The stage does not start while the call that failed is still running, so
+            // by now that call has returned, and what it did to the baseline is thrown away before anything is sampled.
+            if (_gpuReset)
+            {
+                _gpuReset = false;
+                _gpu.Reset();
+            }
+
+            return _gpu.Sample(active: true);
+        }
+        finally
+        {
+            _life.Exit();
+        }
     }
 
     private PdhSystemReading JoinPdh(TimeSpan timeout) =>
@@ -214,25 +310,122 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     {
         if (!_gpuStage.TryJoin(timeout, out var reading, out var failure, out var failureStatus) || reading is null)
         {
+            // The call that did not answer may still finish and move the sampler's baseline. That collection is discarded: the next stage run
+            // starts a new window (and reads "not collected" once) instead of publishing a rate built on it.
+            _gpuReset = true;
             var detail = "GPU counters: " + failure;
             var failed = NoSensors(GpuSampler.Failed(_gpuKnown, failureStatus, detail));
             return new GpuReading(failed, new Dictionary<uint, double>(), false, detail, GpuSampler.ListState(failed, failureStatus, detail));
         }
 
-        _gpuKnown = reading.Gpus;
-        return reading;
+        var gpus = NoSensors(reading.Gpus);
+        _gpuKnown = gpus;
+        return reading with { Gpus = gpus };
     }
 
     /// <summary>
-    /// <see cref="GpuSampler.Failed"/> stamps the sensor fields with the failure too, which says "SensorHost did not answer". There is no
-    /// SensorHost here, so those fields go back to "not collected" and the vendor origin stays unset.
+    /// <see cref="GpuSampler.Failed"/> and the sampler's own "not open" and collect-error results stamp the sensor fields with the failure too,
+    /// which reads as "SensorHost did not answer". There is no SensorHost here, so on every result those fields are "not collected" and the
+    /// vendor origin is unset.
     /// </summary>
-    private static IReadOnlyList<GpuInfo> NoSensors(IReadOnlyList<GpuInfo> gpus) =>
+    internal static IReadOnlyList<GpuInfo> NoSensors(IReadOnlyList<GpuInfo> gpus) =>
         gpus.Select(static g => g with
         {
             TemperatureC = Value.NotCollected<double>("SensorHost", "not read yet"),
             PowerWatts = Value.NotCollected<double>("SensorHost", "not read yet"),
             FanPercent = Value.NotCollected<double>("SensorHost", "not read yet"),
             ClockMhz = Value.NotCollected<double>("SensorHost", "not read yet"),
+            TemperatureLimitC = Value.NotCollected<double>("none"),
+            LimitReasons = Value.NotCollected<ulong>("none"),
+            VendorOrigin = null,
         }).ToArray();
+}
+
+/// <summary>The PDH sampler as <see cref="AggregateSnapshotSource"/> uses it (a seam for tests).</summary>
+internal interface IPdhSampling : IDisposable
+{
+    bool IsOpen { get; }
+
+    void Reset();
+
+    PdhSystemReading Sample();
+}
+
+/// <summary>The GPU sampler as <see cref="AggregateSnapshotSource"/> uses it (a seam for tests).</summary>
+internal interface IGpuSampling : IDisposable
+{
+    void Reset();
+
+    GpuReading Sample(bool active);
+}
+
+/// <summary>
+/// Frees a resource once nobody is using it any more. Users register with <see cref="TryEnter"/> and leave with <see cref="Exit"/>;
+/// <see cref="Request"/> (a dispose) refuses new users at once and runs <c>release</c> exactly once, right away when nobody is inside and
+/// otherwise from the last <see cref="Exit"/>. Nothing waits and nothing that is in use is ever released.
+/// </summary>
+internal sealed class DeferredRelease(Action release)
+{
+    private readonly object _lock = new();
+    private int _users;
+    private bool _requested;
+    private bool _released;
+
+    public bool IsRequested
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _requested;
+            }
+        }
+    }
+
+    /// <summary>Registers a user. False once <see cref="Request"/> was called (the caller must not touch the resource).</summary>
+    public bool TryEnter()
+    {
+        lock (_lock)
+        {
+            if (_requested)
+            {
+                return false;
+            }
+
+            _users++;
+            return true;
+        }
+    }
+
+    public void Exit()
+    {
+        bool run;
+        lock (_lock)
+        {
+            _users--;
+            run = _requested && _users == 0 && !_released;
+            _released |= run;
+        }
+
+        if (run)
+        {
+            release();
+        }
+    }
+
+    public void Request()
+    {
+        bool run;
+        lock (_lock)
+        {
+            _requested = true;
+            run = _users == 0 && !_released;
+            _released |= run;
+        }
+
+        if (run)
+        {
+            release();
+        }
+    }
 }

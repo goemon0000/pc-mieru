@@ -16,6 +16,12 @@ internal sealed class GpuAdapterUsage
     public long? DedicatedUsed { get; set; }
 
     public long? SharedUsed { get; set; }
+
+    /// <summary>
+    /// Engine instances of this adapter were listed but none of them had a usable value (aggregate mode only; always false otherwise). When
+    /// <see cref="EngineInstances"/> is 0 as well, the adapter's load could not be read, which is not the same as "nothing is running".
+    /// </summary>
+    public bool EngineUnreadable { get; set; }
 }
 
 /// <summary>
@@ -34,14 +40,21 @@ internal sealed class GpuAggregator
     private readonly Dictionary<string, string>.AlternateLookup<ReadOnlySpan<char>> _typeLookup;
 
     private readonly bool _trackProcesses;
+    private readonly bool _flagUnreadable;
 
     /// <param name="trackProcesses">
     /// False for the aggregate-only source (Parts Life): the per-process dictionary is never filled, so <see cref="ProcessBusiest"/> stays empty.
     /// The engine and adapter numbers are the same either way.
     /// </param>
-    public GpuAggregator(bool trackProcesses = true)
+    /// <param name="flagUnreadableEngines">
+    /// True for the aggregate-only source: an engine instance with an invalid status marks its adapter <see cref="GpuAdapterUsage.EngineUnreadable"/>,
+    /// so an adapter whose every engine entry was invalid is reported as unreadable instead of as idle (Parts Life must never earn on a load it could
+    /// not read). The default leaves the adapter table as it always was.
+    /// </param>
+    public GpuAggregator(bool trackProcesses = true, bool flagUnreadableEngines = false)
     {
         _trackProcesses = trackProcesses;
+        _flagUnreadable = flagUnreadableEngines;
         _typeLookup = _typeNames.GetAlternateLookup<ReadOnlySpan<char>>();
     }
 
@@ -79,6 +92,11 @@ internal sealed class GpuAggregator
         if (cstatus is not (Pdh.CStatusValidData or Pdh.CStatusNewData) || !double.IsFinite(value) || value < 0)
         {
             Invalid++;
+            if (_flagUnreadable)
+            {
+                Adapter(key.Luid).EngineUnreadable = true;
+            }
+
             return;
         }
 
@@ -183,15 +201,16 @@ internal sealed record GpuReading(
 /// no collection happens, and after a while the query is closed. After a gap the first collection restarts PDH's window and
 /// reads as "not collected" instead of being averaged over the gap.
 /// </summary>
-internal sealed class GpuSampler : IDisposable
+internal sealed class GpuSampler : IGpuSampling
 {
     /// <param name="aggregateOnly">
-    /// True for the aggregate-only source (Parts Life): adapter totals only, no per-process dictionary at all. The default keeps the old behaviour.
+    /// True for the aggregate-only source (Parts Life): adapter totals only, no per-process dictionary at all, and an adapter whose engine
+    /// entries were all unreadable reports its load as missing, never 0. The default keeps the old behaviour.
     /// </param>
     public GpuSampler(bool aggregateOnly = false)
     {
         AggregateOnly = aggregateOnly;
-        _aggregator = new GpuAggregator(trackProcesses: !aggregateOnly);
+        _aggregator = new GpuAggregator(trackProcesses: !aggregateOnly, flagUnreadableEngines: aggregateOnly);
     }
 
     public bool AggregateOnly { get; }
@@ -320,7 +339,7 @@ internal sealed class GpuSampler : IDisposable
                 continue;
             }
 
-            if (usage is { EngineInstances: 0, DedicatedUsed: null, SharedUsed: null })
+            if (usage is { EngineInstances: 0, DedicatedUsed: null, SharedUsed: null, EngineUnreadable: false })
             {
                 continue;
             }
@@ -377,6 +396,12 @@ internal sealed class GpuSampler : IDisposable
                 .ThenBy(static t => t.Key, StringComparer.Ordinal)
                 .Select(static t => new GpuEngineInfo(t.Key, Value.Ok(t.Value, EngineSource)))
                 .ToArray();
+        }
+        else if (usage is { EngineUnreadable: true })
+        {
+            // Engine entries exist for this adapter but none had a usable value: its load is unknown, which must not read as an idle 0.
+            utilization = Value.Missing<double>(ValueStatus.Error, EngineSource, "no GPU Engine instance of this adapter had a usable value");
+            engines = [];
         }
         else if (primed && missingDetail is null && usage is not null)
         {
