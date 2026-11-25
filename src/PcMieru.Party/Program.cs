@@ -38,10 +38,16 @@ internal static class Program
         }
 
         // 2. The one resident of this user (DESIGN-C 3.2). Taken and given back on this thread, the main STA thread that also runs the window.
-        // TODO(DESIGN-C 3.2, step 4): when the resident is another Party of this session, send it "activate" (restore and bring it to the front) before exiting 2.
+        // When the resident is another Party of this session and this install, bring it to the front and end with 0 (the user's second click did what it meant).
+        // Anything else (another session, the old Parts Life, another install) keeps the plain message and 2. A smoke run never does this: it only checks the start.
         using var resident = ResidentInstance.TryAcquire(ResidentInstance.CurrentName());
         if (resident is null)
         {
+            if (!options.Smoke && ResidentActivator.TryActivateExisting())
+            {
+                return 0;
+            }
+
             Say(PartyStrings.AlreadyRunning(language), options.Smoke, language);
             return 2;
         }
