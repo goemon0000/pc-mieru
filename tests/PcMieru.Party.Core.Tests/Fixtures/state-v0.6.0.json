@@ -1,0 +1,36 @@
+{
+  "Experience": {
+    "cpu#0": 98765.4,
+    "cpu-cooler#0": 97000.1,
+    "memory": 41234.5,
+    "gpu#0": 152000,
+    "gpu#1": 3100.25,
+    "m2": 12345,
+    "hdd": 2222,
+    "psu": 60001
+  },
+  "Journey": 30512.75,
+  "Chapter": 13,
+  "Scene": 4,
+  "Log": [
+    "── 第十三章  電気の来ない場所 ──",
+    "灯がともった。盤の上に、めいめいの受け口がある。"
+  ],
+  "LastEventAt": {
+    "boot": 1790000000,
+    "gpu-very-high": 1789990000
+  },
+  "RecentVignettes": [
+    "夜。羽根の音だけが残っている。誰もそれを音だとは思っていない。"
+  ],
+  "UptimeSeconds": 512345.5,
+  "LastSeenUnix": 1790000000,
+  "Boots": 41,
+  "Lang": "ja",
+  "Zoom": 2.5,
+  "WindowLeft": -1600,
+  "WindowTop": 40,
+  "Topmost": true,
+  "Expanded": false,
+  "Labels": "name"
+}

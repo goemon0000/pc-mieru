@@ -1,0 +1,1700 @@
+{
+  "version": 1,
+  "_note": "冒険の本文と表。tools/build-story.py が story-work/adventure-*.json から組み上げる。",
+  "towns": [
+    {
+      "id": "socket-village",
+      "name": {
+        "ja": "受け口の村",
+        "en": "Socket Village"
+      },
+      "fromChapter": 0,
+      "tier": 1,
+      "places": [
+        {
+          "id": "trace-fields",
+          "kind": "field",
+          "length": 4,
+          "name": {
+            "ja": "配線の野",
+            "en": "the Trace Fields"
+          }
+        },
+        {
+          "id": "screw-hole",
+          "kind": "dungeon",
+          "length": 5,
+          "name": {
+            "ja": "ねじ穴の底",
+            "en": "the bottom of the screw hole"
+          }
+        },
+        {
+          "id": "dust-drift",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "埃の吹き溜まり",
+            "en": "the dust drift"
+          }
+        }
+      ]
+    },
+    {
+      "id": "heat-pool-inn",
+      "name": {
+        "ja": "熱溜まりの宿",
+        "en": "Heat Pool Inn"
+      },
+      "fromChapter": 2,
+      "tier": 2,
+      "places": [
+        {
+          "id": "scorched-sand",
+          "kind": "field",
+          "length": 4,
+          "name": {
+            "ja": "灼けた砂地",
+            "en": "the scorched sand"
+          }
+        },
+        {
+          "id": "behind-heatsink",
+          "kind": "dungeon",
+          "length": 5,
+          "harder": 1,
+          "name": {
+            "ja": "放熱板の裏",
+            "en": "the back of the heatsink"
+          }
+        },
+        {
+          "id": "steam-creek",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "湯気の出る沢",
+            "en": "the steaming creek"
+          }
+        }
+      ]
+    },
+    {
+      "id": "all-night-post",
+      "name": {
+        "ja": "夜明かしの宿場",
+        "en": "All-Night Post"
+      },
+      "fromChapter": 4,
+      "tier": 3,
+      "places": [
+        {
+          "id": "dark-plain",
+          "kind": "field",
+          "length": 4,
+          "name": {
+            "ja": "暗い原",
+            "en": "the dark plain"
+          }
+        },
+        {
+          "id": "battery-hollow",
+          "kind": "dungeon",
+          "length": 5,
+          "name": {
+            "ja": "電池の洞",
+            "en": "the battery hollow"
+          }
+        },
+        {
+          "id": "stopped-clock",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "止まった時計の塔",
+            "en": "the stopped clock tower"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gate-market",
+      "name": {
+        "ja": "門前の市",
+        "en": "Gate Market"
+      },
+      "fromChapter": 5,
+      "tier": 4,
+      "places": [
+        {
+          "id": "slope-outside",
+          "kind": "field",
+          "length": 4,
+          "name": {
+            "ja": "門の外の坂",
+            "en": "the slope outside the gate"
+          }
+        },
+        {
+          "id": "inside-lock",
+          "kind": "dungeon",
+          "length": 6,
+          "harder": 1,
+          "name": {
+            "ja": "錠の奥",
+            "en": "the inside of the lock"
+          }
+        },
+        {
+          "id": "guest-camp",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "客人の野営地",
+            "en": "the guests' camp"
+          }
+        }
+      ]
+    },
+    {
+      "id": "old-timers-hamlet",
+      "name": {
+        "ja": "古株の里",
+        "en": "Old-Timers' Hamlet"
+      },
+      "fromChapter": 7,
+      "tier": 5,
+      "places": [
+        {
+          "id": "platter-tracks",
+          "kind": "field",
+          "length": 5,
+          "name": {
+            "ja": "円盤の轍",
+            "en": "the platter tracks"
+          }
+        },
+        {
+          "id": "old-sectors",
+          "kind": "dungeon",
+          "length": 6,
+          "name": {
+            "ja": "古い区画",
+            "en": "the old sectors"
+          }
+        },
+        {
+          "id": "forgotten-shelf",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "消し忘れの棚",
+            "en": "the forgotten shelf"
+          }
+        }
+      ]
+    },
+    {
+      "id": "board-edge",
+      "name": {
+        "ja": "盤の端",
+        "en": "The Board's Edge"
+      },
+      "fromChapter": 10,
+      "tier": 6,
+      "places": [
+        {
+          "id": "past-the-edge",
+          "kind": "field",
+          "length": 5,
+          "name": {
+            "ja": "端の向こうの荒れ地",
+            "en": "the waste past the edge"
+          }
+        },
+        {
+          "id": "cut-wire-trench",
+          "kind": "dungeon",
+          "length": 6,
+          "harder": 1,
+          "name": {
+            "ja": "切れた線の溝",
+            "en": "the cut-wire trench"
+          }
+        },
+        {
+          "id": "box-from-outside",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "外から来た箱",
+            "en": "the box from outside"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wreck-market",
+      "name": {
+        "ja": "残骸の市",
+        "en": "Wreck Market"
+      },
+      "fromChapter": 12,
+      "tier": 7,
+      "places": [
+        {
+          "id": "mud-flat",
+          "kind": "field",
+          "length": 5,
+          "name": {
+            "ja": "泥の原",
+            "en": "the mud flat"
+          }
+        },
+        {
+          "id": "burnt-boards",
+          "kind": "dungeon",
+          "length": 6,
+          "name": {
+            "ja": "焼けた基板の山",
+            "en": "the heap of burnt boards"
+          }
+        },
+        {
+          "id": "no-current-house",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "電気の来ない家",
+            "en": "the house with no current"
+          }
+        }
+      ]
+    },
+    {
+      "id": "lamp-gathering",
+      "name": {
+        "ja": "灯の寄り合い",
+        "en": "The Lamp Gathering"
+      },
+      "fromChapter": 16,
+      "tier": 8,
+      "places": [
+        {
+          "id": "far-light-road",
+          "kind": "field",
+          "length": 5,
+          "name": {
+            "ja": "遠い灯への道",
+            "en": "the road to the far lights"
+          }
+        },
+        {
+          "id": "old-board-valley",
+          "kind": "dungeon",
+          "length": 7,
+          "harder": 1,
+          "name": {
+            "ja": "古い盤の谷",
+            "en": "the valley of old boards"
+          }
+        },
+        {
+          "id": "someones-board",
+          "kind": "side",
+          "length": 3,
+          "name": {
+            "ja": "誰かの忘れた盤",
+            "en": "someone's forgotten board"
+          }
+        }
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "spare-screw",
+      "slot": "hand",
+      "tier": 0,
+      "primary": "atk",
+      "secondary": "spd",
+      "starter": true,
+      "name": {
+        "ja": "予備のねじ",
+        "en": "a spare screw"
+      }
+    },
+    {
+      "id": "glowing-chip",
+      "slot": "hand",
+      "tier": 0,
+      "primary": "mag",
+      "secondary": "bst",
+      "starter": true,
+      "name": {
+        "ja": "光る欠片",
+        "en": "a glowing chip"
+      }
+    },
+    {
+      "id": "old-label",
+      "slot": "hand",
+      "tier": 0,
+      "primary": "lot",
+      "secondary": "end",
+      "starter": true,
+      "name": {
+        "ja": "古いラベル",
+        "en": "an old label"
+      }
+    },
+    {
+      "id": "thin-sheet",
+      "slot": "body",
+      "tier": 0,
+      "primary": "end",
+      "secondary": "sup",
+      "starter": true,
+      "name": {
+        "ja": "薄い絶縁シート",
+        "en": "a thin insulating sheet"
+      }
+    },
+    {
+      "id": "cable-tie",
+      "slot": "charm",
+      "tier": 0,
+      "primary": "cap",
+      "secondary": "sup",
+      "starter": true,
+      "name": {
+        "ja": "結束バンド",
+        "en": "a cable tie"
+      }
+    },
+    {
+      "id": "rubber-foot",
+      "slot": "charm",
+      "tier": 0,
+      "primary": "end",
+      "secondary": "lot",
+      "starter": true,
+      "name": {
+        "ja": "ゴムの足",
+        "en": "a rubber foot"
+      }
+    },
+    {
+      "id": "copper-spatula",
+      "slot": "hand",
+      "tier": 1,
+      "primary": "atk",
+      "secondary": "spd",
+      "name": {
+        "ja": "銅のへら",
+        "en": "a copper spatula"
+      }
+    },
+    {
+      "id": "glowing-stone",
+      "slot": "hand",
+      "tier": 1,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "光る石",
+        "en": "a glowing stone"
+      }
+    },
+    {
+      "id": "anti-static-strap",
+      "slot": "charm",
+      "tier": 1,
+      "primary": "sup",
+      "secondary": "end",
+      "name": {
+        "ja": "静電気よけの腕輪",
+        "en": "an anti-static strap"
+      }
+    },
+    {
+      "id": "cotton-wrap",
+      "slot": "body",
+      "tier": 1,
+      "primary": "end",
+      "secondary": "spd",
+      "name": {
+        "ja": "綿の巻き布",
+        "en": "a cotton wrap"
+      }
+    },
+    {
+      "id": "small-pouch",
+      "slot": "charm",
+      "tier": 1,
+      "primary": "cap",
+      "secondary": "lot",
+      "name": {
+        "ja": "小さな袋",
+        "en": "a small pouch"
+      }
+    },
+    {
+      "id": "screw-tray",
+      "slot": "hand",
+      "tier": 1,
+      "primary": "lot",
+      "secondary": "cap",
+      "shop": false,
+      "name": {
+        "ja": "ねじ受けの皿",
+        "en": "a screw tray"
+      }
+    },
+    {
+      "id": "steel-tweezers",
+      "slot": "hand",
+      "tier": 2,
+      "primary": "atk",
+      "secondary": "spd",
+      "name": {
+        "ja": "鋼のピンセット",
+        "en": "steel tweezers"
+      }
+    },
+    {
+      "id": "heat-coat",
+      "slot": "body",
+      "tier": 2,
+      "primary": "end",
+      "secondary": "sup",
+      "name": {
+        "ja": "放熱の上着",
+        "en": "a heat-shedding coat"
+      }
+    },
+    {
+      "id": "shifting-bead",
+      "slot": "charm",
+      "tier": 2,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "色の変わる玉",
+        "en": "a color-shifting bead"
+      }
+    },
+    {
+      "id": "folding-box",
+      "slot": "charm",
+      "tier": 2,
+      "primary": "cap",
+      "secondary": "lot",
+      "name": {
+        "ja": "折り畳みの箱",
+        "en": "a folding box"
+      }
+    },
+    {
+      "id": "thin-soles",
+      "slot": "body",
+      "tier": 2,
+      "primary": "spd",
+      "secondary": "atk",
+      "name": {
+        "ja": "底の薄い靴",
+        "en": "thin-soled shoes"
+      }
+    },
+    {
+      "id": "warm-stone",
+      "slot": "charm",
+      "tier": 2,
+      "primary": "sup",
+      "secondary": "end",
+      "shop": false,
+      "name": {
+        "ja": "ぬくもりの石",
+        "en": "a warm stone"
+      }
+    },
+    {
+      "id": "precision-driver",
+      "slot": "hand",
+      "tier": 3,
+      "primary": "atk",
+      "secondary": "spd",
+      "name": {
+        "ja": "精密ドライバー",
+        "en": "a precision screwdriver"
+      }
+    },
+    {
+      "id": "thick-cloth",
+      "slot": "body",
+      "tier": 3,
+      "primary": "end",
+      "secondary": "cap",
+      "name": {
+        "ja": "厚い絶縁布",
+        "en": "a thick insulating cloth"
+      }
+    },
+    {
+      "id": "spare-battery",
+      "slot": "charm",
+      "tier": 3,
+      "primary": "sup",
+      "secondary": "end",
+      "name": {
+        "ja": "予備の電池",
+        "en": "a spare battery"
+      }
+    },
+    {
+      "id": "polished-mirror",
+      "slot": "hand",
+      "tier": 3,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "磨いた鏡",
+        "en": "a polished mirror"
+      }
+    },
+    {
+      "id": "catalog-notebook",
+      "slot": "charm",
+      "tier": 3,
+      "primary": "lot",
+      "secondary": "cap",
+      "name": {
+        "ja": "目録の帳面",
+        "en": "a catalog notebook"
+      }
+    },
+    {
+      "id": "wide-blade",
+      "slot": "hand",
+      "tier": 3,
+      "primary": "end",
+      "secondary": "sup",
+      "fits": [
+        "cpu-cooler"
+      ],
+      "name": {
+        "ja": "幅の広い羽根",
+        "en": "a wide fan blade"
+      }
+    },
+    {
+      "id": "spare-key",
+      "slot": "hand",
+      "tier": 4,
+      "primary": "atk",
+      "secondary": "lot",
+      "name": {
+        "ja": "合鍵",
+        "en": "a spare key"
+      }
+    },
+    {
+      "id": "gatekeeper-cloak",
+      "slot": "body",
+      "tier": 4,
+      "primary": "end",
+      "secondary": "sup",
+      "name": {
+        "ja": "門番の外套",
+        "en": "a gatekeeper's cloak"
+      }
+    },
+    {
+      "id": "guest-map",
+      "slot": "charm",
+      "tier": 4,
+      "primary": "lot",
+      "secondary": "spd",
+      "name": {
+        "ja": "客人の地図",
+        "en": "a guest's map"
+      }
+    },
+    {
+      "id": "rainbow-plate",
+      "slot": "hand",
+      "tier": 4,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "虹色の板",
+        "en": "a rainbow plate"
+      }
+    },
+    {
+      "id": "big-satchel",
+      "slot": "body",
+      "tier": 4,
+      "primary": "cap",
+      "secondary": "end",
+      "name": {
+        "ja": "大きな鞄",
+        "en": "a big satchel"
+      }
+    },
+    {
+      "id": "heat-pad",
+      "slot": "charm",
+      "tier": 4,
+      "primary": "end",
+      "secondary": "spd",
+      "fits": [
+        "m2",
+        "ssd"
+      ],
+      "shop": false,
+      "name": {
+        "ja": "熱を吸う板",
+        "en": "a heat-drinking pad"
+      }
+    },
+    {
+      "id": "reading-needle",
+      "slot": "hand",
+      "tier": 5,
+      "primary": "atk",
+      "secondary": "lot",
+      "name": {
+        "ja": "読み取りの針",
+        "en": "a reading needle"
+      }
+    },
+    {
+      "id": "old-magnet",
+      "slot": "charm",
+      "tier": 5,
+      "primary": "lot",
+      "secondary": "end",
+      "name": {
+        "ja": "古い磁石",
+        "en": "an old magnet"
+      }
+    },
+    {
+      "id": "sector-ledger",
+      "slot": "charm",
+      "tier": 5,
+      "primary": "cap",
+      "secondary": "sup",
+      "name": {
+        "ja": "区画の帳簿",
+        "en": "a sector ledger"
+      }
+    },
+    {
+      "id": "heavy-coat",
+      "slot": "body",
+      "tier": 5,
+      "primary": "end",
+      "secondary": "sup",
+      "name": {
+        "ja": "重い上着",
+        "en": "a heavy coat"
+      }
+    },
+    {
+      "id": "light-jar",
+      "slot": "hand",
+      "tier": 5,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "光を溜める瓶",
+        "en": "a jar that holds light"
+      }
+    },
+    {
+      "id": "quick-gloves",
+      "slot": "body",
+      "tier": 5,
+      "primary": "spd",
+      "secondary": "atk",
+      "name": {
+        "ja": "指の速くなる手袋",
+        "en": "quick-fingered gloves"
+      }
+    },
+    {
+      "id": "edge-blade",
+      "slot": "hand",
+      "tier": 6,
+      "primary": "atk",
+      "secondary": "bst",
+      "name": {
+        "ja": "端で拾った刃",
+        "en": "a blade found at the edge"
+      }
+    },
+    {
+      "id": "windbreak",
+      "slot": "body",
+      "tier": 6,
+      "primary": "end",
+      "secondary": "spd",
+      "name": {
+        "ja": "外の風よけ",
+        "en": "a windbreak from outside"
+      }
+    },
+    {
+      "id": "long-cord",
+      "slot": "charm",
+      "tier": 6,
+      "primary": "sup",
+      "secondary": "cap",
+      "name": {
+        "ja": "長い延長線",
+        "en": "a long extension cord"
+      }
+    },
+    {
+      "id": "waymark-stake",
+      "slot": "hand",
+      "tier": 6,
+      "primary": "lot",
+      "secondary": "spd",
+      "name": {
+        "ja": "道しるべの杭",
+        "en": "a waymark stake"
+      }
+    },
+    {
+      "id": "pale-lamp",
+      "slot": "charm",
+      "tier": 6,
+      "primary": "mag",
+      "secondary": "sup",
+      "name": {
+        "ja": "青白い灯",
+        "en": "a pale blue lamp"
+      }
+    },
+    {
+      "id": "outside-crate",
+      "slot": "body",
+      "tier": 6,
+      "primary": "cap",
+      "secondary": "lot",
+      "shop": false,
+      "name": {
+        "ja": "外の木箱",
+        "en": "a crate from outside"
+      }
+    },
+    {
+      "id": "burnt-fragment",
+      "slot": "hand",
+      "tier": 7,
+      "primary": "atk",
+      "secondary": "mag",
+      "name": {
+        "ja": "焼け残りの基板片",
+        "en": "a burnt board fragment"
+      }
+    },
+    {
+      "id": "mud-cloak",
+      "slot": "body",
+      "tier": 7,
+      "primary": "end",
+      "secondary": "lot",
+      "name": {
+        "ja": "泥よけの外套",
+        "en": "a mud cloak"
+      }
+    },
+    {
+      "id": "wreck-gear",
+      "slot": "charm",
+      "tier": 7,
+      "primary": "spd",
+      "secondary": "atk",
+      "name": {
+        "ja": "残骸の歯車",
+        "en": "a gear from the wreck"
+      }
+    },
+    {
+      "id": "dry-capacitor",
+      "slot": "charm",
+      "tier": 7,
+      "primary": "sup",
+      "secondary": "end",
+      "name": {
+        "ja": "乾いた蓄電器",
+        "en": "a dry capacitor"
+      }
+    },
+    {
+      "id": "back-basket",
+      "slot": "body",
+      "tier": 7,
+      "primary": "cap",
+      "secondary": "lot",
+      "name": {
+        "ja": "大きな背負い籠",
+        "en": "a large back basket"
+      }
+    },
+    {
+      "id": "unlit-bulb",
+      "slot": "hand",
+      "tier": 7,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "点かない電球",
+        "en": "a bulb that will not light"
+      }
+    },
+    {
+      "id": "far-light-shard",
+      "slot": "hand",
+      "tier": 8,
+      "primary": "mag",
+      "secondary": "bst",
+      "name": {
+        "ja": "遠い灯の欠片",
+        "en": "a shard of the far light"
+      }
+    },
+    {
+      "id": "polished-heatsink",
+      "slot": "body",
+      "tier": 8,
+      "primary": "end",
+      "secondary": "sup",
+      "name": {
+        "ja": "磨き上げた放熱板",
+        "en": "a polished heatsink"
+      }
+    },
+    {
+      "id": "clear-crystal",
+      "slot": "charm",
+      "tier": 8,
+      "primary": "atk",
+      "secondary": "spd",
+      "name": {
+        "ja": "澄んだ水晶",
+        "en": "a clear crystal"
+      }
+    },
+    {
+      "id": "name-tag",
+      "slot": "charm",
+      "tier": 8,
+      "primary": "lot",
+      "secondary": "cap",
+      "name": {
+        "ja": "誰かの名札",
+        "en": "someone's name tag"
+      }
+    },
+    {
+      "id": "standoff",
+      "slot": "hand",
+      "tier": 8,
+      "primary": "atk",
+      "secondary": "end",
+      "name": {
+        "ja": "古い盤の足",
+        "en": "an old board's standoff"
+      }
+    },
+    {
+      "id": "spare-socket",
+      "slot": "body",
+      "tier": 8,
+      "primary": "sup",
+      "secondary": "cap",
+      "shop": false,
+      "name": {
+        "ja": "空いた受け口",
+        "en": "an empty socket"
+      }
+    }
+  ],
+  "lines": {
+    "why-none": [
+      {
+        "ja": "迷う理由は特に無かった。",
+        "en": "Nothing in particular tipped it."
+      },
+      {
+        "ja": "誰も止めなかった。",
+        "en": "No one held back."
+      },
+      {
+        "ja": "いつもどおりの判断だった。",
+        "en": "It was an ordinary call."
+      },
+      {
+        "ja": "決めるのに時間はかからなかった。",
+        "en": "It did not take long to decide."
+      }
+    ],
+    "why-fresh": [
+      {
+        "ja": "傷らしい傷は、誰にも無かった。",
+        "en": "No one had a wound worth the name."
+      },
+      {
+        "ja": "傷と呼べるものは、まだ無い。",
+        "en": "Nothing yet was worth calling a wound."
+      },
+      {
+        "ja": "全員、足元は確かだった。",
+        "en": "Everyone was steady on their feet."
+      },
+      {
+        "ja": "体はどこも欠けていない。",
+        "en": "Nothing was chipped or loose."
+      }
+    ],
+    "why-rested": [
+      {
+        "ja": "疲れはまだ溜まっていない。",
+        "en": "They were not tired yet."
+      },
+      {
+        "ja": "宿でよく休んだ後だった。",
+        "en": "They had rested well at the inn."
+      },
+      {
+        "ja": "電源くんの供給は安定している。",
+        "en": "The PSU's supply was steady."
+      },
+      {
+        "ja": "誰の動きも鈍っていない。",
+        "en": "No one had slowed down."
+      }
+    ],
+    "why-gear-strong": [
+      {
+        "ja": "道具はこの辺りの物より上だった。",
+        "en": "Their gear was better than this place called for."
+      },
+      {
+        "ja": "持ち物が揃っていた。",
+        "en": "They were well equipped."
+      },
+      {
+        "ja": "手の物が、この先の相手に勝っている。",
+        "en": "What they carried outclassed what lay ahead."
+      },
+      {
+        "ja": "装備の格は足りていた。",
+        "en": "Their gear was up to it."
+      }
+    ],
+    "why-streak-up": [
+      {
+        "ja": "ここまで一度も負けていない。",
+        "en": "They had not lost once so far."
+      },
+      {
+        "ja": "勝ちが続いていた。",
+        "en": "They had been winning."
+      },
+      {
+        "ja": "前の相手は、あっさり片付いた。",
+        "en": "The last one had gone down easily."
+      },
+      {
+        "ja": "続けて上手くいっていた。",
+        "en": "Things had been going their way."
+      }
+    ],
+    "why-calm": [
+      {
+        "ja": "盤の上は静かだった。",
+        "en": "The board was quiet."
+      },
+      {
+        "ja": "誰も呼ばれていない。時間はあった。",
+        "en": "No one was being called on. There was time."
+      },
+      {
+        "ja": "羽根の音が低い。盤は冷えていた。",
+        "en": "The fans were low. The board was cool."
+      },
+      {
+        "ja": "機械は休んでいる。邪魔は入らない。",
+        "en": "The machine was idle. Nothing would interrupt."
+      }
+    ],
+    "why-hurt": [
+      {
+        "ja": "傷が浅くなかった。",
+        "en": "The wounds were not shallow."
+      },
+      {
+        "ja": "何人かが傷を負っていた。",
+        "en": "Several of them were hurt."
+      },
+      {
+        "ja": "体力が半分を切っていた。",
+        "en": "They were down to half their strength."
+      },
+      {
+        "ja": "足を引きずる者がいた。",
+        "en": "Someone was limping."
+      }
+    ],
+    "why-tired": [
+      {
+        "ja": "疲れが溜まっていた。",
+        "en": "They were worn out."
+      },
+      {
+        "ja": "メモリくんが、何度も立ち止まった。",
+        "en": "The memory kept stopping."
+      },
+      {
+        "when": "has:hdd",
+        "ja": "HDDくんの回転が落ちていた。",
+        "en": "The HDD had slowed its spin."
+      },
+      {
+        "ja": "歩みが遅くなっていた。",
+        "en": "Their pace had dropped."
+      }
+    ],
+    "why-gear-weak": [
+      {
+        "ja": "道具が、この辺りの相手に足りていない。",
+        "en": "Their gear was not enough for this place."
+      },
+      {
+        "ja": "手の物は、前の町で揃えた物だった。",
+        "en": "What they carried had come from the last town."
+      },
+      {
+        "ja": "相手の方が硬そうだった。",
+        "en": "What lay ahead looked tougher than they were."
+      },
+      {
+        "ja": "装備の格が一つ足りない。",
+        "en": "Their gear was a step behind."
+      }
+    ],
+    "why-heavy": [
+      {
+        "ja": "荷が重くなっていた。",
+        "en": "The load had grown heavy."
+      },
+      {
+        "ja": "メモリくんの腕が、もう塞がっていた。",
+        "en": "The memory's arms were already full."
+      },
+      {
+        "ja": "拾った物で背袋が膨れている。",
+        "en": "The packs were bulging with finds."
+      },
+      {
+        "ja": "これ以上は持てなかった。",
+        "en": "They could not carry any more."
+      }
+    ],
+    "why-streak-down": [
+      {
+        "ja": "続けて押し返されていた。",
+        "en": "They had been pushed back more than once."
+      },
+      {
+        "ja": "前の相手に負けたばかりだった。",
+        "en": "They had just lost the last fight."
+      },
+      {
+        "ja": "上手くいかない日だった。",
+        "en": "It was not their day."
+      },
+      {
+        "ja": "負けが続いていた。",
+        "en": "They had been losing."
+      }
+    ],
+    "why-hot": [
+      {
+        "ja": "盤の上が熱かった。",
+        "en": "The board was running hot."
+      },
+      {
+        "ja": "クーラーくんが、CPUくんから離れられない。",
+        "en": "The cooler could not leave the CPU's side."
+      },
+      {
+        "ja": "長い仕事が続いている。皆、そちらで手一杯だった。",
+        "en": "A long job was running. Everyone had their hands full."
+      },
+      {
+        "ja": "熱が引かない。",
+        "en": "The heat was not letting up."
+      },
+      {
+        "when": "has:gpu",
+        "ja": "GPUくんの背が、まだ熱を持っていた。",
+        "en": "The GPU's back was still hot."
+      }
+    ],
+    "do-push": [
+      {
+        "ja": "一行は先へ進んだ。",
+        "en": "The party went on."
+      },
+      {
+        "ja": "一行は奥へ向かった。",
+        "en": "The party headed further in."
+      },
+      {
+        "ja": "分かれ道を、奥の方へ取った。",
+        "en": "At the fork, they took the deeper path."
+      },
+      {
+        "ja": "{fighter}が先に立ち、道を進めた。",
+        "en": "{fighter} took the lead and pressed on."
+      }
+    ],
+    "do-back": [
+      {
+        "ja": "一行は引き返した。",
+        "en": "The party turned back."
+      },
+      {
+        "ja": "{place}を後にした。",
+        "en": "They left {place} behind."
+      },
+      {
+        "ja": "一行は町へ戻ることにした。",
+        "en": "The party set off back to town."
+      },
+      {
+        "ja": "{keeper}が向きを変え、皆が続いた。",
+        "en": "{keeper} turned around, and the rest followed."
+      }
+    ],
+    "do-fight": [
+      {
+        "ja": "一行は構えた。",
+        "en": "The party stood its ground."
+      },
+      {
+        "ja": "{fighter}が前に出た。",
+        "en": "{fighter} stepped forward."
+      },
+      {
+        "ja": "避けずに、正面から当たった。",
+        "en": "They met it head on."
+      },
+      {
+        "ja": "一行は退かなかった。",
+        "en": "The party did not give way."
+      }
+    ],
+    "do-avoid": [
+      {
+        "ja": "一行は道を外れて、やり過ごした。",
+        "en": "The party stepped off the path and let it pass."
+      },
+      {
+        "ja": "相手が去るまで、物陰で待った。",
+        "en": "They waited in cover until it had gone."
+      },
+      {
+        "ja": "{keeper}が皆を止め、遠回りをさせた。",
+        "en": "{keeper} stopped everyone and led them the long way round."
+      },
+      {
+        "ja": "戦わずに、脇を抜けた。",
+        "en": "They slipped past without a fight."
+      }
+    ],
+    "do-side": [
+      {
+        "ja": "一行は脇道に入った。",
+        "en": "The party took the side path."
+      },
+      {
+        "ja": "{finder}が見つけた細い道へ入った。",
+        "en": "{finder} found a narrow path, and they went in."
+      },
+      {
+        "ja": "寄り道をすることにした。",
+        "en": "They took a detour."
+      },
+      {
+        "ja": "脇の暗がりを覗きに行った。",
+        "en": "They went to look into the dark at the side."
+      }
+    ],
+    "do-skip": [
+      {
+        "ja": "脇道には入らなかった。",
+        "en": "They left the side path alone."
+      },
+      {
+        "ja": "{finder}が脇道を見たが、皆は通り過ぎた。",
+        "en": "{finder} looked down the side path, but they walked on."
+      },
+      {
+        "ja": "寄り道はしなかった。",
+        "en": "They did not take the detour."
+      },
+      {
+        "ja": "細い道は、そのままにしておいた。",
+        "en": "The narrow path was left as it was."
+      }
+    ],
+    "do-deeper": [
+      {
+        "ja": "一行は、さらに奥へ進んだ。",
+        "en": "The party went deeper still."
+      },
+      {
+        "ja": "行き止まりの先を探した。",
+        "en": "They looked for a way past the dead end."
+      },
+      {
+        "ja": "帰り道を背に、もう少し進んだ。",
+        "en": "With the way back behind them, they went a little further."
+      },
+      {
+        "ja": "{fighter}が先に立ち、奥の奥へ入った。",
+        "en": "{fighter} went ahead, further than the path went."
+      }
+    ],
+    "board-bold": [
+      {
+        "ja": "一行は掲示の中で一番遠い{place}を選んだ。",
+        "en": "The party picked {place}, the farthest on the board."
+      },
+      {
+        "ja": "{place}の紙を剥がした。手強いと書いてある。",
+        "en": "They took down the notice for {place}. It said hard going."
+      },
+      {
+        "ja": "{fighter}が{place}の紙を指した。",
+        "en": "{fighter} pointed at the notice for {place}."
+      },
+      {
+        "ja": "次は{place}へ。近くでは一番奥だった。",
+        "en": "Next was {place}, the deepest nearby."
+      }
+    ],
+    "board-careful": [
+      {
+        "ja": "一行は掲示の中で一番近い{place}を選んだ。",
+        "en": "The party chose {place}, the nearest on the board."
+      },
+      {
+        "ja": "手強い所は避けて、{place}にした。",
+        "en": "They passed over the hard places and chose {place}."
+      },
+      {
+        "ja": "{keeper}が{place}の紙を取った。",
+        "en": "{keeper} took the notice for {place}."
+      },
+      {
+        "ja": "今日は{place}まで。遠くへは行かない。",
+        "en": "Only as far as {place} today."
+      }
+    ],
+    "board-balanced": [
+      {
+        "ja": "一行は掲示を見て、{place}に決めた。",
+        "en": "The party read the board and settled on {place}."
+      },
+      {
+        "ja": "次の行き先は{place}になった。",
+        "en": "The next destination was {place}."
+      },
+      {
+        "ja": "{place}の紙を取った。今の力に見合っていた。",
+        "en": "They took the notice for {place}. It suited them."
+      },
+      {
+        "ja": "掲示に{place}の名があった。",
+        "en": "{place} was on the board."
+      }
+    ],
+    "won": [
+      {
+        "ja": "相手は退いた。一行は息を整えた。",
+        "en": "It backed off. The party caught its breath."
+      },
+      {
+        "ja": "{fighter}が押し切った。拾える物は拾った。",
+        "en": "{fighter} pushed it through. They picked up what there was."
+      },
+      {
+        "ja": "片付いた。{carrier}が拾い物を抱えた。",
+        "en": "It was over. {carrier} gathered up the finds."
+      },
+      {
+        "ja": "勝った。誰も大きな傷は負っていない。",
+        "en": "They won. No one was badly hurt."
+      },
+      {
+        "when": "has:gpu",
+        "ja": "GPUくんが光った。相手はそれきり動かなかった。",
+        "en": "The GPU flared. Nothing moved after that."
+      },
+      {
+        "ja": "CPUくんが全部の腕を使った。数で押し切った。",
+        "en": "The CPU used every arm it had, and won on numbers."
+      },
+      {
+        "when": "level:cpu-cooler>=10",
+        "ja": "クーラーくんはCPUくんの後ろから一歩も動かなかった。それで足りた。",
+        "en": "The cooler never moved from behind the CPU. That was enough."
+      }
+    ],
+    "won-item": [
+      {
+        "ja": "勝った。相手の残した{item}を拾った。",
+        "en": "They won, and picked up {item} left behind."
+      },
+      {
+        "ja": "片付いた後に、{item}が落ちていた。",
+        "en": "When it was over, {item} lay on the ground."
+      },
+      {
+        "ja": "{finder}が、倒れた相手の陰に{item}を見つけた。",
+        "en": "{finder} found {item} where it had fallen."
+      },
+      {
+        "ja": "勝った。{carrier}が{item}を拾い、そのまま抱えた。",
+        "en": "They won. {carrier} picked up {item} and held on to it."
+      }
+    ],
+    "lost": [
+      {
+        "ja": "押し返された。一行は傷を負った。",
+        "en": "They were pushed back, and took some wounds."
+      },
+      {
+        "ja": "相手の方が強かった。{keeper}が皆を下がらせた。",
+        "en": "It was too strong. {keeper} pulled everyone back."
+      },
+      {
+        "ja": "勝てなかった。{fighter}の体に傷が残った。",
+        "en": "They could not win. {fighter} came away marked."
+      },
+      {
+        "ja": "一行は退いた。今の道具では届かなかった。",
+        "en": "The party fell back. Their gear did not reach."
+      },
+      {
+        "ja": "メモリくんが、何と戦っていたのかを忘れた。傷だけが残った。",
+        "en": "The memory forgot what it had been fighting. Only the wounds remained."
+      }
+    ],
+    "avoided": [
+      {
+        "ja": "相手は気づかずに通り過ぎた。",
+        "en": "It went by without noticing them."
+      },
+      {
+        "ja": "遠回りの分だけ、足が重くなった。",
+        "en": "The long way round cost them some strength."
+      },
+      {
+        "ja": "やり過ごした。少し時間がかかった。",
+        "en": "They let it pass. It took a while."
+      },
+      {
+        "ja": "クーラーくんが最後まで振り返っていた。何も来なかった。",
+        "en": "The cooler kept looking back the whole way. Nothing followed."
+      }
+    ],
+    "side-found": [
+      {
+        "ja": "脇道の奥に{item}が落ちていた。",
+        "en": "At the end of the side path lay {item}."
+      },
+      {
+        "ja": "{finder}が{item}を見つけた。誰かが置いていった物らしい。",
+        "en": "{finder} found {item}. Someone seemed to have left it."
+      },
+      {
+        "ja": "寄り道の先で、{item}を拾った。",
+        "en": "The detour turned up {item}."
+      },
+      {
+        "ja": "埃の下から{item}が出てきた。",
+        "en": "{item} came out from under the dust."
+      },
+      {
+        "when": "has:hdd",
+        "ja": "HDDくんが、前にもここで{item}を見たと言った。本当にあった。",
+        "en": "The HDD said it had seen {item} here before. It was right."
+      }
+    ],
+    "side-hurt": [
+      {
+        "ja": "脇道は崩れていた。何人かが足を取られた。",
+        "en": "The side path had caved in. Some of them lost their footing."
+      },
+      {
+        "ja": "脇道で、尖った物に触れた。傷が増えた。",
+        "en": "Something sharp on the side path. A few more cuts."
+      },
+      {
+        "ja": "寄り道は無駄足だった。転んだ者もいた。",
+        "en": "The detour came to nothing, and someone fell."
+      },
+      {
+        "ja": "脇道に静電気が溜まっていた。皆、少し痺れた。",
+        "en": "Static had built up on the side path. It stung them all."
+      }
+    ],
+    "side-small": [
+      {
+        "ja": "脇道には細かい物しか無かった。それも拾った。",
+        "en": "Only small things down the side path. They took those too."
+      },
+      {
+        "ja": "寄り道で、売れそうな屑を少し集めた。",
+        "en": "The detour yielded a little scrap worth selling."
+      },
+      {
+        "ja": "{carrier}が小さな物を一つ拾った。何かは分からない。",
+        "en": "{carrier} picked up something small. No one knew what."
+      },
+      {
+        "ja": "脇道の奥は空だった。床の屑だけ拾って戻った。",
+        "en": "The end of the side path was empty. They swept up some scrap and came back."
+      }
+    ],
+    "reach-end": [
+      {
+        "ja": "{place}の奥に着いた。一行は帰り道についた。",
+        "en": "They reached the far end of {place} and started back."
+      },
+      {
+        "ja": "ここが{place}の行き止まりだった。一行は引き返した。",
+        "en": "This was where {place} ended. The party turned back."
+      },
+      {
+        "ja": "{place}の一番奥まで来た。これ以上の道は無い。",
+        "en": "They had come to the end of {place}. There was no more path."
+      },
+      {
+        "ja": "奥に着いた。{carrier}が荷を数え、一行は戻り始めた。",
+        "en": "They reached the end. {carrier} counted the load, and they started back."
+      }
+    ],
+    "retreat": [
+      {
+        "ja": "これ以上は無理だった。一行は荷を半分置いて退いた。",
+        "en": "It was too much. The party dropped half the load and fell back."
+      },
+      {
+        "ja": "{keeper}が皆を引き戻した。拾った物の半分は置いてきた。",
+        "en": "{keeper} pulled everyone back. Half the finds stayed behind."
+      },
+      {
+        "ja": "電源くんの供給が細った。一行は急いで引き返した。",
+        "en": "The PSU's supply thinned. The party hurried back."
+      }
+    ],
+    "walk-back": [
+      {
+        "ja": "一行は来た道を戻っている。",
+        "en": "The party is walking back the way it came."
+      },
+      {
+        "ja": "帰り道。{carrier}が荷を抱え直した。",
+        "en": "On the way back, {carrier} shifted the load."
+      },
+      {
+        "ja": "町の灯が、遠くに見え始めた。",
+        "en": "The town's lights were coming into view."
+      },
+      {
+        "ja": "{place}を背に、一行は歩いている。",
+        "en": "With {place} behind them, the party walks on."
+      },
+      {
+        "when": "has:hdd",
+        "ja": "HDDくんが一番後ろを、遅れずについてきた。",
+        "en": "The HDD brought up the rear, and kept up."
+      },
+      {
+        "when": "has:m2",
+        "ja": "M.2くんが先に行っては、戻ってくる。それを何度も繰り返した。",
+        "en": "The M.2 kept running ahead and coming back, over and over."
+      }
+    ],
+    "town-arrive": [
+      {
+        "ja": "一行は{town}に戻った。",
+        "en": "The party came back to {town}."
+      },
+      {
+        "ja": "{town}の灯が見えた。一行は門をくぐった。",
+        "en": "The lights of {town} came into view. They went in."
+      },
+      {
+        "ja": "{town}に着いた。誰も欠けていない。",
+        "en": "They reached {town}. No one was missing."
+      },
+      {
+        "ja": "一行は{town}に帰ってきた。宿はいつもの場所にある。",
+        "en": "The party was back in {town}. The inn was where it always was."
+      }
+    ],
+    "town-first": [
+      {
+        "ja": "一行は{town}の門をくぐった。宿の場所を、まだ誰も知らない。",
+        "en": "The party passed through the gate of {town}. No one knew where the inn was yet."
+      },
+      {
+        "ja": "道の先に灯が見えた。{town}という町だった。",
+        "en": "Lights showed down the road. The town was called {town}."
+      },
+      {
+        "ja": "{town}に着いた。しばらくはここを拠点にする。",
+        "en": "They reached {town}. It would be their base for a while."
+      }
+    ],
+    "town-new": [
+      {
+        "ja": "一行は新しい町に着いた。{town}という。",
+        "en": "The party reached a new town, called {town}."
+      },
+      {
+        "ja": "前の町には戻らず、{town}に入った。",
+        "en": "Instead of turning back, they went on into {town}."
+      },
+      {
+        "ja": "{town}は、これまでの町より少し大きかった。",
+        "en": "{town} was a little larger than the towns before it."
+      },
+      {
+        "ja": "道の先に{town}があった。しばらくはここに泊まる。",
+        "en": "{town} lay further down the road. They would stay there for now."
+      }
+    ],
+    "equip": [
+      {
+        "ja": "{name}が{item}を身に着けた。",
+        "en": "{name} put on {item}."
+      },
+      {
+        "ja": "{name}は古い物を外し、{item}に替えた。",
+        "en": "{name} took off the old one and switched to {item}."
+      },
+      {
+        "ja": "{item}は{name}の物になった。",
+        "en": "{item} went to {name}."
+      },
+      {
+        "ja": "{name}が{item}を試した。外さなかった。",
+        "en": "{name} tried {item} and kept it on."
+      }
+    ],
+    "sell": [
+      {
+        "ja": "拾い物を店に並べた。値はすぐについた。",
+        "en": "They laid out their finds at the shop. Prices came quickly."
+      },
+      {
+        "ja": "使わない物は売った。{carrier}の荷が軽くなった。",
+        "en": "They sold what they would not use. {carrier}'s load got lighter."
+      },
+      {
+        "ja": "拾った物の大半は、店の棚に移った。",
+        "en": "Most of the finds went onto the shop's shelves."
+      },
+      {
+        "ja": "売れる物は売った。手元には使う物だけが残った。",
+        "en": "They sold what would sell. Only what they used was left."
+      }
+    ],
+    "buy": [
+      {
+        "ja": "店で{item}を買った。{name}の物になった。",
+        "en": "They bought {item} at the shop. It went to {name}."
+      },
+      {
+        "ja": "{name}のために、{item}を一つ買った。",
+        "en": "They bought {item} for {name}."
+      },
+      {
+        "ja": "棚に{item}があった。{name}が手に取り、そのまま買った。",
+        "en": "{item} was on the shelf. {name} picked it up, and they bought it."
+      },
+      {
+        "ja": "拾い物の代金で{item}を買った。{name}が着けた。",
+        "en": "The money from their finds bought {item}. {name} put it on."
+      }
+    ],
+    "inn-rest": [
+      {
+        "ja": "宿に泊まった。電源くんだけは、夜通し起きていた。",
+        "en": "They stayed at the inn. Only the PSU stayed up through the night."
+      },
+      {
+        "ja": "宿で休んだ。クーラーくんは羽根を緩めた。",
+        "en": "They rested at the inn. The cooler eased its fan."
+      },
+      {
+        "ja": "一行は宿で眠った。メモリくんは、昨日のことをもう覚えていない。",
+        "en": "The party slept at the inn. The memory no longer remembered yesterday."
+      },
+      {
+        "when": "has:hdd",
+        "ja": "宿の床で、皆が横になった。HDDくんが最初に止まった。",
+        "en": "Everyone lay down on the inn floor. The HDD was the first to stop."
+      },
+      {
+        "ja": "宿代を払って、休んだ。",
+        "en": "They paid for the inn and rested."
+      }
+    ],
+    "inn-eaves": [
+      {
+        "ja": "宿代が足りなかった。一行は軒先で休んだ。",
+        "en": "They were short for the inn and rested under the eaves."
+      },
+      {
+        "ja": "金が無い。宿の裏で、皆で固まって眠った。",
+        "en": "No money. They slept huddled together behind the inn."
+      },
+      {
+        "ja": "宿には泊まれなかった。電源くんが見張りに立った。",
+        "en": "They could not pay for a room. The PSU kept watch."
+      }
+    ],
+    "depart": [
+      {
+        "ja": "一行は{place}へ発った。",
+        "en": "The party set off for {place}."
+      },
+      {
+        "ja": "{town}を出た。行き先は{place}。",
+        "en": "They left {town}, bound for {place}."
+      },
+      {
+        "ja": "荷をまとめて、{place}へ向かった。",
+        "en": "They packed up and headed for {place}."
+      },
+      {
+        "ja": "{fighter}が先に立ち、{place}への道に入った。",
+        "en": "{fighter} went first, onto the road to {place}."
+      }
+    ]
+  }
+}
