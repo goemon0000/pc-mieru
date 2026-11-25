@@ -33,11 +33,25 @@ public sealed class PartyState
     /// GPU の席（gpu#0〜gpu#5）の覚え書き。どの席にどの名前・メモリ・PCI バスの GPU がいたか。
     /// **この欄の無い古い保存は空**（最初の起動で並び順どおりに番号が振られ、旧版の gpu#i と同じになる）。
     /// 差す・抜くで番号を詰めず、決められない GPU（同型が2枚でバスが読めない等）には席を与えない
-    /// （<see cref="GpuSlotMap"/>、DESIGN-C 2.3）。**自動では消さない**（取り外した GPU の席は穴として残る。
-    /// 消すのは <see cref="GpuSlotMap.Forget"/> だけで、経験値と装備は別に扱う）。
+    /// （<see cref="GpuSlotMap"/>、DESIGN-C 2.3）。**自動では消さない**（取り外した GPU の席は穴として残る）。
+    /// 手放すのは <see cref="GpuSlotMap.Forget"/>（記録を「引退」にして番号を塞ぐ。経験値と装備は残る）で、
+    /// 番号を空けるのは <see cref="GpuSlotKeys.ResetSlot"/>（その鍵の経験値と装備を消して記録も消す）だけ。
     /// バスと容量が分からなかった記録は null / 0 のまま書く（0 や既定値を作らない）。
+    /// **欄が有るのに壊れている**（null・配列でない・席の番号の重複や負・同一カードの記録が2つ）ときは、
+    /// 「欄が無い」とは別に扱う（<see cref="GpuSlotsRepaired"/>）。空として読むと、残った gpu#i の育成が別のカードに付く。
     /// </summary>
     public List<GpuSlotRecord> GpuSlots { get; set; } = new();
+
+    /// <summary>
+    /// 席の欄（<see cref="GpuSlots"/>）が**壊れていて、読み込みのときに直した**ことの印。画面（利用者への知らせ）がこれを見る。
+    /// 直し方は <see cref="GpuSlotKeys.RepairLoaded"/>: 読める記録は残し、経験値か装備が残っているのに記録の無い席は
+    /// 「引退」の記録で番号を塞ぐ（どのカードにも渡さない。育てた分は消さない）。
+    /// **保存する。** 直した結果は次の保存で正しい形に書き換わるので、実行中だけの印だと再起動で何も言わずに消え、
+    /// 利用者は壊れたことに気づけない。派生（引退の記録があるか）にしないのは、引退は <see cref="GpuSlotMap.Forget"/> の
+    /// 意図した結果でもあり、「壊れていた」と区別がつかなくなるため。
+    /// 画面が知らせたら、呼ぶ側が false に戻す（この欄は自動では戻らない）。欄が**無い**古い保存は壊れていない（false のまま）。
+    /// </summary>
+    public bool GpuSlotsRepaired { get; set; }
 
     /// <summary>旅程。物語が進む距離。全体の仕事量から貯まる。</summary>
     public double Journey { get; set; }
@@ -352,9 +366,17 @@ public sealed class PartyState
     /// <summary>
     /// 保存の本文から読む。まず普通に丸ごと読み、だめなら欄ごとに読む（<see cref="LenientJson"/>）。
     /// **冒険の一欄が読めないことで、物語の進みとレベルを捨てない。**
-    /// 欄ごとに読み直したときは repaired が真。JSON の物（{...}）として読めなければ例外。
+    /// 欄ごとに読み直したとき、または GPU の席の欄（<see cref="GpuSlots"/>）が壊れていて直したときは repaired が真。
+    /// JSON の物（{...}）として読めなければ例外。
     /// </summary>
-    public static PartyState FromJson(string json, out bool repaired)
+    public static PartyState FromJson(string json, out bool repaired) => FromJson(json, out repaired, out _);
+
+    /// <summary>
+    /// 上と同じ。席の欄が壊れていて直したか（<paramref name="gpuSlotsBroken"/>）も別に返す（取り込みが「直した欄」として数えるため）。
+    /// 欄が**無い**（古い保存）のは壊れていない。有るのに null・形違い・重複や負の番号・同一カードの二重記録なら壊れている
+    /// （<see cref="GpuSlotKeys.RepairLoaded"/>）。
+    /// </summary>
+    internal static PartyState FromJson(string json, out bool repaired, out bool gpuSlotsBroken)
     {
         repaired = false;
         PartyState? state;
@@ -372,7 +394,12 @@ public sealed class PartyState
             repaired = true;
         }
         if (state is null) throw new JsonException("state.json の中身が null");
+        // 席の欄が「無い」のか「有るが壊れている」のかは、読み込んだ後では分からない（どちらも空の一覧になる）ので、本文で見る。
+        // Migrate が null を空の一覧に替える前に取る
+        var rawSlots = GpuSlotKeys.Probe(json);
         state.Migrate();
+        gpuSlotsBroken = GpuSlotKeys.RepairLoaded(state, rawSlots);
+        if (gpuSlotsBroken) repaired = true;   // 直す前の本文を控えに写す（Load が repaired を見る）
         return state;
     }
 

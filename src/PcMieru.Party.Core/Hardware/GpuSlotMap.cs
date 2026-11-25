@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using PcMieru.Party.Game;
+
 namespace PcMieru.Party.Hardware;
 
 /// <summary>
@@ -8,7 +11,15 @@ namespace PcMieru.Party.Hardware;
 /// <param name="Name">The adapter name as Core reported it.</param>
 /// <param name="VramBytes">Dedicated video memory; 0 when it was not known.</param>
 /// <param name="PciBus">The PCI bus number last seen; null when never known.</param>
-public sealed record GpuSlotRecord(int Slot, string Name, long VramBytes, uint? PciBus);
+/// <param name="Retired">
+/// True when the number is closed: the owner let the card go (<see cref="GpuSlotMap.Forget"/>), or the save was damaged and the number holds progress that no
+/// readable record claims. A retired record matches no adapter and its number is never handed to any card, in this run or after a restart; the progress
+/// stored under <c>gpu#i</c> stays where it is until <see cref="GpuSlotKeys.ResetSlot"/> removes it together with the record. A save written before this
+/// field existed has none and reads as false. It is left out of the save while false, so an ordinary record keeps its old shape.
+/// </param>
+public sealed record GpuSlotRecord(
+    int Slot, string Name, long VramBytes, uint? PciBus,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Retired = false);
 
 /// <summary>What the map did with one adapter. <see cref="Slot"/> is null when it has none; <see cref="Ambiguous"/> says why (it is shown, but earns nothing).</summary>
 /// <param name="Id">Core's adapter id (LUID), as given to <see cref="GpuSlotMap.Assign"/>.</param>
@@ -49,8 +60,9 @@ public sealed record GpuSlotResult(IReadOnlyList<GpuSlotAssignment> Adapters, IR
 ///    <see cref="GpuSlotAssignment.Ambiguous"/>, take no slot, and the slots they could be stay blocked this call (no new card takes them). An
 ///    adapter that could be one of those blocked slots is ambiguous as well: having a candidate, blocked or not, it is never a new card.
 /// 3. A card that is gone leaves its slot reserved (a hole): the others keep theirs, and a replugged card gets its old slot back by (b).
-/// 4. An adapter that has no candidate slot at all is a new card. It takes the lowest slot that was never used by any card (a hole is "used"); with
-///    none left it has no slot. A slot the owner let go of (<see cref="Forget"/>) is handed out in this run only when nothing else is free.
+/// 4. An adapter that has no candidate slot at all is a new card. It takes the lowest slot that was never used by any card (a hole is "used", and so is
+///    a retired slot, see <see cref="GpuSlotRecord.Retired"/>); with none left it has no slot. A card's progress is never handed to another card by
+///    itself: a number the owner let go of (<see cref="Forget"/>) stays closed until <see cref="GpuSlotKeys.ResetSlot"/> has removed the progress under it.
 ///
 /// Names are compared as the driver gave them: a renamed card (a driver that changes the string) is a new card, not a guess.
 /// A card of the same model put in the place of a gone one is the same card to this map; nothing in (name, memory, bus) can tell them apart.
@@ -63,10 +75,10 @@ public sealed class GpuSlotMap
     private readonly GpuSlotRecord?[] _records = new GpuSlotRecord?[MaxSlots];
     private readonly Dictionary<string, int> _sessionSlots = new(StringComparer.Ordinal);
 
-    /// <summary>Slots the owner let go of in this run (<see cref="Forget"/>). A new card takes one of these only when no other slot is free.</summary>
-    private readonly bool[] _forgotten = new bool[MaxSlots];
-
-    /// <param name="persisted">What the save remembered. Null or empty on the first run and with an old save. A record outside 0..5, and a second record for one slot, is ignored.</param>
+    /// <param name="persisted">
+    /// What the save remembered. Null or empty on the first run and with an old save. A record outside 0..5, and a second record for one slot, is ignored.
+    /// A save whose records are damaged is repaired before it gets here (<see cref="GpuSlotKeys.RepairLoaded"/>); this constructor trusts what it is given.
+    /// </param>
     public GpuSlotMap(IEnumerable<GpuSlotRecord>? persisted = null)
     {
         foreach (var r in persisted ?? [])
@@ -82,19 +94,20 @@ public sealed class GpuSlotMap
     public IReadOnlyList<GpuSlotRecord> Records => _records.Where(static r => r is not null).Select(static r => r!).ToArray();
 
     /// <summary>
-    /// Lets one remembered slot go (a card taken out for good). Nothing calls this by itself: an unplugged card keeps its slot as a hole (rule 3), so a hole
-    /// never goes away on its own, and the experience and equipment stored under the key are not touched here (the caller decides about those).
-    /// So that progress still stored under the key cannot pass to a stranger, the number is not handed to another card in this run while any other slot is
-    /// free; a card with no candidate slot at all takes it only when it is the one slot left. A card that is still plugged in is a new card from the next
-    /// <see cref="Assign"/> on (it was the one that lost the slot). Returns the remembered slots after this call (the same list <see cref="Records"/> gives,
-    /// for the save); a slot outside 0..5, or one with no record, changes nothing.
+    /// Lets one remembered slot go (a card taken out for good) by RETIRING its record (<see cref="GpuSlotRecord.Retired"/>); it does not delete it. Nothing
+    /// calls this by itself: an unplugged card keeps its slot as a hole (rule 3), so a hole never goes away on its own. The experience and equipment stored
+    /// under the key are not touched here, and because they stay, the number is closed: a retired record matches no adapter, and no card is given its number
+    /// in this run or after a restart (the record is in <see cref="Records"/>, so it is in the save). A card that is still plugged in is a new card from the
+    /// next <see cref="Assign"/> on (it was the one that lost the slot) and gets a different free number. The number is free again only after
+    /// <see cref="GpuSlotKeys.ResetSlot"/> has removed the progress under it together with the record.
+    /// Returns the remembered slots after this call (the same list <see cref="Records"/> gives, for the save; <see cref="GpuSlotKeys.ForgetSlot"/> also
+    /// writes it into the state); a slot outside 0..5, one with no record, and one that is already retired change nothing.
     /// </summary>
     public IReadOnlyList<GpuSlotRecord> Forget(int slot)
     {
-        if (slot is >= 0 and < MaxSlots && _records[slot] is not null)
+        if (slot is >= 0 and < MaxSlots && _records[slot] is { Retired: false } record)
         {
-            _records[slot] = null;
-            _forgotten[slot] = true;
+            _records[slot] = record with { Retired = true };
             foreach (var id in _sessionSlots.Where(kv => kv.Value == slot).Select(static kv => kv.Key).ToArray())
             {
                 _sessionSlots.Remove(id);
@@ -102,6 +115,21 @@ public sealed class GpuSlotMap
         }
 
         return Records;
+    }
+
+    /// <summary>
+    /// Removes the record of a RETIRED slot, so that the number is free again. Only <see cref="GpuSlotKeys.ResetSlot"/> calls this, after it has removed the
+    /// progress under the key in the same step; a slot that is not retired (or has no record) changes nothing and gives false.
+    /// </summary>
+    internal bool Release(int slot)
+    {
+        if (slot is >= 0 and < MaxSlots && _records[slot] is { Retired: true })
+        {
+            _records[slot] = null;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -204,38 +232,27 @@ public sealed class GpuSlotMap
         }
     }
 
-    /// <summary>The lowest slot with no record that no one took this call, a forgotten one only when nothing else is free; -1 when none.</summary>
+    /// <summary>The lowest slot with no record (a retired record is a record) that no one took this call; -1 when none.</summary>
     private int LowestFree(Pass pass)
     {
-        var fallback = -1;
         for (var s = 0; s < MaxSlots; s++)
         {
-            if (_records[s] is not null || pass.Claimed[s])
-            {
-                continue;
-            }
-
-            if (!_forgotten[s])
+            if (_records[s] is null && !pass.Claimed[s])
             {
                 return s;
             }
-
-            if (fallback < 0)
-            {
-                fallback = s;
-            }
         }
 
-        return fallback;
+        return -1;
     }
 
-    /// <summary>Rule 2a. An adapter settled earlier in this run keeps its slot while the record there is still the same model.</summary>
+    /// <summary>Rule 2a. An adapter settled earlier in this run keeps its slot while the record there is still the same model (and not retired).</summary>
     private void MatchSession(Pass pass)
     {
         foreach (var i in pass.Open.ToArray())
         {
             if (_sessionSlots.TryGetValue(pass.Adapters[i].Id, out var s)
-                && _records[s] is { } r && !pass.Claimed[s] && SameModel(pass.Adapters[i], r))
+                && _records[s] is { Retired: false } r && !pass.Claimed[s] && SameModel(pass.Adapters[i], r))
             {
                 pass.Give(i, s);
             }
@@ -258,7 +275,7 @@ public sealed class GpuSlotMap
             var list = new List<int>();
             for (var s = 0; s < MaxSlots; s++)
             {
-                if (_records[s] is { } r && !pass.Claimed[s] && same(pass.Adapters[i], r))
+                if (_records[s] is { Retired: false } r && !pass.Claimed[s] && same(pass.Adapters[i], r))
                 {
                     list.Add(s);
                     claimants[s]++;
@@ -294,7 +311,7 @@ public sealed class GpuSlotMap
         }
     }
 
-    /// <summary>Rule 4. What is left matched nothing: a new card, onto the lowest slot no card ever had.</summary>
+    /// <summary>Rule 4. What is left matched nothing: a new card, onto the lowest slot no card ever had (a retired slot counts as had).</summary>
     private void GiveNewCards(Pass pass)
     {
         foreach (var i in pass.Open.ToArray())
@@ -328,7 +345,6 @@ public sealed class GpuSlotMap
             // What is known now wins, but a number that could not be read this time does not erase the one remembered.
             var old = _records[s];
             _records[s] = new GpuSlotRecord(s, g.Name, VramOf(g) > 0 ? VramOf(g) : old?.VramBytes ?? 0, g.PciBus ?? old?.PciBus);
-            _forgotten[s] = false;
             foreach (var other in _sessionSlots.Where(kv => kv.Value == s && kv.Key != g.Id).Select(static kv => kv.Key).ToArray())
             {
                 _sessionSlots.Remove(other);

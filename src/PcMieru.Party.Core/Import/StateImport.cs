@@ -141,9 +141,14 @@ public static class StateImport
             using (var doc2 = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = MaxDepth }))
                 FieldAudit.AuditObject(doc2.RootElement, typeof(PartyState), "", PartyState.Opts, null, broken);
 
-            PartyState state = PartyState.FromJson(text, out bool lenient);
+            PartyState state = PartyState.FromJson(text, out bool lenient, out bool gpuSlotsBroken);
             if (state.SaveVersion != PartyState.CurrentVersion)
                 return Hold(sha, ImportReason.ConversionFailed, $"SaveVersion {state.SaveVersion} after migration", version);
+
+            // A GpuSlots field that is there but broken has been repaired in the state (progress kept, the numbers reserved, see GpuSlotKeys.RepairLoaded).
+            // The audit sees a null, a wrong shape and an unreadable record; it cannot see a repeated or negative slot number or a card listed twice. Never
+            // call any of that a clean import. (A source with no GpuSlots at all is an old save: not broken, nothing to report.)
+            if (gpuSlotsBroken && !broken.Lists(nameof(PartyState.GpuSlots))) broken.Add(nameof(PartyState.GpuSlots));
 
             KeepIgnoredNames(state, root);
             StateNormalizer.Run(state);

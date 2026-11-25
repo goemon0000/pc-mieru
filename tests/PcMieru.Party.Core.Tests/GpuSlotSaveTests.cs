@@ -51,21 +51,24 @@ public class GpuSlotSaveTests
     }
 
     [Fact]
-    public void A_null_slot_list_loads_as_an_empty_one()
+    public void A_null_slot_list_with_no_progress_loads_as_an_empty_one_and_is_reported_as_repaired()
     {
-        var back = PartyState.FromJson("""{"SaveVersion":1,"Experience":{},"GpuSlots":null}""");
+        var back = PartyState.FromJson("""{"SaveVersion":1,"Experience":{},"GpuSlots":null}""", out var repaired);
 
+        Assert.True(repaired);
+        Assert.True(back.GpuSlotsRepaired);
         Assert.NotNull(back.GpuSlots);
         Assert.Empty(back.GpuSlots);
     }
 
     [Fact]
-    public void A_slot_list_of_the_wrong_shape_is_dropped_without_losing_the_rest_of_the_save()
+    public void A_slot_list_of_the_wrong_shape_keeps_the_save_and_reserves_the_number_that_holds_progress()
     {
         var back = PartyState.FromJson("""{"SaveVersion":1,"Experience":{"gpu#0":7},"GpuSlots":"oops"}""", out var repaired);
 
         Assert.True(repaired);
-        Assert.Empty(back.GpuSlots);
+        Assert.True(back.GpuSlotsRepaired);
+        Assert.Equal([new GpuSlotRecord(0, "", 0, null, Retired: true)], back.GpuSlots);
         Assert.Equal(7, back.Experience["gpu#0"]);
     }
 
@@ -90,13 +93,14 @@ public class GpuSlotSaveTests
     // ---- Forget ----
 
     [Fact]
-    public void Forget_drops_only_that_slot_and_a_slot_with_no_record_changes_nothing()
+    public void Forget_retires_only_that_slot_and_a_slot_with_no_record_changes_nothing()
     {
         var map = new GpuSlotMap([Rec(0, "A", 8 * GiB, 1u), Rec(1, "B", 8 * GiB, 2u), Rec(2, "C", 8 * GiB, 3u)]);
 
         var after = map.Forget(1);
 
-        Assert.Equal([0, 2], after.Select(static r => r.Slot).ToArray());
+        Assert.Equal([0, 1, 2], after.Select(static r => r.Slot).ToArray());
+        Assert.Equal([false, true, false], after.Select(static r => r.Retired).ToArray());
         Assert.Equal(after, map.Records);
         Assert.Equal(after, map.Forget(1));    // already gone
         Assert.Equal(after, map.Forget(5));    // never had one
@@ -113,7 +117,8 @@ public class GpuSlotSaveTests
         var r = map.Assign([Gpu("a", "A", 8 * GiB, 1u), Gpu("c", "C", 8 * GiB, 3u), Gpu("d", "D", 8 * GiB, 9u)]);
 
         Assert.Equal([0, 2, 3], Slots(r));    // the new card D takes 3, not the forgotten 1
-        Assert.DoesNotContain(r.Records, static x => x.Slot == 1);
+        Assert.DoesNotContain(r.Adapters, static a => a.Slot == 1);
+        Assert.True(r.Records.Single(static x => x.Slot == 1).Retired);    // still in the list, closed
     }
 
     [Fact]
@@ -141,7 +146,7 @@ public class GpuSlotSaveTests
     }
 
     [Fact]
-    public void A_card_with_no_candidate_takes_a_forgotten_slot_only_when_it_is_the_one_slot_left()
+    public void A_card_with_no_candidate_never_takes_a_forgotten_slot_even_when_it_is_the_one_slot_left()
     {
         var map = new GpuSlotMap(Enumerable.Range(0, 6).Select(i => Rec(i, "C" + i, 8 * GiB, (uint)(10 + i))));
         map.Forget(2);
@@ -152,7 +157,7 @@ public class GpuSlotSaveTests
             Gpu("4", "C4", 8 * GiB, 14u), Gpu("5", "C5", 8 * GiB, 15u), Gpu("n", "NEW", 8 * GiB, 20u),
         ]);
 
-        Assert.Equal([0, 1, 3, 4, 5, 2], Slots(r));
+        Assert.Equal([0, 1, 3, 4, 5, null], Slots(r));    // the new card waits without a number; 2 stays closed until it is reset
     }
 
     [Fact]
@@ -181,10 +186,10 @@ public class GpuSlotSaveTests
         var first = map.ApplyTo(state, frame);
         var second = map.ApplyTo(state, frame);
 
-        Assert.Equal(["gpu#0", "gpu#1"], first.Keys);
+        Assert.Equal(["gpu#0", "gpu#1"], first.EarningKeys);
         Assert.True(first.SlotsChanged);
         Assert.Equal([Rec(0, "A", 12 * GiB, 3u), Rec(1, "B", 0, null)], state.GpuSlots);
-        Assert.Equal(["gpu#0", "gpu#1"], second.Keys);
+        Assert.Equal(["gpu#0", "gpu#1"], second.EarningKeys);
         Assert.False(second.SlotsChanged);
     }
 
@@ -198,7 +203,7 @@ public class GpuSlotSaveTests
 
         var r = map.ApplyTo(state, Frame(null));
 
-        Assert.Empty(r.Keys);
+        Assert.Empty(r.EarningKeys);
         Assert.Empty(r.Adapters);
         Assert.False(r.SlotsChanged);
         Assert.Equal([Rec(0, "A", 8 * GiB, 1u)], state.GpuSlots);
@@ -214,7 +219,7 @@ public class GpuSlotSaveTests
 
         var r = map.ApplyTo(state, Frame(Gpu("t1", "TWIN", 8 * GiB, null), Gpu("t2", "TWIN", 8 * GiB, null)));
 
-        Assert.Empty(r.Keys);
+        Assert.Empty(r.EarningKeys);
         Assert.All(r.Adapters, static a => Assert.True(a.Ambiguous));
         Assert.False(r.SlotsChanged);
     }
@@ -230,8 +235,8 @@ public class GpuSlotSaveTests
         var restarted = PartyState.FromJson(state.ToJson());
         var after = new GpuSlotMap(restarted.GpuSlots).ApplyTo(restarted, Frame(cards[2], Gpu("b2", "TWIN", 0, 4u), Gpu("a2", "TWIN", 0, 3u)));
 
-        Assert.Equal(["gpu#0", "gpu#1", "gpu#2"], before.Keys);
-        Assert.Equal(["gpu#2", "gpu#1", "gpu#0"], after.Keys);
+        Assert.Equal(["gpu#0", "gpu#1", "gpu#2"], before.EarningKeys);
+        Assert.Equal(["gpu#2", "gpu#1", "gpu#0"], after.EarningKeys);
         Assert.False(after.SlotsChanged);
     }
 }

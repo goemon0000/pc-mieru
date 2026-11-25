@@ -45,6 +45,11 @@ internal sealed class RepairSink
 
     public void Add(string path) => Add(new At(path, null, -1));
 
+    /// <summary>Whether a listed path is this field or sits inside it (<c>GpuSlots</c>, <c>GpuSlots[1]</c>, <c>GpuSlots[1].Name</c>). Only the listed ones are known.</summary>
+    public bool Lists(string field) => _listed.Exists(p =>
+        p.StartsWith(field, StringComparison.Ordinal)
+        && (p.Length == field.Length || p[field.Length] is '[' or '.'));
+
     /// <summary>The listed paths, then "+N more" when some were left out.</summary>
     public IReadOnlyList<string> ToList()
     {
