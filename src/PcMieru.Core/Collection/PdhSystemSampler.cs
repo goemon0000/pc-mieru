@@ -27,7 +27,7 @@ internal sealed class PdhSystemSampler : IPdhSampling
     private const string PowerSource = "PDH Energy Meter";
     private const double MinWindowMs = 200;
 
-    private readonly PdhQuery _query = new();
+    private readonly IPdhQuery _query;
     private readonly PdhArrayReader _reader = new();
     private readonly nint _idle;
     private readonly nint _read;
@@ -42,27 +42,47 @@ internal sealed class PdhSystemSampler : IPdhSampling
     private bool _baselineValid;
 
     public PdhSystemSampler()
+        : this(new PdhQuery())
     {
-        if (!_query.IsOpen)
+    }
+
+    /// <summary>
+    /// The sampler over a query that is already open. It owns the query from here: when setting it up throws (a counter that cannot be added, the
+    /// first collection failing), the query is closed before the exception goes on. The half-built object never reaches a caller, so nobody else
+    /// could close it, and every retry after a failed open would leak one PDH query handle.
+    /// </summary>
+    internal PdhSystemSampler(IPdhQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        _query = query;
+        try
         {
-            return;
+            if (!_query.IsOpen)
+            {
+                return;
+            }
+
+            _idle = _query.Add(@"\PhysicalDisk(*)\% Idle Time", out _);
+            _read = _query.Add(@"\PhysicalDisk(*)\Disk Read Bytes/sec", out _);
+            _write = _query.Add(@"\PhysicalDisk(*)\Disk Write Bytes/sec", out _);
+            _latency = _query.Add(@"\PhysicalDisk(*)\Avg. Disk sec/Transfer", out _);
+            _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
+            _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
+
+            // The CPU package power. Many PCs have no Energy Meter counter set: Add then gives 0 and the value says so, it is never a 0 W reading.
+            _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
+
+            // The first collection only starts PDH's clock. Doing it here lets the first tick already have rates.
+            if (_query.Collect() == Pdh.Success)
+            {
+                _lastStamp = Stopwatch.GetTimestamp();
+                _baselineValid = true;
+            }
         }
-
-        _idle = _query.Add(@"\PhysicalDisk(*)\% Idle Time", out _);
-        _read = _query.Add(@"\PhysicalDisk(*)\Disk Read Bytes/sec", out _);
-        _write = _query.Add(@"\PhysicalDisk(*)\Disk Write Bytes/sec", out _);
-        _latency = _query.Add(@"\PhysicalDisk(*)\Avg. Disk sec/Transfer", out _);
-        _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
-        _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
-
-        // The CPU package power. Many PCs have no Energy Meter counter set: Add then gives 0 and the value says so, it is never a 0 W reading.
-        _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
-
-        // The first collection only starts PDH's clock. Doing it here lets the first tick already have rates.
-        if (_query.Collect() == Pdh.Success)
+        catch
         {
-            _lastStamp = Stopwatch.GetTimestamp();
-            _baselineValid = true;
+            _query.Dispose();
+            throw;
         }
     }
 

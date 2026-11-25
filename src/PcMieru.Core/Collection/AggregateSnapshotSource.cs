@@ -49,6 +49,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     private volatile bool _pdhReset;
     private volatile bool _nicReset;
     private volatile bool _gpuReset;
+    private int _gpuGeneration;
 
     /// <param name="clock">Wall clock for <see cref="Snapshot.TakenAtUtc"/> (tests inject their own).</param>
     /// <param name="control">
@@ -145,7 +146,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         var timeout = _stageTimeout ?? (_hasPrevious ? WindowsSnapshotSource.StageTimeout : WindowsSnapshotSource.FirstStageTimeout);
         _ = _pdhStage.Start(RunPdhStage);
         _ = _nicStage.Start(RunNicStage);
-        _ = _gpuStage.Start(RunGpuStage);
+        StartGpuStage();
 
         var stamp = Stopwatch.GetTimestamp();
         var takenAt = DateTime.SpecifyKind(_clock(), DateTimeKind.Utc);
@@ -271,7 +272,22 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         return new NicReading(nics, _nic.State);
     }
 
-    private GpuReading RunGpuStage()
+    /// <summary>
+    /// Starts the GPU stage with the reset request taken at this moment: the request belongs to the stage that is scheduled now, never to
+    /// whichever body happens to reach its check first. When the previous call is still running the stage is skipped and the request stays
+    /// pending for the next one that does start.
+    /// </summary>
+    private void StartGpuStage()
+    {
+        var reset = _gpuReset;
+        var generation = Volatile.Read(ref _gpuGeneration);
+        if (_gpuStage.Start(() => RunGpuStage(reset, generation)) && reset)
+        {
+            _gpuReset = false;
+        }
+    }
+
+    private GpuReading RunGpuStage(bool reset, int generation)
     {
         if (!_life.TryEnter())
         {
@@ -280,19 +296,30 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
 
         try
         {
-            // A reset asked for after a failed join is applied here. The stage does not start while the call that failed is still running, so
-            // by now that call has returned, and what it did to the baseline is thrown away before anything is sampled.
-            if (_gpuReset)
+            // A stage whose join gave up before it got going touches nothing: the next stage starts a new window anyway, and a late collection
+            // here would only move the sampler's baseline under it.
+            ThrowIfAbandoned(generation);
+            if (reset)
             {
-                _gpuReset = false;
                 _gpu.Reset();
+                ThrowIfAbandoned(generation);
             }
 
+            // A call that is already inside the sampler when its join gives up cannot be stopped; the request the failed join leaves behind
+            // makes the next stage reset before it samples, so what this call did to the baseline is thrown away.
             return _gpu.Sample(active: true);
         }
         finally
         {
             _life.Exit();
+        }
+    }
+
+    private void ThrowIfAbandoned(int generation)
+    {
+        if (Volatile.Read(ref _gpuGeneration) != generation)
+        {
+            throw new OperationCanceledException("the GPU stage was given up on before it started");
         }
     }
 
@@ -310,8 +337,10 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     {
         if (!_gpuStage.TryJoin(timeout, out var reading, out var failure, out var failureStatus) || reading is null)
         {
-            // The call that did not answer may still finish and move the sampler's baseline. That collection is discarded: the next stage run
-            // starts a new window (and reads "not collected" once) instead of publishing a rate built on it.
+            // The call that did not answer may still finish and move the sampler's baseline. That collection is discarded: a stage that has not
+            // started yet is told to stand down (the generation), and the next stage that does start resets first and so begins a new window
+            // (it reads "not collected" once) instead of publishing a rate built on the late call.
+            Interlocked.Increment(ref _gpuGeneration);
             _gpuReset = true;
             var detail = "GPU counters: " + failure;
             var failed = NoSensors(GpuSampler.Failed(_gpuKnown, failureStatus, detail));

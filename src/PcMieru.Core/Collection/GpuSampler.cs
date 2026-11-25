@@ -47,9 +47,11 @@ internal sealed class GpuAggregator
     /// The engine and adapter numbers are the same either way.
     /// </param>
     /// <param name="flagUnreadableEngines">
-    /// True for the aggregate-only source: an engine instance with an invalid status marks its adapter <see cref="GpuAdapterUsage.EngineUnreadable"/>,
-    /// so an adapter whose every engine entry was invalid is reported as unreadable instead of as idle (Parts Life must never earn on a load it could
-    /// not read). The default leaves the adapter table as it always was.
+    /// True for the aggregate-only source: an adapter whose load could not be read is marked <see cref="GpuAdapterUsage.EngineUnreadable"/> instead of
+    /// reading as idle (Parts Life must never earn on a load it could not read). That is an engine instance with an invalid status, and any adapter
+    /// that ends with no usable engine instance while the array held an instance whose name could not be parsed (that instance has no adapter to
+    /// blame, so it may have been this one's) or held no usable engine instance for any adapter at all (see <see cref="Finish"/>). The default
+    /// leaves the adapter table as it always was.
     /// </param>
     public GpuAggregator(bool trackProcesses = true, bool flagUnreadableEngines = false)
     {
@@ -67,6 +69,9 @@ internal sealed class GpuAggregator
     /// <summary>Instances PDH could not compute a value for (a process that ended mid-interval, for example).</summary>
     public int Invalid { get; private set; }
 
+    /// <summary>The part of <see cref="Unrecognized"/> that came from the engine array. Such an instance names no adapter, so it cannot be charged to one.</summary>
+    public int UnrecognizedEngines { get; private set; }
+
     public IReadOnlyDictionary<ulong, GpuAdapterUsage> Adapters => _adapters;
 
     public IReadOnlyDictionary<uint, double> ProcessBusiest => _processBusiest;
@@ -78,6 +83,7 @@ internal sealed class GpuAggregator
         _adapters.Clear();
         _processBusiest.Clear();
         Unrecognized = 0;
+        UnrecognizedEngines = 0;
         Invalid = 0;
     }
 
@@ -86,6 +92,7 @@ internal sealed class GpuAggregator
         if (!GpuCounterName.TryParseEngine(instance, out var pid, out var key, out var type))
         {
             Unrecognized++;
+            UnrecognizedEngines++;
             return;
         }
 
@@ -136,7 +143,12 @@ internal sealed class GpuAggregator
         }
     }
 
-    /// <summary>Call once after all instances were added.</summary>
+    /// <summary>
+    /// Call once after all instances were added. In the aggregate-only mode an adapter that ends with no usable engine instance is marked unreadable
+    /// unless the array can be trusted to have had none for it: it must have been read cleanly (no instance whose name could not be parsed, because
+    /// that instance could have been this adapter's) and have held a usable engine instance for some other adapter (an array that lists no engine at
+    /// all, while the memory counters answer, is not an array that shows an idle machine).
+    /// </summary>
     public void Finish()
     {
         foreach (var (key, sum) in _engines)
@@ -146,6 +158,18 @@ internal sealed class GpuAggregator
             usage.EngineInstances++;
             usage.Busiest = Math.Max(usage.Busiest, value);
             usage.ByType[sum.Type] = Math.Max(usage.ByType.GetValueOrDefault(sum.Type), value);
+        }
+
+        if (_flagUnreadable)
+        {
+            var trusted = UnrecognizedEngines == 0 && _engines.Count > 0;
+            foreach (var usage in _adapters.Values)
+            {
+                if (usage.EngineInstances == 0 && !trusted)
+                {
+                    usage.EngineUnreadable = true;
+                }
+            }
         }
 
         foreach (var ((pid, _), value) in _perProcess)
@@ -399,8 +423,9 @@ internal sealed class GpuSampler : IGpuSampling
         }
         else if (usage is { EngineUnreadable: true })
         {
-            // Engine entries exist for this adapter but none had a usable value: its load is unknown, which must not read as an idle 0.
-            utilization = Value.Missing<double>(ValueStatus.Error, EngineSource, "no GPU Engine instance of this adapter had a usable value");
+            // This adapter has no usable engine instance (an invalid one, or one whose name could not be parsed, or no engine listed at all):
+            // its load is unknown, which must not read as an idle 0.
+            utilization = Value.Missing<double>(ValueStatus.Error, EngineSource, "no usable GPU Engine instance for this adapter (invalid value, unknown name format, or none listed)");
             engines = [];
         }
         else if (primed && missingDetail is null && usage is not null)

@@ -73,7 +73,9 @@ public sealed class AggregateGpuUnreadableLoadTests
     private const uint Valid = Pdh.CStatusValidData;
     private const uint InvalidData = 0xC0000BBA;
     private const ulong Gpu0 = 0x166CA;
+    private const ulong Gpu1 = 0x2A3B7;
     private static readonly GpuAdapter Adapter = new(Gpu0, "NVIDIA GeForce RTX 5070", 12L << 30, 0x10DE, false);
+    private static readonly GpuAdapter Adapter1 = new(Gpu1, "AMD Radeon Graphics", 512L << 20, 0x1002, false);
 
     private static GpuAggregator AllEnginesInvalid(bool aggregate, bool withMemory = true)
     {
@@ -130,8 +132,27 @@ public sealed class AggregateGpuUnreadableLoadTests
     }
 
     [Fact]
-    public void A_valid_adapter_with_no_engine_entries_at_all_is_still_idle_in_aggregate_mode()
+    public void A_valid_adapter_with_no_engine_entries_next_to_one_with_a_clean_array_is_still_idle_in_aggregate_mode()
     {
+        // The array was read cleanly and lists engines for the first adapter: for the second one it genuinely lists none, which is what an idle card looks like.
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 12, Valid);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        var gpus = GpuSampler.Describe([Adapter, Adapter1], a, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(12.0, gpus[0].UtilizationPercent.Data);
+        Assert.True(gpus[1].UtilizationPercent.IsOk);
+        Assert.Equal(0.0, gpus[1].UtilizationPercent.Data);
+    }
+
+    [Fact]
+    public void An_array_with_no_usable_engine_for_any_adapter_does_not_read_as_an_idle_machine_in_aggregate_mode()
+    {
+        // Memory counters answer but the engine array lists nothing at all: not proof that nothing runs (every machine has a compositor on its display adapter).
         var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
         a.Begin();
         a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
@@ -139,8 +160,49 @@ public sealed class AggregateGpuUnreadableLoadTests
 
         var gpu = Describe(a);
 
-        Assert.True(gpu.UtilizationPercent.IsOk);
-        Assert.Equal(0.0, gpu.UtilizationPercent.Data);
+        Assert.False(gpu.UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpu.UtilizationPercent.Status);
+        Assert.NotNull(gpu.UtilizationPercent.Detail);
+        Assert.Equal(2048, gpu.DedicatedUsedBytes.Data);
+    }
+
+    [Fact]
+    public void An_adapter_whose_every_engine_name_fails_to_parse_is_missing_not_idle_in_aggregate_mode()
+    {
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine("pid_10_a_name_this_parser_does_not_know", 55, Valid);
+        a.AddEngine("another_unknown_engine_name", 30, Valid);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.Finish();
+
+        var gpu = Describe(a);
+
+        Assert.Equal(2, a.UnrecognizedEngines);
+        Assert.False(gpu.UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpu.UtilizationPercent.Status);
+        Assert.NotNull(gpu.UtilizationPercent.Detail);
+        Assert.Empty(gpu.Engines);
+        Assert.Equal(2048, gpu.DedicatedUsedBytes.Data);
+    }
+
+    [Fact]
+    public void An_unparsable_engine_name_makes_only_the_adapters_without_a_usable_engine_missing()
+    {
+        // The unknown instance could have been the second adapter's, so it is not called idle; the first one has a real reading of its own.
+        var a = new GpuAggregator(trackProcesses: false, flagUnreadableEngines: true);
+        a.Begin();
+        a.AddEngine(GpuNames.Engine(10, Gpu0, 0, 0, "3D"), 12, Valid);
+        a.AddEngine("pid_10_a_name_this_parser_does_not_know", 55, Valid);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        a.AddAdapterMemory(GpuNames.Adapter(Gpu1), 512, Valid, dedicated: true);
+        a.Finish();
+
+        var gpus = GpuSampler.Describe([Adapter, Adapter1], a, primed: true, null, ValueStatus.NotCollected);
+
+        Assert.Equal(12.0, gpus[0].UtilizationPercent.Data);
+        Assert.False(gpus[1].UtilizationPercent.IsOk);
+        Assert.Equal(ValueStatus.Error, gpus[1].UtilizationPercent.Status);
     }
 
     [Fact]
@@ -151,6 +213,27 @@ public sealed class AggregateGpuUnreadableLoadTests
         Assert.True(gpu.UtilizationPercent.IsOk);
         Assert.Equal(0.0, gpu.UtilizationPercent.Data);
         Assert.Empty(GpuSampler.Describe([Adapter], AllEnginesInvalid(aggregate: false, withMemory: false), primed: true, null, ValueStatus.NotCollected));
+    }
+
+    [Fact]
+    public void The_default_mode_output_does_not_change_for_unparsable_engine_names_or_an_empty_engine_array()
+    {
+        var unparsable = new GpuAggregator();
+        unparsable.Begin();
+        unparsable.AddEngine("pid_10_a_name_this_parser_does_not_know", 55, Valid);
+        unparsable.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        unparsable.Finish();
+        var empty = new GpuAggregator();
+        empty.Begin();
+        empty.AddAdapterMemory(GpuNames.Adapter(Gpu0), 2048, Valid, dedicated: true);
+        empty.Finish();
+
+        foreach (var data in new[] { unparsable, empty })
+        {
+            var gpu = Describe(data);
+            Assert.True(gpu.UtilizationPercent.IsOk);
+            Assert.Equal(0.0, gpu.UtilizationPercent.Data);
+        }
     }
 }
 
@@ -270,6 +353,33 @@ public sealed class AggregateSnapshotSourceStageTests
     }
 
     [Fact]
+    public async Task A_gpu_stage_given_up_on_before_it_sampled_never_samples_and_the_next_stage_resets_then_reads_no_rate_from_it()
+    {
+        var hold = new ManualResetEventSlim();
+        var gpu = new FakeGpu { HoldFirstReset = hold };
+        using var source = Make(gpu, () => new FakePdh(), timeoutSeconds: 0.5);
+
+        // Stage 1 is scheduled with the reset and sits inside it; its join gives up (stage 1 times out).
+        source.ResetBaseline();
+        var first = await source.SampleAsync();
+        Assert.Equal(ValueStatus.Timeout, first.System.GpusState.Status);
+
+        // Stage 1 comes back late. It must not sample: that would move the baseline stage 2 is about to read.
+        hold.Set();
+        for (var i = 0; i < 100 && !gpu.Log.Contains("start 1"); i++)
+        {
+            _ = await source.SampleAsync();
+            await Task.Delay(20);
+        }
+
+        Assert.True(SpinWait.SpinUntil(() => gpu.Log.Contains("end 1"), TimeSpan.FromSeconds(10)));
+
+        // Stage 1's reset, then (stage 1 skipped its sample) stage 2: reset, then its first sample, which builds on nothing.
+        Assert.Equal(["reset", "reset", "start 1", "end 1"], gpu.Log.Take(4));
+        Assert.Equal("1 builds on nothing", gpu.Rates.First());
+    }
+
+    [Fact]
     public async Task A_failed_pdh_open_is_closed_and_tried_again_after_the_backoff_not_given_up_for_good()
     {
         var now = 1_000_000L;
@@ -367,21 +477,39 @@ public sealed class AggregateSnapshotSourceStageTests
     private sealed class FakeGpu : IGpuSampling
     {
         private int _calls;
+        private int _resets;
+        private int _baselineFrom;
         private int _disposed;
 
         public ManualResetEventSlim? HoldFirstCall { get; init; }
+
+        public ManualResetEventSlim? HoldFirstReset { get; init; }
 
         public GpuReading? Result { get; init; }
 
         public ConcurrentQueue<string> Log { get; } = new();
 
+        /// <summary>One line per sample: which earlier sample its rate is built on (the sampler's baseline), "nothing" after a reset.</summary>
+        public ConcurrentQueue<string> Rates { get; } = new();
+
         public int Disposed => Volatile.Read(ref _disposed);
 
-        public void Reset() => Log.Enqueue("reset");
+        public void Reset()
+        {
+            var n = Interlocked.Increment(ref _resets);
+            Log.Enqueue("reset");
+            Volatile.Write(ref _baselineFrom, 0);
+            if (n == 1)
+            {
+                _ = HoldFirstReset?.Wait(TimeSpan.FromSeconds(30));
+            }
+        }
 
         public GpuReading Sample(bool active)
         {
             var n = Interlocked.Increment(ref _calls);
+            var basis = Interlocked.Exchange(ref _baselineFrom, n);
+            Rates.Enqueue($"{n} builds on {(basis == 0 ? "nothing" : basis.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
             Log.Enqueue($"start {n}");
             if (n == 1)
             {
@@ -418,10 +546,122 @@ public sealed class PdhDiskTickTests
     }
 }
 
+/// <summary>
+/// The set-up of the always-on PDH query: one that fails halfway through must be closed before the exception goes on, because the half-built sampler
+/// never reaches a caller and the 30 s retry would otherwise leak one query handle per attempt. A scripted query stands in for PDH here.
+/// </summary>
+public sealed class PdhSystemSamplerSetupTests
+{
+    private sealed class FakeQuery : IPdhQuery
+    {
+        public bool IsOpen { get; init; } = true;
+
+        public int Disposed { get; private set; }
+
+        public int Added { get; private set; }
+
+        /// <summary>Throws on the n-th call of <see cref="Add"/> (1 is the first). 0: never.</summary>
+        public int AddThrowsOn { get; init; }
+
+        public bool CollectThrows { get; init; }
+
+        public nint Add(string englishPath, out uint status)
+        {
+            Added++;
+            if (Added == AddThrowsOn)
+            {
+                throw new InvalidOperationException("the fake counter could not be added");
+            }
+
+            status = 0;
+            return Added;
+        }
+
+        public uint Collect() => CollectThrows ? throw new InvalidOperationException("the fake collection failed") : 0u;
+
+        public void Dispose() => Disposed++;
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(7)]
+    public void A_counter_that_cannot_be_added_closes_the_query_and_the_exception_goes_on(int failingAdd)
+    {
+        var query = new FakeQuery { AddThrowsOn = failingAdd };
+
+        var failure = Assert.Throws<InvalidOperationException>(() => new PdhSystemSampler(query));
+
+        Assert.Contains("could not be added", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(1, query.Disposed);
+    }
+
+    [Fact]
+    public void A_first_collection_that_throws_closes_the_query_too()
+    {
+        var query = new FakeQuery { CollectThrows = true };
+
+        _ = Assert.Throws<InvalidOperationException>(() => new PdhSystemSampler(query));
+
+        Assert.Equal(7, query.Added);
+        Assert.Equal(1, query.Disposed);
+    }
+
+    [Fact]
+    public void A_set_up_that_works_keeps_the_query_open_until_the_sampler_is_disposed()
+    {
+        var query = new FakeQuery();
+
+        var sampler = new PdhSystemSampler(query);
+
+        Assert.Equal(0, query.Disposed);
+        Assert.Equal(7, query.Added);
+        sampler.Dispose();
+        Assert.Equal(1, query.Disposed);
+    }
+
+    [Fact]
+    public void A_query_that_did_not_open_is_not_touched_and_stays_the_samplers_to_dispose()
+    {
+        var query = new FakeQuery { IsOpen = false };
+
+        var sampler = new PdhSystemSampler(query);
+
+        Assert.False(sampler.IsOpen);
+        Assert.Equal(0, query.Added);
+        Assert.Equal(0, query.Disposed);
+        sampler.Dispose();
+        Assert.Equal(1, query.Disposed);
+    }
+}
+
 /// <summary>These open the real PDH, DXGI and network counters, but never look at a process.</summary>
 [Trait("Category", "RealMachine")]
 public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
 {
+    /// <summary>
+    /// Whether this machine has a hardware GPU, told by DXGI alone (the adapter list), not by the GPU counters the tests below are about. xunit 2 cannot
+    /// skip at run time, so a machine without one returns early with a line in the output; that is the only no-op path. On a machine with one, a
+    /// missing usable reading is a failure.
+    /// </summary>
+    private static bool HasHardwareGpu(ITestOutputHelper output)
+    {
+        var hardware = GpuAdapters.Enumerate().Where(static a => !a.IsSoftware && !a.IsAlias).ToArray();
+        if (hardware.Length == 0)
+        {
+            output.WriteLine("NO-OP: DXGI lists no hardware GPU on this machine, so there is no GPU reading to assert on.");
+            return false;
+        }
+
+        output.WriteLine("DXGI hardware GPUs: " + string.Join("; ", hardware.Select(static a => $"{a.Name} (bus {a.PciBus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"})")));
+        return true;
+    }
+
+    private static string Describe(IReadOnlyList<GpuInfo> gpus) =>
+        gpus.Count == 0
+            ? "no GPU listed"
+            : string.Join("; ", gpus.Select(static g => $"{g.Name}: load {g.UtilizationPercent.Status} {g.UtilizationPercent.Data} engines {g.Engines.Count} ({g.UtilizationPercent.Detail})"));
+
     [Fact]
     public async Task A_sample_has_no_processes_and_the_second_one_has_machine_wide_numbers()
     {
@@ -445,10 +685,15 @@ public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
     [Fact]
     public async Task The_gpu_sensor_fields_stay_not_collected_and_the_gpu_counters_run_without_any_subscription()
     {
+        if (!HasHardwareGpu(output))
+        {
+            return;
+        }
+
         // SamplerSettings.GpuDefaultOn is false here on purpose: this source collects the GPU totals whatever the control says.
         using var source = new AggregateSnapshotSource(static () => DateTime.UtcNow, new SamplerSettings { GpuDefaultOn = false });
 
-        // Prime the GPU counters until one adapter has a real engine reading; without one the assertions below would say nothing.
+        // Prime the GPU counters until one adapter has a real engine reading. DXGI says there is a GPU, so not getting one is a failure.
         IReadOnlyList<GpuInfo> gpus = [];
         for (var i = 0; i < 8; i++)
         {
@@ -460,12 +705,10 @@ public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
             }
         }
 
-        if (!gpus.Any(static g => g.UtilizationPercent.IsOk && g.Engines.Count > 0))
-        {
-            // xunit 2 cannot skip at run time and the repo has no other skip mechanism: say so in the output, and do not claim a pass for the GPU claims.
-            output.WriteLine("SKIPPED the GPU assertions: this machine gave no primed GPU reading with a valid engine counter (no usable GPU Engine counters).");
-            return;
-        }
+        output.WriteLine("GPU readings: " + Describe(gpus));
+        Assert.True(
+            gpus.Any(static g => g.UtilizationPercent.IsOk && g.Engines.Count > 0),
+            "DXGI lists a hardware GPU but no primed reading with a valid engine counter came back: " + Describe(gpus));
 
         Assert.All(gpus, g =>
         {
@@ -481,6 +724,11 @@ public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
     [Fact]
     public async Task A_gpu_sampler_in_aggregate_mode_keeps_no_per_process_entries()
     {
+        if (!HasHardwareGpu(output))
+        {
+            return;
+        }
+
         using var gpu = new GpuSampler(aggregateOnly: true);
 
         _ = gpu.Sample(active: true);
@@ -495,12 +743,12 @@ public sealed class AggregateSnapshotSourceRealTests(ITestOutputHelper output)
             }
         }
 
-        if (!reading.Gpus.Any(static g => g.UtilizationPercent.IsOk && g.Engines.Count > 0))
-        {
-            output.WriteLine("SKIPPED: this machine gave no primed GPU reading with a valid engine counter, so no per-process cell could have been filled either way.");
-            return;
-        }
+        output.WriteLine("GPU readings: " + Describe(reading.Gpus));
 
+        // Without a primed reading no per-process cell could have been filled either way, so the claim below would say nothing: a failure here.
+        Assert.True(
+            reading.Gpus.Any(static g => g.UtilizationPercent.IsOk && g.Engines.Count > 0),
+            "DXGI lists a hardware GPU but no primed reading with a valid engine counter came back: " + Describe(reading.Gpus));
         Assert.Empty(reading.ProcessBusiest);
         Assert.Equal(0, gpu.PerProcessEntries);
     }
