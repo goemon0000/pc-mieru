@@ -22,6 +22,18 @@ public sealed record BoardMemory(long UsedBytes, long TotalBytes, double Percent
 /// <summary>Whole-machine disk throughput (read + write). <paramref name="Partial"/> when some disks gave no number and were left out of the sum.</summary>
 public sealed record BoardDisk(double? BytesPerSec, bool Partial);
 
+/// <summary>
+/// One kind of drive (NVMe, SSD or HDD) as the board reads it. A kind with no drive is not listed at all; a listed kind never has its numbers
+/// made up: a number nobody could read is null, never 0 (<see cref="DiskSlots"/> says how a missing one is shown).
+/// </summary>
+/// <param name="DeviceCount">How many physical drives of this kind Core found.</param>
+/// <param name="BytesPerSec">Read + write summed over this kind's drives whose PhysicalDisk row matched by drive number and gave both numbers; null when none did.</param>
+/// <param name="Partial">True when some drive of this kind added nothing to <paramref name="BytesPerSec"/> (no matching row, or a row without numbers).</param>
+/// <param name="CapacityBytes">The drives' own capacity, summed over those that reported one; null when none did.</param>
+/// <param name="UsedBytes">Used space of the local fixed volumes that sit wholly on this kind's drives; null when none was read. A volume that spans drives is in no kind.</param>
+/// <param name="TotalBytes">Size of the same volumes.</param>
+public sealed record BoardDiskKind(DiskKind Kind, int DeviceCount, double? BytesPerSec, bool Partial, long? CapacityBytes, long? UsedBytes, long? TotalBytes);
+
 /// <summary>Network totals over the adapters that are up. <paramref name="Partial"/> when an adapter that is up gave no number for one direction.</summary>
 public sealed record BoardNet(double? SendBytesPerSec, double? ReceiveBytesPerSec, bool Partial);
 
@@ -35,9 +47,12 @@ public sealed record BoardNet(double? SendBytesPerSec, double? ReceiveBytesPerSe
 ///
 /// Per-socket CPU load (<see cref="Sockets"/>) is only sent when Core confirmed which logical CPUs sit in which package (<see cref="CpuInfo.Sockets"/>)
 /// and that map covers every logical CPU exactly once; otherwise <see cref="Sockets"/> is null, the caller shows the total only, and no socket
-/// earns experience from a total repeated for each of them.
+/// earns experience from a total repeated for each of them. Core confirms a map today only for one package in one processor group (that one
+/// socket is the total); a multi-package or multi-group machine stays "total only" until a labelled per-processor source exists.
 ///
-/// TODO (DESIGN-C 2.3, not in this unit): disk-type (NVMe, SSD, HDD) split and the fullest local volume.
+/// Disks by kind (<see cref="DiskKinds"/>) tie each PhysicalDisk row to a drive kind by drive number through Core's storage topology, and only
+/// ever from disks that row matched: the whole-machine <see cref="Disk"/> total is never split across kinds. <see cref="FullestVolumePercent"/>
+/// is the used share of the most-full local fixed volume. The old slot keys and scales are in <see cref="DiskSlots"/>.
 /// </summary>
 /// <param name="LogicalProcessors">How many logical CPUs Core counted; 0 when it did not say.</param>
 /// <param name="CpuPercent">Total CPU load, 0..100; null while Core has no baseline or could not read it.</param>
@@ -73,6 +88,16 @@ public sealed record BoardFrame(
     /// </summary>
     public IReadOnlyList<BoardCpuSocket>? Sockets { get; init; }
 
+    /// <summary>
+    /// The drive kinds Core found (NVMe, SSD, HDD, in that order), only those with at least one drive. Null when Core has no storage topology
+    /// (not read yet, or the read failed): every disk is then "unknown kind" and only <see cref="Disk"/> is shown. A drive whose kind Core could
+    /// not confirm, and a PhysicalDisk row with no drive in the topology, belong to <see cref="Disk"/> only.
+    /// </summary>
+    public IReadOnlyList<BoardDiskKind>? DiskKinds { get; init; }
+
+    /// <summary>The used share (0..100) of the most-full local fixed volume Core read, deduplicated; null when none was read.</summary>
+    public double? FullestVolumePercent { get; init; }
+
     public static BoardFrame Project(Snapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -90,6 +115,8 @@ public sealed record BoardFrame(
         {
             AllGpus = all,
             Sockets = SocketsOf(system.Cpu),
+            DiskKinds = DiskKindsOf(system),
+            FullestVolumePercent = FullestVolumeOf(system.Storage),
         };
     }
 
@@ -160,6 +187,106 @@ public sealed record BoardFrame(
         }
 
         return sockets;
+    }
+
+    private static readonly DiskKind[] KindOrder = [DiskKind.Nvme, DiskKind.Ssd, DiskKind.Hdd];
+
+    private static BoardDiskKind[]? DiskKindsOf(SystemInfo system)
+    {
+        var storage = system.Storage;
+        if (storage is null)
+        {
+            return null;
+        }
+
+        // PhysicalDisk rows by drive number. A number that two rows claim is ambiguous: neither is used for a kind (the total still counts both).
+        var rows = new Dictionary<int, DiskInfo>();
+        var ambiguous = new HashSet<int>();
+        foreach (var d in system.Disks)
+        {
+            if (StorageTopology.TryDriveNumber(d.Id, out var number) && !rows.TryAdd(number, d))
+            {
+                ambiguous.Add(number);
+            }
+        }
+
+        var kinds = new List<BoardDiskKind>(KindOrder.Length);
+        foreach (var kind in KindOrder)
+        {
+            var count = 0;
+            double sum = 0;
+            var counted = 0;
+            long capacity = 0;
+            var capacityKnown = false;
+            long used = 0;
+            long total = 0;
+            var volumesKnown = false;
+            foreach (var drive in storage.Drives)
+            {
+                if (drive.Kind != kind)
+                {
+                    continue;
+                }
+
+                count++;
+                if (!ambiguous.Contains(drive.Number)
+                    && rows.TryGetValue(drive.Number, out var row)
+                    && Rate(row.ReadBytesPerSec) is { } read
+                    && Rate(row.WriteBytesPerSec) is { } write)
+                {
+                    sum += read + write;
+                    counted++;
+                }
+
+                if (drive.CapacityBytes is { } size and > 0)
+                {
+                    capacity += size;
+                    capacityKnown = true;
+                }
+
+                // Only volumes wholly on this drive; a volume that spans drives is on none of them, so it is in no kind.
+                foreach (var volume in storage.VolumesOn(drive.Number))
+                {
+                    used += volume.UsedBytes;
+                    total += volume.TotalBytes;
+                    volumesKnown = true;
+                }
+            }
+
+            if (count > 0)
+            {
+                kinds.Add(new BoardDiskKind(
+                    kind,
+                    count,
+                    counted == 0 ? null : sum,
+                    counted < count,
+                    capacityKnown ? capacity : null,
+                    volumesKnown ? used : null,
+                    volumesKnown ? total : null));
+            }
+        }
+
+        return [.. kinds];
+    }
+
+    private static double? FullestVolumeOf(StorageTopology? storage)
+    {
+        double? fullest = null;
+        foreach (var v in storage?.Volumes ?? [])
+        {
+            if (v.TotalBytes <= 0 || v.FreeBytes < 0 || v.FreeBytes > v.TotalBytes)
+            {
+                continue;
+            }
+
+            var percent = (double)v.UsedBytes / v.TotalBytes * 100;
+            if (fullest is null || percent > fullest)
+            {
+                fullest = percent;
+            }
+        }
+
+        return fullest;
     }
 
     private static double? Percent(Value<double> value) =>

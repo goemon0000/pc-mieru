@@ -41,7 +41,8 @@ public class BoardFrameTests
         IReadOnlyList<DiskInfo>? disks = null,
         IReadOnlyList<NicInfo>? nics = null,
         IReadOnlyList<GpuInfo>? gpus = null,
-        Value<int>? gpusState = null)
+        Value<int>? gpusState = null,
+        StorageTopology? storage = null)
     {
         var gpuList = gpus ?? [];
         var system = new SystemInfo(
@@ -53,7 +54,10 @@ public class BoardFrameTests
             100,
             DisksState: Value.Ok((disks ?? []).Count, "test"),
             NicsState: Value.Ok((nics ?? []).Count, "test"),
-            GpusState: gpusState ?? Value.Ok(gpuList.Count, "test"));
+            GpusState: gpusState ?? Value.Ok(gpuList.Count, "test"))
+        {
+            Storage = storage,
+        };
         return new Snapshot(Snapshot.CurrentSchemaVersion, Now, Now.AddSeconds(-1), 1000, system, []);
     }
 
@@ -442,5 +446,207 @@ public class BoardFrameTests
         var frame = BoardFrame.Project(Snap(SocketCpu([[0], [1]], Loads(130, -5))));
 
         Assert.Equal(new[] { new BoardCpuSocket(100, 1), new BoardCpuSocket(0, 1) }, frame.Sockets!.ToArray());
+    }
+
+    // ---- disk kinds and the fullest volume (DESIGN-C 2.3) ----
+
+    private static StorageTopology Topo(StorageDrive[] drives, StorageVolumeUse[]? volumes = null) => new(drives, volumes);
+
+    private static StorageDrive Drive(int number, DiskKind kind, long? capacity = 1000) => new(number, kind, capacity, $"model{number}|serial{number}");
+
+    private static BoardDiskKind Kind(BoardFrame frame, DiskKind kind) => Assert.Single(frame.DiskKinds!, k => k.Kind == kind);
+
+    [Fact]
+    public void Each_kind_sums_read_plus_write_of_its_own_disks_matched_by_drive_number()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Ssd), Drive(2, DiskKind.Hdd), Drive(3, DiskKind.Hdd)]);
+        var disks = new[]
+        {
+            Disk("PhysicalDrive0", Ok(100), Ok(50)),
+            Disk("PhysicalDrive1", Ok(10), Ok(5)),
+            Disk("PhysicalDrive2", Ok(1), Ok(2)),
+            Disk("PhysicalDrive3", Ok(3), Ok(4)),
+        };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        Assert.Equal(new BoardDisk(175, false), frame.Disk);
+        Assert.Equal([DiskKind.Nvme, DiskKind.Ssd, DiskKind.Hdd], frame.DiskKinds!.Select(static k => k.Kind));
+        Assert.Equal(150, Kind(frame, DiskKind.Nvme).BytesPerSec);
+        Assert.Equal(15, Kind(frame, DiskKind.Ssd).BytesPerSec);
+        var hdd = Kind(frame, DiskKind.Hdd);
+        Assert.Equal(10, hdd.BytesPerSec);
+        Assert.Equal(2, hdd.DeviceCount);
+        Assert.False(hdd.Partial);
+        Assert.Equal(2000, hdd.CapacityBytes);
+    }
+
+    [Fact]
+    public void The_kinds_are_never_a_split_of_the_total_so_they_never_add_up_to_more_than_it()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Hdd)]);
+        var disks = new[] { Disk("PhysicalDrive0", Ok(100), Ok(0)), Disk("PhysicalDrive1", Ok(7), Ok(3)), Disk("PhysicalDrive9", Ok(1000), Ok(0)) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        Assert.Equal(1110, frame.Disk.BytesPerSec);
+        Assert.Equal(110, frame.DiskKinds!.Sum(static k => k.BytesPerSec));
+    }
+
+    [Fact]
+    public void A_reused_drive_number_follows_the_topology_it_is_read_with_never_the_earlier_device()
+    {
+        var disks = new[] { Disk("PhysicalDrive1", Ok(40), Ok(10)) };
+
+        // Number 1 was a hard disk.
+        var before = BoardFrame.Project(Snap(disks: disks, storage: Topo([Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Hdd)])));
+        Assert.Equal(50, Kind(before, DiskKind.Hdd).BytesPerSec);
+
+        // Then the device changed and an NVMe has the number: the same row now counts for the NVMe and the HDD is gone.
+        var after = BoardFrame.Project(Snap(disks: disks, storage: Topo([Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Nvme)])));
+        Assert.DoesNotContain(after.DiskKinds!, static k => k.Kind == DiskKind.Hdd);
+        var nvme = Kind(after, DiskKind.Nvme);
+        Assert.Equal(2, nvme.DeviceCount);
+        Assert.Equal(50, nvme.BytesPerSec);
+        Assert.True(nvme.Partial);
+    }
+
+    [Fact]
+    public void A_row_with_no_drive_in_the_topology_is_in_the_total_only()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme)]);
+        var disks = new[] { Disk("PhysicalDrive0", Ok(10), Ok(10)), Disk("PhysicalDrive5", Ok(100), Ok(100)) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        Assert.Equal(20, Kind(frame, DiskKind.Nvme).BytesPerSec);
+        Assert.Single(frame.DiskKinds!);
+        Assert.Equal(220, frame.Disk.BytesPerSec);
+    }
+
+    [Fact]
+    public void A_drive_of_unknown_kind_is_in_the_total_only_and_no_kind_lists_it()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Unknown), Drive(2, DiskKind.Unknown)]);
+        var disks = new[] { Disk("PhysicalDrive0", Ok(1), Ok(1)), Disk("PhysicalDrive1", Ok(500), Ok(500)) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        Assert.Equal(1002, frame.Disk.BytesPerSec);
+        var only = Assert.Single(frame.DiskKinds!);
+        Assert.Equal(DiskKind.Nvme, only.Kind);
+        Assert.Equal(2, only.BytesPerSec);
+        Assert.Equal(1, only.DeviceCount);
+    }
+
+    [Fact]
+    public void Without_a_topology_no_kind_is_guessed_and_only_the_total_is_shown()
+    {
+        var disks = new[] { Disk("PhysicalDrive0", Ok(10), Ok(10)) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks));
+
+        Assert.Null(frame.DiskKinds);
+        Assert.Null(frame.FullestVolumePercent);
+        Assert.Equal(20, frame.Disk.BytesPerSec);
+    }
+
+    [Fact]
+    public void A_kind_with_a_drive_but_no_readable_number_is_null_never_zero()
+    {
+        var topo = Topo([Drive(0, DiskKind.Hdd, capacity: null), Drive(1, DiskKind.Ssd)]);
+        // The HDD has no row at all; the SSD has a row whose write number is missing.
+        var disks = new[] { Disk("PhysicalDrive1", Ok(10), Gone()) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        var hdd = Kind(frame, DiskKind.Hdd);
+        Assert.Null(hdd.BytesPerSec);
+        Assert.True(hdd.Partial);
+        Assert.Null(hdd.CapacityBytes);
+        Assert.Null(hdd.UsedBytes);
+        Assert.Null(hdd.TotalBytes);
+        var ssd = Kind(frame, DiskKind.Ssd);
+        Assert.Null(ssd.BytesPerSec);
+        Assert.True(ssd.Partial);
+        Assert.Equal(1000, ssd.CapacityBytes);
+    }
+
+    [Fact]
+    public void A_negative_or_missing_rate_is_not_counted_and_marks_the_kind_partial()
+    {
+        var topo = Topo([Drive(0, DiskKind.Hdd), Drive(1, DiskKind.Hdd)]);
+        var disks = new[] { Disk("PhysicalDrive0", Ok(10), Ok(20)), Disk("PhysicalDrive1", Ok(-5), Ok(20)) };
+
+        var hdd = Kind(BoardFrame.Project(Snap(disks: disks, storage: topo)), DiskKind.Hdd);
+
+        Assert.Equal(30, hdd.BytesPerSec);
+        Assert.True(hdd.Partial);
+    }
+
+    [Fact]
+    public void Two_rows_that_claim_the_same_drive_number_count_for_no_kind()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme)]);
+        var disks = new[] { Disk("PhysicalDrive0", Ok(10), Ok(10)), Disk("PhysicalDrive0", Ok(30), Ok(30)) };
+
+        var frame = BoardFrame.Project(Snap(disks: disks, storage: topo));
+
+        Assert.Null(Kind(frame, DiskKind.Nvme).BytesPerSec);
+        Assert.Equal(80, frame.Disk.BytesPerSec);
+    }
+
+    [Fact]
+    public void A_volume_on_one_drive_counts_for_that_kind_and_a_spanning_volume_for_none()
+    {
+        var topo = Topo(
+            [Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Ssd), Drive(2, DiskKind.Hdd)],
+            [
+                new StorageVolumeUse("C:", 1000, 400, [0]),
+                new StorageVolumeUse("S:", 4000, 400, [1, 2]),
+                new StorageVolumeUse("E:", 500, 100, [2]),
+            ]);
+
+        var frame = BoardFrame.Project(Snap(storage: topo));
+
+        var nvme = Kind(frame, DiskKind.Nvme);
+        Assert.Equal((600L, 1000L), (nvme.UsedBytes, nvme.TotalBytes));
+        var ssd = Kind(frame, DiskKind.Ssd);
+        Assert.Null(ssd.UsedBytes);
+        Assert.Null(ssd.TotalBytes);
+        var hdd = Kind(frame, DiskKind.Hdd);
+        Assert.Equal((400L, 500L), (hdd.UsedBytes, hdd.TotalBytes));
+        // The spanning volume is the fullest one here (90%), so the fullest-volume number still sees it although no kind does.
+        Assert.Equal(90, frame.FullestVolumePercent);
+    }
+
+    [Fact]
+    public void The_fullest_volume_is_the_largest_used_share_and_missing_when_none_was_read()
+    {
+        var drives = new[] { Drive(0, DiskKind.Nvme), Drive(1, DiskKind.Hdd) };
+
+        var some = BoardFrame.Project(Snap(storage: Topo(drives,
+        [
+            new StorageVolumeUse("C:", 1000, 500, [0]),
+            new StorageVolumeUse("D:", 2000, 100, [1]),
+            new StorageVolumeUse("E:", 100, 40, [1]),
+        ])));
+        Assert.Equal(95, some.FullestVolumePercent);
+
+        Assert.Null(BoardFrame.Project(Snap(storage: Topo(drives))).FullestVolumePercent);
+        Assert.Null(BoardFrame.Project(Snap(storage: Topo(drives, []))).FullestVolumePercent);
+    }
+
+    [Fact]
+    public void A_volume_with_impossible_numbers_is_not_the_fullest()
+    {
+        var topo = Topo([Drive(0, DiskKind.Nvme)],
+        [
+            new StorageVolumeUse("C:", 1000, 2000, [0]),
+            new StorageVolumeUse("D:", 0, 0, [0]),
+            new StorageVolumeUse("E:", 1000, 750, [0]),
+        ]);
+
+        Assert.Equal(25, BoardFrame.Project(Snap(storage: topo)).FullestVolumePercent);
     }
 }

@@ -32,6 +32,10 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     private readonly GuardedStage<NicReading> _nicStage = new();
     private readonly GuardedStage<GpuReading> _gpuStage = new();
 
+    // The drive kinds and volumes, read on their own background loop (null: no reader given, so every disk kind stays unknown). It is started by
+    // the first sample and stopped by Dispose at once; it holds no handle past a read, so it needs no deferred release of its own.
+    private readonly StorageTopologyRefresher? _storage;
+
     // The sample in progress and every stage body that is running count as users. Dispose only marks the source; the samplers are freed by
     // whoever leaves last, so a counter call that is still running is never closed under itself, and one that finishes late is not leaked.
     private readonly DeferredRelease _life;
@@ -57,7 +61,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     /// The GPU counters are always collected here whatever <see cref="ISamplerControl.GpuActive"/> says: the source exists for them.
     /// </param>
     public AggregateSnapshotSource(Func<DateTime> clock, ISamplerControl? control = null)
-        : this(clock, control, static () => new PdhSystemSampler(), new GpuSampler(aggregateOnly: true), static () => Environment.TickCount64, null)
+        : this(clock, control, static () => new PdhSystemSampler(), new GpuSampler(aggregateOnly: true), static () => Environment.TickCount64, null, new WindowsStorageTopologyReader())
     {
     }
 
@@ -69,7 +73,8 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         Func<IPdhSampling> openPdh,
         IGpuSampling gpu,
         Func<long> nowMs,
-        TimeSpan? stageTimeout)
+        TimeSpan? stageTimeout,
+        IStorageTopologyReader? storage = null)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _control = control ?? new SamplerSettings();
@@ -77,6 +82,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         _gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
         _nowMs = nowMs ?? throw new ArgumentNullException(nameof(nowMs));
         _stageTimeout = stageTimeout;
+        _storage = storage is null ? null : new StorageTopologyRefresher(storage, nowMs);
         _life = new DeferredRelease(ReleaseSamplers);
     }
 
@@ -116,7 +122,11 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
     /// Marks the source disposed at once and does not wait. The PDH and GPU samplers are closed by the last of the running sample and the
     /// running stage calls to finish (right here when none is running).
     /// </summary>
-    public void Dispose() => _life.Request();
+    public void Dispose()
+    {
+        _storage?.Dispose();
+        _life.Request();
+    }
 
     private void ReleaseSamplers()
     {
@@ -128,6 +138,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         finally
         {
             _gpu.Dispose();
+            _storage?.Dispose();
         }
     }
 
@@ -143,6 +154,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             _pdhReset = _nicReset = _gpuReset = true;
         }
 
+        _storage?.Start();
         var timeout = _stageTimeout ?? (_hasPrevious ? WindowsSnapshotSource.StageTimeout : WindowsSnapshotSource.FirstStageTimeout);
         _ = _pdhStage.Start(RunPdhStage);
         _ = _nicStage.Start(RunNicStage);
@@ -160,6 +172,10 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
         var pdh = JoinPdh(timeout);
         var nics = JoinNics(timeout);
         var gpu = JoinGpu(timeout);
+        if (pdh.DisksState.IsOk)
+        {
+            _storage?.NoteDisks(pdh.Disks);
+        }
 
         var nominal = (int)(_beat?.Invoke() ?? _control.EffectiveInterval).TotalMilliseconds;
         var intervalMs = _hasPrevious ? (int)Math.Max(1, Math.Round(elapsedSeconds * 1000)) : nominal;
@@ -180,6 +196,7 @@ public sealed class AggregateSnapshotSource : ISnapshotSource, IBeatAware
             gpu.State)
         {
             Power = BatteryCollector.ReadPower(),
+            Storage = _storage?.Current,
         };
 
         // No Provenance: that is the recorder's input, and this source is never recorded.

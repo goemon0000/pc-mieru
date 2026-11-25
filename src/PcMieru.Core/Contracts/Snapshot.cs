@@ -41,6 +41,14 @@ public sealed record SystemInfo(
 {
     /// <summary>AC connected and battery charge/state, from the same Windows power status the hardware page reads. Missing values say why (a desktop has no battery).</summary>
     public PowerInfo Power { get; init; } = PowerInfo.NotCollected;
+
+    /// <summary>
+    /// The physical drives and local volumes a background reader last saw, for the Parts Life board to split the disk numbers by drive kind;
+    /// null when it has not been read (or the read failed): kinds are then unknown, never guessed. Public because that board is another assembly;
+    /// kept out of the JSON with an attribute, like <see cref="CpuInfo.Sockets"/>, so the snapshot schema is exactly what it was without it.
+    /// </summary>
+    [JsonIgnore]
+    public StorageTopology? Storage { get; init; }
 }
 
 /// <summary>
