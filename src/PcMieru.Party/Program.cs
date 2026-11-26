@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.IO;
 using System.Windows.Media.Imaging;
@@ -18,6 +19,12 @@ internal static class Program
 
     /// <summary>This exe's own file name: the sibling a second start brings to the front (SiblingWindows looks for it beside the running exe).</summary>
     internal const string PartyExeName = "PCMieru.Party.exe";
+
+    /// <summary>A second start that finds the mutex held but no sibling window yet (the first one is still creating its window) looks again this often...</summary>
+    internal static readonly TimeSpan SiblingRetryEvery = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>...for up to this long, then it says the other one is running (exit 2). Not used by a smoke run.</summary>
+    internal static readonly TimeSpan SiblingWaitFor = TimeSpan.FromSeconds(3);
 
     // Exit codes: 0 = ran and ended normally, 1 = did not start (bad command line, the start gate said no, a smoke run that failed), 2 = another Parts Life is the resident.
     [STAThread]
@@ -47,7 +54,7 @@ internal static class Program
         using var resident = ResidentInstance.TryAcquire(ResidentInstance.CurrentName());
         if (resident is null)
         {
-            if (!options.Smoke && SiblingWindows.Activate(PartyExeName))
+            if (!options.Smoke && ActivateResident())
             {
                 return 0;
             }
@@ -58,6 +65,29 @@ internal static class Program
 
         // 3. Only now WPF.
         return Run(options);
+    }
+
+    /// <summary>
+    /// Brings the resident's window to the front. The mutex can be held by a first instance that has not made its window yet (it is still starting), so when no sibling window is found
+    /// the find is repeated every <see cref="SiblingRetryEvery"/> for up to <see cref="SiblingWaitFor"/> before this gives up. Runs on the main thread before any window exists: nothing to pump.
+    /// </summary>
+    private static bool ActivateResident()
+    {
+        var waited = Stopwatch.StartNew();
+        while (true)
+        {
+            if (SiblingWindows.Activate(PartyExeName))
+            {
+                return true;
+            }
+
+            if (waited.Elapsed + SiblingRetryEvery > SiblingWaitFor)
+            {
+                return false;
+            }
+
+            Thread.Sleep(SiblingRetryEvery);
+        }
     }
 
     private static int Run(PartyOptions options)

@@ -31,6 +31,8 @@ internal sealed partial class PartyWindow : Window
     // GPU の番号（席）。窓が 1 つ持ち、標本ごとに ApplyTo で決める。_state の変更は全部 UI スレッド（SamplerFeed は Latest を出すだけ）
     private readonly GpuSlotMap _slotMap;
     private GpuSlotFrame _gpuFrame = new([], [], false);
+    /// <summary>最後の標本で盤に居た席（番号のビット）。-1 は「まだ見ていない」。設定の GPU の番号の欄を作り直す目印（<see cref="GpuSlotsSettingsStale"/>）。</summary>
+    private int _presentSlotMask = -1;
     /// <summary>標本を一度でも処理したか（席を決める処理を通したか）（または持ち主が明示で変えたか）。それまでは何も保存しない（番号を決める前の状態で、保存を書き換えない）。</summary>
     private bool _saveAllowed;
     private Action? _noticeOk;
@@ -639,7 +641,9 @@ internal sealed partial class PartyWindow : Window
         // （一覧を待つと、GPU の一覧が読めない機械では CPU などの育成も一度も保存されない）
         _saveAllowed = true;
         if (_gpuFrame.SlotsChanged) SaveState();
-        _work = PartyComposition.WorkOf(frame, _gpuFrame);
+        // 設定の「GPU の番号」の欄は、席の記録が変わったとき・盤に居る席が変わったとき（差す・抜く・最初の標本）に作り直す。欄が開いているときだけ
+        if (GpuSlotsSettingsStale()) RefreshSettings();
+        _work =PartyComposition.WorkOf(frame, _gpuFrame);
         _slots = PartyComposition.Build(frame, _gpuFrame, Strings.Lang);
 
         int levelsBefore = LevelSum();
@@ -651,6 +655,21 @@ internal sealed partial class PartyWindow : Window
         if (changed) SaveState();
 
         UpdateDetail();
+    }
+
+    /// <summary>
+    /// 設定の「GPU の番号」の欄（データのタブ）を作り直すべきか。席の記録が書き換わった（<see cref="GpuSlotFrame.SlotsChanged"/>）か、
+    /// 盤に居る席の組が前の標本と違う（GPU を差した・抜いた・最初の標本）とき、かつその欄が開いているときだけ真。
+    /// 居る席の組は、欄が閉じている間も追い続ける（開いた時点では欄を新しく作るので、古い印は残らない）。
+    /// </summary>
+    private bool GpuSlotsSettingsStale()
+    {
+        int mask = 0;
+        foreach (var a in _gpuFrame.Adapters)
+            if (a.Slot is { } n and >= 0 and < 31) mask |= 1 << n;
+        bool presenceChanged = mask != _presentSlotMask;
+        _presentSlotMask = mask;
+        return (_gpuFrame.SlotsChanged || presenceChanged) && _tab == SettingsTab.Data;
     }
 
     /// <summary>古い標本の値は薄く見せる（最新だと思わせない）。</summary>

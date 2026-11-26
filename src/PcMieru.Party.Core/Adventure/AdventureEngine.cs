@@ -44,6 +44,11 @@ public sealed class AdventureEngine
     private double _sinceStep = MinStepGap;
 
     private Member[] _members = Array.Empty<Member>();
+    /// <summary>
+    /// <see cref="_members"/> のうち、いま測れている者だけ（同じ並び）。**着け替え・買い物はこの者にだけ**する。
+    /// 測れていない席（値が取れない・曖昧）は、持っている装備はそのまま持ち、新しい装備は受け取らない。
+    /// </summary>
+    private Member[] _earners = Array.Empty<Member>();
     private int _membersSig;
     /// <summary>最後に見た進み具合。「両方とも最初から」で作り直されたら、ありあわせを配り直す。</summary>
     private AdventureState? _seenState;
@@ -144,8 +149,14 @@ public sealed class AdventureEngine
         }
         _members = Equipment.SortMembers(list);
         // 測れていない席（検出はしたが値が無い）には、まだ配らない。最初に測れた秒に配る（上の署名が変わるので、ここへ戻ってくる）
+        var earners = new List<Member>(_members.Length);
         foreach (var m in _members)
-            if (measured.Contains(m.Key)) Equipment.GiveStarters(_book, S, m);
+        {
+            if (!measured.Contains(m.Key)) continue;
+            Equipment.GiveStarters(_book, S, m);
+            earners.Add(m);
+        }
+        _earners = earners.ToArray();
     }
 
     // ---------------------------------------------------------------------
@@ -170,6 +181,7 @@ public sealed class AdventureEngine
     ///
     /// 外すのは **同じ種類の者が盤に居て、その鍵だけが居ない** ときだけ（gpu#0..#2 が居て gpu#3 が居ない）。
     /// 種類ごと居ない（計測が止まって GPU が一枚も見えない等）なら触らない。番号の無い鍵（memory・hdd 等）も触らない。
+    /// **保存に GPU 席の記録がある鍵（gpu#N。引退も含む）は、居なくても外さない**（<see cref="HasGpuSlotRecord"/>）。持ち主が Reset するまで装備は残る。cpu# 等は従来どおり。
     /// 外した物は**捨てずに持ち物へ戻す**（入りきらなければ拾い物の荷に包む＝町で売れる）。他の者の装備には触らない。
     /// </summary>
     private void TrackStrayGear(double dt)
@@ -204,6 +216,7 @@ public sealed class AdventureEngine
     {
         int hash = key.IndexOf('#');
         if (hash <= 0) return false;
+        if (HasGpuSlotRecord(key)) return false;   // 席の記録がある GPU（引退も含む）は、持ち主が Reset するまで装備を持ったまま
         var kind = key.AsSpan(0, hash + 1);   // "gpu#"
         bool kindHere = false;
         foreach (var m in _members)
@@ -212,6 +225,19 @@ public sealed class AdventureEngine
             if (m.Key.AsSpan().StartsWith(kind, StringComparison.Ordinal)) kindHere = true;
         }
         return kindHere;
+    }
+
+    /// <summary>
+    /// 保存の GPU 席の記録（<see cref="PartyState.GpuSlots"/>。引退も含む）に、この鍵の席があるか。
+    /// あれば、その GPU が抜けていても・手放していても、装備は片付けない。外すのは持ち主の Reset
+    /// （<see cref="ReturnGearOf"/> が装備を持ち物へ返してから席を空ける）だけ。cpu# など他の番号付きの鍵は対象外。
+    /// </summary>
+    private bool HasGpuSlotRecord(string key)
+    {
+        if (!key.StartsWith("gpu#", StringComparison.Ordinal) || _party.GpuSlots is not { } records) return false;
+        foreach (var r in records)
+            if (r is not null && string.Equals(GpuSlotKeys.KeyOf(r.Slot), key, StringComparison.Ordinal)) return true;
+        return false;
     }
 
     /// <summary>
@@ -434,7 +460,7 @@ public sealed class AdventureEngine
         int bestGain = 0;
         ItemDef? best = null;
         Member bestFor = default;
-        foreach (var m in _members)
+        foreach (var m in _earners)
         {
             s.Equipped.TryGetValue(m.Key, out var eq);
             for (int slot = 0; slot < Equipment.SlotCount; slot++)
@@ -486,7 +512,7 @@ public sealed class AdventureEngine
         who = default;
         what = null;
         _equipLog.Clear();
-        if (Equipment.AutoEquip(_book, S, _members, S.Stance, out _, out _, _equipLog) == 0) return false;
+        if (Equipment.AutoEquip(_book, S, _earners, S.Stance, out _, out _, _equipLog) == 0) return false;
         bool found = false;
         foreach (var c in _equipLog)
         {

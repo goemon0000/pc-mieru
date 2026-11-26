@@ -19,6 +19,8 @@ public static partial class SiblingWindows
 {
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const int SwRestore = 9;
+    private const uint FlashAll = 0x3;                  // FLASHW_ALL: the caption and the taskbar button
+    private const uint FlashTimerNoForeground = 0xC;    // FLASHW_TIMERNOFG: until the window comes to the foreground
 
     /// <summary>The file this deployment expects a sibling to run from: <paramref name="exeFileName"/> beside the running exe.</summary>
     public static string ExpectedPath(string exeFileName) => Path.Combine(AppContext.BaseDirectory, exeFileName);
@@ -102,17 +104,55 @@ public static partial class SiblingWindows
         return windows;
     }
 
-    /// <summary>Restores a sibling's window when minimised and raises it. True when one was brought forward. The caller must have been started or clicked by the user (Windows lets it hand the foreground on).</summary>
+    /// <summary>
+    /// Restores a sibling's window when minimised and raises it. True when a sibling window exists, that is when the user's click found the other one. When Windows refuses to hand the
+    /// foreground on (SetForegroundWindow returns false), the window is flashed in the taskbar instead (<see cref="Flash"/>) so the user can see where it is; the result stays true because
+    /// the window does exist. The caller must have been started or clicked by the user (Windows lets it hand the foreground on).
+    /// </summary>
     public static bool Activate(string exeFileName)
     {
         foreach (var window in Find(exeFileName))
         {
             RestoreIfMinimized(window.Handle);
-            SetForegroundWindow(window.Handle);
+            if (!SetForegroundWindow(window.Handle))
+            {
+                Flash(window.Handle);
+            }
+
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>Flashes a window's taskbar button (and its caption) until it comes to the front: FLASHW_ALL | FLASHW_TIMERNOFG. Best effort: the result is not reported.</summary>
+    public static void Flash(nint hwnd)
+    {
+        if (hwnd == 0)
+        {
+            return;
+        }
+
+        var info = new FlashInfo
+        {
+            Size = (uint)Marshal.SizeOf<FlashInfo>(),
+            Window = hwnd,
+            Flags = FlashAll | FlashTimerNoForeground,
+            Count = 0,
+            TimeoutMs = 0,
+        };
+        _ = FlashWindowEx(ref info);
+    }
+
+    /// <summary>FLASHWINFO.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FlashInfo
+    {
+        public uint Size;
+        public nint Window;
+        public uint Flags;
+        public uint Count;
+        public uint TimeoutMs;
     }
 
     /// <summary>
@@ -222,6 +262,10 @@ public static partial class SiblingWindows
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetForegroundWindow(nint hWnd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool FlashWindowEx(ref FlashInfo info);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

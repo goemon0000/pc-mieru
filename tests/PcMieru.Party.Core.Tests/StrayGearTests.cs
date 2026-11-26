@@ -1,5 +1,6 @@
 using PcMieru.Party.Adventure;
 using PcMieru.Party.Game;
+using PcMieru.Party.Hardware;
 using PcMieru.Party.Rendering;
 
 namespace PcMieru.Party.Core.Tests;
@@ -112,6 +113,46 @@ public class StrayGearTests
             Run(e, withPhantom, 30);
         }
         Assert.Equal(new[] { "glowing-chip", "thin-sheet", "rubber-foot" }, state.Adventure!.Equipped["gpu#3"]);
+    }
+
+    private static GpuSlotRecord Record(int slot, bool retired = false) => new(slot, $"Test GPU {slot}", 8L << 30, (uint)(10 + slot), retired);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_absent_gpu_with_a_slot_record_keeps_its_gear_while_another_gpu_is_present(bool retired)
+    {
+        var state = DemoAfter();
+        // gpu#0 は盤に居る。gpu#1 は記録だけ（抜けた・引退）。gpu#2・gpu#3 は記録が無い（幻）
+        state.GpuSlots = [Record(0), Record(1, retired)];
+        var before = Copy(state.Adventure!);
+        var e = new AdventureEngine(Book, state, new Random(1));
+        var onlyGpu0 = Board.Where(b => b.Key is not ("gpu#1" or "gpu#2")).ToArray();
+
+        Run(e, onlyGpu0, 3 * (int)AdventureEngine.StrayGraceSeconds);
+
+        var s = state.Adventure!;
+        Assert.Equal(before["gpu#1"], s.Equipped["gpu#1"]);   // 記録のある席は外さない
+        Assert.Equal(before["gpu#0"], s.Equipped["gpu#0"]);
+        Assert.False(s.Equipped.ContainsKey("gpu#2"));        // 記録の無い幻は従来どおり片付く
+        Assert.False(s.Equipped.ContainsKey("gpu#3"));
+        Assert.Equal(before["gpu#2"].Concat(before["gpu#3"]).OrderBy(x => x), s.Inventory.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void A_numbered_cpu_key_is_still_swept_even_when_gpu_slot_records_exist()
+    {
+        var state = DemoAfter();
+        state.GpuSlots = [Record(0), Record(1), Record(2), Record(3)];
+        state.Adventure!.Equipped["cpu#1"] = ["spare-screw", "thin-sheet", "rubber-foot"];
+        var e = new AdventureEngine(Book, state, new Random(1));
+
+        Run(e, Board, (int)AdventureEngine.StrayGraceSeconds + 60);
+
+        var s = state.Adventure!;
+        Assert.False(s.Equipped.ContainsKey("cpu#1"));        // cpu#0 は居て cpu#1 だけ居ない
+        Assert.True(s.Equipped.ContainsKey("gpu#3"));         // 席の記録がある gpu#3 は残る
+        Assert.Contains("spare-screw", s.Inventory);
     }
 
     [Fact]
