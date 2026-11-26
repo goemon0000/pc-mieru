@@ -146,5 +146,6 @@ internal static class PartyImportStrings
         new("gui.party.import.lead.former", "旧名のパーツぐらし（PartsParty）の続きが見つかりました。パーツぐらしを開くと、引き継ぐかどうかを選べます。旧版の保存はそのまま残ります。", "Progress from Parts Life under its former name (PartsParty) was found. Open Parts Life to choose whether to bring it over. The old version's save stays as it is."),
         new("gui.party.import.later", "あとで", "Later"),
         new("gui.party.import.waiting", "旧パーツぐらしの続きがあります。開くと、引き継ぐかどうかを選べます。", "Old Parts Life progress is waiting. Open Parts Life to choose whether to bring it over."),
+        new("gui.party.import.later.failed", "あとでの設定を保存できませんでした", "Could not save the 'later' choice"),
     ];
 }

@@ -19,12 +19,13 @@ internal sealed class PartyPage : PageBase
     private PartyOpenResult? _last;
     private PartyImportHintState _hint;
 
-    /// <param name="roamingRoot">The roaming folder the hint looks in. Null: the context's (<see cref="GuiContext.PartyRoamingRoot"/>: the real one in a real run, a scratch one in the smoke run, none in a test), and none means the page looks nowhere.</param>
+    /// <param name="roamingRoot">The roaming folder the hint looks in. Null: the context's, asked when the page is shown (<see cref="GuiContext.PartyRoamingRoot"/>: a scratch one in the smoke run; in a real run the
+    /// context finds the real one on a worker thread; none in a test), and none means the page looks nowhere.</param>
     public PartyPage(GuiContext context, PartyLauncher? launcher = null, string? roamingRoot = null)
         : base(context, "party", "gui.nav.party")
     {
         Launcher = launcher ?? context.PartyLauncherOverride ?? PartyLauncher.Real();
-        _roamingRoot = roamingRoot ?? context.PartyRoamingRoot;
+        _roamingRoot = roamingRoot;
         var flow = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -64,14 +65,19 @@ internal sealed class PartyPage : PageBase
         base.OnActivated();
         if (_roamingRoot is { } root)
         {
-            HintPending = LookForOldProgress(root);
+            HintPending = LookForOldProgress(() => root);
+        }
+        else if (Context.PartyRoamingRootKnown)
+        {
+            // The context's folder: known already (the smoke run's scratch one), or found on the worker thread below (a real run: the real folder may be slow to ask for).
+            HintPending = LookForOldProgress(Context.ResolvePartyRoamingRoot);
         }
     }
 
-    /// <summary>One look at the three files, off the UI thread; the line follows the answer. The hint never throws (it answers None), and a page closed meanwhile is left alone.</summary>
-    private async Task LookForOldProgress(string root)
+    /// <summary>One look at the three files, off the UI thread (asking for the folder too); the line follows the answer. The hint never throws (it answers None), and a page closed meanwhile is left alone.</summary>
+    private async Task LookForOldProgress(Func<string?> rootOf)
     {
-        var state = await Task.Run(() => PartyImportHint.Check(root)).ConfigureAwait(true);
+        var state = await Task.Run(() => rootOf() is { } root ? PartyImportHint.Check(root) : PartyImportHintState.None).ConfigureAwait(true);
         if (IsDisposed)
         {
             return;

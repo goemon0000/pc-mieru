@@ -30,18 +30,9 @@ internal static partial class SmokeRun
         var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt, netMeter);
         var exitCode = 1;
 
-        // DESIGN-C 4.1 items 1-2: the notice that old Parts Life progress is waiting looks only in a scratch folder of the run (never at the real roaming folder), and the Parts Life button
-        // starts nothing here (the run presses none).
-        var partyScratch = MakePartyScratch();
-        context.PartyRoamingRoot = partyScratch;
-        context.PartyLauncherOverride = new PartyLauncher(() => false, _ => true, (_, arguments) =>
-        {
-            PartyStarts.Add(arguments);
-            return true;
-        });
-
-        // DESIGN-C 3 item 5: the sign-in setting works on an in-memory store here, never on the registry (the real store is built by Program.cs of a real start only).
-        context.LogonStore = new PcMieru.Core.Siblings.MemoryRunStore();
+        // Program.cs has done this before the window existed (so a startup page never held the real ones); a caller that has not gets it here.
+        Prepare(context);
+        var partyScratch = context.PartyRoamingRoot;
 
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
         Dialogs.AutoAnswer = false;
@@ -92,6 +83,30 @@ internal static partial class SmokeRun
         runner.Write(outputPath, exitCode);
         return exitCode;
     }
+
+    /// <summary>
+    /// The smoke run's stand-ins for what a real start would name, put into the context BEFORE the main window (and so any page, <c>--page</c> included) is made: DESIGN-C 4.1 items 1-2, the notice that old
+    /// Parts Life progress is waiting looks only in a scratch folder of the run (never at the real roaming folder; no resolver is set) and the Parts Life button starts nothing (the run presses none);
+    /// DESIGN-C 3 item 5, the sign-in setting works on an in-memory store, never on the registry. Done once: a context that already has its launcher stand-in is left as it is.
+    /// </summary>
+    internal static void Prepare(GuiContext context)
+    {
+        if (context.PartyLauncherOverride is not null)
+        {
+            return;
+        }
+
+        context.PartyRoamingRoot = MakePartyScratch();
+        context.PartyLauncherOverride = new PartyLauncher(() => false, _ => true, (_, arguments) =>
+        {
+            PartyStarts.Add(arguments);
+            return true;
+        });
+        context.LogonStore = new PcMieru.Core.Siblings.MemoryRunStore();
+    }
+
+    /// <summary>A prepared run that ends before <see cref="Run"/> (a <c>--page</c> that does not exist): takes its scratch roaming folder away again.</summary>
+    internal static void Discard(GuiContext context) => RemovePartyScratch(context.PartyRoamingRoot);
 
     private static double Ms(DateTime since) => Math.Round((DateTime.Now - since).TotalMilliseconds);
 

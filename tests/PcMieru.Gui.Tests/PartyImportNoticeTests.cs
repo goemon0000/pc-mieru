@@ -219,20 +219,197 @@ public sealed class PartyImportNoticeTests
     [Fact]
     public void Later_is_saved_to_gui_ini_and_the_cross_saves_nothing()
     {
-        using var folder = new Ui.TempRoot();
-        var ini = Path.Combine(folder.Path, "gui.ini");
-        using var rig = new Rig(settings: new GuiSettings(ini));
-        using var form = new MainForm(rig.Context);
-        _ = form.Handle;
+        Ui.Run(ui =>
+        {
+            using var folder = new Ui.TempRoot();
+            var ini = Path.Combine(folder.Path, "gui.ini");
+            using var rig = new Rig(settings: new GuiSettings(ini));
+            using var form = new MainForm(rig.Context);
+            _ = form.Handle;
 
-        form.ApplyPartyImportAnswer(PartyImportAnswer.Dismissed);
-        Assert.False(File.Exists(ini));
-        Assert.False(rig.Context.Settings.PartyImportLater);
+            form.ApplyPartyImportAnswer(PartyImportAnswer.Dismissed);
+            Assert.True(form.PartyLaterSave.IsCompleted);
+            Assert.False(File.Exists(ini));
+            Assert.False(rig.Context.Settings.PartyImportLater);
 
-        form.ApplyPartyImportAnswer(PartyImportAnswer.Later);
-        Assert.Contains("party.import=later", File.ReadAllText(ini));
-        Assert.True(GuiSettings.Load(ini).PartyImportLater);
-        Assert.Empty(rig.Starts);
+            form.ApplyPartyImportAnswer(PartyImportAnswer.Later);
+            Assert.True(ui.Until(() => form.PartyLaterSave.IsCompleted));
+            Assert.Contains("party.import=later", File.ReadAllText(ini));
+            Assert.True(GuiSettings.Load(ini).PartyImportLater);
+            Assert.True(rig.Context.Settings.PartyImportLater);
+            Assert.Empty(rig.Starts);
+        });
+    }
+
+    [Fact]
+    public void Later_does_not_hold_the_window_while_the_file_is_locked_and_is_saved_when_the_lock_goes()
+    {
+        Ui.Run(ui =>
+        {
+            using var folder = new Ui.TempRoot();
+            var ini = Path.Combine(folder.Path, "gui.ini");
+            using var rig = new Rig(settings: new GuiSettings(ini) { LockAttempts = 500, LockWaitMs = 10 });   // 5 s of retries
+            using var form = new MainForm(rig.Context);
+            _ = form.Handle;
+            var said = new List<string>();
+            rig.Context.StatusMessage += said.Add;
+
+            var holder = new FileStream(ini + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);   // another window is saving
+            try
+            {
+                form.ApplyPartyImportAnswer(PartyImportAnswer.Later);
+                Assert.False(form.PartyLaterSave.IsCompleted);   // the click came back while the save still waits for the lock
+            }
+            finally
+            {
+                holder.Dispose();
+            }
+
+            Assert.True(ui.Until(() => form.PartyLaterSave.IsCompleted));
+            Assert.True(GuiSettings.Load(ini).PartyImportLater);
+            Assert.True(rig.Context.Settings.PartyImportLater);
+            Assert.Empty(said);
+        });
+    }
+
+    [Fact]
+    public void A_later_that_could_not_be_saved_is_said_on_the_status_line()
+    {
+        Ui.Run(ui =>
+        {
+            using var folder = new Ui.TempRoot();
+            var ini = Path.Combine(folder.Path, "gui.ini");
+            using var rig = new Rig(settings: new GuiSettings(ini) { LockAttempts = 3, LockWaitMs = 1 });
+            using var form = new MainForm(rig.Context);
+            _ = form.Handle;
+            var said = new List<string>();
+            rig.Context.StatusMessage += said.Add;
+
+            using (new FileStream(ini + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                form.ApplyPartyImportAnswer(PartyImportAnswer.Later);
+                Assert.True(ui.Until(() => form.PartyLaterSave.IsCompleted));
+            }
+
+            Assert.Equal(["Could not save the 'later' choice"], said);
+            Assert.False(rig.Context.Settings.PartyImportLater);
+            Assert.False(File.Exists(ini));
+        });
+    }
+
+    // --- the notice never opens over another dialog ---
+
+    [Fact]
+    public void The_notice_waits_while_a_dialog_is_open_over_the_window_and_comes_once_it_is_free()
+    {
+        Ui.Run(ui =>
+        {
+            using var roaming = new Ui.TempRoot();
+            using var rig = new Rig(roamingRoot: Waiting(roaming.Path, "PartsLife"));
+            using var form = new MainForm(rig.Context) { FreePollMs = 5 };
+            _ = form.Handle;
+            form.Enabled = false;   // what a dialog open over the window does to it (a dialog disables its owner)
+            Assert.True(form.IsBlockedByDialog);
+            var logged = Dialogs.Log.Count;
+
+            var done = form.NoticePartyImportAsync();
+            Assert.False(ui.Until(() => done.IsCompleted, 400), "the notice is still waiting");
+            Assert.Equal(logged, Dialogs.Log.Count);
+
+            form.Enabled = true;
+            Assert.False(form.IsBlockedByDialog);
+            Assert.True(ui.Until(() => done.IsCompleted));
+            Assert.Equal(logged + 1, Dialogs.Log.Count);
+            Assert.Contains("Continue Parts Life", Dialogs.Log[^1]);
+        });
+    }
+
+    [Fact]
+    public void A_notice_that_is_waiting_when_the_window_closes_is_never_shown()
+    {
+        Ui.Run(ui =>
+        {
+            using var roaming = new Ui.TempRoot();
+            using var rig = new Rig(roamingRoot: Waiting(roaming.Path, "PartsLife"));
+            using var form = new MainForm(rig.Context) { FreePollMs = 5 };
+            _ = form.Handle;
+            form.Enabled = false;
+            var logged = Dialogs.Log.Count;
+
+            var done = form.NoticePartyImportAsync();
+            Assert.False(ui.Until(() => done.IsCompleted, 200));
+
+            form.Dispose();
+            Assert.True(ui.Until(() => done.IsCompleted));
+            Assert.Equal(logged, Dialogs.Log.Count);
+        });
+    }
+
+    // --- the real roaming folder is asked for off the UI thread ---
+
+    [Fact]
+    public void A_resolver_is_asked_on_a_worker_thread_once_for_the_notice_and_the_page_and_the_window_start_asks_nothing()
+    {
+        Ui.Run(ui =>
+        {
+            using var roaming = new Ui.TempRoot();
+            Waiting(roaming.Path, "PartsLife");
+            using var rig = new Rig();
+            var asked = new List<int>();
+            rig.Context.PartyRoamingRootResolver = () =>
+            {
+                lock (asked)
+                {
+                    asked.Add(Environment.CurrentManagedThreadId);
+                }
+
+                return roaming.Path;
+            };
+            using var form = new MainForm(rig.Context);
+            _ = form.Handle;
+            Assert.Empty(asked);   // making the window asked nothing
+            Assert.Null(rig.Context.PartyRoamingRoot);   // "not resolved yet" is what the UI thread sees
+
+            var logged = Dialogs.Log.Count;
+            var done = form.NoticePartyImportAsync();
+            using var page = new PartyPage(rig.Context);
+            page.OnActivated();
+            Assert.True(ui.Until(() => done.IsCompleted && page.HintPending.IsCompleted));
+
+            Assert.Equal(logged + 1, Dialogs.Log.Count);
+            Assert.Equal(PartyImportHintState.FromPartsLife, page.Hint);
+            var once = Assert.Single(asked);
+            Assert.NotEqual(Environment.CurrentManagedThreadId, once);
+            Assert.Equal(roaming.Path, rig.Context.PartyRoamingRoot);
+        });
+    }
+
+    [Fact]
+    public void A_resolver_that_fails_or_answers_nothing_means_no_folder_and_a_silent_window()
+    {
+        Ui.Run(ui =>
+        {
+            using var rig = new Rig();
+            var calls = 0;
+            rig.Context.PartyRoamingRootResolver = () =>
+            {
+                Interlocked.Increment(ref calls);
+                throw new IOException("the redirected folder is gone");
+            };
+            using var form = new MainForm(rig.Context);
+            _ = form.Handle;
+            var logged = Dialogs.Log.Count;
+
+            var done = form.NoticePartyImportAsync();
+            using var page = new PartyPage(rig.Context);
+            page.OnActivated();
+            Assert.True(ui.Until(() => done.IsCompleted && page.HintPending.IsCompleted));
+
+            Assert.Equal(logged, Dialogs.Log.Count);
+            Assert.Equal(PartyImportHintState.None, page.Hint);
+            Assert.Null(rig.Context.PartyRoamingRoot);
+            Assert.Equal(1, calls);   // asked once, not again by the page
+        });
     }
 
     [Fact]
@@ -259,7 +436,7 @@ public sealed class PartyImportNoticeTests
         var notice = main.IndexOf("PartyNotice = NoticePartyImportAsync();", StringComparison.Ordinal);
         Assert.True(choice > 0 && notice > choice, "the notice follows the update choice in StartUpdates");
 
-        // RealRoamingRoot is named in Program.cs inside the real-run block only; no other source and no test reaches the real folder.
+        // RealRoamingRoot is named in Program.cs inside the real-run block only (as a method that a worker thread calls later, never called there); no other source and no test reaches the real folder.
         var users = Directory.GetFiles(Harness.GuiSource, "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
                 && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
@@ -268,7 +445,64 @@ public sealed class PartyImportNoticeTests
             .ToArray();
         Assert.Equal(["Program.cs"], users);
         var program = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
-        Assert.Matches(@"if \(readResult\)\s*\{[^}]*PartyRoamingRoot = PcMieru\.Core\.Siblings\.PartyImportHint\.RealRoamingRoot\(\);", program);
+        Assert.Matches(@"if \(readResult\)\s*\{[^}]*PartyRoamingRootResolver = PcMieru\.Core\.Siblings\.PartyImportHint\.RealRoamingRoot;", program);
+        Assert.DoesNotContain("RealRoamingRoot(", program, StringComparison.Ordinal);       // handed over, not asked for, on the thread that starts the window
+        Assert.DoesNotContain("GetFolderPath", program, StringComparison.Ordinal);
+        Assert.DoesNotContain("PartyRoamingRoot =", program, StringComparison.Ordinal);       // the resolved folder is only ever set by the resolver's caller (GuiContext) and the smoke run
+
+        // Only Program.cs sets a resolver in the app's sources (the smoke run and every test leave it null or pass a fake of their own).
+        var setters = Directory.GetFiles(Harness.GuiSource, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && File.ReadAllText(f).Contains("PartyRoamingRootResolver =", StringComparison.Ordinal))
+            .Select(f => Path.GetFileName(f) ?? string.Empty)
+            .ToArray();
+        Assert.Equal(["Program.cs"], setters);
+
+        // The work that needs the folder asks the context from a worker thread (Task.Run), not from the UI thread.
+        Assert.Contains("Task.Run(() => _context.ResolvePartyRoamingRoot()", main, StringComparison.Ordinal);
+        Assert.Contains("_context.ResolvePartyRoamingRoot() is not { } root", main, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"_context\.PartyRoamingRoot(?!Known)\b", main);   // the UI thread never reads the folder itself (Known is only a yes/no)
+    }
+
+    [Fact]
+    public void A_smoke_runs_stand_ins_are_in_the_context_before_the_window_and_so_before_any_startup_page()
+    {
+        var program = File.ReadAllText(Path.Combine(Harness.GuiSource, "Program.cs"));
+        var prepare = program.IndexOf("SmokeRun.Prepare(context);", StringComparison.Ordinal);
+        var window = program.IndexOf("new MainForm(context)", StringComparison.Ordinal);
+        var page = program.IndexOf("form.ShowPage(page)", StringComparison.Ordinal);
+        Assert.True(prepare > 0 && prepare < window && window < page, "Prepare comes before the window and before the startup page");
+
+        // What Prepare puts in: a scratch folder (no resolver, so never the real folder), a launcher that starts nothing, an in-memory store.
+        Ui.Run(_ =>
+        {
+            using var rig = new Rig();
+            var context = new GuiContext(rig.Services, rig.Pump, rig.Context.Theme, new GuiSettings());
+            SmokeRun.Prepare(context);
+            var scratch = context.PartyRoamingRoot;
+            try
+            {
+                Assert.NotNull(scratch);
+                Assert.StartsWith(Path.GetTempPath(), scratch, StringComparison.OrdinalIgnoreCase);
+                Assert.Null(context.PartyRoamingRootResolver);
+                Assert.NotNull(context.PartyLauncherOverride);
+                Assert.IsType<MemoryRunStore>(context.LogonStore);
+                Assert.Equal(PartyImportHintState.FromPartsLife, PartyImportHint.Check(scratch));
+
+                // a page made right after (the --page case) holds the stand-ins, and pressing its button starts nothing
+                using var party = new PartyPage(context);
+                Assert.Same(context.PartyLauncherOverride, party.Launcher);
+                party.Open();
+                Assert.Equal(PartyOpenResult.Started, party.LastResult);
+            }
+            finally
+            {
+                SmokeRun.Discard(context);
+            }
+
+            Assert.False(Directory.Exists(scratch));
+        });
     }
 
     // --- the Parts Life page's line ---
@@ -395,6 +629,6 @@ public sealed class PartyImportNoticeTests
             Assert.DoesNotContain('{', entry.En);
         }
 
-        Assert.Equal(5, PartyImportStrings.All.Length);
+        Assert.Equal(6, PartyImportStrings.All.Length);
     }
 }

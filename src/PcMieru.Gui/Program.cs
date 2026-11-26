@@ -95,11 +95,18 @@ internal static class Program
             context.SiblingLanguageNotifier = static () => PcMieru.Core.Siblings.SiblingWindows.Notify(
                 PartyLauncher.ExeName, PcMieru.Core.Siblings.MieruMessages.LanguageChanged, allowForeground: false);
 
-            // Only a real start looks for old Parts Life progress (file existence only); the smoke run gives its own scratch folder and every test none (DESIGN-C 4.1 items 1-2).
-            context.PartyRoamingRoot = PcMieru.Core.Siblings.PartyImportHint.RealRoamingRoot();
+            // Only a real start looks for old Parts Life progress (file existence only); the smoke run gives its own scratch folder and every test none (DESIGN-C 4.1 items 1-2). The way to the real
+            // roaming folder is handed over as a method, NOT called here: a redirected folder that is slow or gone must stall a worker thread, never the start (GuiContext.ResolvePartyRoamingRoot asks it there).
+            context.PartyRoamingRootResolver = PcMieru.Core.Siblings.PartyImportHint.RealRoamingRoot;
 
             // The sign-in setting reads and writes the owner's HKCU Run key; only a real start gets the real store (a smoke run gets a memory one, every test none).
             context.LogonStore = PcMieru.Core.Siblings.RegistryRunStore.ForCurrentUser();
+        }
+
+        // A smoke run's stand-ins (a scratch roaming folder, a launcher that starts nothing, an in-memory sign-in store) are in the context BEFORE any page exists, so even the page of --page never holds the real ones.
+        if (options.SmokeOutput is not null)
+        {
+            SmokeRun.Prepare(context);
         }
 
         using var form = new MainForm(context);
@@ -112,6 +119,11 @@ internal static class Program
 
         if (options.StartPage is { } page && !form.ShowPage(page))
         {
+            if (options.SmokeOutput is not null)
+            {
+                SmokeRun.Discard(context);
+            }
+
             MessageBox.Show("--page: " + page, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }

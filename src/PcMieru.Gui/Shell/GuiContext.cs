@@ -171,19 +171,74 @@ internal sealed class GuiContext
     /// </summary>
     internal Action? SiblingLanguageNotifier { get; set; }
 
+    private readonly object _roamingGate = new();
+    private string? _partyRoamingRoot;
+    private bool _roamingResolved;
+
     /// <summary>
-    /// The roaming application-data folder the hint that old Parts Life progress is waiting looks in (<see cref="PcMieru.Core.Siblings.PartyImportHint"/>, file existence only). Set to the
-    /// real folder only by a real run (Program.cs) and to a scratch folder by the smoke run; null (every test, a measurement, a trial on fakes) means the window looks nowhere and says nothing,
-    /// so no automated run ever names the owner's real folders.
+    /// The roaming application-data folder the hint that old Parts Life progress is waiting looks in (<see cref="PcMieru.Core.Siblings.PartyImportHint"/>, file existence only), as far as it is KNOWN:
+    /// the smoke run sets a scratch folder; a real run leaves it null until <see cref="ResolvePartyRoamingRoot"/> (called off the UI thread) has asked <see cref="PartyRoamingRootResolver"/>. Null (every
+    /// test, a measurement, a trial on fakes, or "not resolved yet") means the code on the UI thread looks nowhere and says nothing, so no automated run ever names the owner's real folders.
     /// </summary>
-    internal string? PartyRoamingRoot { get; set; }
+    internal string? PartyRoamingRoot
+    {
+        get => Volatile.Read(ref _partyRoamingRoot);
+        set => Volatile.Write(ref _partyRoamingRoot, value);
+    }
+
+    /// <summary>
+    /// How a real run finds its roaming folder (Program.cs sets it in its real-run block only; the smoke run, a measurement and every test leave it null). Asking can stall when the folder is redirected to a
+    /// slow or disconnected place, so only <see cref="ResolvePartyRoamingRoot"/> calls it, on a worker thread, never the code that starts the window.
+    /// </summary>
+    internal Func<string?>? PartyRoamingRootResolver { get; set; }
+
+    /// <summary>True when there is a roaming folder to look in, or a way to find one: the work that needs it is worth starting (and starts off the UI thread).</summary>
+    internal bool PartyRoamingRootKnown => PartyRoamingRoot is not null || PartyRoamingRootResolver is not null;
+
+    /// <summary>
+    /// The roaming folder, asking <see cref="PartyRoamingRootResolver"/> the first time (at most once for the run, whoever asks first; the others wait for it and get the same answer). Call it from a worker
+    /// thread: the resolver may stall. Null when there is none (no resolver, or it failed).
+    /// </summary>
+    internal string? ResolvePartyRoamingRoot()
+    {
+        if (PartyRoamingRoot is { } known)
+        {
+            return known;
+        }
+
+        lock (_roamingGate)
+        {
+            if (PartyRoamingRoot is { } resolvedMeanwhile)
+            {
+                return resolvedMeanwhile;
+            }
+
+            if (_roamingResolved || PartyRoamingRootResolver is not { } resolver)
+            {
+                return null;
+            }
+
+            _roamingResolved = true;
+            try
+            {
+                var root = resolver();
+                PartyRoamingRoot = string.IsNullOrWhiteSpace(root) ? null : root;
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                // a folder that cannot be found is no hint: the window says nothing
+            }
+
+            return PartyRoamingRoot;
+        }
+    }
 
     /// <summary>The launcher of the Parts Life page. Null (every real run) is the real one; a test passes one that starts nothing, so pressing the page's button never starts a process.</summary>
     internal PartyLauncher? PartyLauncherOverride { get; set; }
 
     /// <summary>
     /// Where the setting "Start Parts Life at sign-in" keeps its Run value (DESIGN-C 3 item 5). Set to the real registry store only by a real run (Program.cs, the same block that sets
-    /// <see cref="PartyRoamingRoot"/>) and to an in-memory store by the smoke run; null (every test that does not pass one, a measurement, a trial on fakes) means the setting is shown
+    /// <see cref="PartyRoamingRootResolver"/>) and to an in-memory store by the smoke run; null (every test that does not pass one, a measurement, a trial on fakes) means the setting is shown
     /// unavailable and does nothing, so no automated run ever reads or writes the owner's Run key.
     /// </summary>
     internal PcMieru.Core.Siblings.IRunStore? LogonStore { get; set; }

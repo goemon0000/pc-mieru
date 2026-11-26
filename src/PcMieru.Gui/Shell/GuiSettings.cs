@@ -92,11 +92,93 @@ internal sealed class GuiSettings
     /// </summary>
     public bool PartyImportLater => string.Equals(GetValue(PartyImportKey), PartyImportLaterWord, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Remembers 「あとで」 through the locked save. True when it reached the file (or the store has no file, as in a smoke run and in tests).</summary>
+    /// <summary>
+    /// Remembers 「あとで」 through the locked write of <see cref="TryWritePartyImportLater"/>: only the <c>party.import</c> line of the file as it is NOW is changed, every other line stays exactly as it is
+    /// on disk (another window may have saved a setting since this object loaded; this object's own, older values are not written). True when it reached the file (or the store has no file, as in a smoke
+    /// run and in tests); the in-memory copy follows only then.
+    /// </summary>
     public bool TrySavePartyImportLater()
     {
+        if (!TryWritePartyImportLater())
+        {
+            return false;
+        }
+
         SetValue(PartyImportKey, PartyImportLaterWord);
-        return TrySave();
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="TrySavePartyImportLater"/> off the calling (UI) thread: the lock retries and the flush to disk never hold the window. The in-memory copy is set back on the caller's context, once the file has it.
+    /// </summary>
+    public async Task<bool> TrySavePartyImportLaterAsync()
+    {
+        var written = await Task.Run(TryWritePartyImportLater).ConfigureAwait(true);
+        if (written)
+        {
+            SetValue(PartyImportKey, PartyImportLaterWord);
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// The locked write of <c>party.import=later</c>: <c>gui.ini.lock</c> is held, the file is read again as it is now and ONLY the lines of that key are replaced (or one is added at the end); every other line,
+    /// known or not, is written back as it was read. Touches no state of this object, so it may run on a worker thread. False when the lock was not got in time or the file could not be read or replaced.
+    /// </summary>
+    internal bool TryWritePartyImportLater()
+    {
+        if (_path is null)
+        {
+            return true;
+        }
+
+        string? tmp = null;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            using var gate = TakeLock();
+            if (gate is null)
+            {
+                return false;
+            }
+
+            var lines = new List<string>();
+            try
+            {
+                lines.AddRange(File.ReadAllLines(_path));
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+            }
+
+            var wanted = $"{PartyImportKey}={PartyImportLaterWord}";
+            var found = false;
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var eq = lines[i].IndexOf('=');
+                if (eq > 0 && string.Equals(lines[i][..eq].Trim(), PartyImportKey, StringComparison.Ordinal))
+                {
+                    lines[i] = wanted;
+                    found = true;
+                }
+            }
+
+            if (!found)
+            {
+                lines.Add(wanted);
+            }
+
+            tmp = _path + ".tmp";
+            WriteReplacing(tmp, lines);
+            tmp = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            DeleteQuietly(tmp);
+            return false;
+        }
     }
 
     /// <summary>How often a save tries for the lock (a test lowers it); the wait between tries is <see cref="LockWaitMs"/>. 25 x 20 ms: about half a second, which a click on the screen can bear.</summary>
@@ -324,27 +406,7 @@ internal sealed class GuiSettings
             }
 
             tmp = _path + ".tmp";
-            using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), 1024, leaveOpen: true);
-                foreach (var line in Compose(mode, extra, choice is null ? disk._unknownModeWord : null))
-                {
-                    writer.WriteLine(line);
-                }
-
-                writer.Flush();
-                stream.Flush(flushToDisk: true);
-            }
-
-            if (File.Exists(_path))
-            {
-                File.Replace(tmp, _path, null);
-            }
-            else
-            {
-                File.Move(tmp, _path);
-            }
-
+            WriteReplacing(tmp, Compose(mode, extra, choice is null ? disk._unknownModeWord : null));
             tmp = null;
             UpdateMode = mode;
             _unknownModeWord = choice is null ? disk._unknownModeWord : null;
@@ -352,18 +414,49 @@ internal sealed class GuiSettings
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            if (tmp is not null)
+            DeleteQuietly(tmp);
+            return false;
+        }
+    }
+
+    /// <summary>Writes the lines to <paramref name="tmp"/> (flushed to disk) and puts that file in place of gui.ini. The caller holds the lock.</summary>
+    private void WriteReplacing(string tmp, IEnumerable<string> lines)
+    {
+        using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), 1024, leaveOpen: true);
+            foreach (var line in lines)
             {
-                try
-                {
-                    File.Delete(tmp);
-                }
-                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-                {
-                }
+                writer.WriteLine(line);
             }
 
-            return false;
+            writer.Flush();
+            stream.Flush(flushToDisk: true);
+        }
+
+        if (File.Exists(_path))
+        {
+            File.Replace(tmp, _path, null);
+        }
+        else
+        {
+            File.Move(tmp, _path!);
+        }
+    }
+
+    private static void DeleteQuietly(string? tmp)
+    {
+        if (tmp is null)
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(tmp);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
         }
     }
 

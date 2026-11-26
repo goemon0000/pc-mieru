@@ -325,14 +325,23 @@ internal sealed class MainForm : Form
     {
         try
         {
-            if (_context.LogonStore is not { } store || _context.PartyRoamingRoot is not { } root)
+            if (_context.LogonStore is not { } store || !_context.PartyRoamingRootKnown)
             {
                 return;
             }
 
-            var journal = RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"));
-            var result = await Task.Run(() => RunSwitch.Recover(store, journal)).ConfigureAwait(true);
-            if (!result.NeedsAttention || IsDisposed)
+            // The roaming folder is found on the worker thread too (a redirected folder may be slow or gone), with the recovery itself.
+            var result = await Task.Run(() =>
+            {
+                if (_context.ResolvePartyRoamingRoot() is not { } root)
+                {
+                    return null;
+                }
+
+                var journal = RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"));
+                return RunSwitch.Recover(store, journal);
+            }).ConfigureAwait(true);
+            if (result is not { NeedsAttention: true } || IsDisposed)
             {
                 return;
             }
@@ -362,13 +371,20 @@ internal sealed class MainForm : Form
     {
         try
         {
-            if (_context.PartyRoamingRoot is not { } root || _context.Settings.PartyImportLater)
+            if (!_context.PartyRoamingRootKnown || _context.Settings.PartyImportLater)
             {
                 return;
             }
 
-            var state = await Task.Run(() => PartyImportHint.Check(root)).ConfigureAwait(true);
+            // The folder is found on the worker thread too: the real one may be redirected to a slow or disconnected place, and the window must not wait for it.
+            var state = await Task.Run(() => _context.ResolvePartyRoamingRoot() is { } root ? PartyImportHint.Check(root) : PartyImportHintState.None).ConfigureAwait(true);
             if (state == PartyImportHintState.None || IsDisposed || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            // The look may end while a dialog is open (the confirmation of a close during the hardware check, any message box): never open the notice over it, wait until the window is free.
+            if (!await WaitUntilFreeAsync().ConfigureAwait(true) || _context.Settings.PartyImportLater)
             {
                 return;
             }
@@ -381,6 +397,27 @@ internal sealed class MainForm : Form
         }
     }
 
+    /// <summary>How often <see cref="WaitUntilFreeAsync"/> looks again while a dialog is open (a test lowers it).</summary>
+    internal int FreePollMs = 250;
+
+    /// <summary>
+    /// True while the window cannot take a new dialog of its own: it is closed or disposed, it is disabled (the native window of the owner of a dialog is disabled while that dialog is open, and so is the
+    /// managed state of a window a caller disabled), or a modal form of the app is open.
+    /// </summary>
+    internal bool IsBlockedByDialog =>
+        IsDisposed || !Enabled || (IsHandleCreated && !IsWindowEnabled(Handle)) || Application.OpenForms.Cast<Form>().Any(window => window != this && window.Modal);
+
+    /// <summary>Waits on the UI thread (a short timer, nothing blocked: the dialog that is open keeps running) until no dialog is open over the window. False when the window went away meanwhile.</summary>
+    internal async Task<bool> WaitUntilFreeAsync()
+    {
+        while (!IsDisposed && IsBlockedByDialog)
+        {
+            await Task.Delay(Math.Max(1, FreePollMs)).ConfigureAwait(true);
+        }
+
+        return !IsDisposed;
+    }
+
     /// <summary>What the owner's answer to the notice does. A test calls it with a launcher that starts nothing (<see cref="GuiContext.PartyLauncherOverride"/>).</summary>
     internal void ApplyPartyImportAnswer(PartyImportAnswer answer)
     {
@@ -391,8 +428,32 @@ internal sealed class MainForm : Form
                 (CurrentPage as PartyPage)?.Open();
                 break;
             case PartyImportAnswer.Later:
-                _context.Settings.TrySavePartyImportLater();
+                PartyLaterSave = SavePartyImportLaterAsync();
                 break;
+        }
+    }
+
+    /// <summary>The save that 「あとで」 started (completed when none was). A test awaits it; the window never does.</summary>
+    internal Task PartyLaterSave { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Saves 「あとで」 off the UI thread (the lock retries and the flush to disk must not hold the window). A save that did not reach the file is said once on the status line: the notice then comes again at
+    /// the next start, which is what the line tells.
+    /// </summary>
+    private async Task SavePartyImportLaterAsync()
+    {
+        var saved = false;
+        try
+        {
+            saved = await _context.Settings.TrySavePartyImportLaterAsync().ConfigureAwait(true);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+        }
+
+        if (!saved && !IsDisposed)
+        {
+            _context.ReportKey("gui.party.import.later.failed");
         }
     }
 
@@ -811,4 +872,9 @@ internal sealed class MainForm : Form
         var most = Math.Max((int)(_statusBar.ClientSize.Width * 0.4), LogicalToDeviceUnits(160));
         _notice.Width = Math.Min(wanted, most);
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(nint window);
 }
+
