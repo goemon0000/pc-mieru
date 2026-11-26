@@ -80,7 +80,7 @@ public class ImportEnginePrepareTests
         Assert.Equal(ImportOutcome.SourceUnreadable, plan.Status);
         Assert.Equal("source-denied", plan.Reason);
         Assert.Equal(ImportOrigin.PartsLife, plan.Candidate!.Origin);
-        Assert.False(plan.CanCommit);
+        Assert.Equal(1, bed.Probe.Calls);                       // the old product is asked first, then the candidate is opened
         Assert.Equal(0, bed.Probe.Calls);                       // it stopped before the old product was asked
         Assert.False(Directory.Exists(bed.DestinationDir));     // and wrote nothing
 
@@ -221,7 +221,7 @@ public class ImportEnginePrepareTests
         var plan = bed.Engine.Prepare();
         Assert.Equal(ImportOutcome.OldAppRunning, plan.Status);
         Assert.Equal(reason, plan.Reason);
-        Assert.Equal(ImportOrigin.PartsLife, plan.Candidate!.Origin);
+        Assert.Null(plan.Candidate);   // no candidate was opened to find out
         Assert.False(plan.CanCommit);
         Assert.Equal(1, bed.Probe.Calls);
         Assert.False(Directory.Exists(bed.DestinationDir));
@@ -245,12 +245,14 @@ public class ImportEnginePrepareTests
     }
 
     [Fact]
-    public void No_candidate_is_said_before_the_old_product_is_asked()
+    public void The_old_product_is_asked_before_any_candidate_is_looked_for()
     {
         using var bed = new ImportBed();
-        bed.Probe.State = LegacyRunningState.Running;
         Assert.Equal(ImportOutcome.NoCandidate, bed.Engine.Prepare().Status);
-        Assert.Equal(0, bed.Probe.Calls);
+        Assert.Equal(1, bed.Probe.Calls);
+
+        bed.Probe.State = LegacyRunningState.Running;
+        Assert.Equal(ImportOutcome.OldAppRunning, bed.Engine.Prepare().Status);   // also with no save at all: nothing is opened while it runs
     }
 
     // ---- the source's own verdict ----

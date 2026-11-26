@@ -126,6 +126,9 @@ public sealed class ImportEngine
     /// <summary>Tests: called with the path of the finished temp file, just before it is moved to the destination.</summary>
     internal Action<string>? BeforeMove { get; set; }
 
+    /// <summary>Tests: called with the path of the finished, verified temp file of the original copy, just before it is moved to its final name.</summary>
+    internal Action<string>? BeforeOriginalMove { get; set; }
+
     /// <summary>Tests: the clock of the original copy's name.</summary>
     internal Func<DateTime> UtcNow { get; set; } = static () => DateTime.UtcNow;
 
@@ -171,13 +174,14 @@ public sealed class ImportEngine
         if (dest.Kind == DestinationKind.Valid) return Plan(ImportOutcome.AlreadyHave, ImportReason.AlreadyHave);
         if (dest.Kind == DestinationKind.Blocked) return Plan(ImportOutcome.DestinationBlocked, dest.Reason!, dest.Detail);
 
+        // The old product is asked BEFORE any candidate is opened: while it runs, our open handle must not even exist.
+        var old = ProbeOldApp();
+        if (old is not null) return Plan(ImportOutcome.OldAppRunning, old);
+
         var located = Locate();
         if (located.Outcome != ImportOutcome.Ready)
             return Plan(located.Outcome, located.Reason, located.Detail, located.Candidate);
         var candidate = located.Candidate!;
-
-        var old = ProbeOldApp();
-        if (old is not null) return Plan(ImportOutcome.OldAppRunning, old, null, candidate);
 
         var read = SourceFile.ReadStable(candidate.Path, StateImport.MaxBytes + 1);
         if (!read.Ok) return Plan(FromBadRead(read, out string reason), reason, read.Detail, candidate);
@@ -247,6 +251,14 @@ public sealed class ImportEngine
         var old = ProbeOldApp();
         if (old is not null) return Result(ImportOutcome.OldAppRunning, old, null, candidate);
 
+        // The discovery is run again: a PartsLife that appeared (or became unreadable) after the plan chose PartsParty is another source.
+        var located = Locate();
+        bool same = located.Candidate is not null && string.Equals(located.Candidate.Path, candidate.Path, StringComparison.OrdinalIgnoreCase);
+        if (!same)
+            return Result(ImportOutcome.SourceChanged, ImportReason.SourceChanged, "the candidate is no longer the one that was inspected", candidate);
+        if (located.Outcome != ImportOutcome.Ready)
+            return Result(located.Outcome, located.Reason, located.Detail, candidate);
+
         var read = SourceFile.ReadStable(candidate.Path, StateImport.MaxBytes + 1);
         if (!read.Ok) return Result(FromBadRead(read, out string reason), reason, read.Detail, candidate);
         if (read.Fingerprint != plan.Source)
@@ -264,7 +276,19 @@ public sealed class ImportEngine
             return Result(ImportOutcome.NeedsConsent, ImportReason.NeedsConsent, null, candidate) with { RepairedFields = verdict.RepairedFields };
         }
 
-        var published = Publish(verdict.Converted!, repair ? read.Bytes : null);
+        // Immediately before the final move: the old product is asked once more and the source is read once more.
+        ImportResult? LastCheck()
+        {
+            var running = ProbeOldApp();
+            if (running is not null) return Result(ImportOutcome.OldAppRunning, running, "it started while the save was being written", candidate);
+            var again = SourceFile.ReadStable(candidate.Path, StateImport.MaxBytes + 1);
+            if (!again.Ok) return Result(FromBadRead(again, out string why), why, again.Detail, candidate);
+            if (again.Fingerprint != plan.Source)
+                return Result(ImportOutcome.SourceChanged, ImportReason.SourceChanged, "the source changed while the save was being written", candidate);
+            return null;
+        }
+
+        var published = Publish(verdict.Converted!, repair ? read.Bytes : null, LastCheck);
         if (published.Outcome != ImportOutcome.Imported) return published with { Candidate = candidate };
         return published with { Candidate = candidate, Repaired = repair, RepairedFields = verdict.RepairedFields };
     }
@@ -289,7 +313,7 @@ public sealed class ImportEngine
             if (dest.Kind == DestinationKind.Blocked) return Result(ImportOutcome.DestinationBlocked, dest.Reason!, dest.Detail, null);
 
             byte[] fresh = new UTF8Encoding(false).GetBytes(PartyState.Fresh().ToJson());
-            var published = Publish(fresh, null);
+            var published = Publish(fresh, null, null);
             return published.Outcome == ImportOutcome.Imported
                 ? published with { Outcome = ImportOutcome.StartedFresh, Reason = ImportReason.StartedFresh }
                 : published;
@@ -409,27 +433,35 @@ public sealed class ImportEngine
     }
 
     /// <summary>
-    /// Writes the destination: the original copy first when one is wanted, then the bytes to a unique temp file next to the destination,
-    /// read back and verified, flushed to disk, and moved WITHOUT overwriting. When the destination appeared in the meantime it wins: only our
-    /// own temp files are deleted. On any failure the files of this call are deleted; nothing else is ever deleted.
+    /// Writes the destination: the original copy first when one is wanted (a temp file, read back, then moved WITHOUT overwriting to its final
+    /// name, so no partial file ever has that name), then the bytes to a unique temp file next to the destination, read back and verified,
+    /// flushed to disk. <paramref name="lastCheck"/> runs immediately before the final move and may stop it with a result. The move is
+    /// WITHOUT overwriting. When the destination appeared in the meantime it wins: only our own files are deleted. On any failure or stop the
+    /// files of this call are deleted; nothing else is ever deleted.
     /// </summary>
-    private ImportResult Publish(byte[] bytes, byte[]? original)
+    private ImportResult Publish(byte[] bytes, byte[]? original, Func<ImportResult?>? lastCheck)
     {
-        string? originalPath = null, temp = null;
+        var mine = new List<string>();   // files this call created and has not published (the original copy's final name counts as one)
+        string? originalPath = null;
         try
         {
             Directory.CreateDirectory(_paths.DestinationDir);
-            if (original is not null) WriteOriginalCopy(original, ref originalPath);
-            WriteTemp(bytes, ref temp);
-            BeforeMove?.Invoke(temp!);
-            File.Move(temp!, _paths.Destination, overwrite: false);
-            temp = null;
+            if (original is not null) originalPath = WriteOriginalCopy(original, mine);
+            string temp = WriteTemp(bytes, mine);
+            BeforeMove?.Invoke(temp);
+            var stop = lastCheck?.Invoke();
+            if (stop is not null)
+            {
+                foreach (string path in mine) DeleteQuietly(path);
+                return stop;
+            }
+
+            File.Move(temp, _paths.Destination, overwrite: false);
             return Result(ImportOutcome.Imported, ImportReason.Imported, null, null) with { OriginalCopy = originalPath };
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
-            DeleteQuietly(temp);
-            DeleteQuietly(originalPath);
+            foreach (string path in mine) DeleteQuietly(path);
 
             if (e is VerifyFailedException v) return Result(ImportOutcome.Failed, ImportReason.VerifyFailed, v.Message, null);
 
@@ -441,40 +473,51 @@ public sealed class ImportEngine
         }
     }
 
-    private void WriteOriginalCopy(byte[] original, ref string? created)
+    /// <summary>
+    /// Like the destination: a unique <c>CreateNew</c> temp file, flushed to disk, read back and compared with the source bytes, and only then
+    /// moved without overwriting to <c>imported-original-&lt;UTC&gt;.json</c> (an existing copy is never overwritten: the next gets <c>-2</c>, ...).
+    /// </summary>
+    private string WriteOriginalCopy(byte[] original, List<string> mine)
     {
         string stamp = UtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+        string tmp = Path.Combine(_paths.DestinationDir, $"imported-original.import-{Guid.NewGuid():N}.tmp");
+        using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            mine.Add(tmp);
+            fs.Write(original);
+            fs.Flush(flushToDisk: true);
+        }
+
+        if (!File.ReadAllBytes(tmp).AsSpan().SequenceEqual(original))
+            throw new VerifyFailedException("the original copy does not read back as the bytes that were written");
+
+        BeforeOriginalMove?.Invoke(tmp);
+
         for (int n = 1; ; n++)
         {
             string name = n == 1 ? $"imported-original-{stamp}.json" : $"imported-original-{stamp}-{n}.json";
             string path = Path.Combine(_paths.DestinationDir, name);
-            FileStream fs;
             try
             {
-                fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                File.Move(tmp, path, overwrite: false);
             }
             catch (IOException e) when (n < 20 && SourceFile.IsAlreadyExists(e))
             {
-                continue;   // two attempts within one second: the second gets its own name, an existing copy is never overwritten
+                continue;   // two attempts within one second: the second gets its own name
             }
 
-            created = path;
-            using (fs)
-            {
-                fs.Write(original);
-                fs.Flush(flushToDisk: true);
-            }
-
-            return;
+            mine.Remove(tmp);
+            mine.Add(path);
+            return path;
         }
     }
 
-    private void WriteTemp(byte[] bytes, ref string? created)
+    private string WriteTemp(byte[] bytes, List<string> mine)
     {
         string path = Path.Combine(_paths.DestinationDir, $"{ImportPaths.StateFileName}.import-{Guid.NewGuid():N}.tmp");
         using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
-            created = path;
+            mine.Add(path);
             fs.Write(bytes);
             fs.Flush(flushToDisk: true);
         }
@@ -491,6 +534,8 @@ public sealed class ImportEngine
         {
             throw new VerifyFailedException("PartyState.FromJson cannot read the temp file: " + e.GetType().Name);
         }
+
+        return path;
     }
 
     private static void DeleteQuietly(string? path)
