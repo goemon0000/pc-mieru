@@ -80,8 +80,8 @@ public class ImportEnginePrepareTests
         Assert.Equal(ImportOutcome.SourceUnreadable, plan.Status);
         Assert.Equal("source-denied", plan.Reason);
         Assert.Equal(ImportOrigin.PartsLife, plan.Candidate!.Origin);
+        Assert.False(plan.CanCommit);
         Assert.Equal(1, bed.Probe.Calls);                       // the old product is asked first, then the candidate is opened
-        Assert.Equal(0, bed.Probe.Calls);                       // it stopped before the old product was asked
         Assert.False(Directory.Exists(bed.DestinationDir));     // and wrote nothing
 
         var result = bed.Engine.Commit(plan, true);             // a plan that cannot be committed is answered as it is
