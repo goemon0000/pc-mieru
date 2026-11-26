@@ -129,6 +129,9 @@ public static class Strings
     public static string ImportStartFresh   => T("新しく始める", "Start fresh");
     public static string ImportRetry        => T("もう一度", "Retry");
     public static string ImportCloseButton  => T("閉じる", "Close");
+    public static string ImportOpenReadOnly => T("保存せずに開く", "Open without saving");
+    public static string ImportReadOnlyNote => T("保存せずに開いた場合、この回の進みは保存されません。新しい保存はそのまま残ります。",
+                                                 "If you open it without saving, this session's progress is not saved. The new save is left as it is.");
     public static string ImportFreshAsk     => T("旧パーツぐらしの続きはこのあと引き継げなくなります。新しく始めますか。",
                                                  "The old progress cannot be brought over afterwards. Start fresh?");
     public static string ImportProblemTitle => T("パーツぐらしを始められません", "Parts Life cannot start yet");

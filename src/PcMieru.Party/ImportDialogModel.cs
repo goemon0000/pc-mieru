@@ -11,6 +11,7 @@ internal enum ImportDialogResult
     StartFresh,
     Retry,
     Close,
+    OpenReadOnly,
 }
 
 internal sealed record ImportDialogButton(string Text, ImportDialogResult Result, bool IsDefault = false, bool IsCancel = false);
@@ -57,8 +58,10 @@ internal static class ImportDialogModels
     {
         var buttons = new List<ImportDialogButton> { new(Strings.ImportRetry, ImportDialogResult.Retry, IsDefault: true) };
         if (problem.CanStartFresh) buttons.Add(new ImportDialogButton(Strings.ImportStartFresh, ImportDialogResult.StartFresh));
+        if (problem.CanOpenReadOnly) buttons.Add(new ImportDialogButton(Strings.ImportOpenReadOnly, ImportDialogResult.OpenReadOnly));
         buttons.Add(new ImportDialogButton(Strings.ImportCloseButton, ImportDialogResult.Close, IsCancel: true));
-        return new ImportDialogModel(Strings.ImportProblemTitle, Strings.ImportMessage(problem.Outcome, problem.Reason), null, [], null, buttons);
+        return new ImportDialogModel(Strings.ImportProblemTitle, Strings.ImportMessage(problem.Outcome, problem.Reason), null, [],
+            problem.CanOpenReadOnly ? Strings.ImportReadOnlyNote : null, buttons);
     }
 
     /// <summary>The dialog of a <c>--smoke --import-preview</c> case. A made-up plan: no engine, no path is opened (the candidate path is only a label).</summary>

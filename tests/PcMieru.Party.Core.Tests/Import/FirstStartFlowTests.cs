@@ -81,19 +81,48 @@ public class FirstStartFlowTests
     }
 
     [Fact]
-    public void A_destination_that_cannot_be_read_is_loaded_as_it_is_and_never_started_fresh_over()
+    public void A_destination_that_cannot_be_read_is_never_a_plain_proceed_and_never_started_fresh_over()
     {
         using var bed = new ImportBed();
         byte[] junk = Encoding.UTF8.GetBytes("{ this is not a save");
         bed.WriteDestination(junk);
         var script = new Script();
+        script.Problems.Enqueue(ProblemChoice.OpenReadOnly);
 
-        Assert.Equal(FirstStartEnd.Proceed, FirstStartFlow.Run(bed.Engine, script));
+        // The reason is shown first; going on is a read-only proceed (the load that follows moves nothing and writes nothing).
+        Assert.Equal(FirstStartEnd.ProceedReadOnly, FirstStartFlow.Run(bed.Engine, script));
 
+        var shown = Assert.Single(script.Shown);
+        Assert.Equal(ImportOutcome.DestinationBlocked, shown.Outcome);
+        Assert.True(shown.CanOpenReadOnly);
         Assert.Equal(junk, bed.DestinationBytes());
         Assert.Equal(new[] { "state.json" }, bed.DestinationFiles());
         Assert.Empty(script.Asked);
-        Assert.Empty(script.Shown);
+    }
+
+    [Fact]
+    public void An_unreadable_destination_with_Close_exits()
+    {
+        using var bed = new ImportBed();
+        bed.WriteDestination(Encoding.UTF8.GetBytes("{ this is not a save"));
+        var script = new Script();
+        script.Problems.Enqueue(ProblemChoice.Close);
+
+        Assert.Equal(FirstStartEnd.Exit, FirstStartFlow.Run(bed.Engine, script));
+    }
+
+    [Fact]
+    public void An_old_save_that_appears_while_the_automatic_first_file_is_written_is_asked_about_not_buried()
+    {
+        using var bed = new ImportBed();
+        bed.Engine.BeforeMove = _ => bed.WriteSource(ImportOrigin.PartsLife, Save(111.5));   // after "no old save", before the first file
+        var script = new Script();
+        script.Continues.Enqueue(ContinueChoice.Later);
+
+        Assert.Equal(FirstStartEnd.Exit, FirstStartFlow.Run(bed.Engine, script));
+
+        Assert.Single(script.Asked);   // the plan was made again and found the save
+        Assert.False(File.Exists(bed.Destination));
     }
 
     [Fact]

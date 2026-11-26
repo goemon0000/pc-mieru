@@ -10,8 +10,8 @@ public class FirstStartDecisionTests
         [ImportOutcome.NoCandidate] = FirstStartStep.StartFreshThenLoad,
         [ImportOutcome.Ready] = FirstStartStep.Ask,
         [ImportOutcome.NeedsRepair] = FirstStartStep.Ask,
-        // An unreadable destination is never covered by a fresh start: it is loaded as it is (PartyState.Load keeps it and blocks saving).
-        [ImportOutcome.DestinationBlocked] = FirstStartStep.Load,
+        // An unreadable destination is never covered by a fresh start and never loaded for writing: the reason is shown (Retry / Close / open read-only).
+        [ImportOutcome.DestinationBlocked] = FirstStartStep.Problem,
         [ImportOutcome.OldAppRunning] = FirstStartStep.Problem,
         [ImportOutcome.SourceUnreadable] = FirstStartStep.Problem,
         [ImportOutcome.SourceChanged] = FirstStartStep.Problem,
@@ -51,7 +51,7 @@ public class FirstStartDecisionTests
     [InlineData(ImportOutcome.Imported, FirstStartAfter.Load)]
     [InlineData(ImportOutcome.StartedFresh, FirstStartAfter.Load)]
     [InlineData(ImportOutcome.AlreadyHave, FirstStartAfter.Load)]
-    [InlineData(ImportOutcome.DestinationBlocked, FirstStartAfter.Load)]
+    [InlineData(ImportOutcome.DestinationBlocked, FirstStartAfter.Problem)]
     [InlineData(ImportOutcome.SourceChanged, FirstStartAfter.PrepareAgain)]
     [InlineData(ImportOutcome.CandidateAppeared, FirstStartAfter.PrepareAgain)]
     [InlineData(ImportOutcome.OldAppRunning, FirstStartAfter.PrepareAgain)]
@@ -63,6 +63,23 @@ public class FirstStartDecisionTests
     public void What_follows_a_write(ImportOutcome outcome, FirstStartAfter expected)
     {
         Assert.Equal(expected, FirstStartDecision.AfterWrite(outcome));
+    }
+
+    [Theory]
+    [MemberData(nameof(AllOutcomes))]
+    public void Only_an_unreadable_destination_offers_to_open_read_only(ImportOutcome outcome)
+    {
+        Assert.Equal(outcome == ImportOutcome.DestinationBlocked, FirstStartDecision.OffersReadOnly(outcome));
+        Assert.Equal(outcome == ImportOutcome.DestinationBlocked, new ProblemView(outcome, "x", null).CanOpenReadOnly);
+    }
+
+    [Theory]
+    [MemberData(nameof(AllOutcomes))]
+    public void No_outcome_loads_for_writing_when_the_destination_is_blocked(ImportOutcome outcome)
+    {
+        // The only steps that end in a plain load are a readable save and a written one.
+        bool loads = FirstStartDecision.Next(outcome) == FirstStartStep.Load || FirstStartDecision.AfterWrite(outcome) == FirstStartAfter.Load;
+        Assert.Equal(outcome is ImportOutcome.AlreadyHave or ImportOutcome.Imported or ImportOutcome.StartedFresh, loads);
     }
 
     [Theory]

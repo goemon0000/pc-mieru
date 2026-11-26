@@ -295,7 +295,47 @@ public sealed class PartyState
     public static PartyState Load(string dir, string? legacyFile = null) => Load(dir, legacyFile, KeepBadCopy);
 
     /// <summary>試験用: 控えを作る処理（path, move → 作れたか）を差し替える（作れなかった場合を作るため）。</summary>
-    internal static PartyState Load(string dir, string? legacyFile, Func<string, bool, bool> keepBadCopy)
+    internal static PartyState Load(string dir, string? legacyFile, Func<string, bool, bool> keepBadCopy) =>
+        LoadCore(dir, legacyFile, keepBadCopy, out _);
+
+    /// <summary>
+    /// 初回起動の流れのあとの読み込み。<see cref="Load(string, string?)"/> と同じに読むが、保存が「無い」（FileNotFound / DirectoryNotFound）ことを
+    /// <paramref name="missing"/> で伝える。流れが「ある」と言ったあとで消えていたとき、空の進みを書ける状態で続けず、初回起動の流れへ戻るため。
+    /// 無いときに返す状態は使わない（何も書いていない）。
+    /// </summary>
+    internal static PartyState LoadExisting(string dir, out bool missing) => LoadCore(dir, null, KeepBadCopy, out missing);
+
+    /// <summary>
+    /// 読むだけで開く（新しい保存が読めないと分かっていて、人がそれでも続けると選んだとき）。**ファイルには何もしない**:
+    /// 脇へ退けない・控えを作らない・作り直さない。読めれば読み、読めなければ空の進みを返す。どちらでも保存は止まっている（<see cref="SaveBlocked"/>）ので、
+    /// この回は何も書かれない。
+    /// </summary>
+    internal static PartyState LoadReadOnly(string dir)
+    {
+        string path = Path.Combine(dir, "state.json");
+        PartyState state;
+        if (TryReadText(path, out string text) == ReadOutcome.Read)
+        {
+            try
+            {
+                state = FromJson(text, out _);
+            }
+            catch (Exception e) when (LenientJson.IsReadError(e))
+            {
+                state = Fresh();
+            }
+        }
+        else
+        {
+            state = Fresh();
+        }
+
+        state._path = path;
+        state.SaveBlocked = true;
+        return state;
+    }
+
+    private static PartyState LoadCore(string dir, string? legacyFile, Func<string, bool, bool> keepBadCopy, out bool missing)
     {
         string path = Path.Combine(dir, "state.json");
         // **「無い」と決めるのは、開こうとして FileNotFound / DirectoryNotFound が返ったときだけ。**
@@ -309,6 +349,7 @@ public sealed class PartyState
             read = TryReadText(legacyFile, out text);
         }
 
+        missing = read == ReadOutcome.Missing;
         PartyState state;
         if (read == ReadOutcome.Missing)
         {

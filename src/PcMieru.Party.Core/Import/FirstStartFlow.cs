@@ -3,7 +3,7 @@ namespace PcMieru.Party.Import;
 /// <summary>What the first start of Parts Life does next, given what <see cref="ImportEngine.Prepare"/> found (DESIGN-C 4.1 items 1 and 2).</summary>
 public enum FirstStartStep
 {
-    /// <summary>Load the save as it is (there is one, or it cannot be read and <c>PartyState.Load</c> keeps it and blocks saving).</summary>
+    /// <summary>A readable save is there: load it.</summary>
     Load,
 
     /// <summary>There is no old save: <see cref="ImportEngine.StartFresh"/> writes the first file, then load.</summary>
@@ -42,8 +42,9 @@ public static class FirstStartDecision
 
         ImportOutcome.Ready or ImportOutcome.NeedsRepair => FirstStartStep.Ask,
 
-        // The destination is there but cannot be read: starting fresh would hide it. Load it as it is; PartyState.Load keeps the file and blocks saving.
-        ImportOutcome.DestinationBlocked => FirstStartStep.Load,
+        // The destination is there but cannot be read: it is never loaded for writing (a writable load moves it aside or starts over it) and never started fresh over.
+        // The reason is shown; Retry and Close, and for the user who goes on anyway, a read-only load (nothing is moved, nothing is written this run).
+        ImportOutcome.DestinationBlocked => FirstStartStep.Problem,
 
         ImportOutcome.OldAppRunning or ImportOutcome.SourceUnreadable or ImportOutcome.SourceChanged
             or ImportOutcome.Busy or ImportOutcome.Hold or ImportOutcome.Failed => FirstStartStep.Problem,
@@ -55,13 +56,16 @@ public static class FirstStartDecision
     /// <summary>What follows a write call (<see cref="ImportEngine.Commit"/> or <see cref="ImportEngine.StartFresh"/>).</summary>
     public static FirstStartAfter AfterWrite(ImportOutcome outcome) => outcome switch
     {
-        ImportOutcome.Imported or ImportOutcome.StartedFresh or ImportOutcome.AlreadyHave or ImportOutcome.DestinationBlocked => FirstStartAfter.Load,
-        ImportOutcome.Busy or ImportOutcome.Failed or ImportOutcome.Hold or ImportOutcome.SourceUnreadable => FirstStartAfter.Problem,
+        ImportOutcome.Imported or ImportOutcome.StartedFresh or ImportOutcome.AlreadyHave => FirstStartAfter.Load,
+        ImportOutcome.Busy or ImportOutcome.Failed or ImportOutcome.Hold or ImportOutcome.SourceUnreadable or ImportOutcome.DestinationBlocked => FirstStartAfter.Problem,
         _ => FirstStartAfter.PrepareAgain,
     };
 
     /// <summary>Only a hold offers Start fresh next to Retry and Close: the old save cannot be brought over, so starting anew is a real way on.</summary>
     public static bool OffersStartFresh(ImportOutcome outcome) => outcome == ImportOutcome.Hold;
+
+    /// <summary>Only an unreadable destination offers to open it read-only: it is the one problem that is about the new save, which a person may still want to look at.</summary>
+    public static bool OffersReadOnly(ImportOutcome outcome) => outcome == ImportOutcome.DestinationBlocked;
 }
 
 /// <summary>The answer to the three-choice question.</summary>
@@ -78,12 +82,17 @@ public enum ProblemChoice
     Retry,
     Close,
     StartFresh,
+
+    /// <summary>For an unreadable new save: go on without writing anything this run (see <see cref="FirstStartEnd.ProceedReadOnly"/>).</summary>
+    OpenReadOnly,
 }
 
 /// <summary>What the first start could not do, for the message. <see cref="Detail"/> is for logs; it is never shown.</summary>
 public sealed record ProblemView(ImportOutcome Outcome, string Reason, string? Detail)
 {
     public bool CanStartFresh => FirstStartDecision.OffersStartFresh(Outcome);
+
+    public bool CanOpenReadOnly => FirstStartDecision.OffersReadOnly(Outcome);
 }
 
 /// <summary>The questions the first start asks a person. The app answers them with windows; tests answer them with a script.</summary>
@@ -101,8 +110,11 @@ public interface IFirstStartPrompts
 /// <summary>How the first start ended.</summary>
 public enum FirstStartEnd
 {
-    /// <summary>A save is in place (or is kept as it is): load it and run.</summary>
+    /// <summary>A save is in place: load it and run.</summary>
     Proceed,
+
+    /// <summary>The new save cannot be read and the user chose to go on anyway: load it read-only (the file stays where it is, nothing is written this run).</summary>
+    ProceedReadOnly,
 
     /// <summary>The user chose Later or Close. Nothing was written; the next start asks again.</summary>
     Exit,
@@ -129,7 +141,8 @@ public static class FirstStartFlow
                     return FirstStartEnd.Proceed;
 
                 case FirstStartStep.StartFreshThenLoad:
-                    if (Settle(StartFresh(engine), engine, ref plan)) return FirstStartEnd.Proceed;
+                    // Nobody chose this: the engine proves "no old save" again under its lock right before it writes, and says CandidateAppeared when that is no longer so.
+                    if (Settle(Off(engine.StartFreshIfStillNone, "start-fresh", null), engine, ref plan)) return FirstStartEnd.Proceed;
                     continue;
 
                 case FirstStartStep.Ask:
@@ -157,6 +170,8 @@ public static class FirstStartFlow
                     {
                         case ProblemChoice.Close:
                             return FirstStartEnd.Exit;
+                        case ProblemChoice.OpenReadOnly when problem.CanOpenReadOnly:
+                            return FirstStartEnd.ProceedReadOnly;
                         case ProblemChoice.StartFresh when problem.CanStartFresh:
                             if (!prompts.ConfirmStartFresh()) continue;
                             if (Settle(StartFresh(engine), engine, ref plan)) return FirstStartEnd.Proceed;
