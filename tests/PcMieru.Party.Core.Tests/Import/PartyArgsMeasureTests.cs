@@ -137,4 +137,106 @@ public class PartyArgsMeasureTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ---- C36: a private scratch folder only (codex 2) ----
+
+    private static string NewTempRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "party-measure-scratch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void Junction(string link, string target)
+    {
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + link + "\" \"" + target + "\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+        })!;
+        p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        Assert.True(Directory.Exists(link), "the test junction was not made");
+    }
+
+    [Fact]
+    public void A_scratch_folder_under_the_temp_folder_that_is_empty_or_holds_only_our_files_is_accepted()
+    {
+        var root = NewTempRoot();
+        try
+        {
+            var dir = Path.Combine(root, "run");
+            Directory.CreateDirectory(dir);
+            Assert.Null(PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+            foreach (var name in PartyMeasure.AllowedNames) File.WriteAllText(Path.Combine(dir, name), "x");
+            Assert.Null(PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+            Assert.Null(PartyMeasure.ScratchDirProblem(dir + "\\", Path.GetTempPath() + "\\"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_folder_outside_the_temp_folder_or_the_temp_folder_itself_is_refused_by_the_path_alone()
+    {
+        var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\');
+        Assert.NotNull(PartyMeasure.ScratchDirProblem(temp, temp));
+        Assert.NotNull(PartyMeasure.ScratchDirProblem(temp + "-other\\run", temp));
+        Assert.NotNull(PartyMeasure.ScratchDirProblem(Path.Combine(temp, "a", "..", "..", "elsewhere"), temp));
+        Assert.NotNull(PartyMeasure.ScratchDirProblem(Path.Combine(Path.GetPathRoot(temp)!, "party-measure-never-created"), temp));
+        Assert.NotNull(PartyMeasure.ScratchDirProblem(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PCMieru", "party"), temp));
+    }
+
+    [Fact]
+    public void A_junction_as_the_folder_or_as_one_of_its_parents_is_refused()
+    {
+        var root = NewTempRoot();
+        try
+        {
+            var target = Path.Combine(root, "target");
+            Directory.CreateDirectory(Path.Combine(target, "child"));
+            var link = Path.Combine(root, "link");
+            Junction(link, target);
+            var viaLink = PartyMeasure.ScratchDirProblem(link, Path.GetTempPath());
+            Assert.NotNull(viaLink);
+            Assert.Contains("junction", viaLink);
+            Assert.NotNull(PartyMeasure.ScratchDirProblem(Path.Combine(link, "child"), Path.GetTempPath()));
+            Assert.Null(PartyMeasure.ScratchDirProblem(Path.Combine(target, "child"), Path.GetTempPath()));
+            Directory.Delete(link);
+            Assert.True(Directory.Exists(Path.Combine(target, "child")), "removing the junction must leave the target");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_folder_that_holds_anything_else_is_refused()
+    {
+        var root = NewTempRoot();
+        try
+        {
+            var dir = Path.Combine(root, "run");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "other.txt"), "x");
+            Assert.Contains("other.txt", PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+            File.Delete(Path.Combine(dir, "other.txt"));
+            File.WriteAllText(Path.Combine(dir, "state.json.bad-1"), "x");
+            Assert.NotNull(PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+            File.Delete(Path.Combine(dir, "state.json.bad-1"));
+            Directory.CreateDirectory(Path.Combine(dir, "sub"));
+            Assert.NotNull(PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+            Directory.Delete(Path.Combine(dir, "sub"));
+            Directory.CreateDirectory(Path.Combine(dir, "state.json"));
+            Assert.Contains("plain file", PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -209,6 +209,9 @@ internal sealed partial class PartyWindow : Window
     /// Null = nothing is watched and nothing is paid.
     /// </summary>
     internal Action? FirstValueShown { get; set; }
+
+    /// <summary>True in a measuring start (--measure): every command that starts or brings forward another program, or opens a real folder or page, does nothing.</summary>
+    internal bool Measuring { get; set; }
     private bool _firstValueNoted;
 
     private void NoteFirstValue()
@@ -789,6 +792,9 @@ internal sealed partial class PartyWindow : Window
     /// </summary>
     private void OpenChecks()
     {
+        // A measuring start (--measure) must not start or bring forward PCMieru.exe (it would read the real gui.ini and Run key): the command does nothing.
+        if (Measuring) return;
+
         const string mainExe = "PCMieru.exe";
         if (SiblingWindows.Notify(mainExe, MieruMessages.OpenChecks, allowForeground: true) > 0) return;
 

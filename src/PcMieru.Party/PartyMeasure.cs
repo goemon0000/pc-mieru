@@ -32,6 +32,67 @@ internal static class PartyMeasure
 
     internal static string FirstValuePath(string dir) => Path.Combine(dir, FirstValueFileName);
 
+    /// <summary>The only names a measuring folder may hold when the run starts: what a measuring start itself writes.</summary>
+    internal static readonly string[] AllowedNames = [StateFileName, StateFileName + ".tmp", FirstValueFileName];
+
+    /// <summary>
+    /// Why <paramref name="dir"/> may not be the folder of a measuring start, or null when it may (C36, codex 2). The folder must be a private scratch folder: it sits under <paramref name="tempRoot"/>
+    /// (the caller passes <c>Path.GetTempPath()</c>), neither it nor any parent between it and the temp root is a reparse point (a junction or a symbolic link could point at the real save), and it is
+    /// empty or holds only <see cref="AllowedNames"/> (plain files). String and attribute work only: this never resolves the real Party home or the import paths, and it reads no file.
+    /// The temp root itself is the anchor the OS gave and is not tested.
+    /// </summary>
+    internal static string? ScratchDirProblem(string dir, string tempRoot)
+    {
+        string full;
+        string root;
+        try
+        {
+            full = Path.GetFullPath(dir).TrimEnd('\\', '/');
+            root = Path.GetFullPath(tempRoot).TrimEnd('\\', '/');
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return "--measure: the folder is not a usable path: " + dir;
+        }
+
+        if (root.Length == 0 || !full.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return "--measure: the folder must be inside the temp folder (" + root + "): " + full;
+        }
+
+        for (var p = full; p is not null && !string.Equals(p, root, StringComparison.OrdinalIgnoreCase); p = Path.GetDirectoryName(p))
+        {
+            FileAttributes attributes;
+            try
+            {
+                attributes = File.GetAttributes(p);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return "--measure: cannot read the attributes of " + p;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0) return "--measure: a junction or a link is not allowed: " + p;
+            if ((attributes & FileAttributes.Directory) == 0) return "--measure: not a folder: " + p;
+        }
+
+        try
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(full))
+            {
+                var name = Path.GetFileName(entry);
+                if (!AllowedNames.Contains(name, StringComparer.OrdinalIgnoreCase)) return "--measure: the folder must be empty, it holds " + name;
+                if ((File.GetAttributes(entry) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0) return "--measure: " + name + " is not a plain file";
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return "--measure: the folder could not be listed: " + full;
+        }
+
+        return null;
+    }
+
     /// <summary>When this process was created (UTC), from the OS.</summary>
     internal static DateTime ProcessStartUtc()
     {

@@ -156,6 +156,13 @@ internal static class Program
             return 1;
         }
 
+        // Only a private scratch folder (C36): under the temp folder, no junction or link on the way, empty. String and attribute work: nothing of the user's is resolved.
+        if (PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath()) is { } scratchProblem)
+        {
+            Say(scratchProblem, smoke: true, language);
+            return 1;
+        }
+
         using var resident = ResidentInstance.TryAcquire(PartyMeasure.ResidentName());
         if (resident is null)
         {
@@ -276,6 +283,8 @@ internal static class Program
         var window = new PartyWindow(language, state, feed, writer, options.Smoke || options.MeasureDir is not null ? null : static () => GuiLanguage.Read());
         if (options.MeasureDir is { } measureFolder)
         {
+            // Nothing that starts or brings forward another program or opens a real folder or page works in a measuring start (the Open checks command checks this flag first).
+            window.Measuring = true;
             // The time of the first non-missing value on the board (DESIGN-C 7), from the OS's creation time of this process. One line in the measuring folder; a failure to write it is not the run's failure.
             var startedUtc = PartyMeasure.ProcessStartUtc();
             window.FirstValueShown = () =>

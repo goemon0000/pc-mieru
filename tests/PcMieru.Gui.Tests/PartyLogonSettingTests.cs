@@ -441,6 +441,48 @@ public sealed class PartyLogonSettingTests
     }
 
     [Fact]
+    public void A_measuring_start_checks_its_folder_first_and_the_Open_checks_command_does_nothing_in_it()
+    {
+        // C36 (codex 1 and 2): the scratch-folder check runs before the resident mutex and the state load; the Open checks command returns before it can start or notify PCMieru.exe; and nothing
+        // else in the Party sources starts a program, notifies or activates a sibling window, or opens a real folder or page.
+        var party = Path.Combine(Harness.Root, "src", "PcMieru.Party");
+        var program = File.ReadAllText(Path.Combine(party, "Program.cs"));
+        var start = program.IndexOf("private static int RunMeasure(", StringComparison.Ordinal);
+        var check = program.IndexOf("PartyMeasure.ScratchDirProblem(dir, Path.GetTempPath())", start, StringComparison.Ordinal);
+        var mutex = program.IndexOf("ResidentInstance.TryAcquire(", start, StringComparison.Ordinal);
+        var load = program.IndexOf("PartyState.Load(dir)", start, StringComparison.Ordinal);
+        Assert.True(start > 0 && check > start && check < mutex && mutex < load, $"order folder check < mutex < load: {start} {check} {mutex} {load}");
+        Assert.Contains("window.Measuring = true;", program, StringComparison.Ordinal);
+
+        var window = File.ReadAllText(Path.Combine(party, "PartyWindow.xaml.cs"));
+        var open = window.IndexOf("private void OpenChecks()", StringComparison.Ordinal);
+        var guard = window.IndexOf("if (Measuring) return;", open, StringComparison.Ordinal);
+        var notify = window.IndexOf("SiblingWindows.Notify(", open, StringComparison.Ordinal);
+        var spawn = window.IndexOf("Process.Start(", open, StringComparison.Ordinal);
+        Assert.True(open > 0 && guard > open && guard < notify && guard < spawn, $"OpenChecks: guard before notify and start: {open} {guard} {notify} {spawn}");
+
+        var risky = new[] { "Process.Start(", "SiblingWindows.Notify(", "SiblingWindows.Activate(", "ShellExecute", "explorer", "Launcher.Launch", "OpenFolder" };
+        foreach (var file in Directory.GetFiles(party, "*.cs", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileName(file);
+            if (name is "PartyMeasure.cs") continue;
+            var text = File.ReadAllText(file);
+            foreach (var word in risky)
+            {
+                var at = 0;
+                while ((at = text.IndexOf(word, at, StringComparison.OrdinalIgnoreCase)) >= 0)
+                {
+                    // allowed: OpenChecks (guarded above) and the second-start path of Program.cs (a measuring start leaves Main before it)
+                    var inOpenChecks = name == "PartyWindow.xaml.cs" && at > open && at < window.IndexOf("PCMieru.LanguageChanged.v1", open, StringComparison.Ordinal);
+                    var inProgramSecondStart = name == "Program.cs" && word == "SiblingWindows.Activate(" && at > program.IndexOf("InstallGate.EnterStartup(", StringComparison.Ordinal) && at > program.IndexOf("if (options.MeasureDir is { } measureDir)", StringComparison.Ordinal);
+                    Assert.True(inOpenChecks || inProgramSecondStart || text.Substring(0, at).LastIndexOf("//", StringComparison.Ordinal) > text.Substring(0, at).LastIndexOf('\n'), $"{name}: '{word}' outside the guarded places (offset {at})");
+                    at += word.Length;
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void The_real_store_has_not_been_built_by_this_test_run()
     {
         Assert.Equal(0, RegistryRunStore.Constructed);
