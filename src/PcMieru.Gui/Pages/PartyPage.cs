@@ -93,7 +93,7 @@ internal static class PartyStrings
     public static readonly StringEntry[] All =
     [
         new("gui.nav.party", "パーツぐらし", "Parts Life"),
-        new("gui.party.about", "パーツぐらしは、PC のパーツを育てて眺める別のウィンドウです。", "Parts Life is a separate window where you look after the parts of your PC."),
+        new("gui.party.about", "パーツぐらしは、PC のパーツがキャラクターになり、PC を使うほど育っていく別のウィンドウです。", "Parts Life is a separate window where the parts of your PC become characters that level up as you use your PC."),
         new("gui.party.open", "パーツぐらしを開く", "Open Parts Life"),
         new("gui.party.open.tip", "すでに開いていれば、そのウィンドウを前に出します", "If it is already open, its window is brought to the front"),
         new("gui.party.missing", "PCMieru.Party.exe が、このアプリと同じフォルダにありません。", "PCMieru.Party.exe is not in the same folder as this app."),

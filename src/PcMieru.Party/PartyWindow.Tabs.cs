@@ -343,7 +343,8 @@ internal sealed partial class PartyWindow
                     _slotMap.ResetSlotKeepingGear(_state, _director.Adventure, slot);
                     RefreshSettings();
                 }, Strings.GpuResetTitle)));
-            else
+            else if (!present.Contains(slot))
+                // 使用中のカードには出さない。手放すと、そのカードは次の採取で新しい番号へ移ってしまう（terra 4b の 1）
                 row.Children.Add(ActionButton(Strings.GpuForget, () => ConfirmReset(Strings.GpuForgetAsk(slot), () =>
                 {
                     _slotMap.ForgetSlot(_state, slot);

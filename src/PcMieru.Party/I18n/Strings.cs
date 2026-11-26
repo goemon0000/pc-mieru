@@ -68,8 +68,8 @@ public static class Strings
         "Some GPU numbers in the save were damaged. Their progress was kept and those numbers were reserved so no other card takes it over. You can release them in Settings > GPU slots.");
     public static string GpuSlotsHeader    => T("GPU の番号", "GPU slots");
     public static string GpuSlotsAbout     => T(
-        "カードごとに番号があり、経験値と装備はその番号につきます。外したカードは「手放す」で番号を閉じ、「リセット」で経験値を消して番号を空けます。",
-        "Each card has a number; its experience and gear belong to that number. Forget closes the number of a card you removed; Reset removes its experience and frees the number.");
+        "経験値と装備は GPU の番号ごとに残ります。外したカードは「手放す」で番号を閉じます（経験値と装備は残ります）。そのあと「リセット」を押すと、その番号の経験値を消し、装備を袋へ戻して番号を空けます。",
+        "Experience and gear are kept per GPU number. For a card you removed, Forget closes its number (its experience and gear are kept). Reset then deletes that number's experience, returns its gear to the bag and frees the number.");
     public static string GpuSlotsNone      => T("GPU はまだ見つかっていません", "No GPU recorded yet");
     public static string GpuStateInUse     => T("使用中", "in use");
     public static string GpuStateAbsent    => T("見当たらない", "not found");
