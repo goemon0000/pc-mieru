@@ -28,7 +28,12 @@ internal enum PartyLanguage
 /// (it is a small window that stays out of the taskbar and keeps the place it was left at in its save), so a logon start is the same start as a normal one: the single-resident check, the first-start import
 /// flow and the saved position are all unchanged. The flag only says where the start came from.
 /// </param>
-internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null, bool Logon = false);
+/// <param name="MeasureDir">
+/// <c>--measure &lt;absolute folder&gt;</c>: a measuring start for tools/measure.ps1 (DESIGN-C 7, 8 step 7). The folder must be fully qualified (checked here, pure string work) and must already exist (checked by Main).
+/// Not valid together with <c>--smoke</c>, <c>--logon</c>, <c>--shot</c>, <c>--tab</c> or <c>--import-preview</c>. The run keeps its state only in that folder, builds no sign-in store, shows no first-start import, takes its own
+/// resident mutex name and stays open until the window is closed.
+/// </param>
+internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null, bool Logon = false, string? MeasureDir = null);
 
 /// <summary>The cases of <c>--import-preview</c>: the three-choice question for a save that is ready or needs repairs, the message for a running old product or a hold, and the sign-in question that follows an import.</summary>
 internal enum PartyImportPreview
@@ -51,6 +56,7 @@ internal static class PartyArgs
         PartyLanguage? language = null;
         var smoke = false;
         var logon = false;
+        string? measure = null;
         string? shot = null;
         PcMieru.Party.Ui.SettingsTab? tab = null;
         PartyImportPreview? preview = null;
@@ -80,6 +86,15 @@ internal static class PartyArgs
                     break;
                 case "--logon":
                     logon = true;
+                    break;
+                case "--measure":
+                    measure = i + 1 < args.Length ? args[++i] : null;
+                    if (string.IsNullOrWhiteSpace(measure) || !System.IO.Path.IsPathFullyQualified(measure))
+                    {
+                        problem = "--measure needs an absolute folder path";
+                        return false;
+                    }
+
                     break;
                 case "--shot":
                     shot = i + 1 < args.Length ? args[++i] : null;
@@ -137,6 +152,16 @@ internal static class PartyArgs
             }
         }
 
+        if (measure is not null)
+        {
+            var with = smoke ? "--smoke" : logon ? "--logon" : shot is not null ? "--shot" : tab is not null ? "--tab" : preview is not null ? "--import-preview" : null;
+            if (with is not null)
+            {
+                problem = "--measure is not valid together with " + with;
+                return false;
+            }
+        }
+
         if (shot is not null && !smoke)
         {
             problem = "--shot is valid only together with --smoke";
@@ -161,7 +186,7 @@ internal static class PartyArgs
             return false;
         }
 
-        options = new PartyOptions(language, smoke, shot, tab, preview, logon);
+        options = new PartyOptions(language, smoke, shot, tab, preview, logon, measure);
         return true;
     }
 }

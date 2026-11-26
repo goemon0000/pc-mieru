@@ -13,6 +13,9 @@
     * the record scenario (-Mode record), on synthetic text only: the recording CSV read from outside (fresh / repeat / missing, skipped
       frames, row gaps, value columns), the GUI's event lines, the period summary, the windows around the start and the stop, the
       --measure-record switches on the app's command line, and the user-folder test.
+    * the forms (-Form party / legacy / both): the order of the runs, the old-app gate (the UTF-16 hook text in PartsLife.dll), its two PARTSLIFE_ variables,
+      Party's --measure command line, the new data folder per run and its removal, first-value.txt, the totals and the aggregate, the argument checks
+      (a child powershell that is refused before anything is made) and the order gate < start of the old app. None of these starts an app.
   With -Exe (a published PCMieru.exe) it also starts the GUI twice: with a marker path that cannot be made (exit 1, one stderr line, no
   window) and normally (reads the navigation list, the checks page index and one page step). That part starts PCMieru.exe: do not run it while
   a game is on.
@@ -1015,6 +1018,161 @@ else {
             Stop-Quietly $proc
         }
     }
+}
+
+# ---- the forms (C35): -Form party | legacy | both. None of these checks starts PCMieru, PartsLife or PartsParty. ----
+
+function Invoke-ChildMeasure([string[]]$Arguments, [string]$Tag) {
+    $o = Join-Path $WorkDir ($Tag + '.out')
+    $e = Join-Path $WorkDir ($Tag + '.err')
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $ScriptUnderTest + '"')) + $Arguments
+    $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -RedirectStandardOutput $o -RedirectStandardError $e -Wait -PassThru -WindowStyle Hidden
+    $err = ''
+    if (Test-Path -LiteralPath $e) { $err = [IO.File]::ReadAllText($e) }
+    return @{ Code = $p.ExitCode; Err = $err }
+}
+
+Check 'forms: the order of the runs alternates party and legacy; every other form repeats itself' {
+    $a = @(Get-FormPlan 'party' $true 3)
+    Assert-That (($a -join ',') -eq 'party,legacy,party,legacy,party,legacy') ('party + legacy: ' + ($a -join ','))
+    $b = @(Get-FormPlan 'party' $false 2)
+    Assert-That (($b -join ',') -eq 'party,party') ('party alone: ' + ($b -join ','))
+    $c = @(Get-FormPlan 'both' $false 2)
+    Assert-That (($c -join ',') -eq 'both,both') ('both: ' + ($c -join ','))
+    $d = @(Get-FormPlan 'legacy' $true 2)
+    Assert-That (($d -join ',') -eq 'legacy,legacy') ('legacy: ' + ($d -join ','))
+    $e = @(Get-FormPlan 'party' $true 1)
+    Assert-That (($e -join ',') -eq 'party,legacy') ('one pair: ' + ($e -join ','))
+}
+
+Check 'forms: the old-app gate finds the UTF-16 hook text in PartsLife.dll and refuses without it' {
+    $d = New-WorkSubDir 'legacy-gate'
+    $exe = Join-Path $d 'PartsLife.exe'
+    [IO.File]::WriteAllBytes($exe, [byte[]](1, 2, 3))
+    $dll = Join-Path $d 'PartsLife.dll'
+    $pad = [byte[]]@(0..255 | ForEach-Object { [byte]$_ })
+    $hook = [Text.Encoding]::Unicode.GetBytes($script:LegacyHookText)
+    [IO.File]::WriteAllBytes($dll, [byte[]]($pad + $hook + $pad))
+    Assert-That ((Test-LegacyHook $exe).found) 'the hook text in UTF-16 was not found'
+    $null = Assert-LegacySafe $exe
+    [IO.File]::WriteAllBytes($dll, [byte[]]($pad + [Text.Encoding]::ASCII.GetBytes($script:LegacyHookText) + $pad))
+    Assert-That (-not (Test-LegacyHook $exe).found) 'the text in ASCII is not a string literal of the assembly: it must not count'
+    $threw = $false
+    try { $null = Assert-LegacySafe $exe } catch { $threw = ($_.Exception.Message -like 'refused*') }
+    Assert-That $threw 'a dll without the hook must be refused'
+    Remove-Item -LiteralPath $dll -Force
+    $missing = Test-LegacyHook $exe
+    Assert-That ((-not $missing.found) -and ($missing.note -like '*not found*')) 'a missing dll must not pass'
+}
+
+Check 'forms: the old app gets exactly two PARTSLIFE_ variables, whatever this process has' {
+    $old = $env:PARTSLIFE_SELFTEST_EXTRA
+    $env:PARTSLIFE_SELFTEST_EXTRA = 'must not reach the old app'
+    try {
+        $psi = New-LegacyStartInfo 'C:\fake\PartsLife.exe' 'C:\fake\data'
+        $names = @($psi.EnvironmentVariables.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -like 'PARTSLIFE_*' } | Sort-Object)
+        Assert-That (($names -join ',') -eq 'PARTSLIFE_TEST_DATA_DIR,PARTSLIFE_UPDATE_TEST_FEED') ('names: ' + ($names -join ','))
+        Assert-That ($psi.EnvironmentVariables['PARTSLIFE_TEST_DATA_DIR'] -eq 'C:\fake\data') 'the data folder variable'
+        Assert-That ($psi.EnvironmentVariables['PARTSLIFE_UPDATE_TEST_FEED'] -eq 'http://127.0.0.1:9/') 'the feed variable'
+        Assert-That (-not $psi.UseShellExecute) 'no shell execute (the variables only work without it)'
+        Assert-That ($env:PARTSLIFE_SELFTEST_EXTRA -eq 'must not reach the old app') 'this script''s own environment must not change'
+    }
+    finally {
+        if ($null -eq $old) { Remove-Item -LiteralPath Env:PARTSLIFE_SELFTEST_EXTRA -ErrorAction SilentlyContinue } else { $env:PARTSLIFE_SELFTEST_EXTRA = $old }
+    }
+}
+
+Check 'forms: Party is started with --measure and the run folder, and nothing else' {
+    $psi = New-PartyStartInfo 'C:\fake\Party\PCMieru.Party.exe' 'C:\fake data\run1\'
+    Assert-That ($psi.Arguments -eq '--measure "C:\fake data\run1"') ('arguments: ' + $psi.Arguments)
+    Assert-That ((-not $psi.UseShellExecute) -and $psi.RedirectStandardError) 'no shell execute, stderr kept'
+}
+
+Check 'forms: every run gets a new data folder, and it is removed and checked after the run' {
+    $d = New-WorkSubDir 'form-data'
+    $one = New-FormDataDir $d 'party-01'
+    Assert-That (Test-Path -LiteralPath $one) 'the folder was not made'
+    $threw = $false
+    try { $null = New-FormDataDir $d 'party-01' } catch { $threw = $true }
+    Assert-That $threw 'a folder that exists must not be used again'
+    [IO.File]::WriteAllText((Join-Path $one 'state.json'), '{}')
+    Assert-That (Remove-FormDataDir $one) 'the removal did not report success'
+    Assert-That (-not (Test-Path -LiteralPath $one)) 'the folder is still there'
+}
+
+Check 'forms: first-value.txt is read as milliseconds; a missing or unreadable one is null with a note' {
+    $d = New-WorkSubDir 'first-value'
+    $m = Read-FirstValueMs $d
+    Assert-That (($null -eq $m.ms) -and ($m.note -like '*did not appear*')) 'a missing file must be null with a note'
+    [IO.File]::WriteAllText((Join-Path $d 'first-value.txt'), "1234`n")
+    $ok = Read-FirstValueMs $d
+    Assert-That (($ok.ms -eq 1234) -and ($null -eq $ok.note)) ('one number: ' + $ok.ms)
+    [IO.File]::WriteAllText((Join-Path $d 'first-value.txt'), 'abc')
+    $bad = Read-FirstValueMs $d
+    Assert-That (($null -eq $bad.ms) -and ($null -ne $bad.note)) 'text must be null with a note'
+}
+
+Check 'forms: the total is the sum of the process window means; a figure nobody had stays null' {
+    $by = @{
+        party = [ordered]@{ all = [ordered]@{ cpu_percent_mean = 0.5; cpu_ms_per_s_mean = 4; private_mb_mean = 30; working_set_mb_mean = 40; handles_mean = 200 } }
+        gui = [ordered]@{ all = [ordered]@{ cpu_percent_mean = 0.25; cpu_ms_per_s_mean = $null; private_mb_mean = 50; working_set_mb_mean = $null; handles_mean = 100 } }
+    }
+    $t = Get-FormTotal $by 'all'
+    Assert-That (($t.cpu_percent_mean -eq 0.75) -and ($t.cpu_ms_per_s_mean -eq 4) -and ($t.private_mb_mean -eq 80) -and ($t.working_set_mb_mean -eq 40) -and ($t.handles_mean -eq 300)) 'the sums'
+    $none = Get-FormTotal $by 'steady'
+    foreach ($k in $script:FormMetrics) { Assert-That ($null -eq $none[$k]) ('a window nobody has must be null: ' + $k) }
+}
+
+Check 'forms: the aggregate keeps a form apart from the others, leaves a missing figure out and never makes it 0' {
+    $win = { param($cpu, $priv) [ordered]@{ cpu_percent_mean = $cpu; cpu_ms_per_s_mean = $cpu * 10; private_mb_mean = $priv; working_set_mb_mean = $priv + 10; handles_mean = 100 } }
+    $r1 = @{ form = 'party'; processes = [ordered]@{ party = [ordered]@{ first_window_ms = 300; first_value_ms = 1500; windows = [ordered]@{ all = (& $win 1 20) } } }; total = [ordered]@{ all = (& $win 1 20) } }
+    $r2 = @{ form = 'party'; processes = [ordered]@{ party = [ordered]@{ first_window_ms = 500; first_value_ms = 1700; windows = [ordered]@{ all = (& $win 3 40) } } }; total = [ordered]@{ all = (& $win 3 40) } }
+    $r3 = @{ form = 'legacy'; processes = [ordered]@{ legacy = [ordered]@{ first_window_ms = 900; first_value_ms = $null; windows = [ordered]@{ all = (& $win 2 60) } } }; total = [ordered]@{ all = (& $win 2 60) } }
+    $summary = [ordered]@{ aggregate = [ordered]@{} }
+    Add-FormAggregate $summary @($r1, $r2, $r3)
+    $p = $summary.aggregate['party']
+    Assert-That ($p.runs -eq 2) 'two party runs'
+    Assert-That ($p.processes['party'].first_value_ms.median -eq 1600) ('first-value median: ' + $p.processes['party'].first_value_ms.median)
+    Assert-That ($p.processes['party'].all.private_mb_mean.median -eq 30) 'private median'
+    Assert-That ($p.total['all'].cpu_ms_per_s_mean.median -eq 20) 'total cpu median'
+    $l = $summary.aggregate['legacy']
+    Assert-That (($l.processes['legacy'].first_value_ms.present -eq 0) -and ($null -eq $l.processes['legacy'].first_value_ms.median)) 'the old app has no first value: null, not 0'
+    Assert-That ($null -eq $p.processes['party'].Contains('steady') -or -not $p.processes['party'].Contains('steady')) 'no steady window in these runs'
+}
+
+Check 'forms: -Form arguments are checked before anything is started or made' {
+    $out = Join-Path $WorkDir 'child-out'
+    $a = Invoke-ChildMeasure @('-Form', 'party', '-Output', ('"' + $out + '"')) 'child-a'
+    Assert-That (($a.Code -ne 0) -and ($a.Err -like '*PartyExe is required*')) ('party without -PartyExe: ' + $a.Code + ' ' + $a.Err)
+    $b = Invoke-ChildMeasure @('-Form', 'both', '-Exe', ('"' + (Join-Path $WorkDir 'no-such.exe') + '"'), '-Output', ('"' + $out + '"')) 'child-b'
+    Assert-That (($b.Code -ne 0) -and ($b.Err -like '*Exe not found*')) ('both with a missing -Exe: ' + $b.Code + ' ' + $b.Err)
+    $c = Invoke-ChildMeasure @('-Form', 'main', '-Output', ('"' + $out + '"')) 'child-c'
+    Assert-That (($c.Code -ne 0) -and ($c.Err -like '*Exe is required*')) ('main without -Exe is unchanged: ' + $c.Code + ' ' + $c.Err)
+    $d = Invoke-ChildMeasure @('-Form', 'bogus') 'child-d'
+    Assert-That ($d.Code -ne 0) 'an unknown form must be refused'
+    $e = Invoke-ChildMeasure @('-Form', 'party', '-Mode', 'cold', '-Output', ('"' + $out + '"')) 'child-e'
+    Assert-That (($e.Code -ne 0) -and ($e.Err -like '*warm*')) ('party with another mode: ' + $e.Code + ' ' + $e.Err)
+    # the old app with a dll that lacks the hook: refused, and no output folder was made
+    $d2 = New-WorkSubDir 'child-legacy'
+    $exe = Join-Path $d2 'PartsLife.exe'
+    [IO.File]::WriteAllBytes($exe, [byte[]](1, 2, 3))
+    [IO.File]::WriteAllBytes((Join-Path $d2 'PartsLife.dll'), [byte[]](4, 5, 6))
+    $f = Invoke-ChildMeasure @('-Form', 'legacy', '-LegacyExe', ('"' + $exe + '"'), '-Output', ('"' + $out + '"')) 'child-f'
+    Assert-That (($f.Code -ne 0) -and ($f.Err -like '*refused*')) ('legacy without the hook: ' + $f.Code + ' ' + $f.Err)
+    Assert-That (-not (Test-Path -LiteralPath $out)) 'nothing may be made before the gate has passed'
+}
+
+Check 'forms: the old app is started only after the gate, and the script stays ASCII' {
+    $src = [IO.File]::ReadAllText($ScriptUnderTest)
+    $from = $src.IndexOf('function Invoke-FormRun', [StringComparison]::Ordinal)
+    $to = $src.IndexOf('function Write-FormRunReport', [StringComparison]::Ordinal)
+    Assert-That ($from -gt 0 -and $to -gt $from) 'Invoke-FormRun was not found'
+    $body = $src.Substring($from, $to - $from)
+    $gate = $body.IndexOf('Assert-LegacySafe', [StringComparison]::Ordinal)
+    $start = $body.IndexOf('New-LegacyStartInfo', [StringComparison]::Ordinal)
+    Assert-That ($gate -gt 0 -and $start -gt $gate) 'the gate must come before the old app is started'
+    Assert-That ($body.IndexOf('New-FormDataDir', [StringComparison]::Ordinal) -lt $start) 'the data folder is made before the old app is started'
+    foreach ($ch in $src.ToCharArray()) { if ([int]$ch -gt 127) { throw 'measure.ps1 must be ASCII only' } }
 }
 
 try { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction Stop } catch { }

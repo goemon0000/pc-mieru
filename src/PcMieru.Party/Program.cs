@@ -50,6 +50,13 @@ internal static class Program
             return 1;
         }
 
+        // 1a. A measuring start (--measure <dir>, DESIGN-C 8 step 7) leaves here, before anything of the user's is read: it never builds the sign-in store, never runs the recovery and never asks the first-start
+        // question (RunMeasure keeps its state in the one folder it was given, under its own resident mutex name).
+        if (options.MeasureDir is { } measureDir)
+        {
+            return RunMeasure(options, measureDir, language);
+        }
+
         // 1b. The sign-in start (DESIGN-C 4.3) put back, BEFORE the resident check: the old Parts Life shares the resident mutex, so after a crash that left both starts on it can win the mutex at sign-in and this
         // process would end at step 2 and never recover. This is the ONE place Party builds the real Run store, and only a real start gets here (a smoke run never builds it: its endings check the counter;
         // source-text tests pin both). The store is handed on to the first start, which asks the question after an import.
@@ -135,6 +142,28 @@ internal static class Program
         {
             // nothing shown, nothing blocked
         }
+    }
+
+    /// <summary>
+    /// --measure &lt;dir&gt;: the window with real collection and real play, in a folder that is only ours. Touches nothing of the user: no sign-in store, no recovery, no import question, no real home, no gui.ini.
+    /// The resident mutex has its own name, so a real Parts Life or Party of the user is neither blocked nor brought to the front. Stays open until the window is closed (measure.ps1 sends WM_CLOSE).
+    /// </summary>
+    private static int RunMeasure(PartyOptions options, string dir, PartyLanguage language)
+    {
+        if (!Directory.Exists(dir))
+        {
+            Say("--measure: the folder does not exist: " + dir, smoke: true, language);
+            return 1;
+        }
+
+        using var resident = ResidentInstance.TryAcquire(PartyMeasure.ResidentName());
+        if (resident is null)
+        {
+            Say(PartyStrings.AlreadyRunning(language), smoke: true, language);
+            return 2;
+        }
+
+        return Run(options, PartyState.Load(dir));
     }
 
     /// <summary>The smoke run's proof that the owner's Run key was never in reach: the real store was not built. Null when so, otherwise the failure text.</summary>
@@ -243,8 +272,23 @@ internal static class Program
         var language = PartyStrings.ForWindow(options.Language, state.Lang);
 
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-        // The language follow reads gui.ini only in a normal start; a smoke run reads nothing of this machine.
-        var window = new PartyWindow(language, state, feed, writer, options.Smoke ? null : static () => GuiLanguage.Read());
+        // The language follow reads gui.ini only in a normal start; a smoke run and a measuring start read nothing of this machine.
+        var window = new PartyWindow(language, state, feed, writer, options.Smoke || options.MeasureDir is not null ? null : static () => GuiLanguage.Read());
+        if (options.MeasureDir is { } measureFolder)
+        {
+            // The time of the first non-missing value on the board (DESIGN-C 7), from the OS's creation time of this process. One line in the measuring folder; a failure to write it is not the run's failure.
+            var startedUtc = PartyMeasure.ProcessStartUtc();
+            window.FirstValueShown = () =>
+            {
+                try
+                {
+                    PartyMeasure.WriteFirstValue(measureFolder, (DateTime.UtcNow - startedUtc).TotalMilliseconds);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                }
+            };
+        }
 
         // A smoke run has to end on its own and to fail loudly: an exception on the UI thread is kept for the verdict instead of the default (a crash box nobody can click).
         string? failure = null;

@@ -196,13 +196,27 @@ internal sealed partial class PartyWindow : Window
         // **飾りのために巻き添えで落ちない。**
         // 想定外の例外で常駐物が「動作を停止しました」を出すのは、それ自体が害になる。
         // ただし黙って握りつぶすだけにはしない: 最初の 1 件は FirstFailure に残し、smoke の判定が見る。
-        _frameTimer.Tick += (_, _) => Guarded(() => Redraw());
+        _frameTimer.Tick += (_, _) => Guarded(() => { Redraw(); NoteFirstValue(); });
         _sensorTimer.Tick += (_, _) => Guarded(OnSensorTick);
         _autosaveTimer.Tick += (_, _) => Guarded(() => SaveState());
     }
 
     /// <summary>窓が実際に一度描かれた（作っただけでなく）。smoke が「ok」と言う条件。</summary>
     public bool Rendered { get; private set; }
+
+    /// <summary>
+    /// Only a measuring start sets it (--measure): called once, on the UI thread, after the board has drawn its first measured value (at idle priority, which is after the render pass).
+    /// Null = nothing is watched and nothing is paid.
+    /// </summary>
+    internal Action? FirstValueShown { get; set; }
+    private bool _firstValueNoted;
+
+    private void NoteFirstValue()
+    {
+        if (_firstValueNoted || FirstValueShown is null || !_slots.Any(s => s.Measured)) return;
+        _firstValueNoted = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, (Action)(() => FirstValueShown?.Invoke()));
+    }
 
     /// <summary>タイマーの中で握りつぶした最初の例外（無ければ null）。smoke の判定はこれが有れば失敗にする。</summary>
     public string? FirstFailure { get; private set; }

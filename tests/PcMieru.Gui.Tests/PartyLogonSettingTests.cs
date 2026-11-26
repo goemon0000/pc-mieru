@@ -409,6 +409,38 @@ public sealed class PartyLogonSettingTests
     }
 
     [Fact]
+    public void A_measuring_start_leaves_Main_before_the_real_store_the_recovery_and_the_first_start_and_keeps_to_its_folder()
+    {
+        // C35 (--measure <dir>, DESIGN-C 8 step 7): the measuring start must never reach the owner's Run key, the recovery, the import paths or the first-start flow, and must keep its state in the given folder.
+        var program = File.ReadAllText(Path.Combine(Harness.Root, "src", "PcMieru.Party", "Program.cs"));
+        var gate = program.IndexOf("InstallGate.EnterStartup(", StringComparison.Ordinal);
+        var branch = program.IndexOf("if (options.MeasureDir is { } measureDir)", StringComparison.Ordinal);
+        var guard = program.IndexOf("if (!options.Smoke)", gate, StringComparison.Ordinal);
+        var site = program.IndexOf("RegistryRunStore.ForCurrentUser(", StringComparison.Ordinal);
+        var paths = program.IndexOf("ImportPaths.ForCurrentUser(", StringComparison.Ordinal);
+        var resident = program.IndexOf("ResidentInstance.TryAcquire(", StringComparison.Ordinal);
+        Assert.True(gate > 0 && branch > gate && branch < guard && branch < site && branch < paths && branch < resident, $"order gate < measure branch < smoke guard / store / import paths / resident check: {gate} {branch} {guard} {site} {paths} {resident}");
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"RunMeasure\(options, measureDir, language\)"));
+
+        // The body of RunMeasure names none of the user's things.
+        var start = program.IndexOf("private static int RunMeasure(", StringComparison.Ordinal);
+        var end = program.IndexOf("\n    }\n", start, StringComparison.Ordinal);
+        Assert.True(start > 0 && end > start);
+        var body = program.Substring(start, end - start);
+        foreach (var banned in new[] { "RegistryRunStore", "RunSwitchFlow", "ImportPaths", "FirstStart", "ActivateResident", "GuiLanguage", "PartyState.Load()", "ForCurrentUser", "CurrentName()" })
+        {
+            Assert.DoesNotContain(banned, body, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("ResidentInstance.TryAcquire(PartyMeasure.ResidentName())", body, StringComparison.Ordinal);
+        Assert.Contains("Run(options, PartyState.Load(dir))", body, StringComparison.Ordinal);
+
+        // Run: a measuring start reads no gui.ini either, and writes first-value.txt into its own folder only.
+        Assert.Contains("options.Smoke || options.MeasureDir is not null ? null : static () => GuiLanguage.Read()", program, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"PartyMeasure\.WriteFirstValue\(measureFolder,"));
+    }
+
+    [Fact]
     public void The_real_store_has_not_been_built_by_this_test_run()
     {
         Assert.Equal(0, RegistryRunStore.Constructed);

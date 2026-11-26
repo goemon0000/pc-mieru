@@ -22,6 +22,7 @@
   <!-- The exe has no test project: its WPF-free source files are compiled in here (command line, strings, the model of the first-start dialogs). -->
   <ItemGroup>
     <Compile Include="..\..\src\PcMieru.Party\PartyArgs.cs" Link="Linked\PartyArgs.cs" />
+    <Compile Include="..\..\src\PcMieru.Party\PartyMeasure.cs" Link="Linked\PartyMeasure.cs" />
     <Compile Include="..\..\src\PcMieru.Party\I18n\Strings.cs" Link="Linked\Strings.cs" />
     <Compile Include="..\..\src\PcMieru.Party\ImportDialogModel.cs" Link="Linked\ImportDialogModel.cs" />
   </ItemGroup>
