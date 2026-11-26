@@ -171,14 +171,17 @@
   powershell -File tools\measure.ps1 -Exe C:\release\PCMieru.exe -Mode record -Runs 1 -RecordSeconds 180 -AfterSeconds 60 -UserIntervalMs 2000 -Output C:\measure\record
 .PARAMETER Form
   main (default: the GUI alone, every mode as before), party (PCMieru.Party.exe --measure <a new folder>), legacy (the old Parts Life v0.7.4 built with its
-  Debug-only test hooks, started with PARTSLIFE_TEST_DATA_DIR = a new folder and PARTSLIFE_UPDATE_TEST_FEED = a refused address; refused unless the built
-  PartsLife.dll holds the hook text) or both (the GUI with its own --measure plus Party --measure). The forms party / legacy / both use -Mode warm only. With
-  -Form party and -LegacyExe the runs alternate: party, legacy, party, legacy ... (-Runs of each). Per process: CPU (share of all logical CPUs and ms/s), private
-  bytes, working set, handles in the first 30 s, the steady part and all; the first window; the first valid value (Party; null with a note for the old app).
+  Debug-only test hooks, started with PARTSLIFE_TEST_DATA_DIR = a new folder under the temp folder and PARTSLIFE_UPDATE_TEST_FEED = a refused address; refused
+  unless tools/legacy-gate/legacy-gate.cs read the IL of the exact folder and printed "legacy-gate ok", and refused for an exe above 2 MB or without PartsLife.dll
+  beside it) or both (the GUI with its own --measure plus Party --measure). The forms party / legacy / both use -Mode warm only. A run = a 30 s warm-up plus
+  -Seconds of steady sampling. With -Form party and -LegacyExe the pair order alternates: party legacy, legacy party, party legacy ... (-Runs of each). Per process:
+  CPU (share of all logical CPUs and ms/s), private bytes, working set, handles in the warm-up, the steady part and all; the first window; the first valid value
+  (Party; "legacy: n/a (the old app has no hook)" for the old app); how the process ended (WM_CLOSE to every window of the pid, then Kill). A run whose process
+  ended early or whose steady window is not full is incomplete and left out of the medians.
 .PARAMETER PartyExe
   The published PCMieru.Party.exe (-Form party and both).
 .PARAMETER LegacyExe
-  The old PartsLife.exe (-Form legacy, or -Form party to alternate with it); its PartsLife.dll must hold the UTF-16 text PARTSLIFE_TEST_DATA_DIR.
+  The old PartsLife.exe (-Form legacy, or -Form party to alternate with it); the folder must pass tools/legacy-gate/legacy-gate.cs (a Debug build of v0.7.4).
 #>
 [CmdletBinding()]
 param(
@@ -816,6 +819,36 @@ public static class PcmMeasureWin
         }, IntPtr.Zero);
         if (visible != IntPtr.Zero) { return IsIconic(visible) ? "minimized" : "normal"; }
         return anyTopLevel ? "hidden" : "none";
+    }
+
+    // The rectangle of a window: left, top, right, bottom (GetWindowRect). null: it cannot be read.
+    public static int[] RectOf(IntPtr hwnd)
+    {
+        RECT rect;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out rect)) { return null; }
+        return new int[] { rect.Left, rect.Top, rect.Right, rect.Bottom };
+    }
+
+    // WM_CLOSE to every top-level window of the process (EnumWindows by process id: visible or not, owned or not), except the helper windows the system and
+    // the runtime make (IME, tooltips and their shadow, the broadcast window). Returns how many were posted.
+    public static int PostCloseAll(int processId)
+    {
+        List<IntPtr> windows = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
+        {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId) { return true; }
+            StringBuilder name = new StringBuilder(256);
+            GetClassName(hwnd, name, 256);
+            string cls = name.ToString();
+            if (cls == "SysShadow" || cls == "IME" || cls == "MSCTFIME UI" || cls.StartsWith(".NET-BroadcastEventWindow", StringComparison.Ordinal) || cls.IndexOf("tooltips_class", StringComparison.OrdinalIgnoreCase) >= 0) { return true; }
+            windows.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+        int posted = 0;
+        foreach (IntPtr w in windows) { if (PostMessage(w, 0x0010, IntPtr.Zero, IntPtr.Zero)) { posted++; } }
+        return posted;
     }
 
     // WM_CLOSE to a top-level window, as Process.CloseMainWindow does, but to the window MainWindowOf chose.
@@ -3004,45 +3037,76 @@ function Add-RecordAggregate([System.Collections.IDictionary]$Summary, $RunList)
     $Summary.aggregate['pcmieru_record'] = $agg
 }
 
-# ---- the forms: -Form party | legacy | both (DESIGN-C 7, 8 step 7) ----
-# party  = PCMieru.Party.exe --measure <a new folder>   (its own state, its own mutex name, nothing of the user's)
+# ---- the forms: -Form party | legacy | both (DESIGN-C 7, 8 step 7; C36) ----
+# party  = PCMieru.Party.exe --measure <a new folder under the temp folder>   (its own state, its own mutex name, nothing of the user's)
 # legacy = the old Parts Life v0.7.4 built with its Debug-only test hooks, started with exactly two PARTSLIFE_* variables (a new data folder, a feed
-#          that refuses) after a check that the built PartsLife.dll really holds the hook (without it the old app would read the real save)
+#          that refuses) after tools/legacy-gate/legacy-gate.cs has read the IL of the folder it is started from and printed "legacy-gate ok"
 # both   = the GUI with its own --measure, plus Party --measure
-# Per process: CPU (share of all logical CPUs and ms/s), private bytes, working set, handles, in three windows (first 30 s, steady = after 30 s, all);
-# the total is the sum of the per-process window means. Nothing here ever sends input to a window; every process is closed with WM_CLOSE.
+# A run = a warm-up (30 s) and then -Seconds of steady sampling, 1-second samples, one clock for all processes. Per process: CPU (share of all logical CPUs
+# and ms/s), private bytes, working set, handles, in three windows (warmup, steady = after the warm-up, all). Nothing here ever sends input to a window;
+# every process is closed with WM_CLOSE (posted by EnumWindows to every top-level window of the pid) and only killed when it does not end in time.
+# A run whose process ended early or whose steady window is not full is marked incomplete and left out of the medians.
 
-$script:LegacyHookText = 'PARTSLIFE_TEST_DATA_DIR'
 $script:LegacyFeedText = 'http://127.0.0.1:9/'
+$script:LegacyGateMaxExeBytes = 2097152
+$script:LegacyGatePath = Join-Path $PSScriptRoot 'legacy-gate\legacy-gate.cs'
+$script:FormWarmupSeconds = 30
 $script:FormWindowPollSeconds = 20
+$script:FormWindows = @('warmup', 'steady', 'all')
 $script:FormMetrics = @('cpu_percent_mean', 'cpu_ms_per_s_mean', 'private_mb_mean', 'working_set_mb_mean', 'handles_mean')
 
-# The order of the runs: every run of the form; with -Form party and an old app, each party run is followed by an old-app run (party, legacy, party, legacy ...).
+# The order of the runs: every run of the form; with -Form party and an old app the pair order alternates (party legacy, legacy party, party legacy ...).
 function Get-FormPlan([string]$FormName, [bool]$WithLegacy, [int]$Count) {
     $plan = New-Object System.Collections.ArrayList
     for ($i = 1; $i -le $Count; $i++) {
-        [void]$plan.Add($FormName)
-        if ($FormName -eq 'party' -and $WithLegacy) { [void]$plan.Add('legacy') }
+        if ($FormName -eq 'party' -and $WithLegacy) {
+            if ($i % 2 -eq 1) { [void]$plan.Add('party'); [void]$plan.Add('legacy') }
+            else { [void]$plan.Add('legacy'); [void]$plan.Add('party') }
+        }
+        else { [void]$plan.Add($FormName) }
     }
     return $plan.ToArray()
 }
 
-# Does the PartsLife.dll next to the old exe hold the UTF-16 text of the test-data-folder hook? (Latin-1 maps each byte to one char, so the UTF-16 bytes of the text are found as a string.)
-function Test-LegacyHook([string]$ExePath) {
-    $dll = Join-Path (Split-Path -Parent $ExePath) 'PartsLife.dll'
-    $result = [ordered]@{ dll = $dll; found = $false; note = $null }
-    if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { $result.note = 'PartsLife.dll was not found next to the exe'; return $result }
-    $latin = [Text.Encoding]::GetEncoding(28591)
-    $hay = $latin.GetString([IO.File]::ReadAllBytes($dll))
-    $needle = $latin.GetString([Text.Encoding]::Unicode.GetBytes($script:LegacyHookText))
-    $result.found = ($hay.IndexOf($needle, [StringComparison]::Ordinal) -ge 0)
-    if (-not $result.found) { $result.note = 'the UTF-16 text ' + $script:LegacyHookText + ' is not in PartsLife.dll: the test hook is compiled out' }
-    return $result
+# May the old app be started from the folder of this exe? Only when tools/legacy-gate/legacy-gate.cs (it reads the IL of PartsLife.dll and the constant of
+# PartsLife.Update.dll) printed "legacy-gate ok" for that exact folder. Everything else refuses: a single-file bundle (above 2 MB), a missing PartsLife.dll,
+# a missing checker or dotnet, an answer that is not exactly the ok line. Returns { ok; line; folder; exe_bytes }.
+function Test-LegacyGate([string]$ExePath) {
+    $folder = Split-Path -Parent $ExePath
+    $r = [ordered]@{ ok = $false; line = $null; folder = $folder; exe_bytes = $null }
+    try {
+        $r.exe_bytes = (Get-Item -LiteralPath $ExePath -ErrorAction Stop).Length
+        if ($r.exe_bytes -gt $script:LegacyGateMaxExeBytes) { $r.line = 'legacy-gate refuse: the exe is ' + $r.exe_bytes + ' bytes (above 2 MB): a single-file bundle, whose code is not read here'; return $r }
+        if (-not (Test-Path -LiteralPath (Join-Path $folder 'PartsLife.dll') -PathType Leaf)) { $r.line = 'legacy-gate refuse: PartsLife.dll is missing beside the exe'; return $r }
+        if (-not (Test-Path -LiteralPath $script:LegacyGatePath -PathType Leaf)) { $r.line = 'legacy-gate refuse: the checker was not found: ' + $script:LegacyGatePath; return $r }
+        $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+        if ($null -eq $dotnet) { $r.line = 'legacy-gate refuse: dotnet was not found, the checker cannot run'; return $r }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $dotnet.Source
+        $psi.Arguments = 'run --file "' + $script:LegacyGatePath + '" -- "' + $folder.TrimEnd('\') + '"'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch { }; $r.line = 'legacy-gate refuse: the checker did not finish in 180 s'; return $r }
+        $p.WaitForExit()
+        $lines = @(([string]$outTask.Result) -split "`r?`n" | Where-Object { $_.Trim().Length -gt 0 })
+        $last = ''
+        if ($lines.Count -gt 0) { $last = ([string]$lines[$lines.Count - 1]).Trim() }
+        if ($p.ExitCode -eq 0 -and $last -ceq 'legacy-gate ok') { $r.ok = $true; $r.line = $last }
+        elseif ($last.StartsWith('legacy-gate refuse:', [StringComparison]::Ordinal)) { $r.line = $last }
+        else { $r.line = 'legacy-gate refuse: the checker did not answer ok (exit ' + $p.ExitCode + '): ' + $last }
+    }
+    catch { $r.line = 'legacy-gate refuse: ' + (Get-ShortError $_) }
+    return $r
 }
 
 function Assert-LegacySafe([string]$ExePath) {
-    $r = Test-LegacyHook $ExePath
-    if (-not $r.found) { throw ('refused: the old app was not started, it would read the real save (' + $r.note + '): ' + $r.dll) }
+    $r = Test-LegacyGate $ExePath
+    if (-not $r.ok) { throw ('refused: the old app was not started, it could read the real save (' + $r.line + '): ' + $ExePath) }
     return $r
 }
 
@@ -3068,12 +3132,30 @@ function New-PartyStartInfo([string]$ExePath, [string]$DataDir) {
     return $psi
 }
 
-# A new, empty folder for one run (never one that exists), and its removal after the run (checked: the answer is whether the folder is really gone).
-function New-FormDataDir([string]$OutputDir, [string]$Label) {
-    $dir = Join-Path $OutputDir ('data-' + $Label)
-    if (Test-Path -LiteralPath $dir) { throw ('the data folder of this run already exists; it must be new: ' + $dir) }
-    New-Item -ItemType Directory -Path $dir | Out-Null
-    return $dir
+# A folder that must be new: it is created, and it is refused when it exists. A run reserves its output folder this way.
+function New-ReservedFolder([string]$Path) {
+    if (Test-Path -LiteralPath $Path) { throw ('this folder already exists; every run reserves a new one: ' + $Path) }
+    New-Item -ItemType Directory -Path $Path -ErrorAction Stop | Out-Null
+    return $Path
+}
+
+# A file that must be new (FileMode.CreateNew: an existing CSV or summary is never overwritten).
+function New-ExclusiveWriter([string]$Path) {
+    $fs = New-Object System.IO.FileStream($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    return (New-Object System.IO.StreamWriter($fs, (New-Object System.Text.UTF8Encoding($false))))
+}
+
+function Save-SummaryNew([System.Collections.IDictionary]$Summary, [string]$Path) {
+    $json = ($Summary | ConvertTo-Json -Depth 12) + "`n"
+    $w = New-ExclusiveWriter $Path
+    try { $w.Write($json) } finally { $w.Dispose() }
+}
+
+# The data folder of one run: a new, unique folder directly under the temp folder (Party refuses --measure anywhere else), never one that exists.
+function New-FormDataDir([string]$Label, [string]$Root = '') {
+    if ([string]::IsNullOrEmpty($Root)) { $Root = [IO.Path]::GetTempPath() }
+    $dir = Join-Path $Root ('pcmieru-measure-data-' + $Label + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    return (New-ReservedFolder $dir)
 }
 
 function Remove-FormDataDir([string]$Dir) {
@@ -3111,12 +3193,82 @@ function Get-FormTotal($ByRole, [string]$Window) {
     return $total
 }
 
-function Start-FormProcess([string]$Role, $Psi, [double]$T) {
+# One reading of the run's clock and of the wall clock, back to back: the creation time of a process (wall clock) is placed on the run's clock with them.
+function Get-ClockPair($Clock) {
+    $t = $Clock.Elapsed.TotalSeconds
+    $u = [DateTime]::UtcNow
+    return @{ T = $t; Utc = $u }
+}
+
+function New-FormEntry([string]$Role, $Proc) {
+    return @{ Role = $Role; Proc = $Proc; Series = $null; Rows = (New-Object System.Collections.ArrayList); FirstWindowMs = $null; ErrTask = $null; Close = $null; EarlyExit = $null; Geometry = [ordered]@{}; StartedAt = [DateTime]::UtcNow }
+}
+
+# Starts one process and registers it for cleanup at once (before anything else can throw); the series is made right after, from the creation time and one clock pair.
+function Start-FormProcess([string]$Role, $Psi, $Clock, $Registry) {
     $proc = [System.Diagnostics.Process]::Start($Psi)
-    $err = $null
-    if ($Psi.RedirectStandardError) { $err = $proc.StandardError.ReadToEndAsync() }
-    $series = New-Series $proc $Role $T ([DateTime]::UtcNow) $true
-    return @{ Role = $Role; Proc = $proc; Series = $series; Rows = (New-Object System.Collections.ArrayList); FirstWindowMs = $null; ErrTask = $err; Close = $null; StartedAt = [DateTime]::UtcNow }
+    $entry = New-FormEntry $Role $proc
+    [void]$Registry.Add($entry)
+    if ($Psi.RedirectStandardError) { $entry.ErrTask = $proc.StandardError.ReadToEndAsync() }
+    $pair = Get-ClockPair $Clock
+    $entry.Series = New-Series $proc $Role $pair.T $pair.Utc $true
+    return $entry
+}
+
+# SensorHost children of the GUI: each one found is registered at once (cleanup closes it too).
+function Add-FormChildren($GuiEntry, $Seen, $Registry, $Clock, $Warnings) {
+    $pair = Get-ClockPair $Clock
+    foreach ($cs in (Find-NewChildren $GuiEntry.Series $Seen $pair.T $pair.Utc $Warnings)) {
+        $c = New-FormEntry 'sensorhost' $cs.Proc
+        $c.Series = $cs
+        [void]$Registry.Add($c)
+    }
+}
+
+# The window of a process as the window sees it: state (normal / minimized / hidden / none) and the rectangle of its main window.
+function Get-WindowGeometry([int]$ProcessId) {
+    $g = [ordered]@{ state = $null; left = $null; top = $null; width = $null; height = $null; note = $null }
+    try {
+        Initialize-Win32
+        $g.state = [PcmMeasureWin]::WindowStateOf($ProcessId)
+        $h = [PcmMeasureWin]::MainWindowOf($ProcessId)
+        if ($h -ne [IntPtr]::Zero) {
+            $rect = [PcmMeasureWin]::RectOf($h)
+            if ($null -ne $rect) { $g.left = [int]$rect[0]; $g.top = [int]$rect[1]; $g.width = [int]($rect[2] - $rect[0]); $g.height = [int]($rect[3] - $rect[1]) }
+            else { $g.note = 'GetWindowRect failed' }
+        }
+        else { $g.note = 'no visible top-level window' }
+    }
+    catch { $g.note = Get-ShortError $_ }
+    return $g
+}
+
+# Closes a process the polite way: WM_CLOSE posted (EnumWindows by pid, visible or not) to each of its top-level windows, a wait of up to $TimeoutSeconds, and
+# only then Kill. method: WM_CLOSE (ended after the post) | Kill | already-exited | exited-without-window (ended on its own, nothing to post to).
+function Close-ByWindows([System.Diagnostics.Process]$Proc, [int]$TimeoutSeconds) {
+    $info = [ordered]@{ method = $null; windows_posted = 0; waited_seconds = $null; exit_code = $null; note = $null }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    if (-not (Test-Alive $Proc)) {
+        $info.method = 'already-exited'
+        $info.note = 'the process had already ended when the script went to close it'
+    }
+    else {
+        $posted = 0
+        try { Initialize-Win32; $posted = [int][PcmMeasureWin]::PostCloseAll([int]$Proc.Id) } catch { $info.note = 'PostCloseAll failed: ' + (Get-ShortError $_) }
+        $info.windows_posted = $posted
+        $ended = $false
+        try { $ended = $Proc.WaitForExit($TimeoutSeconds * 1000) } catch { $ended = -not (Test-Alive $Proc) }
+        if ($ended -and $posted -gt 0) { $info.method = 'WM_CLOSE' }
+        elseif ($ended) { $info.method = 'exited-without-window'; $info.note = 'it ended while there was no top-level window to post WM_CLOSE to' }
+        else {
+            $info.method = 'Kill'
+            $info.note = 'WM_CLOSE to ' + $posted + ' window(s) did not end the process within ' + $TimeoutSeconds + ' s; it was killed'
+            try { $Proc.Kill(); [void]$Proc.WaitForExit(10000) } catch { $info.note += '; Kill failed: ' + (Get-ShortError $_) }
+        }
+    }
+    $info.waited_seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    try { if ($Proc.HasExited) { $info.exit_code = $Proc.ExitCode } } catch { }
+    return $info
 }
 
 function Show-Num($Value) {
@@ -3124,74 +3276,101 @@ function Show-Num($Value) {
     return [string]::Format((Get-Inv), '{0:0.##}', $Value)
 }
 
-# One run of one form. $Duration seconds of 1-second samples; windows: first 30 s, steady (after 30 s) and all.
+# Why a run of this process is not complete (null: it is). It must have lived to the end, and its steady window must hold -Seconds samples with CPU readings.
+function Get-FormIncomplete($Entry, $Steady, [int]$Duration) {
+    if ($null -eq $Entry) { return 'it was not started' }
+    if ($null -ne $Entry.EarlyExit) { return ('it ended by itself at ' + (Show-Num $Entry.EarlyExit) + ' s') }
+    if ($null -ne $Entry.Close -and $Entry.Close.method -eq 'already-exited') { return 'it had ended by itself before the close' }
+    if ($null -eq $Steady) { return 'it has no steady window' }
+    if ($Steady.samples -lt $Duration) { return ('the steady window has ' + $Steady.samples + ' of ' + $Duration + ' samples') }
+    if (-not $Steady.complete) { return 'the steady window does not reach the end of the run' }
+    if ($Steady.cpu_intervals -lt ($Steady.samples - 1)) { return ('only ' + $Steady.cpu_intervals + ' CPU intervals in ' + $Steady.samples + ' samples') }
+    if ($null -eq $Steady.private_mb_mean) { return 'no private-bytes reading' }
+    return $null
+}
+
+# One run of one form: a warm-up, then $Duration seconds of steady sampling (1-second samples from one clock).
 function Invoke-FormRun([string]$FormName, [int]$Index, [string]$OutputDir, [int]$Cpus, [int]$Duration, [string]$PartyPath, [string]$LegacyPath) {
     $label = '{0}-{1:00}' -f $FormName, $Index
     $entries = New-Object System.Collections.ArrayList
     $warnings = New-Object System.Collections.ArrayList
     $seen = @{}
+    $runDir = $null
     $dataDir = $null
     $result = $null
     $removed = $null
-    $marksPath = Join-Path $OutputDir ($label + '.marks')
+    $guiEntry = $null
+    $warm = [int]$script:FormWarmupSeconds
+    $total = $warm + $Duration
     try {
-        if ($FormName -eq 'legacy') { $null = Assert-LegacySafe $LegacyPath }
-        $dataDir = New-FormDataDir $OutputDir $label
+        $gateLine = $null
+        if ($FormName -eq 'legacy') { $gate = Assert-LegacySafe $LegacyPath; $gateLine = $gate.line }
+        $runDir = New-ReservedFolder (Join-Path $OutputDir $label)
+        $marksPath = Join-Path $runDir ($label + '.marks')
+        $dataDir = New-FormDataDir $label
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        if ($FormName -eq 'both') { [void]$entries.Add((Start-FormProcess 'gui' (New-AppStartInfo $marksPath) $clock.Elapsed.TotalSeconds)) }
-        if ($FormName -eq 'party' -or $FormName -eq 'both') { [void]$entries.Add((Start-FormProcess 'party' (New-PartyStartInfo $PartyPath $dataDir) $clock.Elapsed.TotalSeconds)) }
-        if ($FormName -eq 'legacy') { [void]$entries.Add((Start-FormProcess 'legacy' (New-LegacyStartInfo $LegacyPath $dataDir) $clock.Elapsed.TotalSeconds)) }
+        if ($FormName -eq 'both') { $guiEntry = Start-FormProcess 'gui' (New-AppStartInfo $marksPath) $clock $entries }
+        if ($FormName -eq 'party' -or $FormName -eq 'both') { [void](Start-FormProcess 'party' (New-PartyStartInfo $PartyPath $dataDir) $clock $entries) }
+        if ($FormName -eq 'legacy') { [void](Start-FormProcess 'legacy' (New-LegacyStartInfo $LegacyPath $dataDir) $clock $entries) }
         $roots = @($entries.ToArray())
         $nextSample = 1.0
+        $steadyMarked = $false
         while ($true) {
             $t = $clock.Elapsed.TotalSeconds
             if ($t -le $script:FormWindowPollSeconds) {
-                foreach ($e in $entries) {
+                # The first visible top-level window of every started process, polled in the same loop and measured from the OS creation time.
+                foreach ($e in $roots) {
                     if ($null -ne $e.FirstWindowMs -or $e.Series.Ended) { continue }
                     try { if ((Get-MainWindow $e.Proc) -ne [IntPtr]::Zero) { $e.FirstWindowMs = [math]::Round(([DateTime]::UtcNow - $(if ($null -ne $e.Series.StartUtc) { $e.Series.StartUtc } else { $e.StartedAt })).TotalMilliseconds, 0) } } catch { }
                 }
             }
             if ($t -ge $nextSample) {
                 $nextSample += 1.0
+                # All processes are read back to back in this one tick, each with the clock read right before its reading: the GUI and Party cover the same window of time.
                 foreach ($e in @($entries.ToArray())) {
                     $s = $e.Series
                     if ($s.Ended) { continue }
                     if (-not (Test-SeriesAlive $s)) {
                         $s.Ended = $true
+                        $e.EarlyExit = [math]::Round($t, 1)
                         [void]$warnings.Add(('{0} ended by itself at {1} s' -f $e.Role, (Show-Num $t)))
                         continue
                     }
-                    [void]$e.Rows.Add((Read-Series $s $t))
+                    [void]$e.Rows.Add((Read-Series $s $clock.Elapsed.TotalSeconds))
                 }
-                if ($FormName -eq 'both') {
-                    foreach ($cs in (Find-NewChildren $roots[0].Series $seen $t ([DateTime]::UtcNow) $warnings)) {
-                        $c = @{ Role = 'sensorhost'; Proc = $cs.Proc; Series = $cs; Rows = (New-Object System.Collections.ArrayList); FirstWindowMs = $null; ErrTask = $null; Close = $null; StartedAt = [DateTime]::UtcNow }
-                        [void]$entries.Add($c)
-                    }
+                if ($null -ne $guiEntry) { Add-FormChildren $guiEntry $seen $entries $clock $warnings }
+                if (-not $steadyMarked -and $t -ge $warm) {
+                    $steadyMarked = $true
+                    foreach ($e in $roots) { $e.Geometry['steady_start'] = Get-WindowGeometry ([int]$e.Proc.Id) }
                 }
-                if ($t -ge $Duration) { break }
+                if ($t -ge $total) { break }
             }
-            Start-Sleep -Milliseconds 100
+            Start-Sleep -Milliseconds 50
         }
-        foreach ($e in $roots) { $e.Close = Close-Politely $e.Proc $script:CloseTimeoutSeconds }
+        if ($null -ne $guiEntry) { try { Add-FormChildren $guiEntry $seen $entries $clock $warnings } catch { } }
+        foreach ($e in $roots) { $e.Geometry['end'] = Get-WindowGeometry ([int]$e.Proc.Id) }
+        # roots first (they are first in the list), then the children found
+        foreach ($e in @($entries.ToArray())) { $e.Close = Close-ByWindows $e.Proc $script:CloseTimeoutSeconds }
+        foreach ($e in $entries) { if ($e.Close.method -eq 'Kill') { [void]$warnings.Add(('{0} did not end after WM_CLOSE and was killed' -f $e.Role)) } }
         $files = @()
         if (Test-Path -LiteralPath $dataDir) { $files = @(Get-ChildItem -LiteralPath $dataDir -Force | ForEach-Object { $_.Name }) }
-        $first = [Math]::Min(30, $Duration) + 0.5
         $procs = [ordered]@{}
         $byRole = @{}
+        $steadyOf = @{}
         foreach ($e in $entries) {
             $wins = [ordered]@{}
-            $wins['first_30s'] = Get-WindowStats $e.Rows 0 $first $Cpus
-            if ($Duration -gt 30) { $wins['steady'] = Get-WindowStats $e.Rows $first ($Duration + 0.5) $Cpus }
-            $wins['all'] = Get-WindowStats $e.Rows 0 ($Duration + 0.5) $Cpus
+            $wins['warmup'] = Get-WindowStats $e.Rows 0 ($warm + 0.5) $Cpus
+            $wins['steady'] = Get-WindowStats $e.Rows ($warm + 0.5) ($total + 0.5) $Cpus
+            $wins['all'] = Get-WindowStats $e.Rows 0 ($total + 0.5) $Cpus
             $role = $e.Role
             $n = 2
             while ($byRole.ContainsKey($role)) { $role = $e.Role + $n; $n++ }
             $byRole[$role] = $wins
+            $steadyOf[$e.Role] = $(if ($steadyOf.ContainsKey($e.Role)) { $steadyOf[$e.Role] } else { @{ Entry = $e; Steady = $wins['steady'] } })
             $fv = $null
             $fvNote = $null
             if ($e.Role -eq 'party') { $r = Read-FirstValueMs $dataDir; $fv = $r.ms; $fvNote = $r.note }
-            elseif ($e.Role -eq 'legacy') { $fvNote = 'the old app writes no first-value file: no first valid value is recorded for it' }
+            elseif ($e.Role -eq 'legacy') { $fvNote = 'legacy: n/a (the old app has no hook)' }
             elseif ($e.Role -eq 'gui') { $fvNote = 'not recorded for the GUI here: see startup (its first_list / cpu_list marks)' }
             $stderrText = ''
             if ($null -ne $e.ErrTask) { try { if ($e.ErrTask.Wait(3000)) { $stderrText = (([string]$e.ErrTask.Result) -replace '\s+', ' ').Trim() } } catch { } }
@@ -3202,20 +3381,35 @@ function Invoke-FormRun([string]$FormName, [int]$Index, [string]$OutputDir, [int
                 pid = $e.Series.ProcId
                 start_utc = $(if ($null -ne $e.Series.StartUtc) { $e.Series.StartUtc.ToString('o', (Get-Inv)) } else { $null })
                 first_window_ms = $e.FirstWindowMs
-                first_window_note = 'the first top-level window of the process, polled every 100 ms for the first ' + $script:FormWindowPollSeconds + ' s'
+                first_window_note = 'the first visible top-level window of the process, polled every 50 ms for the first ' + $script:FormWindowPollSeconds + ' s, from the OS creation time (the same for every app)'
                 first_value_ms = $fv
                 first_value_note = $fvNote
                 startup = $startup
+                window = $e.Geometry
                 windows = $wins
                 missing = $e.Series.Missing
                 close = $e.Close
+                ended_early_s = $e.EarlyExit
                 stderr = $stderrText
             }
         }
+        $expected = @($(if ($FormName -eq 'both') { 'gui', 'party' } else { $FormName }))
+        $why = New-Object System.Collections.ArrayList
+        foreach ($role in $expected) {
+            $found = $null
+            $steady = $null
+            if ($steadyOf.ContainsKey($role)) { $found = $steadyOf[$role].Entry; $steady = $steadyOf[$role].Steady }
+            $reason = Get-FormIncomplete $found $steady $Duration
+            if ($null -ne $reason) { [void]$why.Add(($role + ': ' + $reason)) }
+        }
         $totals = [ordered]@{}
-        foreach ($w in @('first_30s', 'steady', 'all')) { if ($byRole.Values | Where-Object { $null -ne $_[$w] }) { $totals[$w] = Get-FormTotal $byRole $w } }
-        $csv = Join-Path $OutputDir ($label + '.csv')
-        $writer = New-Object System.IO.StreamWriter($csv, $false, (New-Object System.Text.UTF8Encoding($false)))
+        # in both, the total needs every expected process complete; the other forms have one process
+        if (($FormName -ne 'both') -or ($why.Count -eq 0)) {
+            foreach ($w in $script:FormWindows) { if ($byRole.Values | Where-Object { $null -ne $_[$w] }) { $totals[$w] = Get-FormTotal $byRole $w } }
+        }
+        foreach ($m in $why) { [void]$warnings.Add('incomplete: ' + $m) }
+        $csv = Join-Path $runDir ($label + '.csv')
+        $writer = New-ExclusiveWriter $csv
         try {
             $writer.WriteLine('t_s,role,name,pid,start_utc,dt_s,cpu_s,cpu_delta_s,cycles,cycles_delta,cycles_per_s,ghz_equivalent,private_bytes,working_set_bytes,handles')
             foreach ($e in $entries) { foreach ($r in $e.Rows) { Write-CsvRow $writer $r } }
@@ -3226,44 +3420,85 @@ function Invoke-FormRun([string]$FormName, [int]$Index, [string]$OutputDir, [int
             form = $FormName
             index = $Index
             seconds = $Duration
-            window_note = 'window_to_s carries 0.5 s of slack (samples come a few ms after each whole second)'
+            warmup_seconds = $warm
+            complete = ($why.Count -eq 0)
+            incomplete_reasons = @($why.ToArray())
+            window_note = 'window_to_s carries 0.5 s of slack (samples come a few ms after each whole second); steady = the samples after the warm-up, exactly -Seconds of them'
+            run_dir = $runDir
+            legacy_gate = $gateLine
             data_dir_files = $files
             data_dir_removed = $null
             processes = $procs
             total = $totals
-            total_note = 'the sum of the per-process window means'
+            total_note = 'the sum of the per-process window means (in both: only when every expected process is complete)'
             csv = $csv
             warnings = $warnings
         }
     }
     finally {
-        foreach ($e in $entries) {
-            try { if ($null -ne $e.Proc -and (Test-Alive $e.Proc)) { [void](Close-Politely $e.Proc $script:CloseTimeoutSeconds) } } catch { }
-            try { Close-Series $e.Series } catch { }
+        # every process this run started is closed (the GUI's SensorHost children too), whatever happened; the data folder goes only when all of them have exited
+        if ($null -ne $guiEntry) { try { Add-FormChildren $guiEntry $seen $entries $clock $warnings } catch { } }
+        foreach ($e in @($entries.ToArray())) {
+            try { if ($null -ne $e.Proc -and (Test-Alive $e.Proc) -and $null -eq $e.Close) { $e.Close = Close-ByWindows $e.Proc $script:CloseTimeoutSeconds } } catch { }
         }
-        if ($null -ne $dataDir) { $removed = Remove-FormDataDir $dataDir }
-        if ($null -ne $result) { $result.data_dir_removed = $removed }
+        foreach ($e in @($entries.ToArray())) { try { if ($null -ne $e.Series) { Close-Series $e.Series } } catch { } }
+        $allGone = $true
+        foreach ($e in @($entries.ToArray())) { try { if (Test-Alive $e.Proc) { $allGone = $false } } catch { } }
+        if ($null -ne $dataDir) {
+            if ($allGone) { $removed = Remove-FormDataDir $dataDir }
+            else { $removed = $false; Write-Host ('a process of this run is still running: its data folder was left: ' + $dataDir) -ForegroundColor Yellow }
+        }
+        if ($null -ne $result) {
+            $result.data_dir_removed = $removed
+            if (-not $allGone) { $result.complete = $false; $result.incomplete_reasons = @($result.incomplete_reasons) + @('a process of the run was still running at the end') }
+        }
         if ($null -ne $dataDir -and -not $removed) { Write-Host ('the data folder of this run could not be removed: ' + $dataDir) -ForegroundColor Yellow }
     }
     return $result
 }
 
 function Write-FormRunReport($Run) {
-    Write-Host ('run {0}: {1} s, data folder removed: {2}, files it held: {3}' -f $Run.label, $Run.seconds, $Run.data_dir_removed, (@($Run.data_dir_files) -join ' ')) -ForegroundColor Cyan
+    Write-Host ('run {0}: {1} s after a {2} s warm-up, complete: {3}, data folder removed: {4}, files it held: {5}' -f $Run.label, $Run.seconds, $Run.warmup_seconds, $Run.complete, $Run.data_dir_removed, (@($Run.data_dir_files) -join ' ')) -ForegroundColor Cyan
     foreach ($role in $Run.processes.Keys) {
         $p = $Run.processes[$role]
-        $w = $p.windows['all']
-        Write-Host ('  {0,-11} pid {1}: cpu {2} ms/s ({3} %), private {4} MB, working set {5} MB, handles {6}; first window {7} ms, first value {8} ms' -f $role, $p.pid, (Show-Num $w.cpu_ms_per_s_mean), (Show-Num $w.cpu_percent_mean), (Show-Num $w.private_mb_mean), (Show-Num $w.working_set_mb_mean), (Show-Num $w.handles_mean), (Show-Num $p.first_window_ms), (Show-Num $p.first_value_ms))
+        $w = $p.windows['steady']
+        $fv = (Show-Num $p.first_value_ms)
+        if ($null -eq $p.first_value_ms -and $role -eq 'legacy') { $fv = $p.first_value_note }
+        $how = $(if ($null -ne $p.close) { $p.close.method } else { 'n/a' })
+        Write-Host ('  {0,-11} pid {1}: cpu {2} ms/s ({3} %), private {4} MB, working set {5} MB, handles {6}; first window {7} ms, first value {8}; ended: {9}' -f $role, $p.pid, (Show-Num $w.cpu_ms_per_s_mean), (Show-Num $w.cpu_percent_mean), (Show-Num $w.private_mb_mean), (Show-Num $w.working_set_mb_mean), (Show-Num $w.handles_mean), (Show-Num $p.first_window_ms), $fv, $how)
     }
     foreach ($w in @($Run.warnings)) { Write-Host ('  warning: ' + $w) -ForegroundColor Yellow }
 }
 
-# Per form: the figures of every process over the runs of that form (the median and the spread; a missing value is left out, never zero).
+# Party and the old app should be measured in windows of the same size and state: one warning when the end-of-run windows of the two differ.
+function Get-WindowDiffWarnings($RunList) {
+    $found = @{}
+    foreach ($run in @($RunList)) {
+        if ($run.form -ne 'party' -and $run.form -ne 'legacy') { continue }
+        $p = $run.processes[$run.form]
+        if ($null -eq $p -or $null -eq $p.window -or -not $p.window.Contains('end')) { continue }
+        $g = $p.window['end']
+        $text = ('{0}x{1} {2}' -f $g.width, $g.height, $g.state)
+        if (-not $found.ContainsKey($run.form)) { $found[$run.form] = New-Object System.Collections.ArrayList }
+        if ($found[$run.form] -notcontains $text) { [void]$found[$run.form].Add($text) }
+    }
+    $out = New-Object System.Collections.ArrayList
+    if ($found.ContainsKey('party') -and $found.ContainsKey('legacy')) {
+        $a = ($found['party'] -join ' | ')
+        $b = ($found['legacy'] -join ' | ')
+        if ($a -ne $b) { [void]$out.Add(('the windows differ: party {0}; legacy {1} (size and state at the end of the runs)' -f $a, $b)) }
+    }
+    return $out.ToArray()
+}
+
+# Per form: the figures of every process over the COMPLETE runs of that form (the median and the spread; a missing value is left out, never zero).
+# An incomplete run is counted and named, and left out of every median.
 function Add-FormAggregate([System.Collections.IDictionary]$Summary, $RunList) {
     foreach ($f in @($RunList | ForEach-Object { $_.form } | Select-Object -Unique)) {
-        $mine = @($RunList | Where-Object { $_.form -eq $f })
+        $all = @($RunList | Where-Object { $_.form -eq $f })
+        $mine = @($all | Where-Object { $_.complete -eq $true })
         $roles = @($mine | ForEach-Object { @($_.processes.Keys) } | Select-Object -Unique)
-        $agg = [ordered]@{ runs = $mine.Count; processes = [ordered]@{}; total = [ordered]@{} }
+        $agg = [ordered]@{ runs = $mine.Count; runs_started = $all.Count; incomplete = @($all | Where-Object { $_.complete -ne $true } | ForEach-Object { $_.label }); processes = [ordered]@{}; total = [ordered]@{} }
         foreach ($role in $roles) {
             $have = @($mine | Where-Object { $null -ne $_.processes[$role] })
             $one = [ordered]@{
@@ -3271,7 +3506,7 @@ function Add-FormAggregate([System.Collections.IDictionary]$Summary, $RunList) {
                 first_window_ms = (Get-Aggregate @($have | ForEach-Object { $_.processes[$role].first_window_ms }))
                 first_value_ms = (Get-Aggregate @($have | ForEach-Object { $_.processes[$role].first_value_ms }))
             }
-            foreach ($w in @('first_30s', 'steady', 'all')) {
+            foreach ($w in $script:FormWindows) {
                 $withWin = @($have | Where-Object { $null -ne $_.processes[$role].windows[$w] })
                 if ($withWin.Count -eq 0) { continue }
                 $one[$w] = [ordered]@{}
@@ -3279,7 +3514,7 @@ function Add-FormAggregate([System.Collections.IDictionary]$Summary, $RunList) {
             }
             $agg.processes[$role] = $one
         }
-        foreach ($w in @('first_30s', 'steady', 'all')) {
+        foreach ($w in $script:FormWindows) {
             $withTotal = @($mine | Where-Object { $null -ne $_.total[$w] })
             if ($withTotal.Count -eq 0) { continue }
             $agg.total[$w] = [ordered]@{}
@@ -3310,14 +3545,14 @@ function Invoke-FormMain {
         if (-not (Test-Path -LiteralPath $PartyExe -PathType Leaf)) { throw "-PartyExe not found: $PartyExe" }
         $partyPath = (Resolve-Path -LiteralPath $PartyExe).Path
     }
+    $legacyGate = $null
     if ($needLegacy) {
         if ([string]::IsNullOrEmpty($LegacyExe)) { throw '-LegacyExe is required for -Form legacy: the old PartsLife.exe built with the test hooks' }
         if (-not (Test-Path -LiteralPath $LegacyExe -PathType Leaf)) { throw "-LegacyExe not found: $LegacyExe" }
         $legacyPath = (Resolve-Path -LiteralPath $LegacyExe).Path
-        # The safety gate, before anything is started (and again before every start of the old app).
-        $legacyHook = Assert-LegacySafe $legacyPath
+        # The safety gate (legacy-gate.cs reads the IL), before anything is started and again before every start of the old app.
+        $legacyGate = Assert-LegacySafe $legacyPath
     }
-    else { $legacyHook = $null }
 
     if ([string]::IsNullOrEmpty($Output)) { $Output = Join-Path ([IO.Path]::GetTempPath()) ('pcmieru-measure-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss')) }
     try { $Output = [IO.Path]::GetFullPath($Output) }
@@ -3331,7 +3566,7 @@ function Invoke-FormMain {
     $firstExe = $(if ($null -ne $partyPath) { $partyPath } elseif ($null -ne $legacyPath) { $legacyPath } else { $guiPath })
     $environment = Get-EnvironmentInfo $firstExe
     $cpus = [int]$environment.logical_cpus
-    Write-Host ('PC Mieru measure.ps1 - form {0}, {1} run(s) of {2} s' -f $Form, $Runs, $Seconds) -ForegroundColor Cyan
+    Write-Host ('PC Mieru measure.ps1 - form {0}, {1} run(s) of {2} s after a {3} s warm-up' -f $Form, $Runs, $Seconds, $script:FormWarmupSeconds) -ForegroundColor Cyan
     $plan = @(Get-FormPlan $Form ($Form -eq 'party' -and $needLegacy) $Runs)
     $summary = [ordered]@{
         tool = 'tools/measure.ps1'
@@ -3343,17 +3578,19 @@ function Invoke-FormMain {
         warnings = (New-Object System.Collections.ArrayList)
         parameters = [ordered]@{
             seconds = $Seconds
+            warmup_seconds = $script:FormWarmupSeconds
             first_window_seconds = $script:FirstWindowSeconds
             runs = $Runs
             order = $plan
             sample_interval_seconds = 1
             close_timeout_seconds = $script:CloseTimeoutSeconds
-            data_folder_note = 'every run gets a new folder under the output folder (data-<run>) and it is removed after the run'
+            data_folder_note = 'every run gets a new unique folder directly under the temp folder (pcmieru-measure-data-<run>-<id>) and it is removed after the run, once every process of the run has exited; the run output (csv, marks) is in a new folder <output>\<run>'
         }
-        legacy = $(if ($null -ne $legacyHook) { [ordered]@{ exe = $legacyPath; dll = $legacyHook.dll; hook_text_in_dll = $legacyHook.found; env = [ordered]@{ PARTSLIFE_TEST_DATA_DIR = '<the run data folder>'; PARTSLIFE_UPDATE_TEST_FEED = $script:LegacyFeedText } } } else { $null })
+        legacy = $(if ($null -ne $legacyGate) { [ordered]@{ exe = $legacyPath; exe_bytes = $legacyGate.exe_bytes; gate = $legacyGate.line; env = [ordered]@{ PARTSLIFE_TEST_DATA_DIR = '<the run data folder>'; PARTSLIFE_UPDATE_TEST_FEED = $script:LegacyFeedText } } } else { $null })
         runs = (New-Object System.Collections.ArrayList)
         aggregate = [ordered]@{}
     }
+    Save-SummaryNew $summary $summaryPath
     $counts = @{}
     foreach ($f in $plan) {
         $counts[$f] = $(if ($counts.ContainsKey($f)) { $counts[$f] + 1 } else { 1 })
@@ -3364,6 +3601,8 @@ function Invoke-FormMain {
         Add-FormAggregate $summary $summary.runs
         Save-Summary $summary $summaryPath
     }
+    foreach ($w in @(Get-WindowDiffWarnings $summary.runs)) { [void]$summary.warnings.Add($w); Write-Host ('  warning: ' + $w) -ForegroundColor Yellow }
+    Save-Summary $summary $summaryPath
     if ($summary.warnings.Count -gt 0) { Write-Host ('{0} warning(s)' -f $summary.warnings.Count) -ForegroundColor Yellow }
     Write-Host ('summary: {0}' -f $summaryPath)
     return $summary
