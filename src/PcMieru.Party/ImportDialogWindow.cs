@@ -31,6 +31,7 @@ internal sealed class ImportDialogWindow : Window
         Title = model.Title;
         Width = 480;
         SizeToContent = SizeToContent.Height;
+        MaxHeight = Math.Max(240, SystemParameters.WorkArea.Height - 24);   // never taller than the screen: the list scrolls, the buttons stay
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
@@ -39,15 +40,18 @@ internal sealed class ImportDialogWindow : Window
         FontFamily = new FontFamily("Yu Gothic UI, Segoe UI");
         FontSize = 14;
 
+        // Three rows: the title and the text (fixed), the list and the note (they scroll when the screen is too short), the buttons (always visible).
+        var head = new StackPanel();
+        head.Children.Add(new TextBlock { Text = model.Title, FontSize = 19, FontWeight = FontWeights.SemiBold, Foreground = Accent, Margin = new Thickness(0, 0, 0, 12) });
+        head.Children.Add(new TextBlock { Text = model.Body, TextWrapping = TextWrapping.Wrap, Foreground = Text });
+
         var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = model.Title, FontSize = 19, FontWeight = FontWeights.SemiBold, Foreground = Accent, Margin = new Thickness(0, 0, 0, 12) });
-        stack.Children.Add(new TextBlock { Text = model.Body, TextWrapping = TextWrapping.Wrap, Foreground = Text });
         if (model.ListHeader is { } header)
         {
             stack.Children.Add(new TextBlock { Text = header, TextWrapping = TextWrapping.Wrap, Foreground = Sub, Margin = new Thickness(0, 12, 0, 4) });
             foreach (var field in model.List)
             {
-                stack.Children.Add(new TextBlock { Text = "・" + field, Foreground = Text, Margin = new Thickness(10, 0, 0, 0) });
+                stack.Children.Add(new TextBlock { Text = "・" + field, TextWrapping = TextWrapping.Wrap, Foreground = Text, Margin = new Thickness(10, 0, 0, 0) });
             }
         }
 
@@ -55,6 +59,13 @@ internal sealed class ImportDialogWindow : Window
         {
             stack.Children.Add(new TextBlock { Text = note, TextWrapping = TextWrapping.Wrap, Foreground = Sub, Margin = new Thickness(0, 12, 0, 0) });
         }
+
+        var scroll = new ScrollViewer
+        {
+            Content = stack,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
 
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
         foreach (var b in model.Buttons)
@@ -80,8 +91,17 @@ internal sealed class ImportDialogWindow : Window
             row.Children.Add(button);
         }
 
-        stack.Children.Add(row);
-        _root = new Border { Background = Panel, BorderBrush = Edge, BorderThickness = new Thickness(1), Padding = new Thickness(22), Child = stack };
+        var layout = new Grid();
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(head, 0);
+        Grid.SetRow(scroll, 1);
+        Grid.SetRow(row, 2);
+        layout.Children.Add(head);
+        layout.Children.Add(scroll);
+        layout.Children.Add(row);
+        _root = new Border { Background = Panel, BorderBrush = Edge, BorderThickness = new Thickness(1), Padding = new Thickness(22), Child = layout };
         Content = _root;
         ContentRendered += (_, _) => Rendered = true;
     }
@@ -127,6 +147,7 @@ internal sealed class WpfFirstStartPrompts : IFirstStartPrompts
     {
         ImportDialogResult.Retry => ProblemChoice.Retry,
         ImportDialogResult.StartFresh => ProblemChoice.StartFresh,
+        ImportDialogResult.OpenReadOnly => ProblemChoice.OpenReadOnly,
         _ => ProblemChoice.Close,
     };
 

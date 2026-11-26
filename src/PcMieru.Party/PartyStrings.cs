@@ -24,6 +24,10 @@ internal static class PartyStrings
 
     public static string Title(PartyLanguage language) => language == PartyLanguage.Ja ? "パーツぐらし" : "Parts Life";
 
+    /// <summary>The resident mutex is held and no Parts Life window of this session exists: the one holding it is the old Parts Life.</summary>
+    public static string OldAppRunning(PartyLanguage language) =>
+        language == PartyLanguage.Ja ? "パーツぐらし（旧版）を終了してから、もう一度お試しください" : "Close the old Parts Life, then try again";
+
     public static string AlreadyRunning(PartyLanguage language) =>
         language == PartyLanguage.Ja ? "もう一方のパーツぐらしが動いています。" : "Another Parts Life is already running.";
 

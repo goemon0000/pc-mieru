@@ -61,7 +61,8 @@ internal static class Program
                 return 0;
             }
 
-            Say(PartyStrings.AlreadyRunning(language), options.Smoke, language);
+            // No Party window of this session after the retry: what holds the mutex is the old Parts Life (a smoke run never looked, so it keeps the plain text).
+            Say(options.Smoke ? PartyStrings.AlreadyRunning(language) : PartyStrings.OldAppRunning(language), options.Smoke, language);
             return 2;
         }
 
@@ -73,22 +74,28 @@ internal static class Program
 
         // 4. The first start (DESIGN-C 4.1): before the save is read. The first file of a new home always comes from the import engine under its lock, never from the save writer.
         // Later / Close = nothing was written and the app ends (0); the next start asks again. A smoke run never gets here: it must not touch the real folders.
-        if (!options.Smoke && !FirstStart(language))
+        PartyState? loaded = null;
+        if (!options.Smoke && !FirstStart(language, out loaded))
         {
             return 0;
         }
 
         // 5. Only now WPF for the window itself.
-        return Run(options);
+        return Run(options, loaded);
     }
 
-    /// <summary>True: a save is in place (or kept as it is), go on and load it. False: the user chose Later or Close, nothing was written.</summary>
-    private static bool FirstStart(PartyLanguage language)
+    /// <summary>
+    /// True: <paramref name="state"/> is the state to run with (a save in place and loaded; or, for an unreadable new save the user chose to open anyway, a read-only state that never saves).
+    /// False: the user chose Later or Close, nothing was written.
+    /// </summary>
+    private static bool FirstStart(PartyLanguage language, out PartyState? state)
     {
         Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
         // Every engine call runs off this thread inside FirstStartFlow (Task.Run, then a plain wait: no window exists yet); the dialogs run on this STA thread without an Application.
-        var engine = new ImportEngine(ImportPaths.ForCurrentUser(), new WindowsLegacyRunningProbe());
-        return FirstStartFlow.Run(engine, new WpfFirstStartPrompts()) == FirstStartEnd.Proceed;
+        var paths = ImportPaths.ForCurrentUser();
+        var engine = new ImportEngine(paths, new WindowsLegacyRunningProbe());
+        state = StartupLoad.Run(engine, new WpfFirstStartPrompts(), paths.DestinationDir);
+        return state is not null;
     }
 
     /// <summary>--smoke --import-preview: shows the dialog of one case with a made-up plan, writes the shot when asked, and says "party smoke ok". Touches nothing of this machine.</summary>
@@ -166,7 +173,7 @@ internal static class Program
         }
     }
 
-    private static int Run(PartyOptions options)
+    private static int Run(PartyOptions options, PartyState? loaded)
     {
         // The state, the feed and the writer (DESIGN-C 3 item 6, 8 step 4a). A smoke run never reads or writes a save file: an in-memory fresh state and NO writer.
         // A normal start reads only the new home (PartyState.Load() with no arguments) and saves through one background writer.
@@ -184,7 +191,7 @@ internal static class Program
             var sampler = new SamplerFeed();
             sampler.Start();
             feed = sampler;
-            state = PartyState.Load();
+            state = loaded ?? PartyState.Load();   // the first start loaded it already (read-only when the user went on over an unreadable save: SaveBlocked keeps the writer off)
             writer = new PartySaveWriter(state.SaveBlocked);
         }
 
