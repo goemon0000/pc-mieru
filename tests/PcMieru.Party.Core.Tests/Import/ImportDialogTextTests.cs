@@ -292,6 +292,25 @@ public class ImportDialogModelTests
     }
 
     [Fact]
+    public void The_could_not_switch_notice_is_one_line_with_Close_in_both_languages()
+    {
+        InLanguage("ja", () =>
+        {
+            var model = ImportDialogModels.RunSwitchNotSwitched();
+            Assert.Equal("切り替えられませんでした。ログオン時は旧パーツぐらしのままです", model.Body);
+            Assert.Equal(ImportDialogResult.Close, model.CancelResult);
+            Assert.Single(model.Buttons);
+        });
+        InLanguage("en", () =>
+        {
+            var model = ImportDialogModels.RunSwitchNotSwitched();
+            Assert.Equal("Could not switch; the old Parts Life still starts at sign-in", model.Body);
+            Assert.Equal(ImportDialogResult.Close, model.CancelResult);
+            Assert.Single(model.Buttons);
+        });
+    }
+
+    [Fact]
     public void The_preview_of_the_sign_in_question_is_the_question()
     {
         InLanguage("ja", () => Assert.Equal(ImportDialogModels.RunSwitchAsk().Body, ImportDialogModels.Preview(PartyImportPreview.RunSwitch).Body));

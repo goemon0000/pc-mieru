@@ -24,14 +24,21 @@ public sealed class RunSwitchFlowTests : IDisposable
     {
         public int Asked { get; private set; }
         public int Notices { get; private set; }
+        public int NotSwitchedNotices { get; private set; }
+
+        /// <summary>Runs inside AskSwitch, after the offer and before the switch (the owner has said yes by then): a test breaks the store here.</summary>
+        public Action? OnAsk { get; set; }
 
         public bool AskSwitch()
         {
             Asked++;
+            OnAsk?.Invoke();
             return answer;
         }
 
         public void ShowCheckNotice() => Notices++;
+
+        public void ShowNotSwitchedNotice() => NotSwitchedNotices++;
     }
 
     private MemoryRunStore Store()
@@ -94,6 +101,45 @@ public sealed class RunSwitchFlowTests : IDisposable
         store.FailOn(RunStoreCall.ReadApproval, new IOException("x"));   // the offer already fails on this: nothing is asked
         var prompts = new Script(true);
         Assert.Equal(RunSwitchFlowEnd.NotAsked, RunSwitchFlow.AfterImport(Imported(), store, _dir, NewExe, prompts));
+        Assert.Equal(0, prompts.Notices);
+    }
+
+    [Fact]
+    public void A_clean_rollback_after_the_owner_said_switch_is_told_and_the_old_start_is_untouched()
+    {
+        var store = Store();
+        var before = store.ReadRun(RunSwitch.OldName)?.Text;
+        // the owner says yes, then the first write of the switch fails: everything is put back, nothing is left over
+        var prompts = new Script(true) { OnAsk = () => store.FailOn(RunStoreCall.WriteApproval, new IOException("injected")) };
+
+        Assert.Equal(RunSwitchFlowEnd.NotSwitchedNotified, RunSwitchFlow.AfterImport(Imported(), store, _dir, NewExe, prompts));
+
+        Assert.Equal(1, prompts.NotSwitchedNotices);
+        Assert.Equal(0, prompts.Notices);   // the check notice is for a restore that failed, not for this
+        Assert.Equal(before, store.ReadRun(RunSwitch.OldName)?.Text);
+        Assert.Null(store.ReadRun(PartyLogon.ValueName));
+        Assert.False(File.Exists(RunSwitch.JournalPathFor(_dir)));
+    }
+
+    [Fact]
+    public void A_switch_that_worked_says_nothing_more()
+    {
+        var store = Store();
+        var prompts = new Script(true);
+        Assert.Equal(RunSwitchFlowEnd.Switched, RunSwitchFlow.AfterImport(Imported(), store, _dir, NewExe, prompts));
+        Assert.Equal(0, prompts.NotSwitchedNotices);
+        Assert.Equal(0, prompts.Notices);
+    }
+
+    [Fact]
+    public void An_offer_that_no_longer_applies_after_the_question_stays_quiet()
+    {
+        var store = Store();
+        // between the question and the switch the old entry was turned off in Windows: nothing to switch any more
+        var prompts = new Script(true) { OnAsk = () => store.SeedApproval(RunSwitch.OldName, PcMieru.Wire.StartupApprovedCodec.EncodeDisabled(1)) };
+
+        Assert.Equal(RunSwitchFlowEnd.NotSwitched, RunSwitchFlow.AfterImport(Imported(), store, _dir, NewExe, prompts));
+        Assert.Equal(0, prompts.NotSwitchedNotices);
         Assert.Equal(0, prompts.Notices);
     }
 

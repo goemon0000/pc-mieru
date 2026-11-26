@@ -19,6 +19,9 @@ internal sealed partial class SettingsPage
 
     private bool _logonBusy;
     private bool _logonFailed;
+
+    /// <summary>The string key of the line that says how the last click on the box ended when that is neither a plain success nor a plain failure (switched from the old start, could not switch). Cleared by the next read.</summary>
+    private string? _logonNote;
     private bool _logonExeThere;
     private PartyLogonState _logonState = PartyLogonState.Off;
 
@@ -104,19 +107,81 @@ internal sealed partial class SettingsPage
 
     private async Task ChangeLogonAsync(bool on)
     {
-        var (store, exe, launcher) = (Context.LogonStore!, Context.PartyExePath, Context.PartyLauncherOverride ?? PartyLauncher.Real());
+        var (context, store, exe, launcher) = (Context, Context.LogonStore!, Context.PartyExePath, Context.PartyLauncherOverride ?? PartyLauncher.Real());
         _logonBusy = true;
         SyncLogon();
-        var (ok, state, there) = await Task.Run(() =>
+        var change = await Task.Run(() =>
         {
-            var result = on ? PartyLogon.Enable(store, exe) : PartyLogon.Disable(store);
-            return (result.Ok, PartyLogon.Read(store, exe), launcher.Exists(exe));
+            var applied = ApplyLogonChange(context, store, exe, on);
+            return applied with { State = PartyLogon.Read(store, exe), ExeThere = launcher.Exists(exe) };
         }).ConfigureAwait(true);
         _logonBusy = false;
-        FinishLogon(state, there, failed: !ok);
+        if (change.Done)
+        {
+            Context.LogonNeedsCheck = false;   // the setting now says what the owner chose: a recovery that was stuck is settled by it
+        }
+        else if (change.NeedsCheck)
+        {
+            Context.LogonNeedsCheck = true;
+        }
+
+        FinishLogon(change.State, change.ExeThere, failed: change.Failed, note: change.Note);
     }
 
-    private void FinishLogon(PartyLogonState state, bool exeThere, bool failed)
+    /// <summary>What a change of the box did (<see cref="State"/> and <see cref="ExeThere"/> are filled in afterwards, from a fresh read).</summary>
+    private sealed record LogonChange(bool Done, bool Failed, bool NeedsCheck, string? Note, PartyLogonState State = PartyLogonState.Off, bool ExeThere = false);
+
+    /// <summary>
+    /// The owner's click, on a worker thread. Off removes our entry (a stuck journal is settled by it, see <see cref="PartyLogon.Disable"/>). On: when the old Parts Life start is on and points at the old exe,
+    /// checking the box is the consent to the switch (<see cref="RunSwitch.Switch"/>: the old start is replaced, so there are never two starts); otherwise a plain <see cref="PartyLogon.Enable"/>. A journal
+    /// of an earlier switch is recovered first; one that cannot be settled makes the owner's choice win (plain Enable, which deletes the journal once it was written).
+    /// </summary>
+    private static LogonChange ApplyLogonChange(GuiContext context, PcMieru.Core.Siblings.IRunStore store, string exe, bool on)
+    {
+        var seam = context.LogonSeam;
+        var journalPath = context.ResolveLogonJournalPath();
+        if (!on)
+        {
+            return Plain(PartyLogon.Disable(store, seam.LockName, seam.LockWait, journalPath, seam.FileExists));
+        }
+
+        if (journalPath is not null)
+        {
+            var journal = new FileRunSwitchJournal(journalPath);
+            var recovery = RunSwitch.Recover(store, journal, seam.LockName, seam.LockWait, seam.FileExists);
+            if (recovery.Status == RunSwitchStatus.Busy)
+            {
+                return new LogonChange(false, true, false, null);
+            }
+
+            if (!recovery.NeedsAttention && RunSwitch.Offer(store, exe, seam.FileExists).Ask)
+            {
+                var switched = RunSwitch.Switch(store, journal, exe, seam.FileExists, seam.LockName, seam.LockWait);
+                switch (switched.Status)
+                {
+                    case RunSwitchStatus.Switched:
+                        return new LogonChange(true, false, false, "gui.settings.partylogon.switched");
+                    case RunSwitchStatus.RestoreFailed or RunSwitchStatus.NeedsUserCheck or RunSwitchStatus.RecoveryFailed:
+                        return new LogonChange(false, false, true, null);
+                    case RunSwitchStatus.NotOffered:
+                        break;   // the values changed in between: the plain change below decides
+                    default:
+                        return new LogonChange(false, false, false, "gui.settings.partylogon.notswitched");
+                }
+            }
+        }
+        else if (RunSwitch.Offer(store, exe, seam.FileExists).Ask)
+        {
+            // the old start is on but there is nowhere to keep the journal of a switch: not a plain Enable (that would start both), nothing is written
+            return new LogonChange(false, true, false, null);
+        }
+
+        return Plain(PartyLogon.Enable(store, exe, seam.LockName, seam.LockWait, journalPath, seam.FileExists));
+
+        static LogonChange Plain(PartyLogonResult result) => new(result.Ok, !result.Ok, false, null);
+    }
+
+    private void FinishLogon(PartyLogonState state, bool exeThere, bool failed, string? note = null)
     {
         if (IsDisposed)
         {
@@ -127,6 +192,7 @@ internal sealed partial class SettingsPage
         _logonState = state;
         _logonExeThere = exeThere;
         _logonFailed = failed;
+        _logonNote = note;
         SyncLogon();
     }
 
@@ -166,19 +232,21 @@ internal sealed partial class SettingsPage
         _partyLogon.Checked = _logonState == PartyLogonState.On;
         // An unreadable state is never rewritten blind; a Party exe that is not there cannot be registered (but a registration that exists can still be taken off).
         _partyLogon.Enabled = _logonState != PartyLogonState.Unknown && (_logonExeThere || _logonState == PartyLogonState.On);
-        // A change of this session that failed comes first, then an unfinished switch of an earlier run that could not be settled (set by the recovery at start), then what the state itself says.
-        ShowLogonLine(_logonFailed ? "gui.settings.partylogon.failed" : Context.LogonNeedsCheck ? "gui.settings.partylogon.check" : _logonState switch
+        // A change of this session that failed comes first, then how a switch from the old start ended, then an unfinished switch that could not be settled (set by the recovery at start or by a click),
+        // then what the state itself says.
+        ShowLogonLine(_logonFailed ? "gui.settings.partylogon.failed" : _logonNote ?? (Context.LogonNeedsCheck ? "gui.settings.partylogon.check" : _logonState switch
         {
             PartyLogonState.DisabledInWindows => "gui.settings.partylogon.disabled",
             PartyLogonState.OtherPlacement => "gui.settings.partylogon.other",
             PartyLogonState.Unknown => "gui.settings.partylogon.unknown",
             _ => _logonExeThere ? null : "gui.party.missing",
-        });
+        }));
     }
 
     private void ShowLogonLine(string? key)
     {
         _partyLogonLine.Text = key is null ? string.Empty : Strings.Get(key);
         _partyLogonLine.Visible = key is not null;
+        _partyLogonLine.SetTone(key == "gui.settings.partylogon.switched" ? CellTone.Good : CellTone.Warning);
     }
 }

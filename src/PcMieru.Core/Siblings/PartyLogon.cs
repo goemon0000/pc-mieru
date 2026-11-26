@@ -125,8 +125,13 @@ public static class PartyLogon
     /// Registers <paramref name="exePath"/>: writes the Run value, makes a stamp that is there (and not enabled) enabled, and reads the result back. A stamp that is not there is left absent (Windows
     /// runs the entry). When the stamp could not be made, the Run value is put back as it was. Replaces the value of another placement: the user asked for this one.
     /// </summary>
-    public static PartyLogonResult Enable(IRunStore store, string exePath, string? lockName = null, TimeSpan? lockWait = null) =>
-        Locked(lockName, lockWait, () => EnableCore(store, exePath));
+    /// <remarks>
+    /// <paramref name="journalPath"/> is the journal of the switch from the old value (<see cref="RunSwitch.JournalPathFor"/>); null = the caller has none. With it, under the lock, a journal that is there is
+    /// recovered first (<see cref="RunSwitch.RecoverHeld"/>); one that cannot be settled (the user changed an entry in Windows, or the recovery failed) is settled by this change instead: the owner's explicit
+    /// choice wins, and when it was written the journal is deleted, so a later recovery cannot undo it. <paramref name="fileExists"/> is for tests.
+    /// </remarks>
+    public static PartyLogonResult Enable(IRunStore store, string exePath, string? lockName = null, TimeSpan? lockWait = null, string? journalPath = null, Func<string, bool>? fileExists = null) =>
+        Locked(lockName, lockWait, () => Settling(store, journalPath, fileExists, () => EnableCore(store, exePath)));
 
     private static PartyLogonResult EnableCore(IRunStore store, string exePath)
     {
@@ -190,8 +195,40 @@ public static class PartyLogon
     }
 
     /// <summary>Removes the Run value of our name and its approval stamp, and checks that both are gone. Stops at the first failure (the stamp is not touched when the Run value stays).</summary>
-    public static PartyLogonResult Disable(IRunStore store, string? lockName = null, TimeSpan? lockWait = null) =>
-        Locked(lockName, lockWait, () => DisableCore(store));
+    /// <remarks>About <paramref name="journalPath"/> and <paramref name="fileExists"/> see <see cref="Enable"/>: a stuck journal is settled by this change.</remarks>
+    public static PartyLogonResult Disable(IRunStore store, string? lockName = null, TimeSpan? lockWait = null, string? journalPath = null, Func<string, bool>? fileExists = null) =>
+        Locked(lockName, lockWait, () => Settling(store, journalPath, fileExists, () => DisableCore(store)));
+
+    /// <summary>
+    /// Runs <paramref name="change"/> (the lock is held) after the journal of an earlier switch was dealt with: recovered when its values are known, otherwise left for the owner's change to settle, which
+    /// deletes it once the change was written. No journal path or no journal: just the change.
+    /// </summary>
+    private static PartyLogonResult Settling(IRunStore store, string? journalPath, Func<string, bool>? fileExists, Func<PartyLogonResult> change)
+    {
+        if (journalPath is null)
+        {
+            return change();
+        }
+
+        var journal = new FileRunSwitchJournal(journalPath);
+        var stuck = RunSwitch.RecoverHeld(store, journal, fileExists).NeedsAttention;
+        var result = change();
+        if (!stuck || !result.Ok)
+        {
+            return result;
+        }
+
+        try
+        {
+            journal.Delete();
+        }
+        catch (Exception ex)
+        {
+            return Failed(ex);
+        }
+
+        return result;
+    }
 
     private static PartyLogonResult DisableCore(IRunStore store)
     {

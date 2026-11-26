@@ -169,4 +169,6 @@ internal sealed class WpfRunSwitchPrompts : IRunSwitchPrompts
     public bool AskSwitch() => ImportDialogWindow.ShowFor(ImportDialogModels.RunSwitchAsk()) == ImportDialogResult.Switch;
 
     public void ShowCheckNotice() => ImportDialogWindow.ShowFor(ImportDialogModels.RunSwitchCheck());
+
+    public void ShowNotSwitchedNotice() => ImportDialogWindow.ShowFor(ImportDialogModels.RunSwitchNotSwitched());
 }

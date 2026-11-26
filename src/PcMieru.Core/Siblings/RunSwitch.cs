@@ -161,6 +161,13 @@ public static class RunSwitch
     public static RunSwitchResult Recover(IRunStore store, IRunSwitchJournal journal, string? lockName = null, TimeSpan? wait = null, Func<string, bool>? fileExists = null) =>
         Locked(lockName, wait, () => RecoverLocked(store, journal, fileExists ?? File.Exists));
 
+    /// <summary>
+    /// The recovery for a caller that already holds <see cref="RunSwitchLock"/> (<see cref="PartyLogon.Enable"/> and <see cref="PartyLogon.Disable"/> settle a stuck journal this way before the owner's
+    /// change). Same rules and result as <see cref="Recover(IRunStore, IRunSwitchJournal, string?, TimeSpan?, Func{string, bool}?)"/>, without taking the lock again.
+    /// </summary>
+    internal static RunSwitchResult RecoverHeld(IRunStore store, IRunSwitchJournal journal, Func<string, bool>? fileExists = null) =>
+        RecoverLocked(store, journal, fileExists ?? File.Exists);
+
     private static RunSwitchResult Locked(string? lockName, TimeSpan? wait, Func<RunSwitchResult> work)
     {
         RunSwitchLock? held;

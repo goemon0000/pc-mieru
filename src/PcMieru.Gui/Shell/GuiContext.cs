@@ -249,6 +249,30 @@ internal sealed class GuiContext
     /// </summary>
     internal bool LogonNeedsCheck { get; set; }
 
+    /// <summary>
+    /// Seams of the sign-in setting for tests and the smoke run (null/default in every real run): what "the old exe is there" means for the offer, the name and the wait of the lock of the sign-in entries
+    /// (a test uses a lock of its own and a short wait), and how long the recovery at start waits between its tries while that lock is busy.
+    /// </summary>
+    internal LogonSeams LogonSeam { get; set; } = new();
+
+    /// <summary>
+    /// The journal of the switch from the old sign-in start: <c>run-switch.json</c> beside the save of Parts Life (the roaming folder this context names). Null when the folder is not known or cannot be
+    /// found. Call it off the UI thread (it may ask <see cref="PartyRoamingRootResolver"/>).
+    /// </summary>
+    internal string? ResolveLogonJournalPath()
+    {
+        try
+        {
+            return PartyRoamingRootKnown && ResolvePartyRoamingRoot() is { } root
+                ? PcMieru.Core.Siblings.RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"))
+                : null;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>The PCMieru.Party.exe the sign-in entry starts: the one beside the running PCMieru.exe (absolute). A test may point it elsewhere.</summary>
     internal string PartyExePath { get; set; } = Path.GetFullPath(PartyLauncher.ExePath);
 
@@ -405,3 +429,10 @@ internal sealed class GuiContext
         }
     }
 }
+
+/// <summary>See <see cref="GuiContext.LogonSeam"/>. Every member is null in a real run, which means the real behaviour (File.Exists, the per-user lock with its default wait, 5 seconds between tries).</summary>
+/// <param name="FileExists">The "is this file there" of the offer to switch from the old sign-in start.</param>
+/// <param name="LockName">The name of the lock of the sign-in entries.</param>
+/// <param name="LockWait">How long a change waits for that lock.</param>
+/// <param name="RetryDelay">The pause between the tries of the recovery at start while the lock is busy.</param>
+internal sealed record LogonSeams(Func<string, bool>? FileExists = null, string? LockName = null, TimeSpan? LockWait = null, TimeSpan? RetryDelay = null);

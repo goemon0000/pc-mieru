@@ -91,6 +91,15 @@ internal static class ImportDialogModels
         null,
         [new ImportDialogButton(Strings.ImportCloseButton, ImportDialogResult.Close, IsDefault: true, IsCancel: true)]);
 
+    /// <summary>"Could not switch; the old Parts Life still starts at sign-in": the owner said Switch and the switch was rolled back cleanly (or the lock was busy). One line and Close.</summary>
+    public static ImportDialogModel RunSwitchNotSwitched() => new(
+        Strings.RunSwitchTitle,
+        Strings.RunSwitchNotSwitched,
+        null,
+        [],
+        null,
+        [new ImportDialogButton(Strings.ImportCloseButton, ImportDialogResult.Close, IsDefault: true, IsCancel: true)]);
+
     /// <summary>The dialog of a <c>--smoke --import-preview</c> case. A made-up plan: no engine, no path is opened (the candidate path is only a label).</summary>
     public static ImportDialogModel Preview(PartyImportPreview which) => which switch
     {

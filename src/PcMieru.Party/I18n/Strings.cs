@@ -145,6 +145,7 @@ public static class Strings
     public static string RunSwitchYes       => T("切り替える", "Switch");
     public static string RunSwitchNo        => T("今はしない", "Not now");
     public static string RunSwitchCheck     => T("ログオン設定の復元を確認してください", "Please check the sign-in setting");
+    public static string RunSwitchNotSwitched => T("切り替えられませんでした。ログオン時は旧パーツぐらしのままです", "Could not switch; the old Parts Life still starts at sign-in");
 
     /// <summary>引き継ぎの理由コード（<see cref="ImportReason"/>）に対する文。コードが増えて文が無いときは null（テストが全コードを回して見つける）。</summary>
     public static string? ImportReasonTextOrNull(string reason) => reason switch

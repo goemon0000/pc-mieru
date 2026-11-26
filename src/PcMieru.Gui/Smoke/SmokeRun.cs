@@ -103,6 +103,8 @@ internal static partial class SmokeRun
             return true;
         });
         context.LogonStore = new PcMieru.Core.Siblings.MemoryRunStore();
+        // The sign-in switch of the run sees every exe as there (the old Parts Life and the Party exe next to this one are stand-ins) and takes a lock of its own, never the one of a real start.
+        context.LogonSeam = new LogonSeams(FileExists: _ => true, LockName: @"Local\PCMieru.Smoke.Logon." + Guid.NewGuid().ToString("N"));
     }
 
     /// <summary>A prepared run that ends before <see cref="Run"/> (a <c>--page</c> that does not exist): takes its scratch roaming folder away again.</summary>

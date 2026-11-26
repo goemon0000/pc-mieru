@@ -461,7 +461,9 @@ public sealed class PartyImportNoticeTests
 
         // The work that needs the folder asks the context from a worker thread (Task.Run), not from the UI thread.
         Assert.Contains("Task.Run(() => _context.ResolvePartyRoamingRoot()", main, StringComparison.Ordinal);
-        Assert.Contains("_context.ResolvePartyRoamingRoot() is not { } root", main, StringComparison.Ordinal);
+        // The recovery at start finds the folder through the context's journal path (which asks ResolvePartyRoamingRoot), inside the worker too.
+        Assert.Matches(@"Task\.Run\(\(\) =>\s*\{\s*if \(_context\.ResolveLogonJournalPath\(\) is not \{ \} journal\)", main);
+        Assert.Contains("PartyRoamingRootKnown && ResolvePartyRoamingRoot() is { } root", File.ReadAllText(Path.Combine(Harness.GuiSource, "Shell", "GuiContext.cs")), StringComparison.Ordinal);
         Assert.DoesNotMatch(@"_context\.PartyRoamingRoot(?!Known)\b", main);   // the UI thread never reads the folder itself (Known is only a yes/no)
     }
 

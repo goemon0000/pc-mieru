@@ -17,6 +17,9 @@ public interface IRunSwitchPrompts
 
     /// <summary>"Please check the sign-in setting": the switch or its recovery could not be settled (a restore failed, or the user changed an entry meanwhile).</summary>
     void ShowCheckNotice();
+
+    /// <summary>"Could not switch; the old Parts Life still starts at sign-in": the owner said Switch, and the switch was rolled back (every value is as before) or could not start (the lock was busy).</summary>
+    void ShowNotSwitchedNotice();
 }
 
 /// <summary>How <see cref="RunSwitchFlow.AfterImport"/> ended.</summary>
@@ -31,8 +34,11 @@ public enum RunSwitchFlowEnd
     /// <summary>The sign-in start now runs the new exe.</summary>
     Switched,
 
-    /// <summary>It did not finish and every value is as it was (or the lock was busy). Nothing is shown: nothing is worse than before.</summary>
+    /// <summary>The values changed between the question and the switch (the offer no longer applied). Nothing was written and nothing is shown.</summary>
     NotSwitched,
+
+    /// <summary>The owner said Switch, but it was rolled back (every value is as it was) or the lock was busy: the notice "could not switch" was shown (the checkbox on the PCMieru settings page is the retry).</summary>
+    NotSwitchedNotified,
 
     /// <summary>The notice "please check the sign-in setting" was shown.</summary>
     Notified,
@@ -63,8 +69,9 @@ public static class RunSwitchFlow
     }
 
     /// <summary>
-    /// After the first-start flow ended with a load: when this run imported the old save and the old sign-in entry is on and points at the old exe, asks once; on yes, switches. The result is shown only
-    /// when it needs a person (a restore failed, or an entry was changed meanwhile). The copy of the save is already done and stays done whatever happens here.
+    /// After the first-start flow ended with a load: when this run imported the old save and the old sign-in entry is on and points at the old exe, asks once; on yes, switches. A success is quiet; a result
+    /// that needs a person (a restore failed, or an entry was changed meanwhile) shows the check notice, and a clean rollback or a busy lock shows the "could not switch" notice (the owner said yes, so
+    /// it is told). The copy of the save is already done and stays done whatever happens here.
     /// </summary>
     public static RunSwitchFlowEnd AfterImport(FirstStartReport report, IRunStore store, string saveFolder, string newExePath, IRunSwitchPrompts prompts)
     {
@@ -88,6 +95,13 @@ public static class RunSwitchFlow
         {
             prompts.ShowCheckNotice();
             return RunSwitchFlowEnd.Notified;
+        }
+
+        // The owner agreed, so a clean rollback or a busy lock is told (the old start stays as it was; the setting on the PCMieru page is the retry). Only "no longer offered" stays quiet.
+        if (result.Status is RunSwitchStatus.RolledBack or RunSwitchStatus.Busy)
+        {
+            prompts.ShowNotSwitchedNotice();
+            return RunSwitchFlowEnd.NotSwitchedNotified;
         }
 
         return RunSwitchFlowEnd.NotSwitched;

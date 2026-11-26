@@ -330,17 +330,39 @@ internal sealed class MainForm : Form
                 return;
             }
 
-            // The roaming folder is found on the worker thread too (a redirected folder may be slow or gone), with the recovery itself.
-            var result = await Task.Run(() =>
+            // The roaming folder is found on the worker thread too (a redirected folder may be slow or gone), with the recovery itself. While another program holds the lock of the sign-in entries
+            // (Parts Life's own start may be switching right now) the recovery says Busy: it is tried up to 3 more times, 5 seconds apart, in the background; still Busy = nothing this run, the journal
+            // stays for the next start.
+            var seam = _context.LogonSeam;
+            var delay = seam.RetryDelay ?? TimeSpan.FromSeconds(5);
+            RunSwitchResult? result = null;
+            for (var attempt = 0; attempt <= 3; attempt++)
             {
-                if (_context.ResolvePartyRoamingRoot() is not { } root)
+                if (attempt > 0)
                 {
-                    return null;
+                    await Task.Delay(delay).ConfigureAwait(true);
                 }
 
-                var journal = RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"));
-                return RunSwitch.Recover(store, journal);
-            }).ConfigureAwait(true);
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                result = await Task.Run(() =>
+                {
+                    if (_context.ResolveLogonJournalPath() is not { } journal)
+                    {
+                        return null;
+                    }
+
+                    return RunSwitch.Recover(store, new FileRunSwitchJournal(journal), seam.LockName, seam.LockWait, seam.FileExists);
+                }).ConfigureAwait(true);
+                if (result is not { Status: RunSwitchStatus.Busy })
+                {
+                    break;
+                }
+            }
+
             if (result is not { NeedsAttention: true } || IsDisposed)
             {
                 return;

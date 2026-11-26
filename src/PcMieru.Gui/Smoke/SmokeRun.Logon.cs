@@ -69,6 +69,31 @@ internal static partial class SmokeRun
             await settings.PartyLogonPending.ConfigureAwait(true);
             Check("logon: switching off removes the Run value and its stamp", !box.Checked && settings.PartyLogonShown == PartyLogonState.Off && store.RunNames.Count == 0 && store.ApprovalNames.Count == 0 && settings.PartyLogonLineText.Length == 0, settings.PartyLogonShown + " / " + string.Join(",", store.RunNames) + " / " + string.Join(",", store.ApprovalNames));
 
+            // --- The old Parts Life start is on: ticking the box switches it (never two starts), and the line says so. ---
+            var oldCommand = "\"" + Path.Combine(Path.GetPathRoot(context.PartyExePath) ?? "C:\\", "OldPartsLife", "PartsLife.exe") + "\"";
+            store.SeedRun(RunSwitch.OldName, oldCommand);
+            await settings.RefreshPartyLogon().ConfigureAwait(true);
+            box.Checked = true;
+            await settings.PartyLogonPending.ConfigureAwait(true);
+            Check("logon: ticking the box while the old start is on switches it (the old value is gone, the new one is the expected one) and the line says so, in the good tone", box.Checked && settings.PartyLogonShown == PartyLogonState.On && store.ReadRun(RunSwitch.OldName) is null && store.ReadRun(LogonName)?.Text == expected && settings.PartyLogonLineText == Strings.Get("gui.settings.partylogon.switched") && settings.PartyLogonLineTone == CellTone.Good, box.Checked + " / " + settings.PartyLogonShown + " / " + string.Join(",", store.RunNames) + " / " + settings.PartyLogonLineText);
+            await ShootLogon(settings, "switched", "gui.settings.partylogon.switched").ConfigureAwait(true);
+            box.Checked = false;
+            await settings.PartyLogonPending.ConfigureAwait(true);
+            Check("logon: after the switch, switching off leaves no sign-in value of ours and no line", !box.Checked && store.RunNames.Count == 0 && store.ApprovalNames.Count == 0 && settings.PartyLogonLineText.Length == 0, string.Join(",", store.RunNames) + " / " + settings.PartyLogonLineText);
+
+            // --- The switch cannot be finished (the approval cannot be written): it is rolled back, the old start is as it was, and the line says it could not switch. ---
+            store.SeedRun(RunSwitch.OldName, oldCommand);
+            store.FailOn(RunStoreCall.WriteApproval, new IOException("smoke: the approval cannot be written"));
+            await settings.RefreshPartyLogon().ConfigureAwait(true);
+            box.Checked = true;
+            await settings.PartyLogonPending.ConfigureAwait(true);
+            Check("logon: a switch that cannot be finished is rolled back (old value untouched, no new one) and the line says it could not switch", !box.Checked && store.ReadRun(RunSwitch.OldName)?.Text == oldCommand && store.ReadRun(LogonName) is null && settings.PartyLogonLineText == Strings.Get("gui.settings.partylogon.notswitched") && settings.PartyLogonLineTone == CellTone.Warning, box.Checked + " / " + string.Join(",", store.RunNames) + " / " + settings.PartyLogonLineText);
+            await ShootLogon(settings, "notswitched", "gui.settings.partylogon.notswitched").ConfigureAwait(true);
+            store.Heal();
+            store.DeleteRun(RunSwitch.OldName);
+            await settings.RefreshPartyLogon().ConfigureAwait(true);
+            Check("logon: after the rolled-back switch is cleared the box is off and has no line", !box.Checked && settings.PartyLogonLineText.Length == 0 && store.RunNames.Count == 0, string.Join(",", store.RunNames) + " / " + settings.PartyLogonLineText);
+
             // --- Another folder's Parts Life is registered: its line, and the entry is not touched by looking. ---
             var elsewhere = "\"" + Path.Combine(Path.GetPathRoot(context.PartyExePath) ?? "C:\\", "Elsewhere", "PCMieru.Party.exe") + "\" --logon";
             store.SeedRun(LogonName, elsewhere);
@@ -98,9 +123,11 @@ internal static partial class SmokeRun
             {
                 page.ScrollToPartyLogon();
                 await Task.Delay(200).ConfigureAwait(true);
-                var texts = new[] { page.PartyLogonBox.Text, page.PartyLogonLineText };
+                // The box always has its words; the status line is checked only in a state that expects one (Off and On have none: an empty line there is the right answer, and a line there is a fault).
+                var line = page.PartyLogonLineText;
+                var lineOk = lineKey is null ? line.Length == 0 : line.Length > 0 && !SmokeText.IsPlaceholder(line);
                 var missing = SmokeText.Missing(page).Concat(SmokeText.Missing(form)).Distinct().Take(5).ToList();
-                Check($"logon: the sign-in row has its texts, {state} ({look})", missing.Count == 0 && !texts.Any(SmokeText.IsPlaceholder) && page.PartyLogonBox.Text == Strings.Get("gui.settings.partylogon"), string.Join(" | ", missing));
+                Check($"logon: the sign-in row has its texts, {state} ({look})", missing.Count == 0 && lineOk && !SmokeText.IsPlaceholder(page.PartyLogonBox.Text) && page.PartyLogonBox.Text == Strings.Get("gui.settings.partylogon"), string.Join(" | ", missing) + (lineOk ? string.Empty : " / line: '" + line + "'"));
                 if (lineKey is not null)
                 {
                     Check($"logon: the line is exactly the words of {state} in this language ({look})", page.PartyLogonLineText == Strings.Get(lineKey), page.PartyLogonLineText + " / " + Strings.Get(lineKey));
