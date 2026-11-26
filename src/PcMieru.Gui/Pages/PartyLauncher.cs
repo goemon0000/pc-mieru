@@ -64,6 +64,9 @@ internal sealed class PartyLauncher
 
     public static string ExePath => Path.Combine(AppContext.BaseDirectory, ExeName);
 
+    /// <summary>Whether <paramref name="path"/> is there (the check <see cref="Open"/> makes), so the sign-in setting asks the same injected question as the button.</summary>
+    public bool Exists(string path) => _exists(path);
+
     public PartyOpenResult Open(Language language)
     {
         var path = ExePath;

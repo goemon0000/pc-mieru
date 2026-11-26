@@ -181,6 +181,16 @@ internal sealed class GuiContext
     /// <summary>The launcher of the Parts Life page. Null (every real run) is the real one; a test passes one that starts nothing, so pressing the page's button never starts a process.</summary>
     internal PartyLauncher? PartyLauncherOverride { get; set; }
 
+    /// <summary>
+    /// Where the setting "Start Parts Life at sign-in" keeps its Run value (DESIGN-C 3 item 5). Set to the real registry store only by a real run (Program.cs, the same block that sets
+    /// <see cref="PartyRoamingRoot"/>) and to an in-memory store by the smoke run; null (every test that does not pass one, a measurement, a trial on fakes) means the setting is shown
+    /// unavailable and does nothing, so no automated run ever reads or writes the owner's Run key.
+    /// </summary>
+    internal PcMieru.Core.Siblings.IRunStore? LogonStore { get; set; }
+
+    /// <summary>The PCMieru.Party.exe the sign-in entry starts: the one beside the running PCMieru.exe (absolute). A test may point it elsewhere.</summary>
+    internal string PartyExePath { get; set; } = Path.GetFullPath(PartyLauncher.ExePath);
+
     public void SetLanguage(Language language)
     {
         if (Settings.Language == language && Strings.Current == language)

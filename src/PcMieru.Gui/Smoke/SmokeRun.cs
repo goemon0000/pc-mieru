@@ -40,6 +40,9 @@ internal static partial class SmokeRun
             return true;
         });
 
+        // DESIGN-C 3 item 5: the sign-in setting works on an in-memory store here, never on the registry (the real store is built by Program.cs of a real start only).
+        context.LogonStore = new PcMieru.Core.Siblings.MemoryRunStore();
+
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
         Dialogs.AutoAnswer = false;
         form.ShowInTaskbar = false;
@@ -505,6 +508,7 @@ internal static partial class SmokeRun
             await Pcb1Run().ConfigureAwait(true);
             await UpdateRun().ConfigureAwait(true);
             await PartyImportRun().ConfigureAwait(true);
+            await PartyLogonRun().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
         }
 

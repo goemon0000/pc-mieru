@@ -97,6 +97,9 @@ internal static class Program
 
             // Only a real start looks for old Parts Life progress (file existence only); the smoke run gives its own scratch folder and every test none (DESIGN-C 4.1 items 1-2).
             context.PartyRoamingRoot = PcMieru.Core.Siblings.PartyImportHint.RealRoamingRoot();
+
+            // The sign-in setting reads and writes the owner's HKCU Run key; only a real start gets the real store (a smoke run gets a memory one, every test none).
+            context.LogonStore = PcMieru.Core.Siblings.RegistryRunStore.ForCurrentUser();
         }
 
         using var form = new MainForm(context);
