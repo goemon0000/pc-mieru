@@ -44,6 +44,9 @@ public enum PartyLogonFailure
 
     /// <summary>Another program holds the lock of the sign-in entries (a switch from the old value, a recovery, or another change). Nothing was written; trying again later works.</summary>
     Busy,
+
+    /// <summary>The Run command for this exe would be 260 characters or more (the limit of a Run value that Windows starts). Nothing was written.</summary>
+    TooLong,
 }
 
 /// <summary>The outcome of a change. Never an exception: the settings page shows a line for a failure and goes on.</summary>
@@ -67,6 +70,12 @@ public static class PartyLogon
 
     /// <summary>The data of the Run value for this exe: the path in quotes, a space, <see cref="Argument"/>.</summary>
     public static string ExpectedValue(string exePath) => "\"" + exePath + "\" " + Argument;
+
+    /// <summary>A Run command of this many characters or more is refused (Windows starts a Run value only up to a 259-character command line).</summary>
+    public const int MaxCommandLength = 260;
+
+    /// <summary>True when the Run command for <paramref name="exePath"/> would be <see cref="MaxCommandLength"/> characters or more.</summary>
+    public static bool IsTooLong(string exePath) => ExpectedValue(exePath).Length >= MaxCommandLength;
 
     /// <summary>
     /// The state of the setting for <paramref name="expectedExePath"/>, the PCMieru.Party.exe of this install. The rules of the approval stamp are the ones of Task Manager's: a key that opened and
@@ -134,6 +143,11 @@ public static class PartyLogon
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return new PartyLogonResult(false, PartyLogonFailure.InvalidPath, ex.GetType().Name);
+        }
+
+        if (IsTooLong(full))
+        {
+            return new PartyLogonResult(false, PartyLogonFailure.TooLong, ExpectedValue(full).Length + " characters");
         }
 
         RunValue? before;

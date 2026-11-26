@@ -37,4 +37,10 @@ public interface IRunStore
 
     /// <summary>Removes the StartupApproved\Run value; no error when it is not there.</summary>
     void DeleteApproval(string name);
+
+    /// <summary>
+    /// Makes what was written so far survive a power loss (the registry otherwise lazily writes its hive to the disk a while later). The switch calls it after its registry writes and before it marks the
+    /// journal committed, and the recovery calls it after it put the values back and before it deletes the journal. The memory store does nothing (and counts the call).
+    /// </summary>
+    void Flush();
 }

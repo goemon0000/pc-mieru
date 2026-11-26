@@ -4,7 +4,7 @@ using PcMieru.Wire;
 
 namespace PcMieru.Core.Siblings;
 
-/// <summary>The six calls of <see cref="IRunStore"/>, so a failure can be put on any one of them.</summary>
+/// <summary>The seven calls of <see cref="IRunStore"/>, so a failure can be put on any one of them.</summary>
 [JsonConverter(typeof(CamelCaseEnumConverter<RunStoreCall>))]
 public enum RunStoreCall
 {
@@ -14,6 +14,7 @@ public enum RunStoreCall
     ReadApproval,
     WriteApproval,
     DeleteApproval,
+    Flush,
 }
 
 /// <summary>
@@ -28,6 +29,7 @@ public sealed class MemoryRunStore : IRunStore
     private readonly Dictionary<string, ApprovalValue> _approved = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<RunStoreCall, Exception> _failures = [];
     private readonly List<(RunStoreCall Call, string Name)> _calls = [];
+    private int _flushes;
 
     /// <summary>Every call made so far, in order, with the value name it was made for.</summary>
     public IReadOnlyList<(RunStoreCall Call, string Name)> Calls
@@ -160,6 +162,31 @@ public sealed class MemoryRunStore : IRunStore
         {
             Enter(RunStoreCall.DeleteApproval, name);
             _approved.Remove(name);
+        }
+    }
+
+    /// <summary>How many times <see cref="Flush"/> was called (the memory store has nothing to flush).</summary>
+    public int FlushCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _flushes;
+            }
+        }
+    }
+
+    public void Flush()
+    {
+        lock (_gate)
+        {
+            _flushes++;
+            _calls.Add((RunStoreCall.Flush, string.Empty));
+            if (_failures.TryGetValue(RunStoreCall.Flush, out var failure))
+            {
+                throw failure;
+            }
         }
     }
 

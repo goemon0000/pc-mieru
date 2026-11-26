@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PcMieru.Core.Siblings;
@@ -8,9 +10,10 @@ namespace PcMieru.Core.Siblings;
 /// </summary>
 public interface IRunSwitchJournal
 {
-    bool Exists();
-
-    /// <summary>The whole text. Throws when the journal is not there.</summary>
+    /// <summary>
+    /// The whole text. Throws <see cref="FileNotFoundException"/> or <see cref="DirectoryNotFoundException"/> when the journal is not there, and ONLY then: any other exception (access denied, a
+    /// sharing violation, a disk error) means "could not tell", never "no journal". There is deliberately no <c>Exists()</c>: a file that exists but cannot be opened looks absent to it.
+    /// </summary>
     string Read();
 
     /// <summary>Replaces the whole text in one step: a reader sees the old text or the new text, never a half.</summary>
@@ -27,8 +30,6 @@ public interface IRunSwitchJournal
 public sealed class FileRunSwitchJournal(string path) : IRunSwitchJournal
 {
     public string Path { get; } = path;
-
-    public bool Exists() => File.Exists(Path);
 
     public string Read() => File.ReadAllText(Path, Encoding.UTF8);
 
@@ -50,7 +51,7 @@ public sealed class FileRunSwitchJournal(string path) : IRunSwitchJournal
                 file.Flush(flushToDisk: true);
             }
 
-            File.Move(temp, Path, overwrite: true);
+            Publish(temp, Path);
         }
         catch
         {
@@ -67,6 +68,16 @@ public sealed class FileRunSwitchJournal(string path) : IRunSwitchJournal
         }
     }
 
+    /// <summary>Renames the flushed temp file over the journal and does not return before the rename is on the disk (MOVEFILE_WRITE_THROUGH), so a power loss cannot undo the journal that the first registry write relies on.</summary>
+    private static void Publish(string temp, string target)
+    {
+        if (!NativeFile.MoveFileExW(temp, target, NativeFile.ReplaceExisting | NativeFile.WriteThrough))
+        {
+            var error = Marshal.GetLastWin32Error();
+            throw error == 5 ? new UnauthorizedAccessException(new Win32Exception(error).Message) : new IOException(new Win32Exception(error).Message, error);
+        }
+    }
+
     public void Delete()
     {
         File.Delete(Path);
@@ -79,4 +90,15 @@ public sealed class FileRunSwitchJournal(string path) : IRunSwitchJournal
             // a stray temp file is not the journal
         }
     }
+}
+
+internal static partial class NativeFile
+{
+    internal const uint ReplaceExisting = 0x1;
+    internal const uint WriteThrough = 0x8;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "MoveFileExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool MoveFileExW(string existingFileName, string newFileName, uint flags);
 }

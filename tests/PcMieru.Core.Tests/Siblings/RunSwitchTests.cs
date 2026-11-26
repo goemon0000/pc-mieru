@@ -55,11 +55,19 @@ public sealed class RunSwitchTests
         public int Writes;
         public int FailWriteAt = -1;
         public bool FailDelete;
+
+        /// <summary>Thrown by Read instead of the text (a journal that is there but cannot be opened).</summary>
+        public Exception? ReadFailure;
+
+        /// <summary>Called after a write took effect (with the number of the write).</summary>
+        public Action<int>? OnWrite;
+
+        /// <summary>Called when the journal is removed (before it is gone).</summary>
+        public Action? OnDelete;
+
         public List<string> Written { get; } = [];
 
-        public bool Exists() => Text is not null;
-
-        public string Read() => Text ?? throw new FileNotFoundException();
+        public string Read() => ReadFailure is not null ? throw ReadFailure : Text ?? throw new FileNotFoundException();
 
         public void Write(string text)
         {
@@ -71,6 +79,7 @@ public sealed class RunSwitchTests
 
             Text = text;
             Written.Add(text);
+            OnWrite?.Invoke(Writes);
         }
 
         public void Delete()
@@ -80,6 +89,7 @@ public sealed class RunSwitchTests
                 throw new IOException("journal delete failed (injected)");
             }
 
+            OnDelete?.Invoke();
             Text = null;
         }
     }
@@ -111,6 +121,8 @@ public sealed class RunSwitchTests
         public void WriteApproval(string name, byte[] bytes, RegistryValueKind kind = RegistryValueKind.Binary) { Tick(); inner.WriteApproval(name, bytes, kind); }
 
         public void DeleteApproval(string name) { Tick(); inner.DeleteApproval(name); }
+
+        public void Flush() { Tick(); inner.Flush(); }
     }
 
     // ---- Offer ----
@@ -233,7 +245,7 @@ public sealed class RunSwitchTests
     }
 
     [Fact]
-    public void Switch_writes_in_the_documented_order_after_re_reading_the_four_values()
+    public void Switch_enables_the_new_entry_completely_before_it_deletes_the_old_one()
     {
         var inner = Seeded();
         var store = new FaultStore(inner);
@@ -242,8 +254,9 @@ public sealed class RunSwitchTests
         Assert.Equal(
             [
                 "ReadRun:PartsLife", "ReadRun:PCMieru.Party", "ReadApproval:PartsLife", "ReadApproval:PCMieru.Party",
-                "WriteApproval:PCMieru.Party", "WriteRun:PCMieru.Party", "DeleteRun:PartsLife", "DeleteApproval:PartsLife", "DeleteApproval:PCMieru.Party",
+                "WriteApproval:PCMieru.Party", "WriteRun:PCMieru.Party", "DeleteApproval:PCMieru.Party", "DeleteRun:PartsLife", "DeleteApproval:PartsLife",
                 "ReadRun:PartsLife", "ReadRun:PCMieru.Party", "ReadApproval:PartsLife", "ReadApproval:PCMieru.Party",
+                "Flush:",
             ],
             calls);
     }
@@ -256,7 +269,7 @@ public sealed class RunSwitchTests
         var probe = new FaultStore(Seeded(stamps));
         Assert.Equal(RunSwitchStatus.Switched, RunSwitch.Switch(probe, new MemoryJournal(), NewExe, Exists, UniqueLock()).Status);
         var total = probe.Count;
-        Assert.True(total >= 13);
+        Assert.Equal(SwitchCalls, total);
 
         for (var i = 1; i <= total; i++)
         {
@@ -277,7 +290,7 @@ public sealed class RunSwitchTests
     [InlineData(true)]
     public void A_store_that_stays_broken_keeps_the_journal_and_a_later_recovery_puts_everything_back(bool stamps)
     {
-        for (var i = 5; i <= 13; i++)
+        for (var i = 5; i <= SwitchCalls; i++)
         {
             var inner = Seeded(stamps);
             var before = Fingerprint(inner);
@@ -453,7 +466,7 @@ public sealed class RunSwitchTests
     public void Recover_from_a_crash_in_each_phase_restores_the_originals()
     {
         // a crash = the store dies for good at call i and the process ends (the journal stays, the values stay half done)
-        for (var i = 5; i <= 13; i++)
+        for (var i = 5; i <= SwitchCalls; i++)
         {
             var inner = Seeded(true);
             var before = Fingerprint(inner);
@@ -461,7 +474,7 @@ public sealed class RunSwitchTests
             RunSwitch.Switch(new FaultStore(inner) { FailAt = i, Persistent = true }, journal, NewExe, Exists, UniqueLock());
             var half = Fingerprint(inner);
 
-            var recovered = RunSwitch.Recover(inner, journal, UniqueLock());
+            var recovered = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists);
             Assert.True(recovered.Status == RunSwitchStatus.Recovered, "phase " + i + ": " + recovered + "\n" + half);
             Assert.Equal(before, Fingerprint(inner));
             Assert.Null(journal.Text);
@@ -545,7 +558,7 @@ public sealed class RunSwitchTests
             Assert.False(File.Exists(path + ".tmp"));
             Assert.Contains("\"phase\": \"prepared\"", File.ReadAllText(path));
 
-            Assert.Equal(RunSwitchStatus.Recovered, RunSwitch.Recover(inner, path).Status);
+            Assert.Equal(RunSwitchStatus.Recovered, RunSwitch.Recover(inner, path, Exists).Status);
             Assert.False(File.Exists(path));
         }
         finally
@@ -554,6 +567,350 @@ public sealed class RunSwitchTests
             {
                 Directory.Delete(dir, recursive: true);
             }
+        }
+    }
+
+    // ---- C29: step order, restore order, command length, journal read, durability, an uninstalled old exe ----
+
+    /// <summary>The store calls of a clean switch: 4 reads, 5 writes (new stamp disabled, new Run, new stamp enabled or removed, old Run, old stamp), 4 reads back, 1 flush.</summary>
+    private const int SwitchCalls = 14;
+
+    /// <summary>"Effectively enabled" by the C26 rules: the Run value is there and the stamp is absent or of the enabled kind (a disabled or unknown stamp = not enabled).</summary>
+    private static bool Effective(MemoryRunStore store, string name)
+    {
+        if (store.ReadRun(name) is null)
+        {
+            return false;
+        }
+
+        var stamp = store.ReadApproval(name);
+        return stamp is null || StartupApprovedCodec.Decode(stamp.Kind, stamp.Bytes) == ApprovalState.Enabled;
+    }
+
+    /// <summary>A switch whose store dies for good at call <paramref name="crashAt"/> and whose process ends there: the journal stays, the values stay half done.</summary>
+    private static (MemoryRunStore Store, MemoryJournal Journal) CrashedSwitch(bool stamps, int crashAt)
+    {
+        var inner = Seeded(stamps);
+        var journal = new MemoryJournal();
+        RunSwitch.Switch(new FaultStore(inner) { FailAt = crashAt, Persistent = true }, journal, NewExe, Exists, UniqueLock());
+        return (inner, journal);
+    }
+
+    private static string PathOfLength(int length)
+    {
+        var sb = new StringBuilder(@"C:\");
+        while (length - sb.Length > 100)
+        {
+            sb.Append('d', 100).Append('\\');
+        }
+
+        sb.Append('f', length - sb.Length - 4).Append(".exe");
+        Assert.Equal(length, sb.Length);
+        return sb.ToString();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void After_a_crash_at_every_store_call_of_the_switch_at_least_one_of_old_and_new_is_effectively_enabled(bool stamps)
+    {
+        for (var i = 1; i <= SwitchCalls; i++)
+        {
+            var (inner, journal) = CrashedSwitch(stamps, i);
+            var label = "crash at call " + i + "\n" + Fingerprint(inner);
+            Assert.True(Effective(inner, RunSwitch.OldName) || Effective(inner, RunSwitch.NewName), label);
+            if (i >= 5)
+            {
+                Assert.NotNull(journal.Text);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_crash_points_leave_the_states_the_order_promises(bool stamps)
+    {
+        // (old effectively enabled, new effectively enabled) after the store died at call i
+        (int Call, bool Old, bool New)[] expected =
+        [
+            (5, true, false),    // new stamp not written yet: nothing changed
+            (6, true, false),    // new stamp disabled, no new Run yet
+            (7, true, false),    // new Run there but its stamp is still the disabled one
+            (8, true, true),     // new entry fully enabled, old Run still there: both start once (Recover settles it)
+            (9, false, true),    // old Run deleted, new enabled
+            (10, false, true),   // everything written, reading back failed
+            (14, false, true),   // only the flush failed
+        ];
+        foreach (var (call, oldOn, newOn) in expected)
+        {
+            var (inner, _) = CrashedSwitch(stamps, call);
+            var label = "crash at call " + call + "\n" + Fingerprint(inner);
+            Assert.True(oldOn == Effective(inner, RunSwitch.OldName), label);
+            Assert.True(newOn == Effective(inner, RunSwitch.NewName), label);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_restore_stopped_after_its_first_write_never_leaves_both_entries_effectively_enabled_and_the_next_start_finishes_it(bool stamps)
+    {
+        var before = Fingerprint(Seeded(stamps));
+        for (var crash = 5; crash <= SwitchCalls; crash++)
+        {
+            for (var stop = 6; stop <= 14; stop++)
+            {
+                var (inner, journal) = CrashedSwitch(stamps, crash);
+                var half = RunSwitch.Recover(new FaultStore(inner) { FailAt = stop, Persistent = true }, journal, UniqueLock(), fileExists: Exists);
+                var label = "switch crash " + crash + ", restore stopped at call " + stop + ": " + half + "\n" + Fingerprint(inner);
+
+                // the first restore call took the new entry away: from then on a stop never leaves two starts
+                Assert.False(Effective(inner, RunSwitch.OldName) && Effective(inner, RunSwitch.NewName), label);
+
+                var next = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists);
+                Assert.True(next.Status == (half.Status == RunSwitchStatus.Recovered ? RunSwitchStatus.NothingToDo : RunSwitchStatus.Recovered), label + "\nnext: " + next);
+                Assert.Equal(before, Fingerprint(inner));
+                Assert.Null(journal.Text);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_restore_that_cannot_take_the_new_run_away_does_not_bring_the_old_entry_back()
+    {
+        var (inner, journal) = CrashedSwitch(stamps: false, crashAt: 9); // old Run deleted, new entry enabled
+        inner.DenyOn(RunStoreCall.DeleteRun);
+        var tail = inner.Calls.Count;
+
+        var result = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists);
+
+        Assert.Equal(RunSwitchStatus.RecoveryFailed, result.Status);
+        Assert.NotNull(journal.Text);
+        Assert.Null(inner.ReadRun(RunSwitch.OldName));
+        Assert.True(Effective(inner, RunSwitch.NewName));
+        var writesToOld = inner.Calls.Skip(tail).Where(c => c.Name == RunSwitch.OldName && c.Call is RunStoreCall.WriteRun or RunStoreCall.WriteApproval or RunStoreCall.DeleteApproval);
+        Assert.Empty(writesToOld);
+    }
+
+    // ---- command length ----
+
+    [Fact]
+    public void A_run_command_of_260_characters_or_more_is_refused_before_anything_is_written()
+    {
+        var tooLong = PathOfLength(250);
+        Assert.Equal(260, PartyLogon.ExpectedValue(tooLong).Length);
+        var fits = PathOfLength(249);
+        Assert.Equal(259, PartyLogon.ExpectedValue(fits).Length);
+
+        var offered = Seeded();
+        Assert.Equal(new RunSwitchOffer(false, RunSwitchReason.TooLong), RunSwitch.Offer(offered, tooLong, Exists));
+        Assert.True(RunSwitch.Offer(offered, fits, Exists).Ask);
+
+        var inner = Seeded();
+        var before = Fingerprint(inner);
+        var journal = new MemoryJournal();
+        var result = RunSwitch.Switch(inner, journal, tooLong, Exists, UniqueLock());
+        Assert.Equal(RunSwitchStatus.NotOffered, result.Status);
+        Assert.Equal(nameof(RunSwitchReason.TooLong), result.Detail);
+        Assert.Equal(0, journal.Writes);
+        Assert.Equal(before, Fingerprint(inner));
+        Assert.DoesNotContain(inner.Calls, c => c.Call is RunStoreCall.WriteRun or RunStoreCall.WriteApproval or RunStoreCall.DeleteRun or RunStoreCall.DeleteApproval);
+
+        var logon = new MemoryRunStore();
+        var refused = PartyLogon.Enable(logon, tooLong, UniqueLock());
+        Assert.False(refused.Ok);
+        Assert.Equal(PartyLogonFailure.TooLong, refused.Failure);
+        Assert.Empty(logon.Calls);
+        Assert.True(PartyLogon.Enable(logon, fits, UniqueLock()).Ok);
+    }
+
+    // ---- journal read: only "not found" is "no journal" ----
+
+    [Fact]
+    public void A_journal_that_cannot_be_read_is_not_taken_for_no_journal()
+    {
+        var store = new FaultStore(Seeded());
+        var journal = new MemoryJournal { Text = "{}", ReadFailure = new UnauthorizedAccessException("access denied (injected)") };
+
+        var recovered = RunSwitch.Recover(store, journal, UniqueLock());
+        Assert.Equal(RunSwitchStatus.RecoveryFailed, recovered.Status);
+        Assert.True(recovered.NeedsAttention);
+        Assert.Equal(0, store.Count);
+        Assert.Equal("{}", journal.Text);
+
+        var inner = Seeded();
+        var before = Fingerprint(inner);
+        var switched = RunSwitch.Switch(inner, journal, NewExe, Exists, UniqueLock());
+        Assert.Equal(RunSwitchStatus.RolledBack, switched.Status);
+        Assert.Equal(0, journal.Writes);
+        Assert.Equal(before, Fingerprint(inner));
+        Assert.Equal("{}", journal.Text);
+    }
+
+    [Fact]
+    public void File_not_found_and_folder_not_found_are_the_only_ways_to_say_no_journal()
+    {
+        foreach (Exception absent in new Exception[] { new FileNotFoundException(), new DirectoryNotFoundException() })
+        {
+            var store = new FaultStore(Seeded());
+            var journal = new MemoryJournal { ReadFailure = absent };
+            Assert.Equal(RunSwitchStatus.NothingToDo, RunSwitch.Recover(store, journal, UniqueLock()).Status);
+            Assert.Equal(0, store.Count);
+        }
+
+        foreach (Exception unknown in new Exception[] { new IOException("sharing violation (injected)"), new UnauthorizedAccessException(), new PathTooLongException() })
+        {
+            var store = new FaultStore(Seeded());
+            var result = RunSwitch.Recover(store, new MemoryJournal { ReadFailure = unknown }, UniqueLock());
+            Assert.Equal(RunSwitchStatus.RecoveryFailed, result.Status);
+            Assert.Equal(0, store.Count);
+        }
+    }
+
+    [Fact]
+    public void A_journal_path_that_cannot_be_opened_on_disk_is_not_taken_for_no_journal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pcmieru-runswitch-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = RunSwitch.JournalPathFor(dir);
+            Directory.CreateDirectory(path); // a folder where the journal file should be: it exists, and it cannot be read as a file (File.Exists says false for it)
+            var inner = Seeded();
+            var before = Fingerprint(inner);
+
+            var result = RunSwitch.Recover(inner, path, Exists);
+            Assert.Equal(RunSwitchStatus.RecoveryFailed, result.Status);
+            Assert.Equal(before, Fingerprint(inner));
+            Assert.True(Directory.Exists(path));
+            Assert.Equal(RunSwitchStatus.RolledBack, RunSwitch.Switch(inner, path, NewExe, Exists).Status);
+            Assert.Equal(before, Fingerprint(inner));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    // ---- durability ----
+
+    [Fact]
+    public void Switch_flushes_the_store_after_its_last_registry_write_and_before_the_commit_mark()
+    {
+        var inner = Seeded();
+        var flushesWhenWritten = new List<int>();
+        var journal = new MemoryJournal { OnWrite = _ => flushesWhenWritten.Add(inner.FlushCount) };
+        Assert.Equal(RunSwitchStatus.Switched, RunSwitch.Switch(inner, journal, NewExe, Exists, UniqueLock()).Status);
+
+        Assert.Equal([0, 1], flushesWhenWritten); // the "prepared" write before any flush, the "committed" write after exactly one
+        var calls = inner.Calls.ToList();
+        var lastWrite = calls.FindLastIndex(c => c.Call is RunStoreCall.WriteRun or RunStoreCall.DeleteRun or RunStoreCall.WriteApproval or RunStoreCall.DeleteApproval);
+        Assert.True(calls.FindIndex(c => c.Call == RunStoreCall.Flush) > lastWrite);
+    }
+
+    [Fact]
+    public void Recover_flushes_after_it_put_the_values_back_and_before_it_removes_the_journal()
+    {
+        var (inner, journal) = CrashedSwitch(stamps: true, crashAt: 9);
+        var flushesBefore = inner.FlushCount;
+        var flushesWhenRemoved = -1;
+        var callsWhenRemoved = -1;
+        journal.OnDelete = () =>
+        {
+            flushesWhenRemoved = inner.FlushCount;
+            callsWhenRemoved = inner.Calls.Count;
+        };
+        var tail = inner.Calls.Count;
+
+        Assert.Equal(RunSwitchStatus.Recovered, RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists).Status);
+
+        Assert.Equal(flushesBefore + 1, flushesWhenRemoved);
+        var calls = inner.Calls.Take(callsWhenRemoved).Skip(tail).ToList();
+        var lastWrite = calls.FindLastIndex(c => c.Call is RunStoreCall.WriteRun or RunStoreCall.DeleteRun or RunStoreCall.WriteApproval or RunStoreCall.DeleteApproval);
+        Assert.True(lastWrite >= 0 && calls.FindIndex(c => c.Call == RunStoreCall.Flush) > lastWrite);
+    }
+
+    [Fact]
+    public void A_flush_that_fails_keeps_the_journal_of_a_recovery()
+    {
+        var (inner, journal) = CrashedSwitch(stamps: false, crashAt: 9);
+        inner.DenyOn(RunStoreCall.Flush);
+        var result = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists);
+        Assert.Equal(RunSwitchStatus.RecoveryFailed, result.Status);
+        Assert.NotNull(journal.Text);
+
+        inner.Heal();
+        Assert.Equal(RunSwitchStatus.Recovered, RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists).Status);
+        Assert.Null(journal.Text);
+    }
+
+    [Fact]
+    public void The_journal_file_is_replaced_by_a_write_through_rename_and_an_absent_one_reads_as_not_found()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pcmieru-runswitch-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = RunSwitch.JournalPathFor(dir);
+            var journal = new FileRunSwitchJournal(path);
+            Assert.Throws<DirectoryNotFoundException>(() => journal.Read());
+
+            journal.Write("first");
+            journal.Write("second"); // MoveFileEx with MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH over the first
+            Assert.Equal("second", journal.Read());
+            Assert.False(File.Exists(path + ".tmp"));
+
+            journal.Delete();
+            Assert.Throws<FileNotFoundException>(() => journal.Read());
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    // ---- an old exe that was uninstalled in the meantime ----
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void When_the_old_exe_is_gone_and_the_new_one_is_there_a_recovery_finishes_the_switch_instead_of_bringing_the_old_entry_back(bool stamps)
+    {
+        static bool OldGone(string path) => !string.Equals(path, OldExe, StringComparison.OrdinalIgnoreCase);
+
+        for (var crash = 5; crash <= SwitchCalls; crash++)
+        {
+            var (inner, journal) = CrashedSwitch(stamps, crash);
+            var label = "crash at call " + crash + "\n" + Fingerprint(inner);
+            var result = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: OldGone);
+
+            Assert.True(result.Status == RunSwitchStatus.Recovered, label + "\n" + result);
+            Assert.Null(inner.ReadRun(RunSwitch.OldName));
+            Assert.Null(inner.ReadApproval(RunSwitch.OldName));
+            Assert.Equal(new RunValue(RegistryValueKind.String, NewCommand), inner.ReadRun(RunSwitch.NewName));
+            Assert.True(Effective(inner, RunSwitch.NewName), label);
+            Assert.Null(journal.Text);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void When_the_old_exe_and_the_new_one_are_both_gone_a_recovery_puts_the_originals_back(bool stamps)
+    {
+        var before = Fingerprint(Seeded(stamps));
+        for (var crash = 5; crash <= SwitchCalls; crash++)
+        {
+            var (inner, journal) = CrashedSwitch(stamps, crash);
+            var result = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: _ => false);
+            Assert.True(result.Status == RunSwitchStatus.Recovered, "crash at call " + crash + ": " + result);
+            Assert.Equal(before, Fingerprint(inner));
+            Assert.Null(journal.Text);
         }
     }
 }

@@ -341,6 +341,8 @@ public sealed class PartyLogonTests
         }
 
         public void DeleteApproval(string name) => _inner.DeleteApproval(name);
+
+        public void Flush() => _inner.Flush();
     }
 
     // --- Disable ---

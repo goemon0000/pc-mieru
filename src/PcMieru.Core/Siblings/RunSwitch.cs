@@ -69,6 +69,9 @@ public enum RunSwitchReason
 
     /// <summary>A stamp of the new name that is not binary could not be put back exactly.</summary>
     Unrestorable,
+
+    /// <summary>The Run command for the new exe would be 260 characters or more (<see cref="PartyLogon.MaxCommandLength"/>). Nothing is written.</summary>
+    TooLong,
 }
 
 public sealed record RunSwitchOffer(bool Ask, RunSwitchReason Reason);
@@ -76,8 +79,14 @@ public sealed record RunSwitchOffer(bool Ask, RunSwitchReason Reason);
 /// <summary>
 /// The one-time move of the sign-in start from the old Parts Life Run value (<c>PartsLife</c>) to the new one (<see cref="PartyLogon.ValueName"/>), DESIGN-C 4.3. It touches four values:
 /// Run <c>PartsLife</c>, Run <c>PCMieru.Party</c>, StartupApproved <c>PartsLife</c>, StartupApproved <c>PCMieru.Party</c>. Everything goes through an <see cref="IRunStore"/> (a test and a smoke run hand in a
-/// <see cref="MemoryRunStore"/>) and every change runs under <see cref="RunSwitchLock"/>. A journal (JSON, written as temp file + rename) holds the four values as they were and the phase
+/// <see cref="MemoryRunStore"/>) and every change runs under <see cref="RunSwitchLock"/>. A journal (JSON, written as temp file + write-through rename) holds the four values as they were and the phase
 /// (<c>prepared</c>, then <c>committed</c>); <see cref="Recover"/> reads it at the next start. Nothing here throws to its caller.
+/// <para>
+/// ORDER (so that a crash at any store call leaves at least one start that works; worst case both start once, and the next start's Recover settles it): journal prepared, new stamp disabled, new Run written,
+/// new stamp enabled (or removed when it did not exist), THEN old Run deleted, old stamp deleted, read back, flush, journal committed, journal deleted.
+/// The way back is the mirror: the new entry is made not to start first (new Run and new stamp to their "before" values), THEN the old Run and old stamp are put back, so a restore interrupted
+/// halfway never leaves both entries enabled (it may leave neither when the crash had already deleted the old Run; the journal stays and the next start continues).
+/// </para>
 /// </summary>
 public static class RunSwitch
 {
@@ -138,15 +147,19 @@ public static class RunSwitch
         return Locked(lockName, wait, () => SwitchLocked(store, journal, full, fileExists ?? File.Exists));
     }
 
-    public static RunSwitchResult Recover(IRunStore store, string journalPath) => Recover(store, new FileRunSwitchJournal(journalPath));
+    public static RunSwitchResult Recover(IRunStore store, string journalPath, Func<string, bool>? fileExists = null) =>
+        Recover(store, new FileRunSwitchJournal(journalPath), fileExists: fileExists);
 
     /// <summary>
-    /// Run at a real start. No journal: nothing. A committed journal: removed. Otherwise the four values are compared with the journal: when each is the value it had before or a value the switch writes
-    /// or deletes, the values are put back as they were and the journal removed; when one is something else (the user changed it in Windows) nothing is touched and the journal stays
+    /// Run at a real start. No journal (the read says file or folder not found, and nothing else does: any other error is <see cref="RunSwitchStatus.RecoveryFailed"/> with nothing written and the journal kept):
+    /// nothing. A committed journal: removed. Otherwise the four values are compared with the journal: when each is the value it had before or a value the switch writes or deletes, the values are put
+    /// back as they were (new entry first, see the class text) and the journal removed; when one is something else (the user changed it in Windows) nothing is touched and the journal stays
     /// (<see cref="RunSwitchStatus.NeedsUserCheck"/>). The rule is per value, so a crash in the middle of an earlier recovery is recovered too.
+    /// One exception to "put back": when the old Run pointed at a file that is gone now (the old app was uninstalled) and the new exe is still there, nothing is put back; the switch is finished
+    /// instead (new Run and enabled stamp in place, old Run and stamp gone) and the journal removed. If the new exe is gone as well, the values are put back as they were.
     /// </summary>
-    public static RunSwitchResult Recover(IRunStore store, IRunSwitchJournal journal, string? lockName = null, TimeSpan? wait = null) =>
-        Locked(lockName, wait, () => RecoverLocked(store, journal));
+    public static RunSwitchResult Recover(IRunStore store, IRunSwitchJournal journal, string? lockName = null, TimeSpan? wait = null, Func<string, bool>? fileExists = null) =>
+        Locked(lockName, wait, () => RecoverLocked(store, journal, fileExists ?? File.Exists));
 
     private static RunSwitchResult Locked(string? lockName, TimeSpan? wait, Func<RunSwitchResult> work)
     {
@@ -173,16 +186,25 @@ public static class RunSwitch
 
     private static RunSwitchResult SwitchLocked(IRunStore store, IRunSwitchJournal journal, string full, Func<string, bool> exists)
     {
+        // "no journal" is only what a failed READ says (not found); a journal that exists but cannot be opened must not look absent
+        var journalThere = false;
         try
         {
-            if (journal.Exists())
-            {
-                return new RunSwitchResult(RunSwitchStatus.NeedsUserCheck, "a journal of an earlier switch is still there");
-            }
+            journal.Read();
+            journalThere = true;
+        }
+        catch (Exception ex) when (IsAbsent(ex))
+        {
+            // no journal: the normal case
         }
         catch (Exception ex)
         {
             return new RunSwitchResult(RunSwitchStatus.RolledBack, "journal: " + ex.GetType().Name);
+        }
+
+        if (journalThere)
+        {
+            return new RunSwitchResult(RunSwitchStatus.NeedsUserCheck, "a journal of an earlier switch is still there");
         }
 
         Snapshot before;
@@ -228,18 +250,14 @@ public static class RunSwitch
         {
             store.WriteApproval(NewName, disabled);
             store.WriteRun(NewName, command);
+            EnableNew(store, existedBefore: before.NewApproval is not null);
+
+            // the new entry is fully enabled: only now does the old one go (a crash before this line leaves the old start working, after it the new one)
             store.DeleteRun(OldName);
             store.DeleteApproval(OldName);
-            if (before.NewApproval is null)
-            {
-                store.DeleteApproval(NewName);
-            }
-            else
-            {
-                store.WriteApproval(NewName, StartupApprovedCodec.EncodeEnabled());
-            }
 
             Verify(Snapshot.Read(store), command);
+            store.Flush();
             dto.Phase = Committed;
             journal.Write(JsonSerializer.Serialize(dto, JsonOptions));
         }
@@ -276,17 +294,16 @@ public static class RunSwitch
         return new RunSwitchResult(RunSwitchStatus.Switched, string.Empty);
     }
 
-    private static RunSwitchResult RecoverLocked(IRunStore store, IRunSwitchJournal journal)
+    private static RunSwitchResult RecoverLocked(IRunStore store, IRunSwitchJournal journal, Func<string, bool> exists)
     {
         string text;
         try
         {
-            if (!journal.Exists())
-            {
-                return new RunSwitchResult(RunSwitchStatus.NothingToDo, "no journal");
-            }
-
             text = journal.Read();
+        }
+        catch (Exception ex) when (IsAbsent(ex))
+        {
+            return new RunSwitchResult(RunSwitchStatus.NothingToDo, "no journal");
         }
         catch (Exception ex)
         {
@@ -337,7 +354,9 @@ public static class RunSwitch
             return new RunSwitchResult(RunSwitchStatus.NeedsUserCheck, "a value was changed meanwhile");
         }
 
-        var error = RestoreAll(store, dto);
+        // the old app is uninstalled (its exe is gone) and the new exe is there: do not bring back a start that points at nothing; finish the switch instead
+        var finish = OldExeIsGone(dto.OldRun!, exists) && exists(dto.NewExe);
+        var error = finish ? FinishForward(store, dto) : RestoreAll(store, dto);
         if (error is not null)
         {
             return new RunSwitchResult(RunSwitchStatus.RecoveryFailed, error);
@@ -352,21 +371,78 @@ public static class RunSwitch
             return new RunSwitchResult(RunSwitchStatus.RecoveryFailed, "journal delete: " + ex.GetType().Name);
         }
 
-        return new RunSwitchResult(RunSwitchStatus.Recovered, string.Empty);
+        return new RunSwitchResult(RunSwitchStatus.Recovered, finish ? "the old exe is gone: the switch was finished, not put back" : string.Empty);
+    }
+
+    /// <summary>Only "not found" means there is no journal; access denied, a sharing violation or a disk error mean "could not tell".</summary>
+    private static bool IsAbsent(Exception ex) => ex is FileNotFoundException or DirectoryNotFoundException;
+
+    /// <summary>The new stamp as the end of a switch has it: enabled, or not there at all when it was not there before.</summary>
+    private static void EnableNew(IRunStore store, bool existedBefore)
+    {
+        if (existedBefore)
+        {
+            store.WriteApproval(NewName, StartupApprovedCodec.EncodeEnabled());
+        }
+        else
+        {
+            store.DeleteApproval(NewName);
+        }
+    }
+
+    /// <summary>
+    /// The way forward for a recovery whose old exe is gone: new Run, then the new stamp enabled, then the old Run and its stamp removed (never a moment with no entry), flush, read back. Null when done.
+    /// </summary>
+    private static string? FinishForward(IRunStore store, JournalDto dto)
+    {
+        try
+        {
+            store.WriteRun(NewName, dto.NewCommand!);
+            EnableNew(store, existedBefore: dto.NewApproval!.Exists);
+            store.DeleteRun(OldName);
+            store.DeleteApproval(OldName);
+            store.Flush();
+            Verify(Snapshot.Read(store), dto.NewCommand!);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return "finish: " + ex.GetType().Name;
+        }
+    }
+
+    /// <summary>True when the journal's old Run named a file (we can tell its path) that does not exist now.</summary>
+    private static bool OldExeIsGone(ValueDto oldRun, Func<string, bool> exists)
+    {
+        if (!oldRun.Exists || oldRun.Text is null || (RegistryValueKind)oldRun.Kind is not (RegistryValueKind.String or RegistryValueKind.ExpandString))
+        {
+            return false;
+        }
+
+        var path = ExePathOf(new RunValue((RegistryValueKind)oldRun.Kind, oldRun.Text));
+        return path.Length > 0 && !exists(path);
     }
 
     private static RunSwitchOffer Evaluate(Snapshot s, string newExePath, Func<string, bool> exists)
     {
+        string full;
         try
         {
             if (string.IsNullOrWhiteSpace(newExePath) || !Path.IsPathFullyQualified(newExePath))
             {
                 return No(RunSwitchReason.InvalidPath);
             }
+
+            full = Path.GetFullPath(newExePath);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return No(RunSwitchReason.InvalidPath);
+        }
+
+        if (PartyLogon.IsTooLong(full))
+        {
+            return No(RunSwitchReason.TooLong);
         }
 
         if (s.OldRun is null)
@@ -397,14 +473,7 @@ public static class RunSwitch
 
     private static bool PointsAtOldExe(RunValue run, Func<string, bool> exists)
     {
-        if (run.Text is null || run.Kind is not (RegistryValueKind.String or RegistryValueKind.ExpandString))
-        {
-            return false;
-        }
-
-        var text = run.Kind == RegistryValueKind.ExpandString ? Environment.ExpandEnvironmentVariables(run.Text) : run.Text;
-        var trimmed = text.Trim();
-        var path = trimmed.StartsWith('"') ? (PartyLogon.TryParse(trimmed, out var quoted, out _) ? quoted : string.Empty) : trimmed;
+        var path = ExePathOf(run);
         if (path.Length == 0)
         {
             return false;
@@ -412,6 +481,19 @@ public static class RunSwitch
 
         var name = Path.GetFileName(path);
         return OldExeNames.Any(o => string.Equals(o, name, StringComparison.OrdinalIgnoreCase)) && exists(path);
+    }
+
+    /// <summary>The path a Run value starts (quoted, or the whole text when it is not quoted; environment variables expanded for REG_EXPAND_SZ). Empty when it is not a string or names no path.</summary>
+    private static string ExePathOf(RunValue run)
+    {
+        if (run.Text is null || run.Kind is not (RegistryValueKind.String or RegistryValueKind.ExpandString))
+        {
+            return string.Empty;
+        }
+
+        var text = run.Kind == RegistryValueKind.ExpandString ? Environment.ExpandEnvironmentVariables(run.Text) : run.Text;
+        var trimmed = text.Trim();
+        return trimmed.StartsWith('"') ? (PartyLogon.TryParse(trimmed, out var quoted, out _) ? quoted : string.Empty) : trimmed;
     }
 
     private static void Verify(Snapshot s, string command)
@@ -440,15 +522,23 @@ public static class RunSwitch
     }
 
     /// <summary>
-    /// Puts the four values back as the journal has them (each on its own: one failing does not stop the others), reads them back and compares. Null when all four are as before, else what is wrong.
+    /// Puts the four values back as the journal has them, the NEW entry first (its Run, then its stamp, so it cannot start any more) and only then the old one (its Run, then its stamp): a restore that
+    /// stops halfway never leaves both entries enabled. When the new Run could not be taken away, the old entry is not touched at all (two starts are worse than one). A value failing does not stop the
+    /// others of its entry. Flushes, reads the four back and compares. Null when all four are as before, else what is wrong.
     /// </summary>
     private static string? RestoreAll(IRunStore store, JournalDto dto)
     {
         var errors = new List<string>();
-        Try(errors, "old run", () => PutRun(store, OldName, dto.OldRun!));
-        Try(errors, "old stamp", () => PutApproval(store, OldName, dto.OldApproval!));
         Try(errors, "new run", () => PutRun(store, NewName, dto.NewRun!));
+        var newRunBack = errors.Count == 0;
         Try(errors, "new stamp", () => PutApproval(store, NewName, dto.NewApproval!));
+        if (newRunBack)
+        {
+            Try(errors, "old run", () => PutRun(store, OldName, dto.OldRun!));
+            Try(errors, "old stamp", () => PutApproval(store, OldName, dto.OldApproval!));
+        }
+
+        Try(errors, "flush", store.Flush);
 
         try
         {

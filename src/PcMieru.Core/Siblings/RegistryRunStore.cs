@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Siblings;
@@ -71,6 +73,31 @@ public sealed class RegistryRunStore : IRunStore
         key?.DeleteValue(name, throwOnMissingValue: false);
     }
 
+    /// <summary>
+    /// Writes the two keys to the disk now (RegFlushKey). <c>RegistryKey.Flush()</c> is no help here: it does nothing for a key that this object did not write through (a key opened afresh is never "dirty"),
+    /// and every call of this class opens its key afresh, so the handle goes to RegFlushKey directly. A key that is not there has nothing to flush.
+    /// </summary>
+    public void Flush()
+    {
+        FlushKey(StartupApprovedCodec.RunKeyPath);
+        FlushKey(ApprovedPath);
+    }
+
+    private static void FlushKey(string path)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(path, writable: true);
+        if (key is null)
+        {
+            return;
+        }
+
+        var error = NativeRegistry.RegFlushKey(key.Handle);
+        if (error != 0)
+        {
+            throw error == 5 ? new UnauthorizedAccessException("RegFlushKey: access denied") : new IOException("RegFlushKey failed: " + error);
+        }
+    }
+
     private static string ApprovedPath => StartupApprovedCodec.ApprovedRoot + "\\" + StartupApprovedCodec.ApprovedSubKey(StartupProvider.RunHkcu);
 
     private static RunValue? ReadString(RegistryKey? key, string name)
@@ -84,4 +111,12 @@ public sealed class RegistryRunStore : IRunStore
         var kind = key.GetValueKind(name);
         return new RunValue(kind, kind is RegistryValueKind.String or RegistryValueKind.ExpandString ? raw as string : null);
     }
+}
+
+/// <summary>The one registry call the framework does not make for us (see <see cref="RegistryRunStore.Flush"/>).</summary>
+internal static partial class NativeRegistry
+{
+    [LibraryImport("advapi32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static partial int RegFlushKey(SafeRegistryHandle hKey);
 }
