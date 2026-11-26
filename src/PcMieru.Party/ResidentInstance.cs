@@ -1,7 +1,6 @@
 using System.Security.AccessControl;
-using System.Security.Cryptography;
 using System.Security.Principal;
-using System.Text;
+using PcMieru.Party.Import;
 
 namespace PcMieru.Party;
 
@@ -13,7 +12,7 @@ namespace PcMieru.Party;
 /// </summary>
 internal sealed class ResidentInstance : IDisposable
 {
-    internal const string NamePrefix = @"Global\PCMieru.PartsLife.Resident.v1.";
+    internal const string NamePrefix = PartyMutexNames.ResidentPrefix;
 
     private Mutex? _mutex;
 
@@ -23,15 +22,10 @@ internal sealed class ResidentInstance : IDisposable
     }
 
     /// <summary>The mutex name of the user whose SID string is <paramref name="sid"/>.</summary>
-    internal static string NameFor(string sid) =>
-        NamePrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sid)))[..16].ToLowerInvariant();
+    internal static string NameFor(string sid) => PartyMutexNames.ResidentNameFor(sid);
 
     /// <summary>The name for the user this process runs as.</summary>
-    internal static string CurrentName()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        return NameFor(identity.User?.Value ?? throw new InvalidOperationException("the current user has no SID"));
-    }
+    internal static string CurrentName() => PartyMutexNames.CurrentResidentName();
 
     /// <summary>
     /// Becomes the resident; null when someone else is (another session, another start of this program, the old product). A mutex whose owner ended without giving it back (abandoned) is ours:

@@ -239,6 +239,15 @@ goemon0000/parts-life and the owner's pl-sensors helper
   src/PcMieru.Party/ResidentInstance.cs
       the single-resident mutex name shared with the last Parts Life release,
       so that the old app and the new window never run at the same time
+  src/PcMieru.Party.Core/Import/ImportEngine.cs
+  src/PcMieru.Party.Core/Import/ImportPaths.cs
+  src/PcMieru.Party.Core/Import/ImportVerdict.cs
+  src/PcMieru.Party.Core/Import/LegacyRunningProbe.cs
+  src/PcMieru.Party.Core/Import/PartyMutexNames.cs
+      the importer of the old Parts Life save (new code, not copied). It names
+      the old app only because it must: its folders (%APPDATA%\PartsLife and
+      %APPDATA%\PartsParty), its processes (PartsLife.exe, PartsParty.exe) and
+      the resident mutex name it shares with the last release
   src/PcMieru.Party (Rendering, Game/GameAssets.cs, I18n/Strings.cs and
   PartyWindow.xaml with its .cs files) and assets/party/characters.png,
   marks.png, atlas.json and PartsLife.ico

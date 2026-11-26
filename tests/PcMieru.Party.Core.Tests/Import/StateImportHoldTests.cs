@@ -303,7 +303,12 @@ public class StateImportHoldTests
             "PartyState.Load", "PartyState.Save", "System.IO", "File.", "Directory.", "Path.", "FileStream", "StreamReader", "StreamWriter",
             "Environment.", "DateTime", "Registry", "Process", "Console.", "HttpClient", "Random",
         ];
-        foreach (var file in Directory.GetFiles(Path.Combine(dir!, "src", "PcMieru.Party.Core", "Import"), "*.cs"))
+        // The engine (ImportEngine and its pieces) is the one part that touches files, processes and mutexes; its own guard is in
+        // ImportEngineGuardTests. Everything else in Import/ is the pure importer, and stays pure.
+        string[] engineFiles = ["ImportEngine.cs", "ImportLock.cs", "ImportPaths.cs", "LegacyRunningProbe.cs", "PartyMutexNames.cs", "SourceFile.cs"];
+        string importDir = Path.Combine(dir!, "src", "PcMieru.Party.Core", "Import");
+        foreach (string engineFile in engineFiles) Assert.True(File.Exists(Path.Combine(importDir, engineFile)), engineFile + " is not where the guard expects it");
+        foreach (var file in Directory.GetFiles(importDir, "*.cs").Where(f => !engineFiles.Contains(Path.GetFileName(f))))
         {
             // comments may talk about them; code may not
             var code = string.Join('\n', File.ReadAllLines(file).Where(l => !l.TrimStart().StartsWith("//")));
