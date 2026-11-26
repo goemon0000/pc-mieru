@@ -94,6 +94,9 @@ internal static class Program
         {
             context.SiblingLanguageNotifier = static () => PcMieru.Core.Siblings.SiblingWindows.Notify(
                 PartyLauncher.ExeName, PcMieru.Core.Siblings.MieruMessages.LanguageChanged, allowForeground: false);
+
+            // Only a real start looks for old Parts Life progress (file existence only); the smoke run gives its own scratch folder and every test none (DESIGN-C 4.1 items 1-2).
+            context.PartyRoamingRoot = PcMieru.Core.Siblings.PartyImportHint.RealRoamingRoot();
         }
 
         using var form = new MainForm(context);

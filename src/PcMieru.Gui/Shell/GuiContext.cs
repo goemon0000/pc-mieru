@@ -171,6 +171,16 @@ internal sealed class GuiContext
     /// </summary>
     internal Action? SiblingLanguageNotifier { get; set; }
 
+    /// <summary>
+    /// The roaming application-data folder the hint that old Parts Life progress is waiting looks in (<see cref="PcMieru.Core.Siblings.PartyImportHint"/>, file existence only). Set to the
+    /// real folder only by a real run (Program.cs) and to a scratch folder by the smoke run; null (every test, a measurement, a trial on fakes) means the window looks nowhere and says nothing,
+    /// so no automated run ever names the owner's real folders.
+    /// </summary>
+    internal string? PartyRoamingRoot { get; set; }
+
+    /// <summary>The launcher of the Parts Life page. Null (every real run) is the real one; a test passes one that starts nothing, so pressing the page's button never starts a process.</summary>
+    internal PartyLauncher? PartyLauncherOverride { get; set; }
+
     public void SetLanguage(Language language)
     {
         if (Settings.Language == language && Strings.Current == language)

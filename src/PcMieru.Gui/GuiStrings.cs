@@ -30,6 +30,7 @@ internal static class GuiStrings
         .. PerfStrings.All,
         .. StartupStrings.All,
         .. PartyStrings.All,
+        .. PartyImportStrings.All,
         .. ServiceStrings.All,
         .. UsersStrings.All,
         .. HardwareStrings.All,

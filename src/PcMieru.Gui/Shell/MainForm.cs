@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcMieru.Core.Siblings;
 using PcMieru.Update.Feed;
 using PcMieru.Update.Launch;
 using PcMieru.Update.Transaction;
@@ -302,6 +303,56 @@ internal sealed class MainForm : Form
         if (!IsDisposed && !_context.Services.Options.ForceFakes && Environment.ProcessPath is { } executable)
         {
             StartHandOff(executable);
+        }
+
+        // Last, and only after the update choice above has closed (it is modal): the notice that old Parts Life progress is waiting. Never two dialogs at once.
+        PartyNotice = NoticePartyImportAsync();
+    }
+
+    /// <summary>The notice that <see cref="StartUpdates"/> started (completed when nothing was started or it is over). A test awaits it; the window never does.</summary>
+    internal Task PartyNotice { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// The first-run notice that old Parts Life progress is waiting (DESIGN-C 4.1 items 1-2). It only notices and sends the owner to PCMieru.Party.exe, whose first start does the import and
+    /// its choices. The look is a file-existence hint off the UI thread (<see cref="PartyImportHint"/>) in the folder the context names, which only a real run sets. Nothing is shown when a save
+    /// of the new window is there, when nothing old is, or when 「あとで」 was chosen before (gui.ini party.import=later). 「パーツぐらしを開く」 shows the Parts Life page and presses its button
+    /// (so a failure to start is told there); 「あとで」 is saved; the cross is "not answered" and saves nothing, so it comes again at the next start. An unattended run only logs.
+    /// </summary>
+    internal async Task NoticePartyImportAsync()
+    {
+        try
+        {
+            if (_context.PartyRoamingRoot is not { } root || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            var state = await Task.Run(() => PartyImportHint.Check(root)).ConfigureAwait(true);
+            if (state == PartyImportHintState.None || IsDisposed || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            ApplyPartyImportAnswer(PartyImportDialog.Show(this, _context.Theme, state));
+        }
+        catch (Exception ex)
+        {
+            _context.Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+        }
+    }
+
+    /// <summary>What the owner's answer to the notice does. A test calls it with a launcher that starts nothing (<see cref="GuiContext.PartyLauncherOverride"/>).</summary>
+    internal void ApplyPartyImportAnswer(PartyImportAnswer answer)
+    {
+        switch (answer)
+        {
+            case PartyImportAnswer.Open when !IsDisposed:
+                ShowPage("party");
+                (CurrentPage as PartyPage)?.Open();
+                break;
+            case PartyImportAnswer.Later:
+                _context.Settings.TrySavePartyImportLater();
+                break;
         }
     }
 
