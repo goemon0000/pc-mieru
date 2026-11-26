@@ -127,7 +127,7 @@ public enum FirstStartEnd
 /// </summary>
 public static class FirstStartFlow
 {
-    public static FirstStartEnd Run(ImportEngine engine, IFirstStartPrompts prompts)
+    public static FirstStartEnd Run(ImportEngine engine, IFirstStartPrompts prompts, FirstStartReport? report = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(prompts);
@@ -142,7 +142,7 @@ public static class FirstStartFlow
 
                 case FirstStartStep.StartFreshThenLoad:
                     // Nobody chose this: the engine proves "no old save" again under its lock right before it writes, and says CandidateAppeared when that is no longer so.
-                    if (Settle(Off(engine.StartFreshIfStillNone, "start-fresh", null), engine, ref plan)) return FirstStartEnd.Proceed;
+                    if (Settle(Off(engine.StartFreshIfStillNone, "start-fresh", null), engine, ref plan, report)) return FirstStartEnd.Proceed;
                     continue;
 
                 case FirstStartStep.Ask:
@@ -152,13 +152,13 @@ public static class FirstStartFlow
                     if (choice == ContinueChoice.StartFresh)
                     {
                         if (!prompts.ConfirmStartFresh()) continue;   // No: the same question again, nothing was done
-                        if (Settle(StartFresh(engine), engine, ref plan)) return FirstStartEnd.Proceed;
+                        if (Settle(StartFresh(engine), engine, ref plan, report)) return FirstStartEnd.Proceed;
                         continue;
                     }
 
                     // Continue. A repair has shown its list before this button, so pressing it is the consent.
                     var current = plan;
-                    if (Settle(Off(() => engine.Commit(current, consentToRepair: current.Status == ImportOutcome.NeedsRepair), "commit", current.Candidate), engine, ref plan))
+                    if (Settle(Off(() => engine.Commit(current, consentToRepair: current.Status == ImportOutcome.NeedsRepair), "commit", current.Candidate), engine, ref plan, report))
                         return FirstStartEnd.Proceed;
                     continue;
                 }
@@ -174,7 +174,7 @@ public static class FirstStartFlow
                             return FirstStartEnd.ProceedReadOnly;
                         case ProblemChoice.StartFresh when problem.CanStartFresh:
                             if (!prompts.ConfirmStartFresh()) continue;
-                            if (Settle(StartFresh(engine), engine, ref plan)) return FirstStartEnd.Proceed;
+                            if (Settle(StartFresh(engine), engine, ref plan, report)) return FirstStartEnd.Proceed;
                             continue;
                         default:
                             plan = Prepare(engine);   // Retry (and a Start fresh that this message did not offer)
@@ -186,8 +186,13 @@ public static class FirstStartFlow
     }
 
     /// <summary>True when a save is in place. Otherwise <paramref name="plan"/> is what the loop looks at next.</summary>
-    private static bool Settle(ImportResult result, ImportEngine engine, ref ImportPlan plan)
+    private static bool Settle(ImportResult result, ImportEngine engine, ref ImportPlan plan, FirstStartReport? report)
     {
+        if (result.Outcome == ImportOutcome.Imported && report is not null)
+        {
+            report.Imported = true;
+        }
+
         switch (FirstStartDecision.AfterWrite(result.Outcome))
         {
             case FirstStartAfter.Load:
