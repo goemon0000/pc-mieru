@@ -47,20 +47,20 @@ public static class Strings
 
     public static string ResetMenu    => T("最初から", "Start over");
     public static string ChecksMenu   => T("点検…（負荷テスト・システムチェック）", "Checkup… (load test, system check)");
-    public static string ResetStory   => T("物語だけ最初から", "Story only");
-    public static string ResetLevels  => T("レベルだけ最初から", "Levels only");
-    public static string ResetAll     => T("両方とも最初から", "Both");
+    public static string ResetStory   => T("物語をリセット", "Reset story");
+    public static string ResetLevels  => T("レベルをリセット", "Reset levels");
+    public static string ResetAll     => T("物語とレベルをリセット", "Reset story and levels");
     public static string ResetTitle   => T("最初からやり直しますか", "Start over?");
 
     public static string ResetStoryAsk => T(
-        "物語を最初の章に戻します。各パーツのレベルはそのまま残ります。\n\nこの操作は取り消せません。",
-        "The story goes back to its first chapter. Part levels are kept.\n\nThis cannot be undone.");
+        "物語を最初の章に戻し、旅も最初の町からやり直します。物語のログは消えます。\n\n残るもの: 各パーツのレベル、持ち物、装備（GPU の分も）、所持金。\n\nこの操作は取り消せません。",
+        "The story goes back to the first chapter and the journey restarts from the first town. The story log is cleared.\n\nKept: part levels, items, gear (GPU gear too) and gold.\n\nThis cannot be undone.");
     public static string ResetLevelsAsk => T(
-        "各パーツのレベルを 1 に戻します。物語の進み具合はそのまま残ります。\n\nこの操作は取り消せません。",
-        "Every part goes back to level 1. Story progress is kept.\n\nThis cannot be undone.");
+        "各パーツのレベルを 1 に戻します。\n\n残るもの: 物語の進み具合、持ち物、装備（GPU の分も）、所持金。\n\nこの操作は取り消せません。",
+        "Every part goes back to level 1.\n\nKept: story progress, items, gear (GPU gear too) and gold.\n\nThis cannot be undone.");
     public static string ResetAllAsk => T(
-        "物語もレベルも最初に戻します。窓の位置と言語の設定は残ります。\n\nこの操作は取り消せません。",
-        "Both the story and every level go back to the start. Window position and language are kept.\n\nThis cannot be undone.");
+        "物語もレベルも最初に戻します。持ち物、装備（GPU の分も）、所持金も消え、所持金は最初の額になります。冒険の記録と、稼働時間・起動回数も 0 に戻ります。\n\n残るもの: 窓の位置、言語・更新などの設定、GPU の番号。\n\nこの操作は取り消せません。",
+        "The story and every level go back to the start. Items, gear (GPU gear too) and gold are deleted too, and gold goes back to the starting amount. The adventure record, play time and launch count go back to 0.\n\nKept: window position, language and update settings, GPU slot numbers.\n\nThis cannot be undone.");
 
     // --- GPU の番号（設定 > データ） ---
     public static string NoticeOk          => T("OK", "OK");
