@@ -239,7 +239,7 @@ internal sealed class FakeCpuSession : ICpuTestSession
 
         public bool WaitCancelled(TimeSpan wait, CancellationToken ct) => owner.Wait(wait, ct);
 
-        public IDisposable CallAfter(TimeSpan delay, Action callback) => NeverFires.Instance; // the CPU run keeps its own backstop; nothing here fires on wall time
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => NeverFires.Instance; // nothing here fires on wall time: a test that wants the deadline backstop uses a clock that records it (CpuLoadStopTests.StuckClock)
     }
 }
 

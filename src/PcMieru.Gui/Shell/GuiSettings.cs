@@ -102,6 +102,9 @@ internal sealed class GuiSettings
     /// <summary>How often a save tries for the lock (a test lowers it); the wait between tries is <see cref="LockWaitMs"/>. 25 x 20 ms: about half a second, which a click on the screen can bear.</summary>
     internal int LockAttempts { get; set; } = 25;
 
+    /// <summary>A <see cref="LockAttempts"/> that never gives up (a test about the file's contents, which must not depend on how long the machine keeps another writer waiting). The app never sets it.</summary>
+    internal const int UnlimitedLockAttempts = int.MaxValue;
+
     internal int LockWaitMs { get; set; } = 20;
 
     /// <summary>
@@ -394,7 +397,7 @@ internal sealed class GuiSettings
             }
             catch (IOException ex) when (IsSharingViolation(ex))
             {
-                if (attempt >= LockAttempts)
+                if (LockAttempts != UnlimitedLockAttempts && attempt >= LockAttempts)
                 {
                     return null;
                 }

@@ -76,7 +76,8 @@ internal static class CpuLoadTest
 
     /// <summary>
     /// How long after the last reading is due the stop flag is set whatever the control loop is doing (real time). In a healthy run the loop is
-    /// done long before; this is the backstop for a loop that is stuck, so that no load outlives the time that was asked for.
+    /// done long before; this is the backstop for a loop that is stuck, so that no load outlives the time that was asked for. It is armed through
+    /// <see cref="ILoadClock.CallAfter"/>: the real clock fires it on wall time, a test's clock only when the test says so.
     /// </summary>
     internal static readonly TimeSpan DeadlineGrace = TimeSpan.FromSeconds(1);
 
@@ -155,7 +156,7 @@ internal static class CpuLoadTest
 
         // Two things set the stop flag besides the end of the loop, and neither waits for the loop: the cancel, and the deadline.
         using var stopOnCancel = ct.Register(() => Volatile.Write(ref stop, 1));
-        using var stopAtDeadline = new Timer(_ => Volatile.Write(ref stop, 1), null, (TickInterval * seconds) + DeadlineGrace, Timeout.InfiniteTimeSpan);
+        using var stopAtDeadline = clock.CallAfter((TickInterval * seconds) + DeadlineGrace, () => Volatile.Write(ref stop, 1));
 
         // The PDH sample is taken on a thread of its own: a counter call that hangs delays nothing here.
         using var sampler = new PdhSampler(session.SamplePdh, ct);
