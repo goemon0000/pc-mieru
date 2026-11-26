@@ -1089,6 +1089,169 @@ Check 'forms: the old app gets exactly two PARTSLIFE_ variables, whatever this p
     }
 }
 
+Check 'forms: the old app unpacks into the measurement''s own folder (DOTNET_BUNDLE_EXTRACT_BASE_DIR), never an inherited one' {
+    $old = $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR
+    $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = 'C:\inherited\must-not-reach-the-old-app'
+    try {
+        $with = New-LegacyStartInfo 'C:\fake\PartsLife.exe' 'C:\fake\data' 'C:\out\bundle-extract\'
+        Assert-That ($with.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] -eq 'C:\out\bundle-extract') ('with a base: ' + $with.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'])
+        $without = New-LegacyStartInfo 'C:\fake\PartsLife.exe' 'C:\fake\data'
+        Assert-That (-not $without.EnvironmentVariables.ContainsKey('DOTNET_BUNDLE_EXTRACT_BASE_DIR')) 'without a base the inherited value must be removed, not passed on'
+        $names = @($with.EnvironmentVariables.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -like 'PARTSLIFE_*' } | Sort-Object)
+        Assert-That (($names -join ',') -eq 'PARTSLIFE_TEST_DATA_DIR,PARTSLIFE_UPDATE_TEST_FEED') 'still exactly two PARTSLIFE_ variables'
+    }
+    finally {
+        if ($null -eq $old) { Remove-Item -LiteralPath Env:DOTNET_BUNDLE_EXTRACT_BASE_DIR -ErrorAction SilentlyContinue } else { $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = $old }
+    }
+    $listing = @(Get-TempDotNetListing)
+    Assert-That ($listing.Count -ge 0) 'the %TEMP%\.net listing must be readable (empty when there is none)'
+}
+
+# A fake checker that prints the line it is told to (FAKE_GATE_LINE): it tests what measure.ps1 does with each answer, not the checker.
+Check 'forms: an exe above 2 MB is allowed only when the checker read it as a single-file bundle (fail closed)' {
+    $d = New-WorkSubDir 'gate-answers'
+    $fake = Join-Path $d 'fake-gate.cs'
+    [IO.File]::WriteAllText($fake, 'var line = Environment.GetEnvironmentVariable("FAKE_GATE_LINE") ?? "legacy-gate refuse: no line"; Console.WriteLine(line); return line.StartsWith("legacy-gate ok") ? 0 : 1;')
+    $big = Join-Path $d 'big\PartsLife.exe'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $big) | Out-Null
+    [IO.File]::WriteAllBytes($big, (New-Object byte[] 2200000))
+    $small = Join-Path $d 'small\PartsLife.exe'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $small) | Out-Null
+    [IO.File]::WriteAllBytes($small, [byte[]](1, 2, 3))
+    [IO.File]::WriteAllBytes((Join-Path (Split-Path -Parent $small) 'PartsLife.dll'), [byte[]](4, 5, 6))
+    $keepPath = $script:LegacyGatePath
+    $keepLine = $env:FAKE_GATE_LINE
+    try {
+        $script:LegacyGatePath = $fake
+        $env:FAKE_GATE_LINE = 'legacy-gate ok'
+        $a = Test-LegacyGate $big
+        Assert-That ((-not $a.ok) -and ($a.line -like 'legacy-gate refuse:*above 2 MB*')) ('a big exe the checker did not read as a bundle must be refused: ' + $a.line)
+        $env:FAKE_GATE_LINE = 'legacy-gate ok (single-file bundle)'
+        $b = Test-LegacyGate $big
+        Assert-That ($b.ok -and $b.mode -eq 'bundle') ('a big exe read as a bundle is allowed: ' + $b.line)
+        $env:FAKE_GATE_LINE = 'legacy-gate refuse: the bundle has 2 entries named PartsLife.dll (exactly one is needed)'
+        $c = Test-LegacyGate $big
+        Assert-That ((-not $c.ok) -and ($c.line -like '*above 2 MB*') -and ($c.line -like '*exactly one is needed*')) ('a refused big exe: ' + $c.line)
+        $env:FAKE_GATE_LINE = 'legacy-gate OK (single-file bundle)'
+        $d1 = Test-LegacyGate $big
+        Assert-That (-not $d1.ok) ('the ok line is compared exactly (case): ' + $d1.line)
+        $env:FAKE_GATE_LINE = 'legacy-gate ok (single-file bundle) and more'
+        $d2 = Test-LegacyGate $big
+        Assert-That (-not $d2.ok) ('the ok line is compared exactly (nothing after it): ' + $d2.line)
+        $env:FAKE_GATE_LINE = 'legacy-gate ok'
+        $e = Test-LegacyGate $small
+        Assert-That ($e.ok -and $e.mode -eq 'folder') ('a small exe with its dll beside it passes in the folder form: ' + $e.line)
+        $env:FAKE_GATE_LINE = 'something else entirely'
+        $f = Test-LegacyGate $small
+        Assert-That (-not $f.ok) ('an answer that is not an ok line refuses: ' + $f.line)
+    }
+    finally {
+        $script:LegacyGatePath = $keepPath
+        if ($null -eq $keepLine) { Remove-Item -LiteralPath Env:FAKE_GATE_LINE -ErrorAction SilentlyContinue } else { $env:FAKE_GATE_LINE = $keepLine }
+    }
+}
+
+# Fake single-file bundles (the layout of bundle version 6) built here, and the real checker run on them: every broken shape must refuse.
+function New-FakeBundle([string]$Path, $Entries, [uint32]$Major = 6, [int]$Signatures = 1, [switch]$BadOffset) {
+    $sig = [byte[]](0x8b, 0x12, 0x02, 0xb9, 0x6a, 0x61, 0x20, 0x38, 0x72, 0x7b, 0x93, 0x02, 0x14, 0xd7, 0xa0, 0x32, 0x13, 0xf5, 0xb9, 0xe6, 0xef, 0xae, 0x33, 0x18, 0xee, 0x3b, 0x2d, 0xce, 0x24, 0xb3, 0x6a, 0xae)
+    $ms = New-Object IO.MemoryStream
+    $w = New-Object IO.BinaryWriter($ms)
+    $w.Write((New-Object byte[] 64))
+    $marker = $ms.Position
+    $w.Write([long]0)
+    $w.Write($sig)
+    if ($Signatures -gt 1) { $w.Write([long]0); $w.Write($sig) }
+    $w.Write((New-Object byte[] 16))
+    $placed = @()
+    foreach ($e in $Entries) {
+        $bytes = [byte[]]$e.Bytes
+        $stored = $bytes
+        $compressed = [long]0
+        if ($e["Deflate"]) {
+            $zs = New-Object IO.MemoryStream
+            $ds = New-Object IO.Compression.DeflateStream($zs, [IO.Compression.CompressionMode]::Compress, $true)
+            $ds.Write($bytes, 0, $bytes.Length); $ds.Dispose()
+            $stored = $zs.ToArray()
+            $compressed = [long]$stored.Length
+        }
+        $at = $ms.Position
+        $w.Write($stored)
+        $size = [long]$bytes.Length
+        if ($null -ne $e["ClaimSize"]) { $size = [long]$e["ClaimSize"] }
+        $placed += , @{ Offset = $at; Size = $size; Compressed = $compressed; Type = $(if ($null -ne $e["Type"]) { [byte]$e["Type"] } else { [byte]1 }); Path = $e.Path }
+    }
+    $header = $ms.Position
+    $w.Write([uint32]$Major); $w.Write([uint32]0); $w.Write([int]$placed.Count); $w.Write('selftest-bundle-id')
+    $w.Write([long]0); $w.Write([long]0); $w.Write([long]0); $w.Write([long]0); $w.Write([uint64]0)
+    foreach ($p in $placed) { $w.Write([long]$p.Offset); $w.Write([long]$p.Size); $w.Write([long]$p.Compressed); $w.Write([byte]$p.Type); $w.Write([string]$p.Path) }
+    $w.Flush()
+    $ms.Position = $marker
+    $w.Write($(if ($BadOffset) { [long]($ms.Length + 1000) } else { [long]$header }))
+    $w.Flush()
+    [IO.File]::WriteAllBytes($Path, $ms.ToArray())
+}
+
+function Invoke-GateChecker([string]$Target) {
+    $out = & dotnet run --file $script:LegacyGatePath -- $Target 2>$null
+    return ([string](@($out) | Select-Object -Last 1)).Trim()
+}
+
+Check 'legacy-gate.cs: a single-file bundle is read, and every broken shape of it is refused' {
+    if (-not (Test-Path -LiteralPath $script:LegacyGatePath -PathType Leaf)) { return 'SKIP the checker file is not next to this script' }
+    if ($null -eq (Get-Command dotnet -ErrorAction SilentlyContinue)) { return 'SKIP dotnet was not found' }
+    $d = New-WorkSubDir 'fake-bundles'
+    $junk = [byte[]](1..200 | ForEach-Object { $_ % 251 })
+    $two = @(@{ Path = 'PartsLife.dll'; Bytes = $junk }, @{ Path = 'PartsLife.Update.dll'; Bytes = $junk })
+    $cases = @(
+        @{ Name = 'two junk entries (not assemblies)'; Entries = $two; Expect = 'legacy-gate refuse:*' ; Not = '*bundle*entries*' },
+        @{ Name = 'two junk entries, deflated'; Entries = @(@{ Path = 'PartsLife.dll'; Bytes = $junk; Deflate = $true }, @{ Path = 'PartsLife.Update.dll'; Bytes = $junk; Deflate = $true }); Expect = 'legacy-gate refuse:*'; Not = '*inflates to*' },
+        @{ Name = 'PartsLife.dll twice'; Entries = @($two[0], $two[0], $two[1]); Expect = '*2 entries named PartsLife.dll*' },
+        @{ Name = 'PartsLife.Update.dll missing'; Entries = @($two[0]); Expect = '*0 entries named PartsLife.Update.dll*' },
+        @{ Name = 'an entry that inflates to another size'; Entries = @(@{ Path = 'PartsLife.dll'; Bytes = $junk; Deflate = $true; ClaimSize = 500 }, $two[1]); Expect = '*inflates to*' },
+        @{ Name = 'an unfamiliar entry kind'; Entries = @(@{ Path = 'PartsLife.dll'; Bytes = $junk; Type = 9 }, $two[1]); Expect = '*unfamiliar bundle entry kind*' },
+        @{ Name = 'an entry that is not an assembly'; Entries = @(@{ Path = 'PartsLife.dll'; Bytes = $junk; Type = 2 }, $two[1]); Expect = '*is not an assembly*' },
+        @{ Name = 'an unfamiliar bundle version'; Entries = $two; Major = 7; Expect = '*unfamiliar bundle version*' },
+        @{ Name = 'the signature twice'; Entries = $two; Signatures = 2; Expect = '*in the file 2 times*' },
+        @{ Name = 'a header offset outside the file'; Entries = $two; BadOffset = $true; Expect = '*outside the file*' }
+    )
+    $n = 0
+    foreach ($c in $cases) {
+        $n++
+        $path = Join-Path $d ('b' + $n + '.exe')
+        $major = $(if ($null -ne $c["Major"]) { [uint32]$c["Major"] } else { [uint32]6 })
+        $sigs = $(if ($null -ne $c["Signatures"]) { [int]$c["Signatures"] } else { 1 })
+        New-FakeBundle $path $c.Entries $major $sigs -BadOffset:([bool]$c["BadOffset"])
+        $line = Invoke-GateChecker $path
+        Assert-That (($line -like 'legacy-gate refuse:*') -and ($line -like $c.Expect)) ($c.Name + ': ' + $line)
+        if ($c["Not"]) { Assert-That ($line -notlike $c["Not"]) ($c.Name + ' stopped too early: ' + $line) }
+    }
+    # a folder whose PartsLife.exe is a bundle is refused (the exe must be given itself); a missing target is refused
+    $bundleFolder = New-WorkSubDir 'bundle-folder'
+    New-FakeBundle (Join-Path $bundleFolder 'PartsLife.exe') $two
+    $line = Invoke-GateChecker $bundleFolder
+    Assert-That ($line -like 'legacy-gate refuse:*give the exe itself*') ('a folder with a bundle exe: ' + $line)
+    $line = Invoke-GateChecker (Join-Path $d 'no-such.exe')
+    Assert-That ($line -like 'legacy-gate refuse:*not found*') ('a missing target: ' + $line)
+}
+
+# The positive path needs the real old app: set MEASURE_SELFTEST_LEGACY_FOLDER to a Debug build folder of v0.7.4 (PartsLife.dll and PartsLife.Update.dll in it). Fake bundles are
+# made of those two files, plain and deflated, and must be read as "ok (single-file bundle)"; the same with the Release build must refuse.
+Check 'legacy-gate.cs: a bundle made of the real Debug build passes, plain and deflated (optional: MEASURE_SELFTEST_LEGACY_FOLDER)' {
+    $folder = $env:MEASURE_SELFTEST_LEGACY_FOLDER
+    if ([string]::IsNullOrEmpty($folder) -or -not (Test-Path -LiteralPath (Join-Path $folder 'PartsLife.dll'))) { return 'SKIP MEASURE_SELFTEST_LEGACY_FOLDER is not set' }
+    if (-not (Test-Path -LiteralPath $script:LegacyGatePath -PathType Leaf)) { return 'SKIP the checker file is not next to this script' }
+    $d = New-WorkSubDir 'real-bundles'
+    $main = [IO.File]::ReadAllBytes((Join-Path $folder 'PartsLife.dll'))
+    $upd = [IO.File]::ReadAllBytes((Join-Path $folder 'PartsLife.Update.dll'))
+    $extra = [byte[]](1..50)
+    New-FakeBundle (Join-Path $d 'plain.exe') @(@{ Path = 'Other.dll'; Bytes = $extra }, @{ Path = 'PartsLife.dll'; Bytes = $main }, @{ Path = 'PartsLife.Update.dll'; Bytes = $upd })
+    New-FakeBundle (Join-Path $d 'deflated.exe') @(@{ Path = 'PartsLife.dll'; Bytes = $main; Deflate = $true }, @{ Path = 'Other.dll'; Bytes = $extra; Deflate = $true }, @{ Path = 'PartsLife.Update.dll'; Bytes = $upd; Deflate = $true })
+    foreach ($n in @('plain', 'deflated')) {
+        $line = Invoke-GateChecker (Join-Path $d ($n + '.exe'))
+        Assert-That ($line -ceq 'legacy-gate ok (single-file bundle)') ($n + ': ' + $line)
+    }
+}
+
 Check 'forms: Party is started with --measure and the run folder, and nothing else' {
     $psi = New-PartyStartInfo 'C:\fake\Party\PCMieru.Party.exe' 'C:\fake data\run1\'
     Assert-That ($psi.Arguments -eq '--measure "C:\fake data\run1"') ('arguments: ' + $psi.Arguments)
@@ -1255,6 +1418,22 @@ Check 'forms: source pins (gate before the old app, registration right after Sta
     Assert-That ($sfBody.IndexOf('$Registry.Add', [StringComparison]::Ordinal) -gt 0 -and $sfBody.IndexOf('$Registry.Add', [StringComparison]::Ordinal) -lt $sfBody.IndexOf('New-Series', [StringComparison]::Ordinal)) 'a started process is registered before its series is made'
     Assert-That ($sfBody.IndexOf('Get-ClockPair', [StringComparison]::Ordinal) -gt 0) 'the series starts from one clock pair and the OS creation time'
     Assert-That ($src.IndexOf('PostCloseAll', [StringComparison]::Ordinal) -gt 0 -and $src.IndexOf('EnumWindows(delegate', [StringComparison]::Ordinal) -gt 0) 'PostCloseAll (EnumWindows by pid) is missing'
+    Assert-That ($body.IndexOf('New-LegacyStartInfo $LegacyPath $dataDir $script:LegacyExtractBase', [StringComparison]::Ordinal) -gt 0) 'the old app is started with the bundle extract base of this invocation'
+    $fm = $src.IndexOf('function Invoke-FormMain', [StringComparison]::Ordinal)
+    $fmEnd = $src.IndexOf('function Invoke-Main', [StringComparison]::Ordinal)
+    Assert-That ($fm -gt 0 -and $fmEnd -gt $fm) 'Invoke-FormMain was not found'
+    $fmBody = $src.Substring($fm, $fmEnd - $fm)
+    $mk = $fmBody.IndexOf('bundle-extract', [StringComparison]::Ordinal)
+    $before = $fmBody.IndexOf('Get-TempDotNetListing', [StringComparison]::Ordinal)
+    $after = $fmBody.LastIndexOf('Get-TempDotNetListing', [StringComparison]::Ordinal)
+    $loop = $fmBody.IndexOf('Invoke-FormRun', [StringComparison]::Ordinal)
+    Assert-That ($mk -gt 0 -and $mk -lt $loop) 'the bundle extract folder is made inside the output before the first run'
+    Assert-That ($before -gt 0 -and $before -lt $loop -and $after -gt $loop) '%TEMP%\.net is listed before the first run and after the last'
+    Assert-That ($fmBody.IndexOf('Remove-FormDataDir $extractBase', [StringComparison]::Ordinal) -gt $loop) 'the bundle extract folder is removed at the end'
+    $gb = $src.IndexOf('function Test-LegacyGate', [StringComparison]::Ordinal)
+    $gbEnd = $src.IndexOf('function Assert-LegacySafe', [StringComparison]::Ordinal)
+    $gateBody = $src.Substring($gb, $gbEnd - $gb)
+    Assert-That ($gateBody.IndexOf("-ceq 'legacy-gate ok (single-file bundle)'", [StringComparison]::Ordinal) -gt 0 -and $gateBody.IndexOf('LegacyGateMaxExeBytes', [StringComparison]::Ordinal) -gt 0) 'the 2 MB rule and the exact bundle line are both in the gate'
     foreach ($ch in $src.ToCharArray()) { if ([int]$ch -gt 127) { throw 'measure.ps1 must be ASCII only' } }
 }
 

@@ -172,8 +172,9 @@
 .PARAMETER Form
   main (default: the GUI alone, every mode as before), party (PCMieru.Party.exe --measure <a new folder>), legacy (the old Parts Life v0.7.4 built with its
   Debug-only test hooks, started with PARTSLIFE_TEST_DATA_DIR = a new folder under the temp folder and PARTSLIFE_UPDATE_TEST_FEED = a refused address; refused
-  unless tools/legacy-gate/legacy-gate.cs read the IL of the exact folder and printed "legacy-gate ok", and refused for an exe above 2 MB or without PartsLife.dll
-  beside it) or both (the GUI with its own --measure plus Party --measure). The forms party / legacy / both use -Mode warm only. A run = a 30 s warm-up plus
+  unless tools/legacy-gate/legacy-gate.cs read the IL of the exact exe and printed "legacy-gate ok" (folder form: PartsLife.dll beside a small exe) or
+  "legacy-gate ok (single-file bundle)" (the shape v0.7.4 was shipped in: the checker reads PartsLife.dll and PartsLife.Update.dll from inside the bundle); an exe
+  above 2 MB the checker did not read as a bundle is refused. A single-file app unpacks its native DLLs into DOTNET_BUNDLE_EXTRACT_BASE_DIR = <output>\bundle-extract) or both (the GUI with its own --measure plus Party --measure). The forms party / legacy / both use -Mode warm only. A run = a 30 s warm-up plus
   -Seconds of steady sampling. With -Form party and -LegacyExe the pair order alternates: party legacy, legacy party, party legacy ... (-Runs of each). Per process:
   CPU (share of all logical CPUs and ms/s), private bytes, working set, handles in the warm-up, the steady part and all; the first window; the first valid value
   (Party; "legacy: n/a (the old app has no hook)" for the old app); how the process ended (WM_CLOSE to every window of the pid, then Kill). A run whose process
@@ -181,7 +182,7 @@
 .PARAMETER PartyExe
   The published PCMieru.Party.exe (-Form party and both).
 .PARAMETER LegacyExe
-  The old PartsLife.exe (-Form legacy, or -Form party to alternate with it); the folder must pass tools/legacy-gate/legacy-gate.cs (a Debug build of v0.7.4).
+  The old PartsLife.exe (-Form legacy, or -Form party to alternate with it); the exe must pass tools/legacy-gate/legacy-gate.cs (a Debug+Optimize build of v0.7.4, folder form or single-file).
 #>
 [CmdletBinding()]
 param(
@@ -3040,7 +3041,7 @@ function Add-RecordAggregate([System.Collections.IDictionary]$Summary, $RunList)
 # ---- the forms: -Form party | legacy | both (DESIGN-C 7, 8 step 7; C36) ----
 # party  = PCMieru.Party.exe --measure <a new folder under the temp folder>   (its own state, its own mutex name, nothing of the user's)
 # legacy = the old Parts Life v0.7.4 built with its Debug-only test hooks, started with exactly two PARTSLIFE_* variables (a new data folder, a feed
-#          that refuses) after tools/legacy-gate/legacy-gate.cs has read the IL of the folder it is started from and printed "legacy-gate ok"
+#          that refuses) after tools/legacy-gate/legacy-gate.cs has read the IL of the exact exe (folder form, or inside a single-file bundle) and printed "legacy-gate ok"
 # both   = the GUI with its own --measure, plus Party --measure
 # A run = a warm-up (30 s) and then -Seconds of steady sampling, 1-second samples, one clock for all processes. Per process: CPU (share of all logical CPUs
 # and ms/s), private bytes, working set, handles, in three windows (warmup, steady = after the warm-up, all). Nothing here ever sends input to a window;
@@ -3050,6 +3051,7 @@ function Add-RecordAggregate([System.Collections.IDictionary]$Summary, $RunList)
 $script:LegacyFeedText = 'http://127.0.0.1:9/'
 $script:LegacyGateMaxExeBytes = 2097152
 $script:LegacyGatePath = Join-Path $PSScriptRoot 'legacy-gate\legacy-gate.cs'
+$script:LegacyExtractBase = ''
 $script:FormWarmupSeconds = 30
 $script:FormWindowPollSeconds = 20
 $script:FormWindows = @('warmup', 'steady', 'all')
@@ -3068,22 +3070,26 @@ function Get-FormPlan([string]$FormName, [bool]$WithLegacy, [int]$Count) {
     return $plan.ToArray()
 }
 
-# May the old app be started from the folder of this exe? Only when tools/legacy-gate/legacy-gate.cs (it reads the IL of PartsLife.dll and the constant of
-# PartsLife.Update.dll) printed "legacy-gate ok" for that exact folder. Everything else refuses: a single-file bundle (above 2 MB), a missing PartsLife.dll,
-# a missing checker or dotnet, an answer that is not exactly the ok line. Returns { ok; line; folder; exe_bytes }.
+# May the old app be started from this exe? Only when tools/legacy-gate/legacy-gate.cs read it and printed "legacy-gate ok" for that exact exe:
+#   - an exe of 2 MB or less is the folder form (a small apphost): PartsLife.dll must be beside it and the checker must print exactly "legacy-gate ok";
+#   - an exe above 2 MB is allowed only when the checker read it as a single-file bundle (the shape v0.7.4 was shipped in; it parses the bundle manifest and reads
+#     PartsLife.dll and PartsLife.Update.dll from inside) and printed exactly "legacy-gate ok (single-file bundle)". A big exe the checker did not read as a bundle
+#     (any other answer, "legacy-gate ok" included) is refused.
+# Everything else refuses: a missing PartsLife.dll beside a small exe, a missing checker or dotnet, an answer that is not exactly one of the two ok lines.
+# Returns { ok; line; folder; exe_bytes; mode ('folder' | 'bundle') }.
 function Test-LegacyGate([string]$ExePath) {
     $folder = Split-Path -Parent $ExePath
-    $r = [ordered]@{ ok = $false; line = $null; folder = $folder; exe_bytes = $null }
+    $r = [ordered]@{ ok = $false; line = $null; folder = $folder; exe_bytes = $null; mode = $null }
     try {
         $r.exe_bytes = (Get-Item -LiteralPath $ExePath -ErrorAction Stop).Length
-        if ($r.exe_bytes -gt $script:LegacyGateMaxExeBytes) { $r.line = 'legacy-gate refuse: the exe is ' + $r.exe_bytes + ' bytes (above 2 MB): a single-file bundle, whose code is not read here'; return $r }
-        if (-not (Test-Path -LiteralPath (Join-Path $folder 'PartsLife.dll') -PathType Leaf)) { $r.line = 'legacy-gate refuse: PartsLife.dll is missing beside the exe'; return $r }
+        $big = ($r.exe_bytes -gt $script:LegacyGateMaxExeBytes)
+        if (-not $big -and -not (Test-Path -LiteralPath (Join-Path $folder 'PartsLife.dll') -PathType Leaf)) { $r.line = 'legacy-gate refuse: PartsLife.dll is missing beside the exe'; return $r }
         if (-not (Test-Path -LiteralPath $script:LegacyGatePath -PathType Leaf)) { $r.line = 'legacy-gate refuse: the checker was not found: ' + $script:LegacyGatePath; return $r }
         $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
         if ($null -eq $dotnet) { $r.line = 'legacy-gate refuse: dotnet was not found, the checker cannot run'; return $r }
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $dotnet.Source
-        $psi.Arguments = 'run --file "' + $script:LegacyGatePath + '" -- "' + $folder.TrimEnd('\') + '"'
+        $psi.Arguments = 'run --file "' + $script:LegacyGatePath + '" -- "' + $ExePath + '"'
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -3096,8 +3102,15 @@ function Test-LegacyGate([string]$ExePath) {
         $lines = @(([string]$outTask.Result) -split "`r?`n" | Where-Object { $_.Trim().Length -gt 0 })
         $last = ''
         if ($lines.Count -gt 0) { $last = ([string]$lines[$lines.Count - 1]).Trim() }
-        if ($p.ExitCode -eq 0 -and $last -ceq 'legacy-gate ok') { $r.ok = $true; $r.line = $last }
-        elseif ($last.StartsWith('legacy-gate refuse:', [StringComparison]::Ordinal)) { $r.line = $last }
+        if ($p.ExitCode -eq 0 -and $last -ceq 'legacy-gate ok (single-file bundle)') { $r.ok = $true; $r.mode = 'bundle'; $r.line = $last }
+        elseif ($p.ExitCode -eq 0 -and $last -ceq 'legacy-gate ok') {
+            if ($big) { $r.line = 'legacy-gate refuse: the exe is ' + $r.exe_bytes + ' bytes (above 2 MB) and the checker did not read it as a single-file bundle' }
+            else { $r.ok = $true; $r.mode = 'folder'; $r.line = $last }
+        }
+        elseif ($last.StartsWith('legacy-gate refuse:', [StringComparison]::Ordinal)) {
+            $r.line = $last
+            if ($big) { $r.line = 'legacy-gate refuse: the exe is ' + $r.exe_bytes + ' bytes (above 2 MB) and was not read as a single-file bundle: ' + $last.Substring('legacy-gate refuse:'.Length).Trim() }
+        }
         else { $r.line = 'legacy-gate refuse: the checker did not answer ok (exit ' + $p.ExitCode + '): ' + $last }
     }
     catch { $r.line = 'legacy-gate refuse: ' + (Get-ShortError $_) }
@@ -3110,7 +3123,9 @@ function Assert-LegacySafe([string]$ExePath) {
     return $r
 }
 
-function New-LegacyStartInfo([string]$ExePath, [string]$DataDir) {
+# A single-file app built with IncludeNativeLibrariesForSelfExtract unpacks its native DLLs on start: DOTNET_BUNDLE_EXTRACT_BASE_DIR points that at a folder inside the
+# measurement's own output (one per measure.ps1 invocation) instead of %TEMP%\.net. It is not a PARTSLIFE_* variable.
+function New-LegacyStartInfo([string]$ExePath, [string]$DataDir, [string]$ExtractBase = '') {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $ExePath
     $psi.WorkingDirectory = Split-Path -Parent $ExePath
@@ -3119,6 +3134,8 @@ function New-LegacyStartInfo([string]$ExePath, [string]$DataDir) {
     foreach ($k in @($vars.Keys)) { if ([string]$k -like 'PARTSLIFE_*') { $vars.Remove([string]$k) } }
     $vars['PARTSLIFE_TEST_DATA_DIR'] = $DataDir
     $vars['PARTSLIFE_UPDATE_TEST_FEED'] = $script:LegacyFeedText
+    if (-not [string]::IsNullOrEmpty($ExtractBase)) { $vars['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] = $ExtractBase.TrimEnd([char]92) }
+    else { $vars.Remove('DOTNET_BUNDLE_EXTRACT_BASE_DIR') }
     return $psi
 }
 
@@ -3165,6 +3182,22 @@ function Remove-FormDataDir([string]$Dir) {
         Start-Sleep -Milliseconds 500
     }
     return $false
+}
+
+# What %TEMP%\.net holds (the app folders and their hash folders), so that a run of a single-file app can be shown to have left nothing there.
+function Get-TempDotNetListing {
+    $root = Join-Path ([IO.Path]::GetTempPath()) '.net'
+    $names = New-Object System.Collections.ArrayList
+    if (Test-Path -LiteralPath $root) {
+        try {
+            foreach ($app in @(Get-ChildItem -LiteralPath $root -Force -Directory -ErrorAction Stop)) {
+                [void]$names.Add($app.Name)
+                foreach ($h in @(Get-ChildItem -LiteralPath $app.FullName -Force -Directory -ErrorAction SilentlyContinue)) { [void]$names.Add($app.Name + '\' + $h.Name) }
+            }
+        }
+        catch { }
+    }
+    return @($names.ToArray() | Sort-Object)
 }
 
 function Read-FirstValueMs([string]$Dir) {
@@ -3311,7 +3344,7 @@ function Invoke-FormRun([string]$FormName, [int]$Index, [string]$OutputDir, [int
         $clock = [Diagnostics.Stopwatch]::StartNew()
         if ($FormName -eq 'both') { $guiEntry = Start-FormProcess 'gui' (New-AppStartInfo $marksPath) $clock $entries }
         if ($FormName -eq 'party' -or $FormName -eq 'both') { [void](Start-FormProcess 'party' (New-PartyStartInfo $PartyPath $dataDir) $clock $entries) }
-        if ($FormName -eq 'legacy') { [void](Start-FormProcess 'legacy' (New-LegacyStartInfo $LegacyPath $dataDir) $clock $entries) }
+        if ($FormName -eq 'legacy') { [void](Start-FormProcess 'legacy' (New-LegacyStartInfo $LegacyPath $dataDir $script:LegacyExtractBase) $clock $entries) }
         $roots = @($entries.ToArray())
         $nextSample = 1.0
         $steadyMarked = $false
@@ -3563,6 +3596,16 @@ function Invoke-FormMain {
     if ($null -ne $problem) { throw $problem }
     Assert-WritableFolder $Output
 
+    # A single-file old app unpacks its native DLLs on start: one folder per invocation inside this output, shared by its runs (later runs start warm) and removed
+    # at the end like the data folders. %TEMP%\.net is listed before and after the trials: PartsLife must leave nothing new there.
+    $extractBase = $null
+    $tempNetBefore = @()
+    if ($needLegacy) {
+        $extractBase = New-ReservedFolder (Join-Path $Output 'bundle-extract')
+        $script:LegacyExtractBase = $extractBase
+        $tempNetBefore = @(Get-TempDotNetListing)
+    }
+
     $firstExe = $(if ($null -ne $partyPath) { $partyPath } elseif ($null -ne $legacyPath) { $legacyPath } else { $guiPath })
     $environment = Get-EnvironmentInfo $firstExe
     $cpus = [int]$environment.logical_cpus
@@ -3586,20 +3629,43 @@ function Invoke-FormMain {
             close_timeout_seconds = $script:CloseTimeoutSeconds
             data_folder_note = 'every run gets a new unique folder directly under the temp folder (pcmieru-measure-data-<run>-<id>) and it is removed after the run, once every process of the run has exited; the run output (csv, marks) is in a new folder <output>\<run>'
         }
-        legacy = $(if ($null -ne $legacyGate) { [ordered]@{ exe = $legacyPath; exe_bytes = $legacyGate.exe_bytes; gate = $legacyGate.line; env = [ordered]@{ PARTSLIFE_TEST_DATA_DIR = '<the run data folder>'; PARTSLIFE_UPDATE_TEST_FEED = $script:LegacyFeedText } } } else { $null })
+        legacy = $(if ($null -ne $legacyGate) { [ordered]@{ exe = $legacyPath; exe_bytes = $legacyGate.exe_bytes; gate = $legacyGate.line; gate_mode = $legacyGate.mode; env = [ordered]@{ PARTSLIFE_TEST_DATA_DIR = '<the run data folder>'; PARTSLIFE_UPDATE_TEST_FEED = $script:LegacyFeedText; DOTNET_BUNDLE_EXTRACT_BASE_DIR = $extractBase } } } else { $null })
         runs = (New-Object System.Collections.ArrayList)
         aggregate = [ordered]@{}
     }
     Save-SummaryNew $summary $summaryPath
     $counts = @{}
-    foreach ($f in $plan) {
-        $counts[$f] = $(if ($counts.ContainsKey($f)) { $counts[$f] + 1 } else { 1 })
-        $run = Invoke-FormRun $f $counts[$f] $Output $cpus $Seconds $partyPath $legacyPath
-        [void]$summary.runs.Add($run)
-        foreach ($w in @($run.warnings)) { [void]$summary.warnings.Add(('{0}: {1}' -f $run.label, $w)) }
-        Write-FormRunReport $run
-        Add-FormAggregate $summary $summary.runs
-        Save-Summary $summary $summaryPath
+    $extractRemoved = $null
+    try {
+        foreach ($f in $plan) {
+            $counts[$f] = $(if ($counts.ContainsKey($f)) { $counts[$f] + 1 } else { 1 })
+            $run = Invoke-FormRun $f $counts[$f] $Output $cpus $Seconds $partyPath $legacyPath
+            [void]$summary.runs.Add($run)
+            foreach ($w in @($run.warnings)) { [void]$summary.warnings.Add(('{0}: {1}' -f $run.label, $w)) }
+            Write-FormRunReport $run
+            Add-FormAggregate $summary $summary.runs
+            Save-Summary $summary $summaryPath
+        }
+    }
+    finally {
+        $script:LegacyExtractBase = ''
+        if ($null -ne $extractBase) { $extractRemoved = Remove-FormDataDir $extractBase }
+    }
+    if ($null -ne $extractBase) {
+        $tempNetAfter = @(Get-TempDotNetListing)
+        $newEntries = @($tempNetAfter | Where-Object { $tempNetBefore -notcontains $_ })
+        $fromPartsLife = @($newEntries | Where-Object { $_ -like 'PartsLife*' })
+        $summary.legacy['bundle_extract_removed'] = $extractRemoved
+        $summary.legacy['temp_dotnet'] = [ordered]@{
+            root = (Join-Path ([IO.Path]::GetTempPath()) '.net')
+            before = $tempNetBefore
+            after = $tempNetAfter
+            new_entries = $newEntries
+            new_from_partslife = $fromPartsLife
+            note = 'the old app was started with DOTNET_BUNDLE_EXTRACT_BASE_DIR in this output; nothing from PartsLife may be new in %TEMP%\.net'
+        }
+        Write-Host ('%TEMP%\.net: {0} entries before, {1} after, {2} new, {3} new from PartsLife; bundle extract folder removed: {4}' -f $tempNetBefore.Count, $tempNetAfter.Count, $newEntries.Count, $fromPartsLife.Count, $extractRemoved) -ForegroundColor $(if ($fromPartsLife.Count -eq 0) { 'Cyan' } else { 'Yellow' })
+        if ($fromPartsLife.Count -gt 0) { [void]$summary.warnings.Add('PartsLife left something new in %TEMP%\.net: ' + ($fromPartsLife -join ', ')) }
     }
     foreach ($w in @(Get-WindowDiffWarnings $summary.runs)) { [void]$summary.warnings.Add($w); Write-Host ('  warning: ' + $w) -ForegroundColor Yellow }
     Save-Summary $summary $summaryPath
