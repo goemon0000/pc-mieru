@@ -182,7 +182,7 @@ public sealed class PartyLogonSettingTests
     {
         Ui.Run(_ =>
         {
-            foreach (var (language, line) in new[] { (Language.Ja, "Windows の設定で無効になっています"), (Language.En, "It is turned off in Windows settings") })
+            foreach (var (language, line) in new[] { (Language.Ja, "Windows の設定で無効になっています。チェックを入れると、ログオン時に起動するよう戻します"), (Language.En, "It is turned off in Windows settings. Tick the box to start it at sign-in again") })
             {
                 using var rig = new Rig(language);
                 rig.Store.SeedRun(Name, Expected);
@@ -207,7 +207,7 @@ public sealed class PartyLogonSettingTests
     {
         Ui.Run(_ =>
         {
-            foreach (var (language, line) in new[] { (Language.Ja, "別の場所のパーツぐらしが登録されています"), (Language.En, "A Parts Life in another folder is registered") })
+            foreach (var (language, line) in new[] { (Language.Ja, "別の場所のパーツぐらしが登録されています。チェックを入れると、こちらに置き換えます"), (Language.En, "A Parts Life in another folder is registered. Tick the box to use this one instead") })
             {
                 using var rig = new Rig(language);
                 var other = "\"" + Path.Combine(Path.GetTempPath(), "somewhere-else", "PCMieru.Party.exe") + "\" --logon";
@@ -227,7 +227,7 @@ public sealed class PartyLogonSettingTests
     {
         Ui.Run(_ =>
         {
-            foreach (var (language, line) in new[] { (Language.Ja, "ログオンの設定を読めませんでした"), (Language.En, "Could not read the sign-in setting") })
+            foreach (var (language, line) in new[] { (Language.Ja, "ログオンの設定を読めませんでした。ほかのページを開いてから戻ると、もう一度読みます"), (Language.En, "Could not read the sign-in setting. Open another page and come back to try again") })
             {
                 using var rig = new Rig(language);
                 rig.Store.DenyOn(RunStoreCall.ReadRun);
@@ -324,9 +324,10 @@ public sealed class PartyLogonSettingTests
         var all = SettingsStrings.All.ToDictionary(e => e.Key);
         Assert.Equal("ログオン時にパーツぐらしを起動", all["gui.settings.partylogon"].Ja);
         Assert.Equal("Start Parts Life at sign-in", all["gui.settings.partylogon"].En);
-        Assert.Equal("Windows の設定で無効になっています", all["gui.settings.partylogon.disabled"].Ja);
-        Assert.Equal("別の場所のパーツぐらしが登録されています", all["gui.settings.partylogon.other"].Ja);
-        Assert.Equal("ログオンの設定を読めませんでした", all["gui.settings.partylogon.unknown"].Ja);
+        // Each warning line also says what ticking the box (or coming back to the page) does (the C30 screen check).
+        Assert.Equal("Windows の設定で無効になっています。チェックを入れると、ログオン時に起動するよう戻します", all["gui.settings.partylogon.disabled"].Ja);
+        Assert.Equal("別の場所のパーツぐらしが登録されています。チェックを入れると、こちらに置き換えます", all["gui.settings.partylogon.other"].Ja);
+        Assert.Equal("ログオンの設定を読めませんでした。ほかのページを開いてから戻ると、もう一度読みます", all["gui.settings.partylogon.unknown"].Ja);
         foreach (var key in all.Keys.Where(k => k.StartsWith("gui.settings.partylogon", StringComparison.Ordinal)))
         {
             Assert.False(string.IsNullOrWhiteSpace(all[key].Ja), key);

@@ -343,14 +343,14 @@ internal static class SettingsStrings
         // The sign-in setting (DESIGN-C 3 item 5). "Parts Life" is the product's own name; the status lines say why the box is not simply on or off.
         new("gui.settings.partylogon", "ログオン時にパーツぐらしを起動", "Start Parts Life at sign-in"),
         new("gui.settings.partylogon.tip", "Windows にサインインしたときに、パーツぐらしを自動で開きます。オフにすると登録を消します", "Opens Parts Life by itself when you sign in to Windows. Turning it off removes the entry"),
-        new("gui.settings.partylogon.disabled", "Windows の設定で無効になっています", "It is turned off in Windows settings"),
-        new("gui.settings.partylogon.other", "別の場所のパーツぐらしが登録されています", "A Parts Life in another folder is registered"),
-        new("gui.settings.partylogon.unknown", "ログオンの設定を読めませんでした", "Could not read the sign-in setting"),
+        new("gui.settings.partylogon.disabled", "Windows の設定で無効になっています。チェックを入れると、ログオン時に起動するよう戻します", "It is turned off in Windows settings. Tick the box to start it at sign-in again"),
+        new("gui.settings.partylogon.other", "別の場所のパーツぐらしが登録されています。チェックを入れると、こちらに置き換えます", "A Parts Life in another folder is registered. Tick the box to use this one instead"),
+        new("gui.settings.partylogon.unknown", "ログオンの設定を読めませんでした。ほかのページを開いてから戻ると、もう一度読みます", "Could not read the sign-in setting. Open another page and come back to try again"),
         new("gui.settings.partylogon.failed", "ログオンの設定を変えられませんでした", "Could not change the sign-in setting"),
         new("gui.settings.partylogon.check", "ログオン設定の復元を確認してください", "Please check the sign-in setting"),
         // Ticking the box while the old Parts Life still starts at sign-in switches that start over (never two starts): how it ended.
-        new("gui.settings.partylogon.switched", "旧パーツぐらしのログオン起動から切り替えました", "Switched from the old Parts Life sign-in start"),
-        new("gui.settings.partylogon.notswitched", "切り替えられませんでした。ログオン時は旧パーツぐらしのままです", "Could not switch; the old Parts Life still starts at sign-in"),
+        new("gui.settings.partylogon.switched", "切り替えました。次のログオンから、旧パーツぐらしの代わりにこちらが起動します", "Switched: from your next sign-in, this one starts instead of the old Parts Life"),
+        new("gui.settings.partylogon.notswitched", "切り替えられませんでした。ログオン時は旧パーツぐらしのままです。チェックを入れると、もう一度試します", "Could not switch; the old Parts Life still starts at sign-in. Tick the box to try again"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
         // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
         new(

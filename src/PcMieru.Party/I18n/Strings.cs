@@ -139,8 +139,8 @@ public static class Strings
 
     // ---- ログオン時の起動の切り替え（引き継ぎのあとの 1 問と、その復元の確認。DESIGN-C 4.3） ----
     public static string RunSwitchTitle     => T("ログオン時の起動", "Start at sign-in");
-    public static string RunSwitchAsk       => T("ログオン時の起動も、パーツぐらし（PCミエル）に切り替えますか？",
-                                                 "Switch sign-in start to Parts Life (PC Mieru) too?");
+    public static string RunSwitchAsk       => T("次のログオンから、旧パーツぐらしの代わりにパーツぐらし（PCミエル）を起動しますか？",
+                                                 "From your next sign-in, start Parts Life (PC Mieru) instead of the old Parts Life?");
     public static string RunSwitchCopied    => T("保存の引き継ぎは、すでに完了しています。", "Your save was already copied over successfully.");
     public static string RunSwitchYes       => T("切り替える", "Switch");
     public static string RunSwitchNo        => T("今はしない", "Not now");

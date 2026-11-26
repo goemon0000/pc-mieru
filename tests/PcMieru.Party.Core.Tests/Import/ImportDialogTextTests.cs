@@ -247,14 +247,14 @@ public class ImportDialogModelTests
         InLanguage("ja", () =>
         {
             var model = ImportDialogModels.RunSwitchAsk();
-            Assert.Equal("ログオン時の起動も、パーツぐらし（PCミエル）に切り替えますか？", model.Body);
+            Assert.Equal("次のログオンから、旧パーツぐらしの代わりにパーツぐらし（PCミエル）を起動しますか？", model.Body);
             Assert.Equal(["切り替える", "今はしない"], model.Buttons.Select(b => b.Text));
             Assert.Contains("すでに完了", model.Note);
         });
         InLanguage("en", () =>
         {
             var model = ImportDialogModels.RunSwitchAsk();
-            Assert.Equal("Switch sign-in start to Parts Life (PC Mieru) too?", model.Body);
+            Assert.Equal("From your next sign-in, start Parts Life (PC Mieru) instead of the old Parts Life?", model.Body);
             Assert.Equal(["Switch", "Not now"], model.Buttons.Select(b => b.Text));
             Assert.Contains("already", model.Note);
         });

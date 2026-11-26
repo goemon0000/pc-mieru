@@ -12,8 +12,8 @@ public sealed class LogonSwitchTests
 {
     private const string OldExe = @"C:\Old\PartsLife.exe";
     private const string Check = "Please check the sign-in setting";
-    private const string Switched = "Switched from the old Parts Life sign-in start";
-    private const string NotSwitched = "Could not switch; the old Parts Life still starts at sign-in";
+    private const string Switched = "Switched: from your next sign-in, this one starts instead of the old Parts Life";
+    private const string NotSwitched = "Could not switch; the old Parts Life still starts at sign-in. Tick the box to try again";
 
     private static readonly string ExePath = Path.Combine(Path.GetTempPath(), "pcmieru-logon-switch-test", "PCMieru.Party.exe");
     private static readonly string Expected = PartyLogon.ExpectedValue(ExePath);
