@@ -5,6 +5,8 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PcMieru.Core.Siblings;
 using PcMieru.Party.Game;
+using PcMieru.Party.I18n;
+using PcMieru.Party.Import;
 using PcMieru.Wire.Gate;
 
 namespace PcMieru.Party;
@@ -63,8 +65,82 @@ internal static class Program
             return 2;
         }
 
-        // 3. Only now WPF.
+        // 3. A smoke preview of the first-start dialogs: a made-up plan, no engine, no path of the machine (the real paths and the probe are never built here).
+        if (options.Smoke && options.ImportPreview is { } preview)
+        {
+            return RunImportPreview(options, preview, language);
+        }
+
+        // 4. The first start (DESIGN-C 4.1): before the save is read. The first file of a new home always comes from the import engine under its lock, never from the save writer.
+        // Later / Close = nothing was written and the app ends (0); the next start asks again. A smoke run never gets here: it must not touch the real folders.
+        if (!options.Smoke && !FirstStart(language))
+        {
+            return 0;
+        }
+
+        // 5. Only now WPF for the window itself.
         return Run(options);
+    }
+
+    /// <summary>True: a save is in place (or kept as it is), go on and load it. False: the user chose Later or Close, nothing was written.</summary>
+    private static bool FirstStart(PartyLanguage language)
+    {
+        Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
+        // Every engine call runs off this thread inside FirstStartFlow (Task.Run, then a plain wait: no window exists yet); the dialogs run on this STA thread without an Application.
+        var engine = new ImportEngine(ImportPaths.ForCurrentUser(), new WindowsLegacyRunningProbe());
+        return FirstStartFlow.Run(engine, new WpfFirstStartPrompts()) == FirstStartEnd.Proceed;
+    }
+
+    /// <summary>--smoke --import-preview: shows the dialog of one case with a made-up plan, writes the shot when asked, and says "party smoke ok". Touches nothing of this machine.</summary>
+    private static int RunImportPreview(PartyOptions options, PartyImportPreview which, PartyLanguage language)
+    {
+        Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
+        string? failure = null;
+        var shotWritten = false;
+        try
+        {
+            var window = new ImportDialogWindow(ImportDialogModels.Preview(which));
+            var wait = new DispatcherTimer { Interval = options.ShotPath is null ? SmokeOpenFor : TimeSpan.FromMilliseconds(600) };
+            window.ContentRendered += (_, _) => wait.Start();
+            wait.Tick += (_, _) =>
+            {
+                wait.Stop();
+                try
+                {
+                    if (options.ShotPath is { } shot)
+                    {
+                        WriteShot(window.RenderShot(2.0), shot);
+                        shotWritten = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure ??= "the shot could not be written: " + ex;
+                }
+
+                window.Close();
+            };
+            window.ShowDialog();
+            if (!window.Rendered) failure ??= "the dialog was closed before it was drawn";
+        }
+        catch (Exception ex)
+        {
+            failure ??= ex.ToString();
+        }
+
+        if (failure is null && options.ShotPath is not null && !shotWritten)
+        {
+            failure = "the dialog was closed before the shot was written";
+        }
+
+        if (failure is not null)
+        {
+            Console.Error.WriteLine("party smoke FAILED: " + failure.ReplaceLineEndings(" "));
+            return 1;
+        }
+
+        Console.Out.WriteLine("party smoke ok");
+        return 0;
     }
 
     /// <summary>
