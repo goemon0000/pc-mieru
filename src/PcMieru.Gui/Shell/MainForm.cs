@@ -424,10 +424,11 @@ internal sealed class MainForm : Form
 
     /// <summary>
     /// True while the window cannot take a new dialog of its own: it is closed or disposed, it is disabled (the native window of the owner of a dialog is disabled while that dialog is open, and so is the
-    /// managed state of a window a caller disabled), or a modal form of the app is open.
+    /// managed state of a window a caller disabled), a modal form of the app is open, or a UAC prompt is on the screen (the network meter's start or the Helper waits on it: the secure desktop is no
+    /// form of ours, but a notice must not come up while the owner answers it).
     /// </summary>
     internal bool IsBlockedByDialog =>
-        IsDisposed || !Enabled || (IsHandleCreated && !IsWindowEnabled(Handle)) || Application.OpenForms.Cast<Form>().Any(window => window != this && window.Modal);
+        IsDisposed || !Enabled || (IsHandleCreated && !IsWindowEnabled(Handle)) || _context.PendingUac || Application.OpenForms.Cast<Form>().Any(window => window != this && window.Modal);
 
     /// <summary>Waits on the UI thread (a short timer, nothing blocked: the dialog that is open keeps running) until no dialog is open over the window. False when the window went away meanwhile.</summary>
     internal async Task<bool> WaitUntilFreeAsync()
@@ -455,8 +456,31 @@ internal sealed class MainForm : Form
         }
     }
 
-    /// <summary>The save that 「あとで」 started (completed when none was). A test awaits it; the window never does.</summary>
-    internal Task PartyLaterSave { get; private set; } = Task.CompletedTask;
+    /// <summary>The save that 「あとで」 started (completed when none was). A test awaits it; the close of the window waits for it, bounded by <see cref="LaterCloseWait"/>.</summary>
+    internal Task PartyLaterSave = Task.CompletedTask;
+
+    /// <summary>How long a close waits for a 「あとで」 save that is still running (a test lowers it).</summary>
+    internal TimeSpan LaterCloseWait = TimeSpan.FromSeconds(3);
+
+    private bool _laterSettled;
+
+    /// <summary>Waits for the 「あとで」 save, at most <see cref="LaterCloseWait"/>, then closes again (the save of the settings after it then finds the lock free, or the save was lost to a lock that never went).</summary>
+    private async Task CloseAfterLaterSaveAsync()
+    {
+        try
+        {
+            await Task.WhenAny(PartyLaterSave, Task.Delay(LaterCloseWait)).ConfigureAwait(true);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // the save reports its own failure; the window closes anyway
+        }
+
+        if (!IsDisposed)
+        {
+            Close();
+        }
+    }
 
     /// <summary>
     /// Saves 「あとで」 off the UI thread (the lock retries and the flush to disk must not hold the window). A save that did not reach the file is said once on the status line: the notice then comes again at
@@ -568,6 +592,17 @@ internal sealed class MainForm : Form
         if (!_closeGuard.OnCloseRequested(e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
         {
             e.Cancel = true;
+            return;
+        }
+
+        // 「あとで」 was clicked just before: its save runs on a worker and may still hold gui.ini.lock, and the synchronous Save below would wait for that lock on the UI thread (a close that won would also lose
+        // the Later write). So the close is held once: the save is awaited without blocking (bounded by LaterCloseWait, 3 s) and the close is asked again. Windows ending the session cannot wait (a cancelled
+        // close is what Windows reports as "this app is stopping the shutdown"): it goes on, and the late write is a best effort.
+        if (!_laterSettled && !PartyLaterSave.IsCompleted && e.CloseReason is not (CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
+        {
+            _laterSettled = true;
+            e.Cancel = true;
+            _ = CloseAfterLaterSaveAsync();
             return;
         }
 

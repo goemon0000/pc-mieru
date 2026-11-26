@@ -133,8 +133,9 @@ internal sealed partial class SettingsPage
 
     /// <summary>
     /// The owner's click, on a worker thread. Off removes our entry (a stuck journal is settled by it, see <see cref="PartyLogon.Disable"/>). On: when the old Parts Life start is on and points at the old exe,
-    /// checking the box is the consent to the switch (<see cref="RunSwitch.Switch"/>: the old start is replaced, so there are never two starts); otherwise a plain <see cref="PartyLogon.Enable"/>. A journal
-    /// of an earlier switch is recovered first; one that cannot be settled makes the owner's choice win (plain Enable, which deletes the journal once it was written).
+    /// checking the box is the consent to the switch (<see cref="RunSwitch.Switch"/>: the old start is replaced, so there are never two starts, also when a new value of ours already exists and Windows turned
+    /// it off: it is overwritten and enabled by the same journaled steps); otherwise a plain <see cref="PartyLogon.Enable"/>, which only runs when the switch, deciding under the shared lock, says the old
+    /// start is not on (never a plain Enable while it is). A journal of an earlier switch is recovered first; one that cannot be settled makes the owner's choice win (plain Enable, which deletes the journal once it was written).
     /// </summary>
     private static LogonChange ApplyLogonChange(GuiContext context, PcMieru.Core.Siblings.IRunStore store, string exe, bool on)
     {
@@ -154,23 +155,25 @@ internal sealed partial class SettingsPage
                 return new LogonChange(false, true, false, null);
             }
 
-            if (!recovery.NeedsAttention && RunSwitch.Offer(store, exe, seam.FileExists).Ask)
+            if (!recovery.NeedsAttention && RunSwitch.Offer(store, exe, seam.FileExists, replaceExisting: true).Ask)
             {
-                var switched = RunSwitch.Switch(store, journal, exe, seam.FileExists, seam.LockName, seam.LockWait);
+                var switched = RunSwitch.Switch(store, journal, exe, seam.FileExists, seam.LockName, seam.LockWait, replaceExisting: true);
                 switch (switched.Status)
                 {
                     case RunSwitchStatus.Switched:
                         return new LogonChange(true, false, false, "gui.settings.partylogon.switched");
                     case RunSwitchStatus.RestoreFailed or RunSwitchStatus.NeedsUserCheck or RunSwitchStatus.RecoveryFailed:
                         return new LogonChange(false, false, true, null);
+                    case RunSwitchStatus.NotOffered when OldStartIsNotOn(switched.Detail):
+                        break;   // the values changed in between and the old start is not on: the plain change below
                     case RunSwitchStatus.NotOffered:
-                        break;   // the values changed in between: the plain change below decides
+                        return new LogonChange(false, true, false, null);   // it is on, but the switch cannot be made (e.g. a stamp that cannot be put back): not a plain Enable
                     default:
                         return new LogonChange(false, false, false, "gui.settings.partylogon.notswitched");
                 }
             }
         }
-        else if (RunSwitch.Offer(store, exe, seam.FileExists).Ask)
+        else if (RunSwitch.Offer(store, exe, seam.FileExists, replaceExisting: true).Ask)
         {
             // the old start is on but there is nowhere to keep the journal of a switch: not a plain Enable (that would start both), nothing is written
             return new LogonChange(false, true, false, null);
@@ -178,8 +181,13 @@ internal sealed partial class SettingsPage
 
         return Plain(PartyLogon.Enable(store, exe, seam.LockName, seam.LockWait, journalPath, seam.FileExists));
 
-        static LogonChange Plain(PartyLogonResult result) => new(result.Ok, !result.Ok, false, null);
+        static LogonChange Plain(PartyLogonResult result) =>
+            result.Failure == PartyLogonFailure.JournalUnreadable ? new LogonChange(false, false, true, null) : new LogonChange(result.Ok, !result.Ok, false, null);
     }
+
+    /// <summary>True for the reasons of a refused switch that mean "the old start is not (effectively) on", where a plain change cannot make two starts.</summary>
+    private static bool OldStartIsNotOn(string reason) =>
+        reason is nameof(RunSwitchReason.OldNotThere) or nameof(RunSwitchReason.NotOldExe) or nameof(RunSwitchReason.NotEnabled);
 
     private void FinishLogon(PartyLogonState state, bool exeThere, bool failed, string? note = null)
     {

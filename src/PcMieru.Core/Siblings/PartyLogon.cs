@@ -47,6 +47,12 @@ public enum PartyLogonFailure
 
     /// <summary>The Run command for this exe would be 260 characters or more (the limit of a Run value that Windows starts). Nothing was written.</summary>
     TooLong,
+
+    /// <summary>
+    /// The journal of an earlier switch is there but cannot be read, or an unsettled one could not be deleted before the change (a sharing violation, access denied, a disk error). Nothing was written:
+    /// the settings row shows the "check the sign-in setting" line, and trying again later works.
+    /// </summary>
+    JournalUnreadable,
 }
 
 /// <summary>The outcome of a change. Never an exception: the settings page shows a line for a failure and goes on.</summary>
@@ -128,7 +134,7 @@ public static class PartyLogon
     /// <remarks>
     /// <paramref name="journalPath"/> is the journal of the switch from the old value (<see cref="RunSwitch.JournalPathFor"/>); null = the caller has none. With it, under the lock, a journal that is there is
     /// recovered first (<see cref="RunSwitch.RecoverHeld"/>); one that cannot be settled (the user changed an entry in Windows, or the recovery failed) is settled by this change instead: the owner's explicit
-    /// choice wins, and when it was written the journal is deleted, so a later recovery cannot undo it. <paramref name="fileExists"/> is for tests.
+    /// choice wins, and the journal is deleted first, so a later recovery cannot undo it. <paramref name="fileExists"/> is for tests.
     /// </remarks>
     public static PartyLogonResult Enable(IRunStore store, string exePath, string? lockName = null, TimeSpan? lockWait = null, string? journalPath = null, Func<string, bool>? fileExists = null) =>
         Locked(lockName, lockWait, () => Settling(store, journalPath, fileExists, () => EnableCore(store, exePath)));
@@ -201,7 +207,8 @@ public static class PartyLogon
 
     /// <summary>
     /// Runs <paramref name="change"/> (the lock is held) after the journal of an earlier switch was dealt with: recovered when its values are known, otherwise left for the owner's change to settle, which
-    /// deletes it once the change was written. No journal path or no journal: just the change.
+    /// deletes it before the change is written. A journal that cannot be read, or an unsettled one that cannot be deleted, stops the change (<see cref="PartyLogonFailure.JournalUnreadable"/>).
+    /// No journal path or no journal: just the change.
     /// </summary>
     private static PartyLogonResult Settling(IRunStore store, string? journalPath, Func<string, bool>? fileExists, Func<PartyLogonResult> change)
     {
@@ -211,23 +218,39 @@ public static class PartyLogon
         }
 
         var journal = new FileRunSwitchJournal(journalPath);
-        var stuck = RunSwitch.RecoverHeld(store, journal, fileExists).NeedsAttention;
-        var result = change();
-        if (!stuck || !result.Ok)
+
+        // "no journal" is only what a read that says "not found" means: a journal that is there but cannot be read (locked by a virus scanner, a disk error) is not absent. Nothing is toggled then, or a
+        // later recovery could roll the owner's choice back.
+        try
         {
-            return result;
+            journal.Read();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return change();
+        }
+        catch (Exception ex)
+        {
+            return new PartyLogonResult(false, PartyLogonFailure.JournalUnreadable, "journal: " + ex.GetType().Name);
         }
 
+        if (!RunSwitch.RecoverHeld(store, journal, fileExists).NeedsAttention)
+        {
+            return change();
+        }
+
+        // The owner's choice overrides a journal that could not be settled. The journal goes FIRST: when its delete fails nothing is written (a journal that outlived a written change would be rolled forward
+        // or back by the next start and undo the choice); when the change then fails the values stay as the owner left them to try again.
         try
         {
             journal.Delete();
         }
         catch (Exception ex)
         {
-            return Failed(ex);
+            return new PartyLogonResult(false, PartyLogonFailure.JournalUnreadable, "journal delete: " + ex.GetType().Name);
         }
 
-        return result;
+        return change();
     }
 
     private static PartyLogonResult DisableCore(IRunStore store)

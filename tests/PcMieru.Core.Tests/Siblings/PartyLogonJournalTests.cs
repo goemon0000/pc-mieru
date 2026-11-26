@@ -88,8 +88,82 @@ public sealed class PartyLogonJournalTests : IDisposable
 
         var result = PartyLogon.Disable(store, UniqueLock(), journalPath: JournalPath, fileExists: Exists);
 
+        // the journal goes first (an owner's change is never written next to a journal that could roll it back): the change failed, so the journal is gone and the values are as the owner left them
         Assert.False(result.Ok);
+        Assert.False(File.Exists(JournalPath));
+        Assert.NotNull(store.ReadRun(PartyLogon.ValueName));
+    }
+
+    // ---- C31 item 6: an unreadable journal stops the change; an unsettled one is deleted before anything is written ----
+
+    [Fact]
+    public void A_journal_that_is_there_but_cannot_be_read_stops_the_change_and_nothing_is_written()
+    {
+        var store = new MemoryRunStore();
+        store.SeedRun(PartyLogon.ValueName, PartyLogon.ExpectedValue(NewExe));
+        Directory.CreateDirectory(JournalPath);   // opening a folder as a file: UnauthorizedAccessException, not "not found"
+        var calls = store.Calls.Count;
+
+        var disabled = PartyLogon.Disable(store, UniqueLock(), journalPath: JournalPath, fileExists: Exists);
+        var enabled = PartyLogon.Enable(store, NewExe, UniqueLock(), journalPath: JournalPath, fileExists: Exists);
+
+        Assert.False(disabled.Ok);
+        Assert.Equal(PartyLogonFailure.JournalUnreadable, disabled.Failure);
+        Assert.False(enabled.Ok);
+        Assert.Equal(PartyLogonFailure.JournalUnreadable, enabled.Failure);
+        Assert.Equal(calls, store.Calls.Count);   // the store was not touched at all
+        Assert.NotNull(store.ReadRun(PartyLogon.ValueName));
+        Assert.True(Directory.Exists(JournalPath));
+    }
+
+    [Fact]
+    public void An_unsettled_journal_that_cannot_be_deleted_stops_the_change_before_it_is_written()
+    {
+        var store = StuckSwitch();
+        var calls = store.Calls.Count;
+
+        using (new FileStream(JournalPath, FileMode.Open, FileAccess.Read, FileShare.Read))   // readable, but not deletable
+        {
+            var result = PartyLogon.Disable(store, UniqueLock(), journalPath: JournalPath, fileExists: Exists);
+
+            Assert.False(result.Ok);
+            Assert.Equal(PartyLogonFailure.JournalUnreadable, result.Failure);
+        }
+
+        Assert.NotNull(store.ReadRun(PartyLogon.ValueName));   // the change was not written
         Assert.True(File.Exists(JournalPath));
+        Assert.DoesNotContain(store.Calls.Skip(calls), c => c.Call is RunStoreCall.WriteRun or RunStoreCall.DeleteRun or RunStoreCall.WriteApproval or RunStoreCall.DeleteApproval);
+    }
+
+    [Fact]
+    public void An_unsettled_journal_is_gone_before_the_owners_change_is_written()
+    {
+        var store = StuckSwitch();
+        var steps = new List<string>();
+        var watched = new JournalWatchStore(store, () => steps.Add(File.Exists(JournalPath) ? "write-with-journal" : "write-without-journal"));
+
+        var result = PartyLogon.Disable(watched, UniqueLock(), journalPath: JournalPath, fileExists: Exists);
+
+        Assert.True(result.Ok, result.Failure + " " + result.Detail);
+        Assert.NotEmpty(steps);
+        Assert.All(steps, step => Assert.Equal("write-without-journal", step));
+    }
+
+    private sealed class JournalWatchStore(MemoryRunStore inner, Action onWrite) : IRunStore
+    {
+        public RunValue? ReadRun(string name) => inner.ReadRun(name);
+
+        public void WriteRun(string name, string text, Microsoft.Win32.RegistryValueKind kind = Microsoft.Win32.RegistryValueKind.String) { onWrite(); inner.WriteRun(name, text, kind); }
+
+        public void DeleteRun(string name) { onWrite(); inner.DeleteRun(name); }
+
+        public ApprovalValue? ReadApproval(string name) => inner.ReadApproval(name);
+
+        public void WriteApproval(string name, byte[] bytes, Microsoft.Win32.RegistryValueKind kind = Microsoft.Win32.RegistryValueKind.Binary) { onWrite(); inner.WriteApproval(name, bytes, kind); }
+
+        public void DeleteApproval(string name) { onWrite(); inner.DeleteApproval(name); }
+
+        public void Flush() => inner.Flush();
     }
 
     [Fact]

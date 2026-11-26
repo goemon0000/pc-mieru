@@ -693,6 +693,97 @@ public sealed class RunSwitchTests
         Assert.Empty(writesToOld);
     }
 
+    // ---- C31 item 3: the new stamp goes back only once the new Run is gone ----
+
+    [Fact]
+    public void A_rollback_that_cannot_remove_the_new_run_leaves_its_stamp_disabled_and_reports_the_failure()
+    {
+        // the dry run finds the call that turns the new stamp on (the second write or delete of it, after the disabled stamp) so the real run can stop exactly there
+        var dry = Seeded();
+        RunSwitch.Switch(dry, new MemoryJournal(), NewExe, Exists, UniqueLock());
+        var stampOn = 0;
+        var seen = 0;
+        for (var i = 0; i < dry.Calls.Count; i++)
+        {
+            if (dry.Calls[i].Call is RunStoreCall.WriteApproval or RunStoreCall.DeleteApproval && dry.Calls[i].Name == RunSwitch.NewName && ++seen == 2)
+            {
+                stampOn = i + 1;
+            }
+        }
+
+        Assert.True(stampOn > 0);
+
+        var inner = Seeded();
+        var journal = new MemoryJournal();
+        inner.DenyOn(RunStoreCall.DeleteRun);   // the staged new Run cannot be removed
+        var result = RunSwitch.Switch(new FaultStore(inner) { FailAt = stampOn }, journal, NewExe, Exists, UniqueLock());
+
+        Assert.Equal(RunSwitchStatus.RestoreFailed, result.Status);
+        Assert.NotNull(inner.ReadRun(RunSwitch.NewName));
+        Assert.False(Effective(inner, RunSwitch.NewName), "the new Run must stay under its disabled stamp");
+        Assert.NotNull(journal.Text);
+    }
+
+    // ---- C31 item 5: a new value that already exists is overwritten only with the owner's consent ----
+
+    private static MemoryRunStore SeededWithDisabledNew()
+    {
+        var store = Seeded(stamp: true);
+        store.SeedRun(RunSwitch.NewName, "C:/Else/Party.exe --old");
+        store.SeedApproval(RunSwitch.NewName, StartupApprovedCodec.EncodeDisabled(132000000000000000L));
+        return store;
+    }
+
+    [Fact]
+    public void An_existing_new_value_is_a_refusal_unless_the_owner_consents_to_overwrite_it()
+    {
+        var store = SeededWithDisabledNew();
+        Assert.Equal(RunSwitchReason.NewExists, RunSwitch.Offer(store, NewExe, Exists).Reason);
+        Assert.True(RunSwitch.Offer(store, NewExe, Exists, replaceExisting: true).Ask);
+
+        var before = Fingerprint(store);
+        var refused = RunSwitch.Switch(store, new MemoryJournal(), NewExe, Exists, UniqueLock());
+        Assert.Equal(RunSwitchStatus.NotOffered, refused.Status);
+        Assert.Equal(before, Fingerprint(store));
+    }
+
+    [Fact]
+    public void A_switch_with_consent_overwrites_and_enables_the_new_value_and_takes_the_old_one_away()
+    {
+        var store = SeededWithDisabledNew();
+        var journal = new MemoryJournal();
+
+        var result = RunSwitch.Switch(store, journal, NewExe, Exists, UniqueLock(), replaceExisting: true);
+
+        Assert.Equal(RunSwitchStatus.Switched, result.Status);
+        Assert.Equal(NewCommand, store.ReadRun(RunSwitch.NewName)?.Text);
+        Assert.True(Effective(store, RunSwitch.NewName));
+        Assert.Null(store.ReadRun(RunSwitch.OldName));
+        Assert.False(Effective(store, RunSwitch.OldName));
+        Assert.Null(journal.Text);
+    }
+
+    [Fact]
+    public void A_switch_with_consent_that_stops_anywhere_never_leaves_two_starts_after_the_next_recovery()
+    {
+        var before = Fingerprint(SeededWithDisabledNew());
+        for (var crash = 1; crash <= SwitchCalls + 4; crash++)
+        {
+            var inner = SeededWithDisabledNew();
+            var journal = new MemoryJournal();
+            RunSwitch.Switch(new FaultStore(inner) { FailAt = crash, Persistent = true }, journal, NewExe, Exists, UniqueLock(), replaceExisting: true);
+            var recovered = RunSwitch.Recover(inner, journal, UniqueLock(), fileExists: Exists);
+            var label = "stopped at call " + crash + ": " + recovered + "\n" + Fingerprint(inner);
+
+            Assert.False(Effective(inner, RunSwitch.OldName) && Effective(inner, RunSwitch.NewName), label);
+            Assert.Null(journal.Text);
+            if (recovered.Status == RunSwitchStatus.Recovered)
+            {
+                Assert.Equal(before, Fingerprint(inner));   // a rolled-back switch puts the owner's disabled new value back as it was
+            }
+        }
+    }
+
     // ---- command length ----
 
     [Fact]

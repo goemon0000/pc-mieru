@@ -84,7 +84,8 @@ internal static class Program
             }
         }
 
-        using var services = PcMieruServices.Create(options.CoreOptions);
+        // A smoke run's Startup page is served from memory in every case (with or without --fakes): the real startup manager would read the owner's HKCU/HKLM Run, StartupApproved and Startup folder.
+        using var services = PcMieruServices.Create(options.CoreOptions, options.SmokeOutput is not null ? SmokeStartupManager.Register : null);
         using var pump = new SnapshotPump(services, settings.IntervalMs);
         var readResult = options.MeasureOutput is null && options.SmokeOutput is null && !options.ForceFakes;
         var context = new GuiContext(services, pump, theme, settings, measure: marks, lastUpdate: readResult

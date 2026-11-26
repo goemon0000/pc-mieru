@@ -50,6 +50,18 @@ internal static class Program
             return 1;
         }
 
+        // 1b. The sign-in start (DESIGN-C 4.3) put back, BEFORE the resident check: the old Parts Life shares the resident mutex, so after a crash that left both starts on it can win the mutex at sign-in and this
+        // process would end at step 2 and never recover. This is the ONE place Party builds the real Run store, and only a real start gets here (a smoke run never builds it: its endings check the counter;
+        // source-text tests pin both). The store is handed on to the first start, which asks the question after an import.
+        IRunStore? runStore = null;
+        if (!options.Smoke)
+        {
+            runStore = RegistryRunStore.ForCurrentUser();
+            Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
+            var recoveryPrompts = new WpfRunSwitchPrompts();
+            GuardedRunSwitch(() => RunSwitchFlow.RecoverAtStart(runStore, ImportPaths.ForCurrentUser().DestinationDir, recoveryPrompts));
+        }
+
         // 2. The one resident of this user (DESIGN-C 3.2). Taken and given back on this thread, the main STA thread that also runs the window.
         // When the resident is another Party of this session and this install, bring it to the front and end with 0 (the user's second click did what it meant).
         // Anything else (another session, the old Parts Life, another install) keeps the plain message and 2. A smoke run never does this: it only checks the start.
@@ -75,7 +87,7 @@ internal static class Program
         // 4. The first start (DESIGN-C 4.1): before the save is read. The first file of a new home always comes from the import engine under its lock, never from the save writer.
         // Later / Close = nothing was written and the app ends (0); the next start asks again. A smoke run never gets here: it must not touch the real folders.
         PartyState? loaded = null;
-        if (!options.Smoke && !FirstStart(language, out loaded))
+        if (!options.Smoke && !FirstStart(language, runStore!, out loaded))
         {
             return 0;
         }
@@ -88,17 +100,15 @@ internal static class Program
     /// True: <paramref name="state"/> is the state to run with (a save in place and loaded; or, for an unreadable new save the user chose to open anyway, a read-only state that never saves).
     /// False: the user chose Later or Close, nothing was written.
     /// </summary>
-    private static bool FirstStart(PartyLanguage language, out PartyState? state)
+    private static bool FirstStart(PartyLanguage language, IRunStore runStore, out PartyState? state)
     {
         Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
         // Every engine call runs off this thread inside FirstStartFlow (Task.Run, then a plain wait: no window exists yet); the dialogs run on this STA thread without an Application.
         var paths = ImportPaths.ForCurrentUser();
 
-        // The sign-in start (DESIGN-C 4.3). This is the ONE place Party builds the real Run store, and it is only reached by a real start (Main calls FirstStart only without --smoke; source-text
-        // tests pin both). Before the flow: put back what an unfinished switch left. After it: when this run brought the old save over, ask once whether the sign-in start follows.
-        var runStore = RegistryRunStore.ForCurrentUser();
+        // The sign-in start (DESIGN-C 4.3): what an unfinished switch left was already put back in Main (before the resident check). After the flow: when this run brought the old save over, ask once
+        // whether the sign-in start follows. The store is the real one of a real start, handed in by Main.
         var runPrompts = new WpfRunSwitchPrompts();
-        GuardedRunSwitch(() => RunSwitchFlow.RecoverAtStart(runStore, paths.DestinationDir, runPrompts));
 
         var engine = new ImportEngine(paths, new WindowsLegacyRunningProbe());
         var report = new FirstStartReport();

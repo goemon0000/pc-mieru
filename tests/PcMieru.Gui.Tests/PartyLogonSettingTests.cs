@@ -384,23 +384,26 @@ public sealed class PartyLogonSettingTests
     {
         var program = File.ReadAllText(Path.Combine(Harness.Root, "src", "PcMieru.Party", "Program.cs"));
 
-        // One construction site, and it lies inside the body of FirstStart (not in a helper that something else could call).
+        // C31 item 4: one construction site, inside the `if (!options.Smoke)` block of Main that runs the recovery after the install gate and BEFORE the resident check (the old Parts Life shares the
+        // resident mutex, so a start that exits on it first never recovers a crashed switch).
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"RegistryRunStore\.ForCurrentUser\("));
-        var first = program.IndexOf("private static bool FirstStart(", StringComparison.Ordinal);
+        var gate = program.IndexOf("InstallGate.EnterStartup(", StringComparison.Ordinal);
+        var guard = program.IndexOf("if (!options.Smoke)", gate, StringComparison.Ordinal);
         var site = program.IndexOf("RegistryRunStore.ForCurrentUser(", StringComparison.Ordinal);
-        var next = program.IndexOf("    private static ", first + 10, StringComparison.Ordinal);
-        Assert.True(first > 0 && site > first && site < next, $"the real store must be built inside FirstStart ({first} < {site} < {next})");
+        var recover = program.IndexOf("RunSwitchFlow.RecoverAtStart(runStore", StringComparison.Ordinal);
+        var resident = program.IndexOf("ResidentInstance.TryAcquire(", StringComparison.Ordinal);
+        Assert.True(gate > 0 && guard > gate && site > guard && recover > site && resident > recover, $"order gate < smoke guard < store < recovery < resident check: {gate} {guard} {site} {recover} {resident}");
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"RunSwitchFlow\.RecoverAtStart\("));
 
-        // FirstStart is called from one place only, and only when this is not a smoke run (it is the same guard that keeps the first-start flow off the real folders in a smoke run).
+        // FirstStart is called from one place only, only when this is not a smoke run, and it is handed the store (it builds none).
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"FirstStart\(language"));
-        Assert.Matches(@"if \(!options\.Smoke && !FirstStart\(language, out loaded\)\)", program);
+        Assert.Matches(@"if \(!options\.Smoke && !FirstStart\(language, runStore!, out loaded\)\)", program);
 
         // Both smoke endings (the plain run and the import previews) fail when the real store was built.
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(program, @"failure \?\?= RealStoreBuiltInSmoke\(\);").Count);
         Assert.Contains("RegistryRunStore.Constructed == 0", program, StringComparison.Ordinal);
 
-        // The store is only handed to the flow: recovery before the first-start flow, the question after it. (Party.Core names no registry class either: it is handed the store.)
-        Assert.Contains("RunSwitchFlow.RecoverAtStart(runStore", program, StringComparison.Ordinal);
+        // The store is only handed to the flow: the question after the first-start flow. (Party.Core names no registry class either: it is handed the store.)
         Assert.Contains("RunSwitchFlow.AfterImport(report, runStore", program, StringComparison.Ordinal);
     }
 

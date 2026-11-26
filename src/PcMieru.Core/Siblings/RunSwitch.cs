@@ -108,7 +108,7 @@ public static class RunSwitch
     /// Asks only when the old Run value points at an existing old exe (PartsLife.exe or PartsParty.exe), is effectively enabled (the key was readable and there is no stamp, or a stamp of the enabled
     /// kind; a stamp of the disabled kind, an unknown format or a failed read is "not enabled"), and the new name has no Run value.
     /// </summary>
-    public static RunSwitchOffer Offer(IRunStore store, string newExePath, Func<string, bool>? fileExists = null)
+    public static RunSwitchOffer Offer(IRunStore store, string newExePath, Func<string, bool>? fileExists = null, bool replaceExisting = false)
     {
         Snapshot snapshot;
         try
@@ -120,14 +120,18 @@ public static class RunSwitch
             return new RunSwitchOffer(false, RunSwitchReason.Unreadable);
         }
 
-        return Evaluate(snapshot, newExePath, fileExists ?? File.Exists);
+        return Evaluate(snapshot, newExePath, fileExists ?? File.Exists, replaceExisting);
     }
 
-    public static RunSwitchResult Switch(IRunStore store, string journalPath, string newExePath, Func<string, bool>? fileExists = null) =>
-        Switch(store, new FileRunSwitchJournal(journalPath), newExePath, fileExists);
+    public static RunSwitchResult Switch(IRunStore store, string journalPath, string newExePath, Func<string, bool>? fileExists = null, bool replaceExisting = false) =>
+        Switch(store, new FileRunSwitchJournal(journalPath), newExePath, fileExists, replaceExisting: replaceExisting);
 
-    /// <summary>Moves the sign-in start to <paramref name="newExePath"/> (see the class text for the steps). <paramref name="lockName"/> and <paramref name="wait"/> are for tests.</summary>
-    public static RunSwitchResult Switch(IRunStore store, IRunSwitchJournal journal, string newExePath, Func<string, bool>? fileExists = null, string? lockName = null, TimeSpan? wait = null)
+    /// <summary>
+    /// Moves the sign-in start to <paramref name="newExePath"/> (see the class text for the steps). <paramref name="lockName"/> and <paramref name="wait"/> are for tests.
+    /// <paramref name="replaceExisting"/> is the owner's explicit consent (the box ticked) for the case that the new name already has a Run value (one Windows turned off, or one of another placement): it is
+    /// overwritten and enabled by the same journaled steps, so the old start still goes in the same move and there are never two starts. Without it an existing new Run is <see cref="RunSwitchReason.NewExists"/>.
+    /// </summary>
+    public static RunSwitchResult Switch(IRunStore store, IRunSwitchJournal journal, string newExePath, Func<string, bool>? fileExists = null, string? lockName = null, TimeSpan? wait = null, bool replaceExisting = false)
     {
         string full;
         try
@@ -144,7 +148,7 @@ public static class RunSwitch
             return new RunSwitchResult(RunSwitchStatus.NotOffered, nameof(RunSwitchReason.InvalidPath));
         }
 
-        return Locked(lockName, wait, () => SwitchLocked(store, journal, full, fileExists ?? File.Exists));
+        return Locked(lockName, wait, () => SwitchLocked(store, journal, full, fileExists ?? File.Exists, replaceExisting));
     }
 
     public static RunSwitchResult Recover(IRunStore store, string journalPath, Func<string, bool>? fileExists = null) =>
@@ -191,7 +195,7 @@ public static class RunSwitch
         }
     }
 
-    private static RunSwitchResult SwitchLocked(IRunStore store, IRunSwitchJournal journal, string full, Func<string, bool> exists)
+    private static RunSwitchResult SwitchLocked(IRunStore store, IRunSwitchJournal journal, string full, Func<string, bool> exists, bool replaceExisting)
     {
         // "no journal" is only what a failed READ says (not found); a journal that exists but cannot be opened must not look absent
         var journalThere = false;
@@ -224,7 +228,7 @@ public static class RunSwitch
             return new RunSwitchResult(RunSwitchStatus.RolledBack, "read: " + ex.GetType().Name);
         }
 
-        var offer = Evaluate(before, full, exists);
+        var offer = Evaluate(before, full, exists, replaceExisting);
         if (!offer.Ask)
         {
             return new RunSwitchResult(RunSwitchStatus.NotOffered, offer.Reason.ToString());
@@ -430,7 +434,7 @@ public static class RunSwitch
         return path.Length > 0 && !exists(path);
     }
 
-    private static RunSwitchOffer Evaluate(Snapshot s, string newExePath, Func<string, bool> exists)
+    private static RunSwitchOffer Evaluate(Snapshot s, string newExePath, Func<string, bool> exists, bool replaceExisting = false)
     {
         string full;
         try
@@ -462,7 +466,7 @@ public static class RunSwitch
             return No(RunSwitchReason.NotOldExe);
         }
 
-        if (s.NewRun is not null)
+        if (s.NewRun is not null && !replaceExisting)
         {
             return No(RunSwitchReason.NewExists);
         }
@@ -537,10 +541,11 @@ public static class RunSwitch
     {
         var errors = new List<string>();
         Try(errors, "new run", () => PutRun(store, NewName, dto.NewRun!));
-        var newRunBack = errors.Count == 0;
-        Try(errors, "new stamp", () => PutApproval(store, NewName, dto.NewApproval!));
+        var newRunBack = errors.Count == 0 || NewRunIsBack(store, dto);
         if (newRunBack)
         {
+            // the new stamp goes back only once the new Run is as it was: a staged new Run under a stamp that is no longer "disabled" would start next to the old entry
+            Try(errors, "new stamp", () => PutApproval(store, NewName, dto.NewApproval!));
             Try(errors, "old run", () => PutRun(store, OldName, dto.OldRun!));
             Try(errors, "old stamp", () => PutApproval(store, OldName, dto.OldApproval!));
         }
@@ -561,6 +566,19 @@ public static class RunSwitch
         }
 
         return errors.Count == 0 ? null : "restore: " + string.Join(", ", errors);
+    }
+
+    /// <summary>A read says the new Run is as the journal has it (the write or delete reported a failure, but the value is right).</summary>
+    private static bool NewRunIsBack(IRunStore store, JournalDto dto)
+    {
+        try
+        {
+            return dto.NewRun!.Matches(store.ReadRun(NewName));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private static void Try(List<string> errors, string what, Action put)

@@ -367,14 +367,27 @@ internal sealed class GuiContext
 
     public async Task<NetMeterState> StartNetMeterAsync()
     {
+        using var pending = BeginPendingUac();
+        return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
+    }
+
+    /// <summary>Marks a UAC prompt as on its way (<see cref="PendingUac"/> is set until the result is disposed): the network meter's start uses it, and a test uses it to stand in for a prompt.</summary>
+    internal IDisposable BeginPendingUac()
+    {
         Interlocked.Increment(ref _netMeterStarts);
-        try
+        return new PendingUacHold(this);
+    }
+
+    private sealed class PendingUacHold(GuiContext owner) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
         {
-            return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _netMeterStarts);
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                Interlocked.Decrement(ref owner._netMeterStarts);
+            }
         }
     }
 

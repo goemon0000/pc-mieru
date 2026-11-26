@@ -450,6 +450,7 @@ internal static partial class SmokeRun
             if (await Open("startup").ConfigureAwait(true) is StartupPage startup)
             {
                 Check("startup: items are listed", startup.Grid.VirtualListSize > 0, startup.Grid.VirtualListSize + " rows");
+                Check("startup: the page is served from memory, never from the real Run keys or Startup folder", context.Services.Startup is not PcMieru.Core.Management.StartupManager, context.Services.Startup.GetType().Name);
             }
 
             if (await Open("services").ConfigureAwait(true) is ServicesPage services)
