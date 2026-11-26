@@ -255,6 +255,7 @@ goemon0000/parts-life and the owner's pl-sensors helper
       the progress comes from
   src/PcMieru.Core/Siblings/PartyImportHint.cs
   src/PcMieru.Gui/Controls/PartyImportDialog.cs
+  src/PcMieru.Gui/Smoke/SmokeRun.Party.cs
       the main window's side of that import (new code, not copied): a hint from
       the existence of the old save files, and the notice with its texts, which
       say which old app (PartsLife, or its former name PartsParty) the

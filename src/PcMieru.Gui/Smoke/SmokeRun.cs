@@ -17,9 +17,9 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// </summary>
 internal static partial class SmokeRun
 {
-    // 300 s: the run with --fakes --shots walks the checks page, the two configuration code dialogs (plain and trimmed) and the update check (the first-run dialog and four
+    // 420 s (it was 300 s until the walk of the old-progress notice made the run run past it on this PC): the run with --fakes --shots walks the checks page, the two configuration code dialogs (plain and trimmed) and the update check (the first-run dialog and four
     // states of the settings section) in four looks each (about 130 s in all, more at 150%); the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(300);
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(420);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
@@ -29,6 +29,16 @@ internal static partial class SmokeRun
         var checks = new JsonArray();
         var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt, netMeter);
         var exitCode = 1;
+
+        // DESIGN-C 4.1 items 1-2: the notice that old Parts Life progress is waiting looks only in a scratch folder of the run (never at the real roaming folder), and the Parts Life button
+        // starts nothing here (the run presses none).
+        var partyScratch = MakePartyScratch();
+        context.PartyRoamingRoot = partyScratch;
+        context.PartyLauncherOverride = new PartyLauncher(() => false, _ => true, (_, arguments) =>
+        {
+            PartyStarts.Add(arguments);
+            return true;
+        });
 
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
         Dialogs.AutoAnswer = false;
@@ -75,6 +85,7 @@ internal static partial class SmokeRun
         Application.Run(form);
         runner.Check("no unhandled exception on the UI thread", UnhandledErrors.IsEmpty, string.Join(" || ", UnhandledErrors.Take(3)));
         exitCode = checks.All(c => (bool)c!["ok"]!) ? exitCode : Math.Max(exitCode, 1);
+        RemovePartyScratch(partyScratch);
         runner.Write(outputPath, exitCode);
         return exitCode;
     }
@@ -493,6 +504,7 @@ internal static partial class SmokeRun
             await RecordRun().ConfigureAwait(true);
             await Pcb1Run().ConfigureAwait(true);
             await UpdateRun().ConfigureAwait(true);
+            await PartyImportRun().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
         }
 
