@@ -260,6 +260,10 @@ goemon0000/parts-life and the owner's pl-sensors helper
       the existence of the old save files, and the notice with its texts, which
       say which old app (PartsLife, or its former name PartsParty) the
       progress comes from. The import itself is not in the main window.
+  src/PcMieru.Core/Siblings/RunSwitch.cs
+      the one-time move of the sign-in start from the old app's Run value
+      (named PartsLife) to the new one (new code, not copied): it only needs
+      that value name and the old exe names
   src/PcMieru.Party (Rendering, Game/GameAssets.cs, I18n/Strings.cs and
   PartyWindow.xaml with its .cs files) and assets/party/characters.png,
   marks.png, atlas.json and PartsLife.ico

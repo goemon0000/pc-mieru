@@ -41,6 +41,9 @@ public enum PartyLogonFailure
 
     /// <summary>Every call worked, but reading the result back did not show the wanted state (see <see cref="PartyLogonResult.Detail"/>).</summary>
     NotVerified,
+
+    /// <summary>Another program holds the lock of the sign-in entries (a switch from the old value, a recovery, or another change). Nothing was written; trying again later works.</summary>
+    Busy,
 }
 
 /// <summary>The outcome of a change. Never an exception: the settings page shows a line for a failure and goes on.</summary>
@@ -113,7 +116,10 @@ public static class PartyLogon
     /// Registers <paramref name="exePath"/>: writes the Run value, makes a stamp that is there (and not enabled) enabled, and reads the result back. A stamp that is not there is left absent (Windows
     /// runs the entry). When the stamp could not be made, the Run value is put back as it was. Replaces the value of another placement: the user asked for this one.
     /// </summary>
-    public static PartyLogonResult Enable(IRunStore store, string exePath)
+    public static PartyLogonResult Enable(IRunStore store, string exePath, string? lockName = null, TimeSpan? lockWait = null) =>
+        Locked(lockName, lockWait, () => EnableCore(store, exePath));
+
+    private static PartyLogonResult EnableCore(IRunStore store, string exePath)
     {
         string full;
         try
@@ -170,7 +176,10 @@ public static class PartyLogon
     }
 
     /// <summary>Removes the Run value of our name and its approval stamp, and checks that both are gone. Stops at the first failure (the stamp is not touched when the Run value stays).</summary>
-    public static PartyLogonResult Disable(IRunStore store)
+    public static PartyLogonResult Disable(IRunStore store, string? lockName = null, TimeSpan? lockWait = null) =>
+        Locked(lockName, lockWait, () => DisableCore(store));
+
+    private static PartyLogonResult DisableCore(IRunStore store)
     {
         try
         {
@@ -199,6 +208,30 @@ public static class PartyLogon
         catch (Exception ex)
         {
             return Failed(ex);
+        }
+    }
+
+    /// <summary>Runs a change under <see cref="RunSwitchLock"/> (the same lock as the switch from the old value). Taken and given back on this thread, inside this call.</summary>
+    private static PartyLogonResult Locked(string? lockName, TimeSpan? lockWait, Func<PartyLogonResult> change)
+    {
+        RunSwitchLock? held;
+        try
+        {
+            held = RunSwitchLock.TryAcquire(lockName ?? RunSwitchLock.CurrentName(), lockWait ?? RunSwitchLock.DefaultWait);
+        }
+        catch (Exception ex)
+        {
+            return Failed(ex);
+        }
+
+        if (held is null)
+        {
+            return new PartyLogonResult(false, PartyLogonFailure.Busy, "another change of the sign-in entries is running");
+        }
+
+        using (held)
+        {
+            return change();
         }
     }
 
