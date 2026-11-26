@@ -38,6 +38,11 @@ internal sealed class GuiSettings
     /// <summary>Allowed sampling intervals in milliseconds (SPEC: 0.5 / 1 / 2 / 5 seconds; pause is a separate switch).</summary>
     public static readonly int[] IntervalChoices = [500, 1000, 2000, 5000];
 
+    /// <summary>The key of <see cref="PartyImportLater"/>.</summary>
+    internal const string PartyImportKey = "party.import";
+
+    internal const string PartyImportLaterWord = "later";
+
     private readonly string? _path;
     private readonly Dictionary<string, string> _extra = new(StringComparer.Ordinal);
     private int _intervalMs = 1000;
@@ -79,6 +84,20 @@ internal sealed class GuiSettings
     /// Only <see cref="TrySaveUpdateMode"/> changes it (and a load); an ordinary <see cref="TrySave"/> never writes this object's copy over the file's.
     /// </summary>
     public UpdateMode UpdateMode { get; private set; } = UpdateMode.Ask;
+
+    /// <summary>
+    /// gui.ini "party.import" (DESIGN-C 4.1 item 2): the one word <c>later</c> when the owner chose 「あとで」 on the notice that old Parts Life progress is waiting; absent otherwise (and any
+    /// other word reads as absent). It is an ordinary free-form key, so a save keeps the file's copy when this object never saw it. Only the word <c>later</c> is ever written
+    /// (<see cref="TrySavePartyImportLater"/>); the notice is only about asking again, the import itself and its choices live in PCMieru.Party.exe.
+    /// </summary>
+    public bool PartyImportLater => string.Equals(GetValue(PartyImportKey), PartyImportLaterWord, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Remembers 「あとで」 through the locked save. True when it reached the file (or the store has no file, as in a smoke run and in tests).</summary>
+    public bool TrySavePartyImportLater()
+    {
+        SetValue(PartyImportKey, PartyImportLaterWord);
+        return TrySave();
+    }
 
     /// <summary>How often a save tries for the lock (a test lowers it); the wait between tries is <see cref="LockWaitMs"/>. 25 x 20 ms: about half a second, which a click on the screen can bear.</summary>
     internal int LockAttempts { get; set; } = 25;
