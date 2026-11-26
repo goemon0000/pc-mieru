@@ -23,7 +23,12 @@ internal enum PartyLanguage
 /// <c>--import-preview ready|repair|oldapp|hold</c>, valid only together with <c>--smoke</c> (and usable with <c>--shot</c>): shows the dialog of the first start for that case with a made-up
 /// plan (no engine, no file) and ends with "party smoke ok".
 /// </param>
-internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null);
+/// <param name="Logon">
+/// <c>--logon</c>: this start comes from the Run key of the sign-in (DESIGN-C 3 item 5), not from a click. Not valid together with <c>--smoke</c>. The window has no minimized, hidden or tray state of its own
+/// (it is a small window that stays out of the taskbar and keeps the place it was left at in its save), so a logon start is the same start as a normal one: the single-resident check, the first-start import
+/// flow and the saved position are all unchanged. The flag only says where the start came from.
+/// </param>
+internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null, bool Logon = false);
 
 /// <summary>The cases of <c>--import-preview</c>: the three-choice question for a save that is ready or needs repairs, and the message for a running old product or a hold.</summary>
 internal enum PartyImportPreview
@@ -44,6 +49,7 @@ internal static class PartyArgs
     {
         PartyLanguage? language = null;
         var smoke = false;
+        var logon = false;
         string? shot = null;
         PcMieru.Party.Ui.SettingsTab? tab = null;
         PartyImportPreview? preview = null;
@@ -70,6 +76,9 @@ internal static class PartyArgs
                     break;
                 case "--smoke":
                     smoke = true;
+                    break;
+                case "--logon":
+                    logon = true;
                     break;
                 case "--shot":
                     shot = i + 1 < args.Length ? args[++i] : null;
@@ -144,7 +153,13 @@ internal static class PartyArgs
             return false;
         }
 
-        options = new PartyOptions(language, smoke, shot, tab, preview);
+        if (logon && smoke)
+        {
+            problem = "--logon is not valid together with --smoke";
+            return false;
+        }
+
+        options = new PartyOptions(language, smoke, shot, tab, preview, logon);
         return true;
     }
 }
