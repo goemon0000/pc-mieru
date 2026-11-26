@@ -15,6 +15,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <InvariantGlobalization>false</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks> <!-- the generated code of LibraryImport (Monitors.cs) -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection> <!-- resident, light sampling: no background GC thread (the old app has had this since 0.7; TieredPGO is on by default in .NET 10) -->
   </PropertyGroup>
 
   <ItemGroup>
