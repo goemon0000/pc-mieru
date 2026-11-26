@@ -19,7 +19,20 @@ internal enum PartyLanguage
 /// <param name="ShotTab">
 /// <c>--tab view|startup|checks|data</c>, valid only together with <c>--shot</c>: that settings tab is opened before the shot is taken.
 /// </param>
-internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null);
+/// <param name="ImportPreview">
+/// <c>--import-preview ready|repair|oldapp|hold</c>, valid only together with <c>--smoke</c> (and usable with <c>--shot</c>): shows the dialog of the first start for that case with a made-up
+/// plan (no engine, no file) and ends with "party smoke ok".
+/// </param>
+internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null);
+
+/// <summary>The cases of <c>--import-preview</c>: the three-choice question for a save that is ready or needs repairs, and the message for a running old product or a hold.</summary>
+internal enum PartyImportPreview
+{
+    Ready,
+    Repair,
+    OldApp,
+    Hold,
+}
 
 /// <summary>
 /// Command line of PCMieru.Party.exe. Parsed by hand like the one of PCMieru.exe (src/PcMieru.Gui/Program.cs): <c>--lang</c> takes ja or en, an argument nobody knows is refused,
@@ -33,6 +46,7 @@ internal static class PartyArgs
         var smoke = false;
         string? shot = null;
         PcMieru.Party.Ui.SettingsTab? tab = null;
+        PartyImportPreview? preview = null;
         problem = string.Empty;
         options = new PartyOptions(null, false);
 
@@ -90,6 +104,22 @@ internal static class PartyArgs
                     }
 
                     break;
+                case "--import-preview":
+                    preview = (i + 1 < args.Length ? args[++i] : null)?.ToLowerInvariant() switch
+                    {
+                        "ready" => PartyImportPreview.Ready,
+                        "repair" => PartyImportPreview.Repair,
+                        "oldapp" => PartyImportPreview.OldApp,
+                        "hold" => PartyImportPreview.Hold,
+                        _ => null,
+                    };
+                    if (preview is null)
+                    {
+                        problem = "--import-preview must be ready, repair, oldapp or hold";
+                        return false;
+                    }
+
+                    break;
                 default:
                     problem = "unknown argument: " + args[i];
                     return false;
@@ -108,7 +138,13 @@ internal static class PartyArgs
             return false;
         }
 
-        options = new PartyOptions(language, smoke, shot, tab);
+        if (preview is not null && !smoke)
+        {
+            problem = "--import-preview is valid only together with --smoke";
+            return false;
+        }
+
+        options = new PartyOptions(language, smoke, shot, tab, preview);
         return true;
     }
 }

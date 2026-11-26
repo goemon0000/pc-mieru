@@ -19,6 +19,13 @@
     <ProjectReference Include="..\..\src\PcMieru.Core\PcMieru.Core.csproj" />
   </ItemGroup>
 
+  <!-- The exe has no test project: its WPF-free source files are compiled in here (command line, strings, the model of the first-start dialogs). -->
+  <ItemGroup>
+    <Compile Include="..\..\src\PcMieru.Party\PartyArgs.cs" Link="Linked\PartyArgs.cs" />
+    <Compile Include="..\..\src\PcMieru.Party\I18n\Strings.cs" Link="Linked\Strings.cs" />
+    <Compile Include="..\..\src\PcMieru.Party\ImportDialogModel.cs" Link="Linked\ImportDialogModel.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Tests run against the real text: passing on made-up text would not say the shipped text passes. -->
     <None Include="..\..\assets\party\story.json" Link="assets\story.json" CopyToOutputDirectory="PreserveNewest" />

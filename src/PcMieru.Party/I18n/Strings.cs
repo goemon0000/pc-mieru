@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcMieru.Party.Import;
 
 namespace PcMieru.Party.I18n;
 
@@ -113,4 +114,70 @@ public static class Strings
     public static string Disclaimer => T(
         "※ 規格・相性・物語はすべてお遊びです。購入や設定の判断には使えません。",
         "Note: the specs, compatibility marks and story here are all for fun — not a reference for purchases or settings.");
+
+    // ---- 旧パーツぐらしの続き（初回起動の引き継ぎ。DESIGN-C 4.1） ----
+    public static string ImportTitle        => T("パーツぐらしの続き", "Continue Parts Life");
+    public static string ImportBodyLife     => T("旧パーツぐらし（PartsLife）の続きが見つかりました。ここから続けますか。",
+                                                 "Progress from the old Parts Life (PartsLife) was found. Continue from it?");
+    public static string ImportBodyParty    => T("旧名のパーツぐらし（PartsParty）の続きが見つかりました。ここから続けますか。",
+                                                 "Progress from the old Parts Life under its former name (PartsParty) was found. Continue from it?");
+    public static string ImportKept         => T("旧版の保存はそのまま残ります。", "The old save is left exactly as it is.");
+    public static string ImportRepairHeader => T("次の欄は読み取れませんでした。", "These fields could not be read:");
+    public static string ImportRepairNote   => T("直せなかった欄は初期値になります。", "Fields that could not be read start from their defaults.");
+    public static string ImportContinue     => T("引き継ぐ", "Continue");
+    public static string ImportLater        => T("あとで", "Later");
+    public static string ImportStartFresh   => T("新しく始める", "Start fresh");
+    public static string ImportRetry        => T("もう一度", "Retry");
+    public static string ImportCloseButton  => T("閉じる", "Close");
+    public static string ImportFreshAsk     => T("旧パーツぐらしの続きはこのあと引き継げなくなります。新しく始めますか。",
+                                                 "The old progress cannot be brought over afterwards. Start fresh?");
+    public static string ImportProblemTitle => T("パーツぐらしを始められません", "Parts Life cannot start yet");
+    public static string ImportHoldPrefix   => T("旧パーツぐらしの続きは引き継げません。", "The old progress cannot be brought over. ");
+
+    /// <summary>引き継ぎの理由コード（<see cref="ImportReason"/>）に対する文。コードが増えて文が無いときは null（テストが全コードを回して見つける）。</summary>
+    public static string? ImportReasonTextOrNull(string reason) => reason switch
+    {
+        ImportReason.TooLarge            => T("旧版の保存が大きすぎて読み込めません。", "The old save is too large to read."),
+        ImportReason.BrokenJson          => T("旧版の保存が壊れていて読み込めません。", "The old save is damaged and cannot be read."),
+        ImportReason.TooDeep             => T("旧版の保存の形が想定外で読み込めません。", "The old save has an unexpected structure and cannot be read."),
+        ImportReason.DuplicateKey        => T("旧版の保存に同じ項目が二重に書かれていて読み込めません。", "The old save lists the same entry twice and cannot be read."),
+        ImportReason.NotAnObject         => T("旧版の保存が保存の形式になっていません。", "The old save is not in the save format."),
+        ImportReason.VersionType         => T("旧版の保存の版の欄が読み取れません。", "The version entry of the old save cannot be read."),
+        ImportReason.VersionNegative     => T("旧版の保存の版の欄が正しくありません。", "The version entry of the old save is not valid."),
+        ImportReason.VersionFuture       => T("旧版の保存は、この版より新しい版で作られています。この版では引き継げません。", "The old save was made by a newer version than this one and cannot be brought over here."),
+        ImportReason.MainFieldsUnreadable => T("旧版の保存の主要な欄が読み取れません。", "The main fields of the old save cannot be read."),
+        ImportReason.ConversionFailed    => T("旧版の保存を新しい形に変えられませんでした。", "The old save could not be converted to the new form."),
+        ImportReason.InternalError       => T("内部の問題で引き継げませんでした。もう一度お試しください。", "The import failed because of an internal problem. Please try again."),
+        ImportReason.OutputTooLarge      => T("引き継ぐと保存が大きくなりすぎます。", "The save would become too large after the import."),
+        ImportReason.Accept              => T("そのまま引き継げます。", "It can be brought over as it is."),
+        ImportReason.NeedsRepair         => T("一部の欄を初期値にすれば引き継げます。", "It can be brought over if some fields start from their defaults."),
+        ImportReason.Imported            => T("引き継ぎました。", "Brought over."),
+        ImportReason.StartedFresh        => T("新しく始めました。", "Started fresh."),
+        ImportReason.AlreadyHave         => T("すでに保存があります。", "A save is already there."),
+        ImportReason.NoCandidate         => T("旧版の続きは見つかりませんでした。", "No old progress was found."),
+        ImportReason.DestinationBroken   => T("新しい保存が読み取れません。そのまま残してあります。", "The new save cannot be read. It was left as it is."),
+        ImportReason.DestinationTooLarge => T("新しい保存が大きすぎて読み取れません。そのまま残してあります。", "The new save is too large to read. It was left as it is."),
+        ImportReason.DestinationDenied   => T("新しい保存の場所にアクセスできません（拒否されました）。", "The place of the new save cannot be accessed (denied)."),
+        ImportReason.DestinationSharing  => T("新しい保存がほかで使われています。少し待ってから、もう一度お試しください。", "The new save is in use elsewhere. Wait a moment, then try again."),
+        ImportReason.DestinationIoError  => T("新しい保存の場所を読めませんでした。", "The place of the new save could not be read."),
+        ImportReason.OldAppRunning       => T("パーツぐらし（旧版）を終了してから、もう一度お試しください", "Close the old Parts Life, then try again"),
+        ImportReason.OldAppUnknown       => T("旧版のパーツぐらしが動いているか確かめられませんでした。旧版を終了してから、もう一度お試しください。",
+                                              "Could not tell whether the old Parts Life is running. Close it, then try again."),
+        ImportReason.SourceDenied        => T("旧版の保存を読む許可がありません。", "There is no permission to read the old save."),
+        ImportReason.SourceSharing       => T("旧版の保存が使用中で読めません。旧版を終了してから、もう一度お試しください。", "The old save is in use and cannot be read. Close the old Parts Life, then try again."),
+        ImportReason.SourceIoError       => T("旧版の保存を読めませんでした。もう一度お試しください。", "The old save could not be read. Please try again."),
+        ImportReason.SourceChanged       => T("旧版の保存が確認のあとで変わりました。もう一度お試しください。", "The old save changed after it was checked. Please try again."),
+        ImportReason.NeedsConsent        => T("一部の欄が初期値になることの確認が必要です。", "Confirmation is needed that some fields start from their defaults."),
+        ImportReason.LockBusy            => T("ほかのパーツぐらしが引き継ぎ中です。少し待ってから、もう一度お試しください。", "Another Parts Life is importing. Wait a moment, then try again."),
+        ImportReason.WriteFailed         => T("保存を書き込めませんでした。空き容量や権限を確かめて、もう一度お試しください。", "The save could not be written. Check the free space and permissions, then try again."),
+        ImportReason.VerifyFailed        => T("書き込んだ保存の確認に失敗しました。もう一度お試しください。", "The written save did not verify. Please try again."),
+        _ => null,
+    };
+
+    public static string ImportReasonText(string reason) =>
+        ImportReasonTextOrNull(reason) ?? T("引き継ぎを進められませんでした。もう一度お試しください。", "The import could not go on. Please try again.");
+
+    /// <summary>メッセージ窓に出す 1 文。保留（Hold）だけは「引き継げない」を頭に付ける。</summary>
+    public static string ImportMessage(ImportOutcome outcome, string reason) =>
+        outcome == ImportOutcome.Hold ? ImportHoldPrefix + ImportReasonText(reason) : ImportReasonText(reason);
 }
