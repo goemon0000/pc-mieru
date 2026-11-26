@@ -16,7 +16,10 @@ internal enum PartyLanguage
 /// <param name="ShotPath">
 /// <c>--shot &lt;png&gt;</c>, valid only together with <c>--smoke</c>: after the first render the window is written as a PNG and the program exits 0.
 /// </param>
-internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null);
+/// <param name="ShotTab">
+/// <c>--tab view|startup|checks|data</c>, valid only together with <c>--shot</c>: that settings tab is opened before the shot is taken.
+/// </param>
+internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null);
 
 /// <summary>
 /// Command line of PCMieru.Party.exe. Parsed by hand like the one of PCMieru.exe (src/PcMieru.Gui/Program.cs): <c>--lang</c> takes ja or en, an argument nobody knows is refused,
@@ -29,6 +32,7 @@ internal static class PartyArgs
         PartyLanguage? language = null;
         var smoke = false;
         string? shot = null;
+        PcMieru.Party.Ui.SettingsTab? tab = null;
         problem = string.Empty;
         options = new PartyOptions(null, false);
 
@@ -70,6 +74,22 @@ internal static class PartyArgs
                     }
 
                     break;
+                case "--tab":
+                    tab = (i + 1 < args.Length ? args[++i] : null)?.ToLowerInvariant() switch
+                    {
+                        "view" => PcMieru.Party.Ui.SettingsTab.View,
+                        "startup" => PcMieru.Party.Ui.SettingsTab.Startup,
+                        "checks" => PcMieru.Party.Ui.SettingsTab.Checks,
+                        "data" => PcMieru.Party.Ui.SettingsTab.Data,
+                        _ => null,
+                    };
+                    if (tab is null)
+                    {
+                        problem = "--tab must be view, startup, checks or data";
+                        return false;
+                    }
+
+                    break;
                 default:
                     problem = "unknown argument: " + args[i];
                     return false;
@@ -82,7 +102,13 @@ internal static class PartyArgs
             return false;
         }
 
-        options = new PartyOptions(language, smoke, shot);
+        if (tab is not null && shot is null)
+        {
+            problem = "--tab is valid only together with --shot";
+            return false;
+        }
+
+        options = new PartyOptions(language, smoke, shot, tab);
         return true;
     }
 }

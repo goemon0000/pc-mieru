@@ -141,6 +141,7 @@ internal static class Program
                     wait.Stop();
                     try
                     {
+                        if (options.ShotTab is { } tab) window.OpenTabForShot(tab);
                         WriteShot(window.RenderShot(expanded: true, scale: 2.0), shot);
                         shotWritten = true;
                     }

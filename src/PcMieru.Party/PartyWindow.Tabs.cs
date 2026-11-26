@@ -200,6 +200,9 @@ internal sealed partial class PartyWindow
         }
     }
 
+    /// <summary>smoke の撮影（<c>--shot</c> ＋ <c>--tab</c>）だけが使う。撮る前にそのタブを開く。</summary>
+    internal void OpenTabForShot(SettingsTab tab) => SelectTab(tab);
+
     /// <summary>そのタブを開く（None なら畳む）。</summary>
     private void SelectTab(SettingsTab tab)
     {
