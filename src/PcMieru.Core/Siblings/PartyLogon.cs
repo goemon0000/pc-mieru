@@ -1,9 +1,11 @@
 using System.Security;
+using System.Text.Json.Serialization;
 using PcMieru.Wire;
 
 namespace PcMieru.Core.Siblings;
 
 /// <summary>What <see cref="PartyLogon.Read"/> found.</summary>
+[JsonConverter(typeof(CamelCaseEnumConverter<PartyLogonState>))]
 public enum PartyLogonState
 {
     /// <summary>There is no registration of ours.</summary>
@@ -23,6 +25,7 @@ public enum PartyLogonState
 }
 
 /// <summary>Why <see cref="PartyLogon.Enable"/> or <see cref="PartyLogon.Disable"/> did not finish.</summary>
+[JsonConverter(typeof(CamelCaseEnumConverter<PartyLogonFailure>))]
 public enum PartyLogonFailure
 {
     None,

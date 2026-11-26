@@ -1,8 +1,11 @@
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using PcMieru.Wire;
 
 namespace PcMieru.Core.Siblings;
 
 /// <summary>The six calls of <see cref="IRunStore"/>, so a failure can be put on any one of them.</summary>
+[JsonConverter(typeof(CamelCaseEnumConverter<RunStoreCall>))]
 public enum RunStoreCall
 {
     ReadRun,
