@@ -167,6 +167,7 @@ public static class Strings
         ImportReason.SourceSharing       => T("旧版の保存が使用中で読めません。旧版を終了してから、もう一度お試しください。", "The old save is in use and cannot be read. Close the old Parts Life, then try again."),
         ImportReason.SourceIoError       => T("旧版の保存を読めませんでした。もう一度お試しください。", "The old save could not be read. Please try again."),
         ImportReason.SourceChanged       => T("旧版の保存が確認のあとで変わりました。もう一度お試しください。", "The old save changed after it was checked. Please try again."),
+        ImportReason.CandidateAppeared   => T("旧版の続きが見つかりました。もう一度確かめます。", "Old progress was found. It is being checked again."),
         ImportReason.NeedsConsent        => T("一部の欄が初期値になることの確認が必要です。", "Confirmation is needed that some fields start from their defaults."),
         ImportReason.LockBusy            => T("ほかのパーツぐらしが引き継ぎ中です。少し待ってから、もう一度お試しください。", "Another Parts Life is importing. Wait a moment, then try again."),
         ImportReason.WriteFailed         => T("保存を書き込めませんでした。空き容量や権限を確かめて、もう一度お試しください。", "The save could not be written. Check the free space and permissions, then try again."),

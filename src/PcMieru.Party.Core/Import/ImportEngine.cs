@@ -43,6 +43,9 @@ public enum ImportOutcome
     /// <summary>The source must not be imported (<see cref="StateImport"/> held it); the reason is the <see cref="ImportReason"/> of the hold.</summary>
     Hold,
 
+    /// <summary>Result of <see cref="ImportEngine.StartFreshIfStillNone"/>: an old save appeared after the plan saw none. Nothing was written; prepare again.</summary>
+    CandidateAppeared,
+
     /// <summary>The import lock is kept by somebody else.</summary>
     Busy,
 
@@ -276,15 +279,20 @@ public sealed class ImportEngine
             return Result(ImportOutcome.NeedsConsent, ImportReason.NeedsConsent, null, candidate) with { RepairedFields = verdict.RepairedFields };
         }
 
-        // Immediately before the final move: the old product is asked once more and the source is read once more.
+        // Immediately before the final move: the discovery is run again (the pick must be the same candidate), the source is read once more
+        // (the two reads and the fingerprint compare), and only then the old product is asked: the probe is the LAST thing before the move.
         ImportResult? LastCheck()
         {
+            var again = Locate();
+            if (again.Candidate is null || !string.Equals(again.Candidate.Path, candidate.Path, StringComparison.OrdinalIgnoreCase))
+                return Result(ImportOutcome.SourceChanged, ImportReason.SourceChanged, "the candidate changed while the save was being written", candidate);
+            if (again.Outcome != ImportOutcome.Ready) return Result(again.Outcome, again.Reason, again.Detail, candidate);
+            var reread = SourceFile.ReadStable(candidate.Path, StateImport.MaxBytes + 1);
+            if (!reread.Ok) return Result(FromBadRead(reread, out string why), why, reread.Detail, candidate);
+            if (reread.Fingerprint != plan.Source)
+                return Result(ImportOutcome.SourceChanged, ImportReason.SourceChanged, "the source changed while the save was being written", candidate);
             var running = ProbeOldApp();
             if (running is not null) return Result(ImportOutcome.OldAppRunning, running, "it started while the save was being written", candidate);
-            var again = SourceFile.ReadStable(candidate.Path, StateImport.MaxBytes + 1);
-            if (!again.Ok) return Result(FromBadRead(again, out string why), why, again.Detail, candidate);
-            if (again.Fingerprint != plan.Source)
-                return Result(ImportOutcome.SourceChanged, ImportReason.SourceChanged, "the source changed while the save was being written", candidate);
             return null;
         }
 
@@ -314,6 +322,43 @@ public sealed class ImportEngine
 
             byte[] fresh = new UTF8Encoding(false).GetBytes(PartyState.Fresh().ToJson());
             var published = Publish(fresh, null, null);
+            return published.Outcome == ImportOutcome.Imported
+                ? published with { Outcome = ImportOutcome.StartedFresh, Reason = ImportReason.StartedFresh }
+                : published;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return Result(ImportOutcome.Failed, ImportReason.InternalError, e.GetType().Name, null);
+        }
+    }
+
+    /// <summary>
+    /// The automatic first file after <see cref="ImportOutcome.NoCandidate"/>. Like <see cref="StartFresh"/>, but nothing is decided by the user here, so the
+    /// "there is nothing to continue from" the plan saw is proven again under this lock: the destination, then (immediately before the final move) the
+    /// candidates and last the old product. A candidate that appeared since gives <see cref="ImportOutcome.CandidateAppeared"/> (the caller prepares again);
+    /// the old product running gives <see cref="ImportOutcome.OldAppRunning"/>. Nothing is written in either case.
+    /// </summary>
+    public ImportResult StartFreshIfStillNone()
+    {
+        using var gate = ImportLock.TryAcquire(_lockName, _lockTimeout);
+        if (gate is null) return Result(ImportOutcome.Busy, ImportReason.LockBusy, null, null);
+        try
+        {
+            var dest = CheckDestination();
+            if (dest.Kind == DestinationKind.Valid) return Result(ImportOutcome.AlreadyHave, ImportReason.AlreadyHave, null, null);
+            if (dest.Kind == DestinationKind.Blocked) return Result(ImportOutcome.DestinationBlocked, dest.Reason!, dest.Detail, null);
+
+            ImportResult? LastCheck()
+            {
+                var found = Locate();
+                if (found.Outcome != ImportOutcome.NoCandidate)
+                    return Result(ImportOutcome.CandidateAppeared, ImportReason.CandidateAppeared, found.Candidate?.Origin.ToString(), found.Candidate);
+                var running = ProbeOldApp();
+                return running is null ? null : Result(ImportOutcome.OldAppRunning, running, "it started before the first file was written", null);
+            }
+
+            byte[] fresh = new UTF8Encoding(false).GetBytes(PartyState.Fresh().ToJson());
+            var published = Publish(fresh, null, LastCheck);
             return published.Outcome == ImportOutcome.Imported
                 ? published with { Outcome = ImportOutcome.StartedFresh, Reason = ImportReason.StartedFresh }
                 : published;

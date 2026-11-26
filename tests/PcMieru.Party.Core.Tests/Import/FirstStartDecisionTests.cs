@@ -15,6 +15,7 @@ public class FirstStartDecisionTests
         [ImportOutcome.OldAppRunning] = FirstStartStep.Problem,
         [ImportOutcome.SourceUnreadable] = FirstStartStep.Problem,
         [ImportOutcome.SourceChanged] = FirstStartStep.Problem,
+        [ImportOutcome.CandidateAppeared] = FirstStartStep.Problem,   // only the answer of the automatic first file: the plan is made again, never shown as a plan
         [ImportOutcome.Busy] = FirstStartStep.Problem,
         [ImportOutcome.Hold] = FirstStartStep.Problem,
         [ImportOutcome.Failed] = FirstStartStep.Problem,
@@ -52,6 +53,7 @@ public class FirstStartDecisionTests
     [InlineData(ImportOutcome.AlreadyHave, FirstStartAfter.Load)]
     [InlineData(ImportOutcome.DestinationBlocked, FirstStartAfter.Load)]
     [InlineData(ImportOutcome.SourceChanged, FirstStartAfter.PrepareAgain)]
+    [InlineData(ImportOutcome.CandidateAppeared, FirstStartAfter.PrepareAgain)]
     [InlineData(ImportOutcome.OldAppRunning, FirstStartAfter.PrepareAgain)]
     [InlineData(ImportOutcome.NeedsConsent, FirstStartAfter.PrepareAgain)]
     [InlineData(ImportOutcome.Busy, FirstStartAfter.Problem)]

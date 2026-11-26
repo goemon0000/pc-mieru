@@ -109,6 +109,9 @@ public static class ImportReason
     /// <summary>The source is not the version that was inspected (identity, size or SHA-256 differs, or it is gone). Nothing is written.</summary>
     public const string SourceChanged = "source-changed";
 
+    /// <summary>An old save appeared after the plan saw none, before the first file was written. Nothing is written; the plan is made again.</summary>
+    public const string CandidateAppeared = "candidate-appeared";
+
     /// <summary>Commit: the repairs were not consented to. Nothing is written.</summary>
     public const string NeedsConsent = "needs-consent";
 
