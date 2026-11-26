@@ -347,6 +347,7 @@ internal static class SettingsStrings
         new("gui.settings.partylogon.other", "別の場所のパーツぐらしが登録されています", "A Parts Life in another folder is registered"),
         new("gui.settings.partylogon.unknown", "ログオンの設定を読めませんでした", "Could not read the sign-in setting"),
         new("gui.settings.partylogon.failed", "ログオンの設定を変えられませんでした", "Could not change the sign-in setting"),
+        new("gui.settings.partylogon.check", "ログオン設定の復元を確認してください", "Please check the sign-in setting"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
         // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
         new(

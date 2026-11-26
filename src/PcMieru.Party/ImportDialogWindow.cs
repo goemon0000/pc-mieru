@@ -106,6 +106,14 @@ internal sealed class ImportDialogWindow : Window
         ContentRendered += (_, _) => Rendered = true;
     }
 
+    /// <summary>Shows the window of <paramref name="model"/> modally (no owner, no Application needed) and returns the button that was pressed.</summary>
+    internal static ImportDialogResult ShowFor(ImportDialogModel model)
+    {
+        var window = new ImportDialogWindow(model);
+        window.ShowDialog();
+        return window.Choice;
+    }
+
     /// <summary>The button that was pressed. The cross or Escape without a press is the model's cancel (Later or Close): never a write.</summary>
     public ImportDialogResult Choice => _chosen ?? _model.CancelResult;
 
@@ -151,10 +159,14 @@ internal sealed class WpfFirstStartPrompts : IFirstStartPrompts
         _ => ProblemChoice.Close,
     };
 
-    private static ImportDialogResult Show(ImportDialogModel model)
-    {
-        var window = new ImportDialogWindow(model);
-        window.ShowDialog();
-        return window.Choice;
-    }
+    private static ImportDialogResult Show(ImportDialogModel model) => ImportDialogWindow.ShowFor(model);
+}
+
+/// <summary>The two things the sign-in switch says to a person, answered with the same small window (the flow itself is <see cref="RunSwitchFlow"/>, which the tests drive with a script).</summary>
+internal sealed class WpfRunSwitchPrompts : IRunSwitchPrompts
+{
+    /// <summary>Switch is the button; Not now, the cross and Escape all leave the sign-in start as it is.</summary>
+    public bool AskSwitch() => ImportDialogWindow.ShowFor(ImportDialogModels.RunSwitchAsk()) == ImportDialogResult.Switch;
+
+    public void ShowCheckNotice() => ImportDialogWindow.ShowFor(ImportDialogModels.RunSwitchCheck());
 }

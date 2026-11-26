@@ -188,6 +188,12 @@ internal sealed class GuiContext
     /// </summary>
     internal PcMieru.Core.Siblings.IRunStore? LogonStore { get; set; }
 
+    /// <summary>
+    /// True once the recovery at a real start (<see cref="MainForm.RecoverLogonAsync"/>) found a switch of the sign-in start that it could not settle (a restore failed, or an entry was changed in Windows
+    /// meanwhile): the setting's status line then says "please check the sign-in setting". Never set by a smoke run, a measurement or a test that does not ask for it.
+    /// </summary>
+    internal bool LogonNeedsCheck { get; set; }
+
     /// <summary>The PCMieru.Party.exe the sign-in entry starts: the one beside the running PCMieru.exe (absolute). A test may point it elsewhere.</summary>
     internal string PartyExePath { get; set; } = Path.GetFullPath(PartyLauncher.ExePath);
 

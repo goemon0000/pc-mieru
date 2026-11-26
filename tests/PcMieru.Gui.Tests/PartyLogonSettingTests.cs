@@ -341,22 +341,26 @@ public sealed class PartyLogonSettingTests
             && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal));
 
     [Fact]
-    public void The_real_registry_store_is_built_only_in_its_own_file_and_in_the_real_run_block_of_Program_cs()
+    public void The_real_registry_store_is_built_only_in_its_own_file_and_in_the_real_run_paths_of_the_two_Program_files()
     {
-        // Nothing in src/ asks for the real store except RegistryRunStore.cs (the factory itself) and the GUI's Program.cs; no test and no smoke file builds it.
-        var users = SourceFiles(Path.Combine(Harness.Root, "src"))
+        // Nothing in src/ asks for the real store except RegistryRunStore.cs (the factory itself), the GUI's Program.cs and Party's Program.cs; no test and no smoke file builds it.
+        var src = Path.Combine(Harness.Root, "src");
+        string Rel(string file) => Path.GetRelativePath(src, file).Replace(Path.DirectorySeparatorChar, '/');
+        var users = SourceFiles(src)
             .Where(f => File.ReadAllText(f).Contains("RegistryRunStore", StringComparison.Ordinal))
-            .Select(f => Path.GetFileName(f) ?? string.Empty)
-            .Order()
+            .Select(Rel)
+            .Order(StringComparer.Ordinal)
             .ToArray();
-        // (IRunStore.cs only names it in a comment; SmokeRun.Logon.cs only reads its counter, checked below.)
-        Assert.Equal(["IRunStore.cs", "Program.cs", "RegistryRunStore.cs", "SmokeRun.Logon.cs"], users);
-        var builders = SourceFiles(Path.Combine(Harness.Root, "src"))
+        // (IRunStore.cs only names it in a comment; SmokeRun.Logon.cs only reads its counter, checked below; Party's Program.cs builds it in its first start and reads the counter in its smoke endings.)
+        Assert.Equal(
+            ["PcMieru.Core/Siblings/IRunStore.cs", "PcMieru.Core/Siblings/RegistryRunStore.cs", "PcMieru.Gui/Program.cs", "PcMieru.Gui/Smoke/SmokeRun.Logon.cs", "PcMieru.Party/Program.cs"],
+            users);
+        var builders = SourceFiles(src)
             .Where(f => File.ReadAllText(f).Contains("RegistryRunStore.ForCurrentUser(", StringComparison.Ordinal))
-            .Select(f => Path.GetFileName(f) ?? string.Empty)
-            .Order()
+            .Select(Rel)
+            .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(["Program.cs"], builders);
+        Assert.Equal(["PcMieru.Gui/Program.cs", "PcMieru.Party/Program.cs"], builders);
 
         // The smoke file only reads the counter that proves the store was never built; it does not build one.
         var smoke = File.ReadAllText(Path.Combine(Harness.GuiSource, "Smoke", "SmokeRun.Logon.cs"));
@@ -373,6 +377,31 @@ public sealed class PartyLogonSettingTests
                 && (File.ReadAllText(f).Contains("RegistryRunStore.ForCurrentUser", StringComparison.Ordinal) || File.ReadAllText(f).Contains("new RegistryRunStore", StringComparison.Ordinal)))
             .ToArray();
         Assert.Empty(tests);
+    }
+
+    [Fact]
+    public void Party_builds_the_real_store_once_inside_FirstStart_which_only_a_real_start_reaches()
+    {
+        var program = File.ReadAllText(Path.Combine(Harness.Root, "src", "PcMieru.Party", "Program.cs"));
+
+        // One construction site, and it lies inside the body of FirstStart (not in a helper that something else could call).
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"RegistryRunStore\.ForCurrentUser\("));
+        var first = program.IndexOf("private static bool FirstStart(", StringComparison.Ordinal);
+        var site = program.IndexOf("RegistryRunStore.ForCurrentUser(", StringComparison.Ordinal);
+        var next = program.IndexOf("    private static ", first + 10, StringComparison.Ordinal);
+        Assert.True(first > 0 && site > first && site < next, $"the real store must be built inside FirstStart ({first} < {site} < {next})");
+
+        // FirstStart is called from one place only, and only when this is not a smoke run (it is the same guard that keeps the first-start flow off the real folders in a smoke run).
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(program, @"FirstStart\(language"));
+        Assert.Matches(@"if \(!options\.Smoke && !FirstStart\(language, out loaded\)\)", program);
+
+        // Both smoke endings (the plain run and the import previews) fail when the real store was built.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(program, @"failure \?\?= RealStoreBuiltInSmoke\(\);").Count);
+        Assert.Contains("RegistryRunStore.Constructed == 0", program, StringComparison.Ordinal);
+
+        // The store is only handed to the flow: recovery before the first-start flow, the question after it. (Party.Core names no registry class either: it is handed the store.)
+        Assert.Contains("RunSwitchFlow.RecoverAtStart(runStore", program, StringComparison.Ordinal);
+        Assert.Contains("RunSwitchFlow.AfterImport(report, runStore", program, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -307,6 +307,46 @@ internal sealed class MainForm : Form
 
         // Last, and only after the update choice above has closed (it is modal): the notice that old Parts Life progress is waiting. Never two dialogs at once.
         PartyNotice = NoticePartyImportAsync();
+
+        // And off the UI thread, quietly: an unfinished switch of the sign-in start (Parts Life's first start offers it) is put back; only one that cannot be settled shows a line on the setting.
+        LogonRecovery = RecoverLogonAsync();
+    }
+
+    /// <summary>The recovery that <see cref="StartUpdates"/> started (completed when nothing was started or it is over). A test awaits it; the window never does.</summary>
+    internal Task LogonRecovery { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// DESIGN-C 4.3, the window's side: at a real start, puts back what an unfinished switch of the sign-in start left (<see cref="RunSwitch.Recover"/>), off the UI thread. Nothing is asked and no
+    /// dialog opens; when the result needs a person (<see cref="RunSwitchResult.NeedsAttention"/>) the status line of the setting says so (<see cref="GuiContext.LogonNeedsCheck"/>). It needs both the
+    /// store and the roaming folder the context names (a real run sets them; a smoke run, a measurement and a test leave at least one out), and the journal is the one beside the save of Parts Life.
+    /// An exception shows nothing and never reaches the window.
+    /// </summary>
+    internal async Task RecoverLogonAsync()
+    {
+        try
+        {
+            if (_context.LogonStore is not { } store || _context.PartyRoamingRoot is not { } root)
+            {
+                return;
+            }
+
+            var journal = RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"));
+            var result = await Task.Run(() => RunSwitch.Recover(store, journal)).ConfigureAwait(true);
+            if (!result.NeedsAttention || IsDisposed)
+            {
+                return;
+            }
+
+            _context.LogonNeedsCheck = true;
+            if (PageById("settings") is SettingsPage page)
+            {
+                await page.RefreshPartyLogon().ConfigureAwait(true);   // a page that is already open shows the line now; one that is not yet made shows it when it opens
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // nothing shown, nothing blocked: the setting still works as it did
+        }
     }
 
     /// <summary>The notice that <see cref="StartUpdates"/> started (completed when nothing was started or it is over). A test awaits it; the window never does.</summary>

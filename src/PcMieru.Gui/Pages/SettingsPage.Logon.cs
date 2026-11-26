@@ -7,7 +7,7 @@ namespace PcMieru.Gui;
 /// (<see cref="GuiContext.LogonStore"/>: the real one in a real run only, a memory store in the smoke run, none in a test unless it passes one) and changed through
 /// <see cref="PartyLogon"/>; both the read and the change run off the UI thread and the page re-reads afterwards, so what the box shows is what the store holds. With no store the box is
 /// shown off and unavailable and does nothing. One status line under the box says why the setting is not simply on or off (turned off in Windows, another folder's registration, not readable,
-/// a change that failed, no Party exe beside this one).
+/// a change that failed, a switch of the sign-in start that could not be settled, no Party exe beside this one).
 /// </summary>
 internal sealed partial class SettingsPage
 {
@@ -166,7 +166,8 @@ internal sealed partial class SettingsPage
         _partyLogon.Checked = _logonState == PartyLogonState.On;
         // An unreadable state is never rewritten blind; a Party exe that is not there cannot be registered (but a registration that exists can still be taken off).
         _partyLogon.Enabled = _logonState != PartyLogonState.Unknown && (_logonExeThere || _logonState == PartyLogonState.On);
-        ShowLogonLine(_logonFailed ? "gui.settings.partylogon.failed" : _logonState switch
+        // A change of this session that failed comes first, then an unfinished switch of an earlier run that could not be settled (set by the recovery at start), then what the state itself says.
+        ShowLogonLine(_logonFailed ? "gui.settings.partylogon.failed" : Context.LogonNeedsCheck ? "gui.settings.partylogon.check" : _logonState switch
         {
             PartyLogonState.DisabledInWindows => "gui.settings.partylogon.disabled",
             PartyLogonState.OtherPlacement => "gui.settings.partylogon.other",

@@ -222,8 +222,78 @@ public class ImportDialogModelTests
     }
 
     [Fact]
-    public void The_preview_cases_are_exactly_the_four_of_the_command_line()
+    public void The_preview_cases_are_exactly_the_five_of_the_command_line()
     {
-        Assert.Equal(4, Enum.GetValues<PartyImportPreview>().Length);
+        Assert.Equal(5, Enum.GetValues<PartyImportPreview>().Length);
+    }
+
+    private static void InLanguage(string lang, Action body)
+    {
+        var before = Strings.Lang;
+        Strings.Lang = lang;
+        try
+        {
+            body();
+        }
+        finally
+        {
+            Strings.Lang = before;
+        }
+    }
+
+    [Fact]
+    public void The_sign_in_question_says_what_was_agreed_in_both_languages()
+    {
+        InLanguage("ja", () =>
+        {
+            var model = ImportDialogModels.RunSwitchAsk();
+            Assert.Equal("ログオン時の起動も、パーツぐらし（PCミエル）に切り替えますか？", model.Body);
+            Assert.Equal(["切り替える", "今はしない"], model.Buttons.Select(b => b.Text));
+            Assert.Contains("すでに完了", model.Note);
+        });
+        InLanguage("en", () =>
+        {
+            var model = ImportDialogModels.RunSwitchAsk();
+            Assert.Equal("Switch sign-in start to Parts Life (PC Mieru) too?", model.Body);
+            Assert.Equal(["Switch", "Not now"], model.Buttons.Select(b => b.Text));
+            Assert.Contains("already", model.Note);
+        });
+    }
+
+    [Fact]
+    public void Only_the_switch_button_switches_and_the_cross_or_Escape_means_not_now()
+    {
+        InLanguage("en", () =>
+        {
+            var model = ImportDialogModels.RunSwitchAsk();
+            Assert.Equal(ImportDialogResult.NotNow, model.CancelResult);
+            Assert.Equal(ImportDialogResult.Switch, model.Buttons.Single(b => b.IsDefault).Result);
+            Assert.Equal([ImportDialogResult.Switch, ImportDialogResult.NotNow], model.Buttons.Select(b => b.Result));
+        });
+    }
+
+    [Fact]
+    public void The_check_notice_is_one_line_with_Close_in_both_languages()
+    {
+        InLanguage("ja", () =>
+        {
+            var model = ImportDialogModels.RunSwitchCheck();
+            Assert.Equal("ログオン設定の復元を確認してください", model.Body);
+            Assert.Equal(ImportDialogResult.Close, model.CancelResult);
+            Assert.Single(model.Buttons);
+        });
+        InLanguage("en", () =>
+        {
+            var model = ImportDialogModels.RunSwitchCheck();
+            Assert.Equal("Please check the sign-in setting", model.Body);
+            Assert.Equal(ImportDialogResult.Close, model.CancelResult);
+            Assert.Single(model.Buttons);
+        });
+    }
+
+    [Fact]
+    public void The_preview_of_the_sign_in_question_is_the_question()
+    {
+        InLanguage("ja", () => Assert.Equal(ImportDialogModels.RunSwitchAsk().Body, ImportDialogModels.Preview(PartyImportPreview.RunSwitch).Body));
     }
 }

@@ -12,6 +12,12 @@ internal enum ImportDialogResult
     Retry,
     Close,
     OpenReadOnly,
+
+    /// <summary>The sign-in question: switch the sign-in start to the new app.</summary>
+    Switch,
+
+    /// <summary>The sign-in question: leave it for now (also the cross and Escape). Nothing is written.</summary>
+    NotNow,
 }
 
 internal sealed record ImportDialogButton(string Text, ImportDialogResult Result, bool IsDefault = false, bool IsCancel = false);
@@ -64,6 +70,27 @@ internal static class ImportDialogModels
             problem.CanOpenReadOnly ? Strings.ImportReadOnlyNote : null, buttons);
     }
 
+    /// <summary>The question after a successful import (DESIGN-C 4.3): switch the sign-in start too? The note says the copy of the save already succeeded (it is shown apart from the Run's own result).</summary>
+    public static ImportDialogModel RunSwitchAsk() => new(
+        Strings.RunSwitchTitle,
+        Strings.RunSwitchAsk,
+        null,
+        [],
+        Strings.RunSwitchCopied,
+        [
+            new ImportDialogButton(Strings.RunSwitchYes, ImportDialogResult.Switch, IsDefault: true),
+            new ImportDialogButton(Strings.RunSwitchNo, ImportDialogResult.NotNow, IsCancel: true),
+        ]);
+
+    /// <summary>"Please check the sign-in setting": the switch or its recovery could not be settled. One line and Close: it says nothing about the save.</summary>
+    public static ImportDialogModel RunSwitchCheck() => new(
+        Strings.RunSwitchTitle,
+        Strings.RunSwitchCheck,
+        null,
+        [],
+        null,
+        [new ImportDialogButton(Strings.ImportCloseButton, ImportDialogResult.Close, IsDefault: true, IsCancel: true)]);
+
     /// <summary>The dialog of a <c>--smoke --import-preview</c> case. A made-up plan: no engine, no path is opened (the candidate path is only a label).</summary>
     public static ImportDialogModel Preview(PartyImportPreview which) => which switch
     {
@@ -82,6 +109,7 @@ internal static class ImportDialogModels
         }),
         PartyImportPreview.OldApp => Problem(new ProblemView(ImportOutcome.OldAppRunning, ImportReason.OldAppRunning, null)),
         PartyImportPreview.Hold => Problem(new ProblemView(ImportOutcome.Hold, ImportReason.VersionFuture, null)),
+        PartyImportPreview.RunSwitch => RunSwitchAsk(),
         _ => throw new ArgumentOutOfRangeException(nameof(which)),
     };
 }

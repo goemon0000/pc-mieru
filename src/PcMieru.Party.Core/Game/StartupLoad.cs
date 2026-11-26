@@ -16,11 +16,16 @@ public static class StartupLoad
     /// <summary>The flow is run again this many times when the save disappears under it; after that the state is opened read-only (no empty writable state).</summary>
     public const int MaxRounds = 3;
 
-    /// <summary>The state to run with, or null when the user chose Later or Close (nothing was written). <paramref name="dir"/> is the folder of <c>state.json</c> (the engine's destination folder).</summary>
-    public static PartyState? Run(ImportEngine engine, IFirstStartPrompts prompts, string dir) => Run(engine, prompts, dir, null);
+    /// <summary>
+    /// The state to run with, or null when the user chose Later or Close (nothing was written). <paramref name="dir"/> is the folder of <c>state.json</c> (the engine's destination folder).
+    /// <paramref name="report"/> (when given) learns whether this run's own write brought the old save over (<see cref="FirstStartReport.Imported"/>), for the sign-in switch that follows.
+    /// </summary>
+    public static PartyState? Run(ImportEngine engine, IFirstStartPrompts prompts, string dir, FirstStartReport? report = null) => Run(engine, prompts, dir, report, null);
 
     /// <summary>Tests: <paramref name="afterFlow"/> runs after each round of the flow (1-based), just before the load.</summary>
-    internal static PartyState? Run(ImportEngine engine, IFirstStartPrompts prompts, string dir, Action<int>? afterFlow)
+    internal static PartyState? Run(ImportEngine engine, IFirstStartPrompts prompts, string dir, Action<int>? afterFlow) => Run(engine, prompts, dir, null, afterFlow);
+
+    private static PartyState? Run(ImportEngine engine, IFirstStartPrompts prompts, string dir, FirstStartReport? report, Action<int>? afterFlow)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(prompts);
@@ -28,7 +33,7 @@ public static class StartupLoad
 
         for (int round = 1; round <= MaxRounds; round++)
         {
-            var end = FirstStartFlow.Run(engine, prompts);
+            var end = FirstStartFlow.Run(engine, prompts, report);
             afterFlow?.Invoke(round);
             switch (end)
             {

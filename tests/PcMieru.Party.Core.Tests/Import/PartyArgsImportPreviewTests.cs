@@ -10,6 +10,8 @@ public class PartyArgsImportPreviewTests
     [InlineData("repair", "Repair")]
     [InlineData("oldapp", "OldApp")]
     [InlineData("hold", "Hold")]
+    [InlineData("runswitch", "RunSwitch")]
+    [InlineData("RunSwitch", "RunSwitch")]
     [InlineData("HOLD", "Hold")]
     public void Each_case_is_accepted_together_with_smoke(string value, string expected)
     {
@@ -58,5 +60,15 @@ public class PartyArgsImportPreviewTests
         Assert.Null(options.ImportPreview);
         Assert.True(PartyArgs.TryParse([], out var plain, out _));
         Assert.Null(plain.ImportPreview);
+    }
+
+    [Fact]
+    public void The_refusal_names_every_case_including_the_sign_in_question()
+    {
+        Assert.False(PartyArgs.TryParse(["--smoke", "--import-preview", "bogus"], out _, out var problem));
+        foreach (var name in new[] { "ready", "repair", "oldapp", "hold", "runswitch" })
+        {
+            Assert.Contains(name, problem);
+        }
     }
 }

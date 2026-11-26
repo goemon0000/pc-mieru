@@ -20,7 +20,7 @@ internal enum PartyLanguage
 /// <c>--tab view|startup|checks|data</c>, valid only together with <c>--shot</c>: that settings tab is opened before the shot is taken.
 /// </param>
 /// <param name="ImportPreview">
-/// <c>--import-preview ready|repair|oldapp|hold</c>, valid only together with <c>--smoke</c> (and usable with <c>--shot</c>): shows the dialog of the first start for that case with a made-up
+/// <c>--import-preview ready|repair|oldapp|hold|runswitch</c>, valid only together with <c>--smoke</c> (and usable with <c>--shot</c>): shows the dialog of the first start for that case with a made-up
 /// plan (no engine, no file) and ends with "party smoke ok".
 /// </param>
 /// <param name="Logon">
@@ -30,13 +30,14 @@ internal enum PartyLanguage
 /// </param>
 internal sealed record PartyOptions(PartyLanguage? Language, bool Smoke, string? ShotPath = null, PcMieru.Party.Ui.SettingsTab? ShotTab = null, PartyImportPreview? ImportPreview = null, bool Logon = false);
 
-/// <summary>The cases of <c>--import-preview</c>: the three-choice question for a save that is ready or needs repairs, and the message for a running old product or a hold.</summary>
+/// <summary>The cases of <c>--import-preview</c>: the three-choice question for a save that is ready or needs repairs, the message for a running old product or a hold, and the sign-in question that follows an import.</summary>
 internal enum PartyImportPreview
 {
     Ready,
     Repair,
     OldApp,
     Hold,
+    RunSwitch,
 }
 
 /// <summary>
@@ -120,11 +121,12 @@ internal static class PartyArgs
                         "repair" => PartyImportPreview.Repair,
                         "oldapp" => PartyImportPreview.OldApp,
                         "hold" => PartyImportPreview.Hold,
+                        "runswitch" => PartyImportPreview.RunSwitch,
                         _ => null,
                     };
                     if (preview is null)
                     {
-                        problem = "--import-preview must be ready, repair, oldapp or hold";
+                        problem = "--import-preview must be ready, repair, oldapp, hold or runswitch";
                         return false;
                     }
 

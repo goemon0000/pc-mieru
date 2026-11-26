@@ -137,6 +137,15 @@ public static class Strings
     public static string ImportProblemTitle => T("パーツぐらしを始められません", "Parts Life cannot start yet");
     public static string ImportHoldPrefix   => T("旧パーツぐらしの続きは引き継げません。", "The old progress cannot be brought over. ");
 
+    // ---- ログオン時の起動の切り替え（引き継ぎのあとの 1 問と、その復元の確認。DESIGN-C 4.3） ----
+    public static string RunSwitchTitle     => T("ログオン時の起動", "Start at sign-in");
+    public static string RunSwitchAsk       => T("ログオン時の起動も、パーツぐらし（PCミエル）に切り替えますか？",
+                                                 "Switch sign-in start to Parts Life (PC Mieru) too?");
+    public static string RunSwitchCopied    => T("保存の引き継ぎは、すでに完了しています。", "Your save was already copied over successfully.");
+    public static string RunSwitchYes       => T("切り替える", "Switch");
+    public static string RunSwitchNo        => T("今はしない", "Not now");
+    public static string RunSwitchCheck     => T("ログオン設定の復元を確認してください", "Please check the sign-in setting");
+
     /// <summary>引き継ぎの理由コード（<see cref="ImportReason"/>）に対する文。コードが増えて文が無いときは null（テストが全コードを回して見つける）。</summary>
     public static string? ImportReasonTextOrNull(string reason) => reason switch
     {

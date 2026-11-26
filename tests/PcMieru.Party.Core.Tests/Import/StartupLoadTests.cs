@@ -130,6 +130,38 @@ public class StartupLoadTests
         Assert.False(Directory.Exists(bed.DestinationDir));
     }
 
+    // ---- the report for the sign-in switch ----
+
+    [Fact]
+    public void The_report_says_the_old_save_was_brought_over_by_this_run()
+    {
+        using var bed = new ImportBed();
+        bed.WriteSource(ImportOrigin.PartsLife, ImportEnginePrepareTests.Save(111.5));
+        var script = new Script();
+        script.Continues.Enqueue(ContinueChoice.Continue);
+        var report = new FirstStartReport();
+
+        var state = StartupLoad.Run(bed.Engine, script, bed.DestinationDir, report);
+
+        Assert.NotNull(state);
+        Assert.True(report.Imported);
+    }
+
+    [Fact]
+    public void The_report_stays_false_for_a_save_that_was_already_there_and_for_a_fresh_start()
+    {
+        using var bed = new ImportBed();
+        Assert.Equal(ImportOutcome.StartedFresh, bed.Engine.StartFresh().Outcome);
+        var already = new FirstStartReport();
+        Assert.NotNull(StartupLoad.Run(bed.Engine, new Script(), bed.DestinationDir, already));
+        Assert.False(already.Imported);
+
+        using var empty = new ImportBed();
+        var fresh = new FirstStartReport();
+        Assert.NotNull(StartupLoad.Run(empty.Engine, new Script(), empty.DestinationDir, fresh));
+        Assert.False(fresh.Imported);
+    }
+
     // ---- item 3: the save is gone at load time ----
 
     [Fact]

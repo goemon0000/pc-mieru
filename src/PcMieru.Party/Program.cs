@@ -93,10 +93,42 @@ internal static class Program
         Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
         // Every engine call runs off this thread inside FirstStartFlow (Task.Run, then a plain wait: no window exists yet); the dialogs run on this STA thread without an Application.
         var paths = ImportPaths.ForCurrentUser();
+
+        // The sign-in start (DESIGN-C 4.3). This is the ONE place Party builds the real Run store, and it is only reached by a real start (Main calls FirstStart only without --smoke; source-text
+        // tests pin both). Before the flow: put back what an unfinished switch left. After it: when this run brought the old save over, ask once whether the sign-in start follows.
+        var runStore = RegistryRunStore.ForCurrentUser();
+        var runPrompts = new WpfRunSwitchPrompts();
+        GuardedRunSwitch(() => RunSwitchFlow.RecoverAtStart(runStore, paths.DestinationDir, runPrompts));
+
         var engine = new ImportEngine(paths, new WindowsLegacyRunningProbe());
-        state = StartupLoad.Run(engine, new WpfFirstStartPrompts(), paths.DestinationDir);
+        var report = new FirstStartReport();
+        state = StartupLoad.Run(engine, new WpfFirstStartPrompts(), paths.DestinationDir, report);
+        if (state is not null && Environment.ProcessPath is { } exe)
+        {
+            GuardedRunSwitch(() => RunSwitchFlow.AfterImport(report, runStore, paths.DestinationDir, exe, runPrompts));
+        }
+
         return state is not null;
     }
+
+    /// <summary>
+    /// The sign-in switch is an extra: whatever goes wrong in it (a registry or window failure the flow did not turn into a result) must never stop Parts Life from starting. The flow already
+    /// shows what needs a person; an exception that escapes it shows nothing (nothing is worse than before).
+    /// </summary>
+    private static void GuardedRunSwitch(Action step)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // nothing shown, nothing blocked
+        }
+    }
+
+    /// <summary>The smoke run's proof that the owner's Run key was never in reach: the real store was not built. Null when so, otherwise the failure text.</summary>
+    private static string? RealStoreBuiltInSmoke() => RegistryRunStore.Constructed == 0 ? null : "the real sign-in store was built in a smoke run";
 
     /// <summary>--smoke --import-preview: shows the dialog of one case with a made-up plan, writes the shot when asked, and says "party smoke ok". Touches nothing of this machine.</summary>
     private static int RunImportPreview(PartyOptions options, PartyImportPreview which, PartyLanguage language)
@@ -139,6 +171,8 @@ internal static class Program
         {
             failure = "the dialog was closed before the shot was written";
         }
+
+        failure ??= RealStoreBuiltInSmoke();
 
         if (failure is not null)
         {
@@ -274,6 +308,8 @@ internal static class Program
         {
             failure = "the window was closed before the shot was written";
         }
+
+        failure ??= RealStoreBuiltInSmoke();
 
         if (failure is not null)
         {
