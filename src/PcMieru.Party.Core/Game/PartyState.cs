@@ -104,8 +104,8 @@ public sealed class PartyState
     public bool Topmost { get; set; } = true;
     public bool Expanded { get; set; }
 
-    /// <summary>名札の出し方 "level" / "name" / "none"。</summary>
-    public string Labels { get; set; } = "level";
+    /// <summary>名札の出し方 "level" / "name" / "none"。既定は "name"（「CPU Lv1」: どの子かが読める。入らない幅では Lv だけに落ちる）。</summary>
+    public string Labels { get; set; } = "name";
 
     /// <summary>
     /// 更新の設定 "auto"（自動で更新する）/ "notify"（確認だけして知らせる）/ "off"（確認しない）。
@@ -175,7 +175,7 @@ public sealed class PartyState
         LastEventAt ??= new Dictionary<string, long>();
         RecentVignettes ??= new List<string>();
         Lang ??= "";
-        Labels ??= "level";
+        Labels ??= "name";
         UpdateMode ??= "auto";
 
         if (SaveVersion < 1) MigrateKeys();

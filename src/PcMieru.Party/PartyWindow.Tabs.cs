@@ -366,7 +366,7 @@ internal sealed partial class PartyWindow
 
     private TextBlock Note(string text) => new()
     {
-        Text = text, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3),
+        Text = text, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3),
         Foreground = (System.Windows.Media.Brush)FindResource("Sub"),
     };
 

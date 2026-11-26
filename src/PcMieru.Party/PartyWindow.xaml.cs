@@ -56,7 +56,7 @@ internal sealed partial class PartyWindow : Window
 
     /// <summary>名札の出し方。パーツが増えると字が邪魔になる人もいるので選べるようにする。</summary>
     private enum Labels { LevelOnly, NameAndLevel, None }
-    private Labels _labels = Labels.LevelOnly;
+    private Labels _labels = Labels.NameAndLevel;
     private BoardFrame? _frame;
     private Work _work = new(0, 0, 0, 0, 0);
 
@@ -142,9 +142,9 @@ internal sealed partial class PartyWindow : Window
         _state.MigrateKeys();
         _labels = _state.Labels switch
         {
-            "name" => Labels.NameAndLevel,
+            "level" => Labels.LevelOnly,
             "none" => Labels.None,
-            _ => Labels.LevelOnly,
+            _ => Labels.NameAndLevel,
         };
 
         _scale = _state.Zoom > 0 ? Math.Clamp(_state.Zoom, 0.8, 6.0) : 2.0;
@@ -572,6 +572,14 @@ internal sealed partial class PartyWindow : Window
         double font = Math.Clamp(6 + 3 * _scale, 9, 15);
         double cell = BoardRenderer.Cell * _scale;
         int perRow = BoardRenderer.PerRow(_slots.Count);
+        // 名札が使える幅は、隣の子との間隔（盤の拡大に比例。最小倍率 0.8 でも 37px 台）から少し引いた分。
+        // 入らなければ名前を落として「Lv3」だけにする（BoardLabel.Text）
+        double pitch = (BoardRenderer.Cell + BoardRenderer.Gap) * _scale;
+        double maxWidth = pitch - 2;
+        var typeface = new Typeface(FontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        double Measure(string text) => new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight, typeface, font, Brushes.White, dip).WidthIncludingTrailingWhitespace;
 
         for (int i = 0; i < _slots.Count; i++)
         {
@@ -582,11 +590,11 @@ internal sealed partial class PartyWindow : Window
             t.Text = _labels switch
             {
                 Labels.None => "",
-                Labels.NameAndLevel => $"{_slots[i].Title} {Strings.Level}{lv}",
+                Labels.NameAndLevel => BoardLabel.Text(_slots[i].Title, Strings.Level, lv, maxWidth, Measure),
                 _ => Strings.Level + lv,
             };
-            // 名前まで出すと 32px の枠には入らない。**枠を越えて中央に伸ばす**
-            t.Width = _labels == Labels.NameAndLevel ? cell * 2 : cell;
+            // 名前まで出すと 32px の枠には入らない。**枠を越えて、隣の子との間隔いっぱいまで中央に伸ばす**
+            t.Width = _labels == Labels.NameAndLevel ? Math.Max(cell, pitch) : cell;
             int row = i / perRow;
             double left = (BoardRenderer.RowInset(_slots.Count, row, _boardPixelWidth)
                            + BoardRenderer.SlotLeft(i % perRow)) * _scale;
@@ -932,10 +940,11 @@ internal sealed partial class PartyWindow : Window
         DetailStack.Children.Add(new TextBlock
         {
             Text = Strings.Disclaimer,
-            FontSize = 9,
+            FontSize = 10,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0),
-            Foreground = new SolidColorBrush(Color.FromRgb(0x6E, 0x7A, 0x93)),
+            // #8794B0: 枠（#101319）の上で 6.1:1、窓の後ろが真っ白でも 4.7:1（旧 #6E7A93 は 4.3:1 / 3.3:1）。Sub（#9AA7C4）よりは控えめ
+            Foreground = new SolidColorBrush(Color.FromRgb(0x87, 0x94, 0xB0)),
         });
     }
 
