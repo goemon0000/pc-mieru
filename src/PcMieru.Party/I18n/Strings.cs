@@ -69,8 +69,8 @@ public static class Strings
         "Some GPU numbers in the save were damaged. Their progress was kept and those numbers were reserved so no other card takes it over. You can release them in Settings > GPU slots.");
     public static string GpuSlotsHeader    => T("GPU の番号", "GPU slots");
     public static string GpuSlotsAbout     => T(
-        "経験値と装備は GPU の番号ごとに残ります。外したカードは「手放す」で番号を閉じます（経験値と装備は残ります）。そのあと「リセット」を押すと、その番号の経験値を消し、装備を袋へ戻して番号を空けます。",
-        "Experience and gear are kept per GPU number. For a card you removed, Forget closes its number (its experience and gear are kept). Reset then deletes that number's experience, returns its gear to the bag and frees the number.");
+        "経験値と装備は GPU の番号ごとに残ります。外したカードの行には「手放す」が出ます。それを押すと番号を閉じます（経験値と装備は残ります）。そのあと同じ行の「リセット」を押すと、その番号の経験値を消し、装備を袋へ戻して番号を空けます。",
+        "Experience and gear are kept per GPU number. The row of a card you removed shows Forget, which closes its number (its experience and gear are kept). Reset, on the same row, then deletes that number's experience, returns its gear to the bag and frees the number.");
     public static string GpuSlotsNone      => T("GPU はまだ見つかっていません", "No GPU recorded yet");
     public static string GpuStateInUse     => T("使用中", "in use");
     public static string GpuStateAbsent    => T("見当たらない", "not found");
@@ -117,9 +117,9 @@ public static class Strings
 
     // ---- 旧パーツぐらしの続き（初回起動の引き継ぎ。DESIGN-C 4.1） ----
     public static string ImportTitle        => T("パーツぐらしの続き", "Continue Parts Life");
-    public static string ImportBodyLife     => T("旧パーツぐらし（PartsLife）の続きが見つかりました。ここから続けますか。",
+    public static string ImportBodyLife     => T("旧パーツぐらし（PartsLife）の続きが見つかりました。引き継ぎますか。",
                                                  "Progress from the old Parts Life (PartsLife) was found. Continue from it?");
-    public static string ImportBodyParty    => T("旧名のパーツぐらし（PartsParty）の続きが見つかりました。ここから続けますか。",
+    public static string ImportBodyParty    => T("旧名のパーツぐらし（PartsParty）の続きが見つかりました。引き継ぎますか。",
                                                  "Progress from the old Parts Life under its former name (PartsParty) was found. Continue from it?");
     public static string ImportKept         => T("旧版の保存はそのまま残ります。", "The old save is left exactly as it is.");
     public static string ImportRepairHeader => T("次の欄は読み取れませんでした。", "These fields could not be read:");
@@ -135,6 +135,8 @@ public static class Strings
     public static string ImportFreshAsk     => T("旧パーツぐらしの続きはこのあと引き継げなくなります。新しく始めますか。",
                                                  "The old progress cannot be brought over afterwards. Start fresh?");
     public static string ImportProblemTitle => T("パーツぐらしを始められません", "Parts Life cannot start yet");
+    /// <summary>引き継げない（保留）のときの題。「新しく始める」と並ぶので「始められません」とは言わない。</summary>
+    public static string ImportHoldTitle    => T("旧版の続きを引き継げません", "The old progress cannot be brought over");
     public static string ImportHoldPrefix   => T("旧パーツぐらしの続きは引き継げません。", "The old progress cannot be brought over. ");
 
     // ---- ログオン時の起動の切り替え（引き継ぎのあとの 1 問と、その復元の確認。DESIGN-C 4.3） ----

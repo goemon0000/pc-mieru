@@ -173,12 +173,75 @@ public class ImportDialogModelTests
     {
         Ja(() =>
         {
-            var m = ImportDialogModels.Ask(Plan(ImportOutcome.NeedsRepair, ImportOrigin.PartsParty, "Adventure.Gold", "Levels.Cpu"));
-            Assert.Equal(new[] { "Adventure.Gold", "Levels.Cpu" }, m.List);
+            var m = ImportDialogModels.Ask(Plan(ImportOutcome.NeedsRepair, ImportOrigin.PartsParty, "Adventure.Gold", "Experience[cpu#0]"));
+            Assert.Equal(new[] { "冒険のお金", "経験値（CPU0）" }, m.List);   // the names of the fields, never the internal paths
             Assert.NotNull(m.ListHeader);
             Assert.Contains("直せなかった欄は初期値になります", m.Note);
             Assert.Contains("PartsParty", m.Body);
         });
+        InLanguage("en", () =>
+        {
+            var m = ImportDialogModels.Ask(Plan(ImportOutcome.NeedsRepair, ImportOrigin.PartsParty, "Adventure.Gold", "Experience[cpu#0]"));
+            Assert.Equal(new[] { "Adventure gold", "Experience (CPU0)" }, m.List);
+        });
+    }
+
+    [Fact]
+    public void A_path_the_list_does_not_know_is_shown_as_it_is()
+    {
+        Ja(() =>
+        {
+            var m = ImportDialogModels.Ask(Plan(ImportOutcome.NeedsRepair, ImportOrigin.PartsLife, "Levels.Cpu", "Adventure.Gold"));
+            Assert.Equal(new[] { "Levels.Cpu", "冒険のお金" }, m.List);
+        });
+    }
+
+    [Fact]
+    public void The_question_ends_with_the_word_of_the_button_in_Japanese()
+    {
+        Ja(() =>
+        {
+            Assert.EndsWith("引き継ぎますか。", ImportDialogModels.Ask(Plan(ImportOutcome.Ready, ImportOrigin.PartsLife)).Body);
+            Assert.EndsWith("引き継ぎますか。", ImportDialogModels.Ask(Plan(ImportOutcome.Ready, ImportOrigin.PartsParty)).Body);
+            Assert.Equal("引き継ぐ", Strings.ImportContinue);
+        });
+    }
+
+    [Fact]
+    public void A_hold_is_titled_for_what_is_true_beside_Start_fresh_and_says_the_old_save_stays()
+    {
+        Ja(() =>
+        {
+            var m = ImportDialogModels.Problem(new ProblemView(ImportOutcome.Hold, ImportReason.VersionFuture, null));
+            Assert.Equal("旧版の続きを引き継げません", m.Title);
+            Assert.DoesNotContain("始められません", m.Title);   // "cannot start" beside a "Start fresh" button was the conflict
+            Assert.Equal("旧版の保存はそのまま残ります。", m.Note);
+        });
+        InLanguage("en", () =>
+        {
+            var m = ImportDialogModels.Problem(new ProblemView(ImportOutcome.Hold, ImportReason.VersionFuture, null));
+            Assert.Equal("The old progress cannot be brought over", m.Title);
+            Assert.Equal("The old save is left exactly as it is.", m.Note);
+        });
+    }
+
+    [Fact]
+    public void The_old_app_message_keeps_its_cannot_start_title_and_has_no_note()
+    {
+        Ja(() =>
+        {
+            var m = ImportDialogModels.Problem(new ProblemView(ImportOutcome.OldAppRunning, ImportReason.OldAppRunning, null));
+            Assert.Equal("パーツぐらしを始められません", m.Title);
+            Assert.Null(m.Note);
+        });
+        InLanguage("en", () => Assert.Equal("Parts Life cannot start yet", ImportDialogModels.Problem(new ProblemView(ImportOutcome.OldAppRunning, ImportReason.OldAppRunning, null)).Title));
+    }
+
+    [Fact]
+    public void The_data_tab_note_says_where_Forget_and_Reset_appear()
+    {
+        Ja(() => Assert.Contains("外したカードの行", Strings.GpuSlotsAbout));
+        InLanguage("en", () => Assert.Contains("row of a card you removed", Strings.GpuSlotsAbout));
     }
 
     [Fact]

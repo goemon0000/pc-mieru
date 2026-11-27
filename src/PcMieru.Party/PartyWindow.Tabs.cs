@@ -30,7 +30,7 @@ internal sealed partial class PartyWindow
         switch (command)
         {
             case MenuCommand.Topmost: ToggleTopmost(); break;
-            case MenuCommand.RunAtLogin: break;   // step 5: 「ログイン時に起動」は PCMieru 本体の登録に統合する
+            case MenuCommand.RunAtLogin: break;   // Party では出さない設計: 「ログイン時に起動」は PCMieru の設定にある（DESIGN-C §3 項目 5）
             case MenuCommand.Language: ToggleLanguage(); break;
             case MenuCommand.LabelsLevelOnly: SetLabels(Labels.LevelOnly); break;
             case MenuCommand.LabelsNameAndLevel: SetLabels(Labels.NameAndLevel); break;
@@ -47,7 +47,7 @@ internal sealed partial class PartyWindow
 
     /// <summary>この窓で扱わない項目（献立にもタブにも出さない）。</summary>
     private static bool IsOutOfScope(MenuCommand command) =>
-        command is MenuCommand.RunAtLogin or MenuCommand.Updates;   // step 5 / PCMieru の更新係
+        command is MenuCommand.RunAtLogin or MenuCommand.Updates;   // 起動時登録は PCMieru の設定（DESIGN-C §3 項目 5）・更新は PCMieru の更新係
 
     /// <summary>選ばれている印を付けるか。付けない項目は null。</summary>
     private bool? IsChecked(MenuCommand command) => command switch
@@ -142,7 +142,7 @@ internal sealed partial class PartyWindow
 
         foreach (var entry in MenuMap.Entries)
         {
-            if (IsOutOfScope(entry.Command)) continue;   // step 5（起動時登録）・PCMieru の更新係
+            if (IsOutOfScope(entry.Command)) continue;   // 起動時登録・更新は PCMieru 側にある（出さない設計）
             if (entry.SeparatorBefore) menu.Items.Add(new Separator());
 
             bool? check = IsChecked(entry.Command);
@@ -174,7 +174,7 @@ internal sealed partial class PartyWindow
 
     /// <summary>
     /// タブを並べ直す（起動時と言語を切り替えたとき）。
-    /// 「起動」タブは step 5 まで出さない。**Ctrl+n の n は <see cref="MenuMap.Tabs"/> の並びのまま**（出さないタブの番号は空く）。
+    /// 「起動」タブは Party では出さない（設計。ログイン時の起動は PCMieru の設定にある。DESIGN-C §3 項目 5）。**Ctrl+n の n は <see cref="MenuMap.Tabs"/> の並びのまま**（出さないタブの番号は空く）。
     /// </summary>
     private void BuildTabs()
     {
@@ -184,7 +184,7 @@ internal sealed partial class PartyWindow
         for (int i = 0; i < MenuMap.Tabs.Count; i++)
         {
             var tab = MenuMap.Tabs[i];
-            if (tab == SettingsTab.Startup) continue;   // step 5
+            if (tab == SettingsTab.Startup) continue;   // 出さない設計
             var b = new RadioButton
             {
                 Content = TabTitle(tab),
@@ -253,7 +253,7 @@ internal sealed partial class PartyWindow
             case SettingsTab.View: BuildViewTab(); break;
             case SettingsTab.Checks: BuildChecksTab(); break;
             case SettingsTab.Data: BuildDataTab(); break;
-            // SettingsTab.Startup: step 5
+            // SettingsTab.Startup: 出さない設計（PCMieru の設定にある）
         }
         if (focused >= 0 && Focusables().ElementAtOrDefault(focused) is { } again)
             Dispatcher.BeginInvoke(() => again.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);

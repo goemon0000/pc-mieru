@@ -17,7 +17,7 @@ internal enum PartyLanguage
 /// <c>--shot &lt;png&gt;</c>, valid only together with <c>--smoke</c>: after the first render the window is written as a PNG and the program exits 0.
 /// </param>
 /// <param name="ShotTab">
-/// <c>--tab view|startup|checks|data</c>, valid only together with <c>--shot</c>: that settings tab is opened before the shot is taken.
+/// <c>--tab view|checks|data</c>, valid only together with <c>--shot</c>: that settings tab is opened before the shot is taken.
 /// </param>
 /// <param name="ImportPreview">
 /// <c>--import-preview ready|repair|oldapp|hold|runswitch</c>, valid only together with <c>--smoke</c> (and usable with <c>--shot</c>): shows the dialog of the first start for that case with a made-up
@@ -117,14 +117,13 @@ internal static class PartyArgs
                     tab = (i + 1 < args.Length ? args[++i] : null)?.ToLowerInvariant() switch
                     {
                         "view" => PcMieru.Party.Ui.SettingsTab.View,
-                        "startup" => PcMieru.Party.Ui.SettingsTab.Startup,
                         "checks" => PcMieru.Party.Ui.SettingsTab.Checks,
                         "data" => PcMieru.Party.Ui.SettingsTab.Data,
                         _ => null,
                     };
                     if (tab is null)
                     {
-                        problem = "--tab must be view, startup, checks or data";
+                        problem = "--tab must be view, checks or data (the Startup tab is not shown in Party)";
                         return false;
                     }
 

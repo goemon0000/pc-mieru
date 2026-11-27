@@ -40,7 +40,9 @@ public class ImportDialogReadOnlyTests
         {
             var model = ImportDialogModels.Problem(new ProblemView(outcome, ImportReason.InternalError, null));
             Assert.DoesNotContain(model.Buttons, b => b.Result == ImportDialogResult.OpenReadOnly);
-            Assert.Null(model.Note);
+            // no read-only line for any of these; only a hold has a muted line (the old save stays), the same one the question shows
+            if (outcome == ImportOutcome.Hold) Assert.Equal(Strings.ImportKept, model.Note);
+            else Assert.Null(model.Note);
         }
     }
 }

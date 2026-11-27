@@ -24,6 +24,7 @@
     <Compile Include="..\..\src\PcMieru.Party\PartyArgs.cs" Link="Linked\PartyArgs.cs" />
     <Compile Include="..\..\src\PcMieru.Party\PartyMeasure.cs" Link="Linked\PartyMeasure.cs" />
     <Compile Include="..\..\src\PcMieru.Party\I18n\Strings.cs" Link="Linked\Strings.cs" />
+    <Compile Include="..\..\src\PcMieru.Party\I18n\ImportFieldNames.cs" Link="Linked\ImportFieldNames.cs" />
     <Compile Include="..\..\src\PcMieru.Party\ImportDialogModel.cs" Link="Linked\ImportDialogModel.cs" />
   </ItemGroup>
 

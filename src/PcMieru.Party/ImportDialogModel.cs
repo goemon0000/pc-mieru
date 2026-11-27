@@ -50,7 +50,7 @@ internal static class ImportDialogModels
             Strings.ImportTitle,
             body,
             repair ? Strings.ImportRepairHeader : null,
-            repair ? plan.RepairedFields : [],
+            repair ? plan.RepairedFields.Select(ImportFieldNames.Display).ToList() : [],
             note,
             [
                 new ImportDialogButton(Strings.ImportContinue, ImportDialogResult.Continue, IsDefault: true),
@@ -66,8 +66,12 @@ internal static class ImportDialogModels
         if (problem.CanStartFresh) buttons.Add(new ImportDialogButton(Strings.ImportStartFresh, ImportDialogResult.StartFresh));
         if (problem.CanOpenReadOnly) buttons.Add(new ImportDialogButton(Strings.ImportOpenReadOnly, ImportDialogResult.OpenReadOnly));
         buttons.Add(new ImportDialogButton(Strings.ImportCloseButton, ImportDialogResult.Close, IsCancel: true));
-        return new ImportDialogModel(Strings.ImportProblemTitle, Strings.ImportMessage(problem.Outcome, problem.Reason), null, [],
-            problem.CanOpenReadOnly ? Strings.ImportReadOnlyNote : null, buttons);
+        // A hold sits beside "Start fresh", so its title cannot say "cannot start"; it says what is true: the old progress cannot come over.
+        // Its muted line is the one of the question: the old save is not touched by any choice here.
+        bool hold = problem.Outcome == ImportOutcome.Hold;
+        string? note = problem.CanOpenReadOnly ? Strings.ImportReadOnlyNote : hold ? Strings.ImportKept : null;
+        return new ImportDialogModel(hold ? Strings.ImportHoldTitle : Strings.ImportProblemTitle,
+            Strings.ImportMessage(problem.Outcome, problem.Reason), null, [], note, buttons);
     }
 
     /// <summary>The question after a successful import (DESIGN-C 4.3): switch the sign-in start too? The note says the copy of the save already succeeded (it is shown apart from the Run's own result).</summary>
@@ -114,7 +118,7 @@ internal static class ImportDialogModels
             Status = ImportOutcome.NeedsRepair,
             Reason = ImportReason.NeedsRepair,
             Candidate = new ImportCandidate(ImportOrigin.PartsParty, "preview"),
-            RepairedFields = ["Adventure.Gold", "Levels.Cpu"],
+            RepairedFields = ["Adventure.Gold", "Experience[cpu#0]"],
         }),
         PartyImportPreview.OldApp => Problem(new ProblemView(ImportOutcome.OldAppRunning, ImportReason.OldAppRunning, null)),
         PartyImportPreview.Hold => Problem(new ProblemView(ImportOutcome.Hold, ImportReason.VersionFuture, null)),
