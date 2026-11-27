@@ -19,6 +19,7 @@ public sealed class BoardSurface : FrameworkElement
     private readonly DrawingVisual _visual = new();
     private Size _art = new(1, 1);
     private double _scale = 1;
+    private bool _transformSet;
 
     public BoardSurface()
     {
@@ -36,10 +37,18 @@ public sealed class BoardSurface : FrameworkElement
     /// <summary>盤を描き直す。<paramref name="draw"/> は描いた大きさを返すこと。</summary>
     public void Redraw(Func<DrawingContext, Size> draw, double scale)
     {
+        var artBefore = _art;
+        var scaleBefore = _scale;
         using (var dc = _visual.RenderOpen()) _art = draw(dc);
         _scale = scale <= 0 ? 1 : scale;
-        _visual.Transform = new ScaleTransform(_scale, _scale);
-        InvalidateMeasure();
+        // C38: a redraw for a new animation frame keeps the size and the scale. A new transform and a measure pass for that only cost the UI and render threads for nothing.
+        if (!_transformSet || _scale != scaleBefore)
+        {
+            _visual.Transform = new ScaleTransform(_scale, _scale);
+            _transformSet = true;
+        }
+
+        if (_art != artBefore || _scale != scaleBefore) InvalidateMeasure();
     }
 
     protected override Size MeasureOverride(Size availableSize) =>

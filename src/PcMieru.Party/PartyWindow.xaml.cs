@@ -88,6 +88,10 @@ internal sealed partial class PartyWindow : Window
     /// <summary>前回描いた絵の指紋。同じなら描き直さない。</summary>
     private int _lastSignature;
 
+    /// <summary>前回名札を置いたときの指紋（<see cref="BoardLabel.Fingerprint"/>）。同じなら置き直さない。</summary>
+    private int _lastLabelKey;
+    private bool _labelKeySet;
+
     private int _failures;
 
     private readonly List<TextBlock> _levelLabels = new();
@@ -573,6 +577,16 @@ internal sealed partial class PartyWindow : Window
     /// <summary>レベルの字を、基板の帯の上に置く。字は絵と違って拡大せず、常に読める大きさで。</summary>
     private void PlaceLevelLabels()
     {
+        // **名札は、中身か置き場所が変わったときだけ置き直す**（C38）。コマ送りで盤を描き直すたびに、全部の名札を FormattedText で測り直し、
+        // 幅を 2 回書き換えて（cell → 最終の幅）レイアウトを起こしていたのが、旧アプリより重い一番の理由だった。
+        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var seats = new (string Title, int Level)[_slots.Count];
+        for (int i = 0; i < seats.Length; i++) seats[i] = (_slots[i].Title, _state.Level(_slots[i].Key));
+        int labelKey = BoardLabel.Fingerprint((int)_labels, _scale, dip, _boardPixelWidth, Strings.Lang, seats);
+        if (_labelKeySet && labelKey == _lastLabelKey) return;
+        _lastLabelKey = labelKey;
+        _labelKeySet = true;
+
         while (_levelLabels.Count < _slots.Count)
         {
             var t = new TextBlock
@@ -594,7 +608,6 @@ internal sealed partial class PartyWindow : Window
         double pitch = (BoardRenderer.Cell + BoardRenderer.Gap) * _scale;
         double maxWidth = pitch - 2;
         var typeface = new Typeface(FontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
-        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         double Measure(string text) => new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight, typeface, font, Brushes.White, dip).WidthIncludingTrailingWhitespace;
 
@@ -602,15 +615,14 @@ internal sealed partial class PartyWindow : Window
         {
             var t = _levelLabels[i];
             t.FontSize = font;
-            t.Width = cell;
-            int lv = _state.Level(_slots[i].Key);
+            int lv = seats[i].Level;
             t.Text = _labels switch
             {
                 Labels.None => "",
                 Labels.NameAndLevel => BoardLabel.Text(_slots[i].Title, Strings.Level, lv, maxWidth, Measure),
                 _ => Strings.Level + lv,
             };
-            // 名前まで出すと 32px の枠には入らない。**枠を越えて、隣の子との間隔いっぱいまで中央に伸ばす**
+            // 名前まで出すと 32px の枠には入らない。**枠を越えて、隣の子との間隔いっぱいまで中央に伸ばす**（幅は 1 回だけ書く: 途中の値を書くと、そのたびにレイアウトが起きる）
             t.Width = _labels == Labels.NameAndLevel ? Math.Max(cell, pitch) : cell;
             int row = i / perRow;
             double left = (BoardRenderer.RowInset(_slots.Count, row, _boardPixelWidth)
@@ -865,6 +877,7 @@ internal sealed partial class PartyWindow : Window
         apply();
         SaveState(force: true);          // すぐ書き戻す。ここで落ちても戻らないように
         _lastSignature = 0;
+        _labelKeySet = false;
         UpdateStoryText();
         Redraw(force: true);
         UpdateDetail();

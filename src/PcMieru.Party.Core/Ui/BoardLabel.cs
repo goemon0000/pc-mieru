@@ -19,4 +19,28 @@ public static class BoardLabel
         string full = title.Trim() + " " + levelOnly;
         return measure(full) <= maxWidth ? full : levelOnly;
     }
+
+    /// <summary>
+    /// Everything that decides what the name tags say and where they sit: the tag mode, the scale, the screen's DIP factor, the board's pixel width, the language, and each seat's title and level, in order.
+    /// The window places the tags only when this changes (C38): a redraw for a new animation frame changes none of it, and re-measuring every title with FormattedText and re-laying out every tag on each of those
+    /// redraws was Party's biggest idle cost over the old app.
+    /// </summary>
+    public static int Fingerprint(int mode, double scale, double dip, int boardPixelWidth, string lang, IReadOnlyList<(string Title, int Level)> seats)
+    {
+        ArgumentNullException.ThrowIfNull(seats);
+        var h = new HashCode();
+        h.Add(mode);
+        h.Add(scale);
+        h.Add(dip);
+        h.Add(boardPixelWidth);
+        h.Add(lang, StringComparer.Ordinal);
+        h.Add(seats.Count);
+        foreach (var (title, level) in seats)
+        {
+            h.Add(title, StringComparer.Ordinal);
+            h.Add(level);
+        }
+
+        return h.ToHashCode();
+    }
 }
