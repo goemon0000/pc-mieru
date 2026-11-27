@@ -18,7 +18,8 @@ internal static class StorageCollector
     internal const int MaxDisks = 64;
     private static readonly Guid DiskInterface = new("53f56307-b6bf-11d0-94f2-00a0c91efb8b");
 
-    private sealed record VolumeInfo(string Letter, string Label, string FileSystem, Value<long> Total, Value<long> Free, IReadOnlyList<(int Disk, long Start, long Length)> Extents, string? Style);
+    /// <summary><paramref name="Fixed"/> is a local fixed disk (drive type 3), as opposed to removable media (type 2).</summary>
+    internal sealed record VolumeInfo(string Letter, string Label, string FileSystem, Value<long> Total, Value<long> Free, IReadOnlyList<(int Disk, long Start, long Length)> Extents, string? Style, bool Fixed = true);
 
     public static Value<IReadOnlyList<StorageDevice>> Collect()
     {
@@ -94,7 +95,7 @@ internal static class StorageCollector
         return map;
     }
 
-    private static List<VolumeInfo> ReadVolumes()
+    internal static List<VolumeInfo> ReadVolumes()
     {
         var result = new List<VolumeInfo>();
         var mask = Kernel32.GetLogicalDrives();
@@ -146,7 +147,8 @@ internal static class StorageCollector
                 total,
                 free,
                 extents,
-                style));
+                style,
+                type == 3));
         }
 
         return result;

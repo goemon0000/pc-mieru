@@ -18,5 +18,6 @@ internal static class PageCatalog
         new("checks", "gui.nav.checks", c => new ChecksPage(c)),
         new("diagnose", "gui.nav.diagnose", c => new DiagnosePage(c)),
         new("settings", "gui.nav.settings", c => new SettingsPage(c)),
+        new("party", "gui.nav.party", c => new PartyPage(c)),
     ];
 }

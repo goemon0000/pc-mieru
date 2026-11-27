@@ -17,9 +17,9 @@ internal delegate void CheckFn(string name, bool ok, string detail = "");
 /// </summary>
 internal static partial class SmokeRun
 {
-    // 300 s: the run with --fakes --shots walks the checks page, the two configuration code dialogs (plain and trimmed) and the update check (the first-run dialog and four
+    // 420 s (it was 300 s until the walk of the old-progress notice made the run run past it on this PC): the run with --fakes --shots walks the checks page, the two configuration code dialogs (plain and trimmed) and the update check (the first-run dialog and four
     // states of the settings section) in four looks each (about 130 s in all, more at 150%); the time is a watchdog against a hang, not a measure, so it leaves room for a slow machine.
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(300);
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(420);
 
     /// <summary>Exceptions that reached Application.ThreadException during the run. Any entry fails the smoke run.</summary>
     public static System.Collections.Concurrent.ConcurrentQueue<string> UnhandledErrors { get; } = new();
@@ -29,6 +29,10 @@ internal static partial class SmokeRun
         var checks = new JsonArray();
         var runner = new Runner(form, context, checks, shotsDirectory, onScreen, dpiPercent, startedAt, netMeter);
         var exitCode = 1;
+
+        // Program.cs has done this before the window existed (so a startup page never held the real ones); a caller that has not gets it here.
+        Prepare(context);
+        var partyScratch = context.PartyRoamingRoot;
 
         // A dialog must never wait for a click in an unattended run; "no" is the safe answer.
         Dialogs.AutoAnswer = false;
@@ -75,9 +79,36 @@ internal static partial class SmokeRun
         Application.Run(form);
         runner.Check("no unhandled exception on the UI thread", UnhandledErrors.IsEmpty, string.Join(" || ", UnhandledErrors.Take(3)));
         exitCode = checks.All(c => (bool)c!["ok"]!) ? exitCode : Math.Max(exitCode, 1);
+        RemovePartyScratch(partyScratch);
         runner.Write(outputPath, exitCode);
         return exitCode;
     }
+
+    /// <summary>
+    /// The smoke run's stand-ins for what a real start would name, put into the context BEFORE the main window (and so any page, <c>--page</c> included) is made: DESIGN-C 4.1 items 1-2, the notice that old
+    /// Parts Life progress is waiting looks only in a scratch folder of the run (never at the real roaming folder; no resolver is set) and the Parts Life button starts nothing (the run presses none);
+    /// DESIGN-C 3 item 5, the sign-in setting works on an in-memory store, never on the registry. Done once: a context that already has its launcher stand-in is left as it is.
+    /// </summary>
+    internal static void Prepare(GuiContext context)
+    {
+        if (context.PartyLauncherOverride is not null)
+        {
+            return;
+        }
+
+        context.PartyRoamingRoot = MakePartyScratch();
+        context.PartyLauncherOverride = new PartyLauncher(() => false, _ => true, (_, arguments) =>
+        {
+            PartyStarts.Add(arguments);
+            return true;
+        });
+        context.LogonStore = new PcMieru.Core.Siblings.MemoryRunStore();
+        // The sign-in switch of the run sees every exe as there (the old Parts Life and the Party exe next to this one are stand-ins) and takes a lock of its own, never the one of a real start.
+        context.LogonSeam = new LogonSeams(FileExists: _ => true, LockName: @"Local\PCMieru.Smoke.Logon." + Guid.NewGuid().ToString("N"));
+    }
+
+    /// <summary>A prepared run that ends before <see cref="Run"/> (a <c>--page</c> that does not exist): takes its scratch roaming folder away again.</summary>
+    internal static void Discard(GuiContext context) => RemovePartyScratch(context.PartyRoamingRoot);
 
     private static double Ms(DateTime since) => Math.Round((DateTime.Now - since).TotalMilliseconds);
 
@@ -419,6 +450,7 @@ internal static partial class SmokeRun
             if (await Open("startup").ConfigureAwait(true) is StartupPage startup)
             {
                 Check("startup: items are listed", startup.Grid.VirtualListSize > 0, startup.Grid.VirtualListSize + " rows");
+                Check("startup: the page is served from memory, never from the real Run keys or Startup folder", context.Services.Startup is not PcMieru.Core.Management.StartupManager, context.Services.Startup.GetType().Name);
             }
 
             if (await Open("services").ConfigureAwait(true) is ServicesPage services)
@@ -493,6 +525,8 @@ internal static partial class SmokeRun
             await RecordRun().ConfigureAwait(true);
             await Pcb1Run().ConfigureAwait(true);
             await UpdateRun().ConfigureAwait(true);
+            await PartyImportRun().ConfigureAwait(true);
+            await PartyLogonRun().ConfigureAwait(true);
             await ReportRun().ConfigureAwait(true);
         }
 

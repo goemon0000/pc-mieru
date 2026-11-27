@@ -152,18 +152,26 @@ public sealed class CpuLoadStopTests
     {
         var stuck = new StuckClock();
         var world = new RealWorld(Cpus.Uniform(2), stuck);
-        var clock = Stopwatch.StartNew();
         var running = RunOnWorker(world, 1);
         try
         {
             Assert.True(stuck.Entered.Wait(Bound));
 
-            var limit = CpuLoadTest.TickInterval + CpuLoadTest.DeadlineGrace + TimeSpan.FromSeconds(5);
+            // The run armed its backstop through the clock, for the second it was asked for plus the grace, and nothing has fired it: the load is
+            // still running while the control loop is stuck. Real time does not enter into this: the test fires the backstop itself.
+            var backstop = stuck.Backstop;
+            Assert.NotNull(backstop);
+            Assert.Equal(CpuLoadTest.TickInterval + CpuLoadTest.DeadlineGrace, backstop.Delay);
+            Assert.Equal(2, world.Handles.Count);
+            Assert.All(world.Handles, static h => Assert.True(h.IsAlive));
+
+            backstop.Fire();
+
+            // The only wait left is for a thread to reach the end of its (2 ms) chunk: the stop flag is already set. Patience is a hang guard, not a timing.
             Assert.True(
-                SpinWait.SpinUntil(() => world.Handles.All(static h => !h.IsAlive), limit),
-                $"the load threads were still running {limit} after the start");
-            Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(1), $"the load stopped after {clock.Elapsed}, before its second was over");
-            Assert.False(running.IsCompleted);
+                SpinWait.SpinUntil(() => world.Handles.All(static h => !h.IsAlive), Patience),
+                "the load threads were still running after the deadline backstop fired");
+            Assert.False(running.IsCompleted); // the control loop is still stuck in its wait: the threads stopped without it
         }
         finally
         {
@@ -313,6 +321,9 @@ public sealed class CpuLoadStopTests
 
         public ManualResetEventSlim Release { get; } = new(false);
 
+        /// <summary>The deadline backstop the run armed: what it asked for, and it fires only when the test says so (never on wall time).</summary>
+        public FakeBackstop? Backstop { get; private set; }
+
         public long Timestamp => Stopwatch.GetTimestamp();
 
         public TimeSpan Elapsed(long since) => Stopwatch.GetElapsedTime(since);
@@ -324,7 +335,7 @@ public sealed class CpuLoadStopTests
             return false;
         }
 
-        public IDisposable CallAfter(TimeSpan delay, Action callback) => NeverFires.Instance;
+        public IDisposable CallAfter(TimeSpan delay, Action callback) => Backstop = new FakeBackstop(delay, callback);
     }
 
     private sealed class RealWorld(IReadOnlyList<LogicalCpu> cpus, ILoadClock clock) : ICpuTestSession

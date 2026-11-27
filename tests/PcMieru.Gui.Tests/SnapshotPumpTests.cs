@@ -31,14 +31,24 @@ public class SnapshotPumpTests
         public void Dispose() => _inner.Dispose();
     }
 
-    /// <summary>Remembers which threads called it, so a test can tell the loop's thread from the window's.</summary>
+    /// <summary>
+    /// Remembers which threads called it, so a test can tell the loop's thread from the window's, and counts the calls made down a flow the
+    /// test marked. The thread alone does not say who sampled: a one-shot that waited for the loop's gate goes on on a pool thread.
+    /// </summary>
     private sealed class ThreadTrackingSource : ISnapshotSource
     {
+        private readonly AsyncLocal<bool> _marked = new(); // one per source: a mark left by another test is another key
         private readonly FakeSnapshotSource _inner = new();
         private readonly HashSet<int> _threads = [];
         private int _calls;
+        private int _markedCalls;
 
         public int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>Calls made down a flow after <see cref="MarkThisFlow"/>, whatever thread an await resumed on. The loop runs on its own flow.</summary>
+        public int MarkedCalls => Volatile.Read(ref _markedCalls);
+
+        public void MarkThisFlow() => _marked.Value = true;
 
         public bool WasCalledOn(int managedThreadId)
         {
@@ -58,6 +68,11 @@ public class SnapshotPumpTests
             }
 
             _ = Interlocked.Increment(ref _calls);
+            if (_marked.Value)
+            {
+                _ = Interlocked.Increment(ref _markedCalls);
+            }
+
             return _inner.SampleAsync(ct);
         }
 
@@ -196,11 +211,13 @@ public class SnapshotPumpTests
         Assert.True(loop.IsRecording);
         Assert.Empty(pump.History); // paused: the window got nothing so far
 
+        source.MarkThisFlow();
         var tick = pump.TickAsync();
 
         Assert.True(Pumping(() => tick.IsCompleted), "the refresh of a paused, recording window did not come back");
         Finish(tick);
         Assert.False(source.WasCalledOn(Environment.CurrentManagedThreadId), "the refresh sampled on the window's thread");
+        Assert.Equal(0, source.MarkedCalls); // the refresh took no sample of its own, on any thread
         Assert.NotNull(pump.Latest);
         Assert.Single(pump.History);
         Assert.True(pump.Paused);
@@ -223,11 +240,14 @@ public class SnapshotPumpTests
         lease.Dispose();
         Assert.False(loop.IsRecording);
 
+        // The loop may still be finishing the recording's last sample, so the one-shot can wait for the gate and go on on a pool thread:
+        // ask whether the refresh's own flow sampled, not which thread did.
+        source.MarkThisFlow();
         var tick = pump.TickAsync();
         Assert.True(Pumping(() => tick.IsCompleted));
         Finish(tick);
 
-        Assert.True(source.WasCalledOn(Environment.CurrentManagedThreadId), "the paused refresh did not sample again after the lease ended");
+        Assert.Equal(1, source.MarkedCalls); // "the paused refresh did not sample again after the lease ended"
         Assert.NotNull(pump.Latest);
     }
 

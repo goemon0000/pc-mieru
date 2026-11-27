@@ -1,0 +1,3517 @@
+{
+  "version": 1,
+  "cell": 32,
+  "markCell": 16,
+  "characters": {
+    "cpu-cooler": {
+      "name": {
+        "ja": "CPUクーラーくん",
+        "en": "Mr. CPU Cooler"
+      },
+      "motif": {
+        "ja": "CPUクーラー（ファンが顔）",
+        "en": "A CPU cooler — the fan is its face"
+      },
+      "trait": {
+        "ja": "心配性・過保護",
+        "en": "A worrier, overprotective"
+      },
+      "why": {
+        "ja": "守る相手はCPUただ一つ。機械の頭が熱でまいらないよう見張る係で、目を離すとすぐ熱が上がる。だから落ち着きなく見て回るし、あまり寝ない。",
+        "en": "It looks after exactly one part: the CPU. Keeping the machine's head from overheating is its whole job, so it never really stops checking — always moving, rarely sleeping."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              0
+            ],
+            [
+              32,
+              0
+            ],
+            [
+              64,
+              0
+            ],
+            [
+              96,
+              0
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              0
+            ],
+            [
+              160,
+              0
+            ],
+            [
+              192,
+              0
+            ],
+            [
+              224,
+              0
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              0
+            ],
+            [
+              288,
+              0
+            ],
+            [
+              320,
+              0
+            ],
+            [
+              352,
+              0
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              0
+            ],
+            [
+              416,
+              0
+            ],
+            [
+              448,
+              0
+            ],
+            [
+              480,
+              0
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              32
+            ],
+            [
+              32,
+              32
+            ],
+            [
+              64,
+              32
+            ],
+            [
+              96,
+              32
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              128,
+              32
+            ],
+            [
+              160,
+              32
+            ],
+            [
+              192,
+              32
+            ],
+            [
+              224,
+              32
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              256,
+              32
+            ],
+            [
+              288,
+              32
+            ],
+            [
+              320,
+              32
+            ],
+            [
+              352,
+              32
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              32
+            ],
+            [
+              416,
+              32
+            ],
+            [
+              448,
+              32
+            ],
+            [
+              480,
+              32
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              0,
+              64
+            ],
+            [
+              32,
+              64
+            ],
+            [
+              64,
+              64
+            ]
+          ]
+        }
+      }
+    },
+    "cpu": {
+      "name": {
+        "ja": "CPUくん",
+        "en": "Mr. CPU"
+      },
+      "motif": {
+        "ja": "CPU（ヒートスプレッダが顔）",
+        "en": "A CPU — the heat spreader is its face"
+      },
+      "trait": {
+        "ja": "生真面目・働き者",
+        "en": "Earnest and hard-working"
+      },
+      "why": {
+        "ja": "計算はぜんぶこの子が引き受けている。休むと機械が止まるので、動きが速く、休憩が短い。",
+        "en": "Every calculation goes through it. The machine stops when it rests, so it moves fast and takes short breaks."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              64
+            ],
+            [
+              128,
+              64
+            ],
+            [
+              160,
+              64
+            ],
+            [
+              192,
+              64
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              64
+            ],
+            [
+              256,
+              64
+            ],
+            [
+              288,
+              64
+            ],
+            [
+              320,
+              64
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              64
+            ],
+            [
+              384,
+              64
+            ],
+            [
+              416,
+              64
+            ],
+            [
+              448,
+              64
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              64
+            ],
+            [
+              0,
+              96
+            ],
+            [
+              32,
+              96
+            ],
+            [
+              64,
+              96
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              96
+            ],
+            [
+              128,
+              96
+            ],
+            [
+              160,
+              96
+            ],
+            [
+              192,
+              96
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              224,
+              96
+            ],
+            [
+              256,
+              96
+            ],
+            [
+              288,
+              96
+            ],
+            [
+              320,
+              96
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              352,
+              96
+            ],
+            [
+              384,
+              96
+            ],
+            [
+              416,
+              96
+            ],
+            [
+              448,
+              96
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              96
+            ],
+            [
+              0,
+              128
+            ],
+            [
+              32,
+              128
+            ],
+            [
+              64,
+              128
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              96,
+              128
+            ],
+            [
+              128,
+              128
+            ],
+            [
+              160,
+              128
+            ]
+          ]
+        }
+      }
+    },
+    "gpu": {
+      "name": {
+        "ja": "GPUくん",
+        "en": "Mr. GPU"
+      },
+      "motif": {
+        "ja": "グラフィックスカード（ファンが顔）",
+        "en": "A graphics card — the fan is its face"
+      },
+      "trait": {
+        "ja": "派手・自信家",
+        "en": "Flashy and self-assured"
+      },
+      "why": {
+        "ja": "いちばん大きく、いちばん電気を食い、いちばん高い。おまけに光る。だから動きも反応も大きい。",
+        "en": "The biggest, the hungriest, the most expensive part — and it lights up. So it moves big and reacts big."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              192,
+              128
+            ],
+            [
+              224,
+              128
+            ],
+            [
+              256,
+              128
+            ],
+            [
+              288,
+              128
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              320,
+              128
+            ],
+            [
+              352,
+              128
+            ],
+            [
+              384,
+              128
+            ],
+            [
+              416,
+              128
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              448,
+              128
+            ],
+            [
+              480,
+              128
+            ],
+            [
+              0,
+              160
+            ],
+            [
+              32,
+              160
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              64,
+              160
+            ],
+            [
+              96,
+              160
+            ],
+            [
+              128,
+              160
+            ],
+            [
+              160,
+              160
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              192,
+              160
+            ],
+            [
+              224,
+              160
+            ],
+            [
+              256,
+              160
+            ],
+            [
+              288,
+              160
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              320,
+              160
+            ],
+            [
+              352,
+              160
+            ],
+            [
+              384,
+              160
+            ],
+            [
+              416,
+              160
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              448,
+              160
+            ],
+            [
+              480,
+              160
+            ],
+            [
+              0,
+              192
+            ],
+            [
+              32,
+              192
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              64,
+              192
+            ],
+            [
+              96,
+              192
+            ],
+            [
+              128,
+              192
+            ],
+            [
+              160,
+              192
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              192,
+              192
+            ],
+            [
+              224,
+              192
+            ],
+            [
+              256,
+              192
+            ]
+          ]
+        }
+      }
+    },
+    "memory": {
+      "name": {
+        "ja": "メモリくん",
+        "en": "Ms. Memory"
+      },
+      "motif": {
+        "ja": "メモリモジュール（ヒートスプレッダが顔）",
+        "en": "A memory module — the heat spreader is its face"
+      },
+      "trait": {
+        "ja": "忘れっぽい・のんき",
+        "en": "Forgetful and easygoing"
+      },
+      "why": {
+        "ja": "電気が切れると中身がぜんぶ消えてしまう。だから急がないし、歩いている途中でよく立ち止まる。",
+        "en": "Everything it holds vanishes the moment the power goes. So it never hurries, and it often stops mid-walk."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              288,
+              192
+            ],
+            [
+              320,
+              192
+            ],
+            [
+              352,
+              192
+            ],
+            [
+              384,
+              192
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              416,
+              192
+            ],
+            [
+              448,
+              192
+            ],
+            [
+              480,
+              192
+            ],
+            [
+              0,
+              224
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              32,
+              224
+            ],
+            [
+              64,
+              224
+            ],
+            [
+              96,
+              224
+            ],
+            [
+              128,
+              224
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              160,
+              224
+            ],
+            [
+              192,
+              224
+            ],
+            [
+              224,
+              224
+            ],
+            [
+              256,
+              224
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              288,
+              224
+            ],
+            [
+              320,
+              224
+            ],
+            [
+              352,
+              224
+            ],
+            [
+              384,
+              224
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              416,
+              224
+            ],
+            [
+              448,
+              224
+            ],
+            [
+              480,
+              224
+            ],
+            [
+              0,
+              256
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              32,
+              256
+            ],
+            [
+              64,
+              256
+            ],
+            [
+              96,
+              256
+            ],
+            [
+              128,
+              256
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              160,
+              256
+            ],
+            [
+              192,
+              256
+            ],
+            [
+              224,
+              256
+            ],
+            [
+              256,
+              256
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              288,
+              256
+            ],
+            [
+              320,
+              256
+            ],
+            [
+              352,
+              256
+            ]
+          ]
+        }
+      }
+    },
+    "motherboard": {
+      "name": {
+        "ja": "マザーボードくん",
+        "en": "Mr. Motherboard"
+      },
+      "motif": {
+        "ja": "マザーボード（ソケットが顔）",
+        "en": "A motherboard — the socket is its face"
+      },
+      "trait": {
+        "ja": "司令塔・まとめ役",
+        "en": "The one who runs the room"
+      },
+      "why": {
+        "ja": "ただ繋いでいるだけではなく、各部品への給電もクロックの配分も起動の順番も、この子が決めている。だからあまり動かず、全体を見ている。",
+        "en": "It does more than connect things: power delivery, clock distribution and the boot order are all its call. So it stays put and watches everything."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              256
+            ],
+            [
+              416,
+              256
+            ],
+            [
+              448,
+              256
+            ],
+            [
+              480,
+              256
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              288
+            ],
+            [
+              32,
+              288
+            ],
+            [
+              64,
+              288
+            ],
+            [
+              96,
+              288
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              288
+            ],
+            [
+              160,
+              288
+            ],
+            [
+              192,
+              288
+            ],
+            [
+              224,
+              288
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              288
+            ],
+            [
+              288,
+              288
+            ],
+            [
+              320,
+              288
+            ],
+            [
+              352,
+              288
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              288
+            ],
+            [
+              416,
+              288
+            ],
+            [
+              448,
+              288
+            ],
+            [
+              480,
+              288
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              0,
+              320
+            ],
+            [
+              32,
+              320
+            ],
+            [
+              64,
+              320
+            ],
+            [
+              96,
+              320
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              128,
+              320
+            ],
+            [
+              160,
+              320
+            ],
+            [
+              192,
+              320
+            ],
+            [
+              224,
+              320
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              320
+            ],
+            [
+              288,
+              320
+            ],
+            [
+              320,
+              320
+            ],
+            [
+              352,
+              320
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              384,
+              320
+            ],
+            [
+              416,
+              320
+            ],
+            [
+              448,
+              320
+            ]
+          ]
+        }
+      }
+    },
+    "psu": {
+      "name": {
+        "ja": "電源くん",
+        "en": "Mr. PSU"
+      },
+      "motif": {
+        "ja": "電源ユニット（銘板が顔）",
+        "en": "A power supply — the label is its face"
+      },
+      "trait": {
+        "ja": "無口・職人気質",
+        "en": "Quiet, and all craft"
+      },
+      "why": {
+        "ja": "地味に見えるが、ここが落ちると全部が同時に落ちる。だから反応は薄いのに、持ち場を離れないし寝ない。",
+        "en": "It looks plain, but everything dies the instant it does. It barely reacts — and it never leaves its post or sleeps."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              320
+            ],
+            [
+              0,
+              352
+            ],
+            [
+              32,
+              352
+            ],
+            [
+              64,
+              352
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              352
+            ],
+            [
+              128,
+              352
+            ],
+            [
+              160,
+              352
+            ],
+            [
+              192,
+              352
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              352
+            ],
+            [
+              256,
+              352
+            ],
+            [
+              288,
+              352
+            ],
+            [
+              320,
+              352
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              352
+            ],
+            [
+              384,
+              352
+            ],
+            [
+              416,
+              352
+            ],
+            [
+              448,
+              352
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              352
+            ],
+            [
+              0,
+              384
+            ],
+            [
+              32,
+              384
+            ],
+            [
+              64,
+              384
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              96,
+              384
+            ],
+            [
+              128,
+              384
+            ],
+            [
+              160,
+              384
+            ],
+            [
+              192,
+              384
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              224,
+              384
+            ],
+            [
+              256,
+              384
+            ],
+            [
+              288,
+              384
+            ],
+            [
+              320,
+              384
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              384
+            ],
+            [
+              384,
+              384
+            ],
+            [
+              416,
+              384
+            ],
+            [
+              448,
+              384
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              480,
+              384
+            ],
+            [
+              0,
+              416
+            ],
+            [
+              32,
+              416
+            ]
+          ]
+        }
+      }
+    },
+    "hdd": {
+      "name": {
+        "ja": "HDDくん",
+        "en": "Mr. HDD"
+      },
+      "motif": {
+        "ja": "ハードディスク（円盤が顔）",
+        "en": "A hard disk — the platter is its face"
+      },
+      "trait": {
+        "ja": "老人・寡黙で頼れる",
+        "en": "Old, quiet, dependable"
+      },
+      "why": {
+        "ja": "いちばん古くからいて、いちばん多く覚えている。そのかわり動きは遅く、放っておくとすぐ止まって休む。",
+        "en": "The oldest one here, and the one that remembers the most. In exchange it is slow, and it spins down to rest the moment it can."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              64,
+              416
+            ],
+            [
+              96,
+              416
+            ],
+            [
+              128,
+              416
+            ],
+            [
+              160,
+              416
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              192,
+              416
+            ],
+            [
+              224,
+              416
+            ],
+            [
+              256,
+              416
+            ],
+            [
+              288,
+              416
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              320,
+              416
+            ],
+            [
+              352,
+              416
+            ],
+            [
+              384,
+              416
+            ],
+            [
+              416,
+              416
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              448,
+              416
+            ],
+            [
+              480,
+              416
+            ],
+            [
+              0,
+              448
+            ],
+            [
+              32,
+              448
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              64,
+              448
+            ],
+            [
+              96,
+              448
+            ],
+            [
+              128,
+              448
+            ],
+            [
+              160,
+              448
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              192,
+              448
+            ],
+            [
+              224,
+              448
+            ],
+            [
+              256,
+              448
+            ],
+            [
+              288,
+              448
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              320,
+              448
+            ],
+            [
+              352,
+              448
+            ],
+            [
+              384,
+              448
+            ],
+            [
+              416,
+              448
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              448,
+              448
+            ],
+            [
+              480,
+              448
+            ],
+            [
+              0,
+              480
+            ],
+            [
+              32,
+              480
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              64,
+              480
+            ],
+            [
+              96,
+              480
+            ],
+            [
+              128,
+              480
+            ]
+          ]
+        }
+      }
+    },
+    "ssd": {
+      "name": {
+        "ja": "SSDくん",
+        "en": "Mr. SSD"
+      },
+      "motif": {
+        "ja": "SSD（ラベル面が顔）",
+        "en": "An SSD — the label is its face"
+      },
+      "trait": {
+        "ja": "せっかち・若者",
+        "en": "Impatient, and young"
+      },
+      "why": {
+        "ja": "待たされるのが何より苦手。HDDくんより桁違いに速いが、そのぶん容量では敵わない。",
+        "en": "Waiting is the one thing it cannot stand. Orders of magnitude faster than HDD — but it cannot match him on capacity."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              160,
+              480
+            ],
+            [
+              192,
+              480
+            ],
+            [
+              224,
+              480
+            ],
+            [
+              256,
+              480
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              288,
+              480
+            ],
+            [
+              320,
+              480
+            ],
+            [
+              352,
+              480
+            ],
+            [
+              384,
+              480
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              416,
+              480
+            ],
+            [
+              448,
+              480
+            ],
+            [
+              480,
+              480
+            ],
+            [
+              0,
+              512
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              32,
+              512
+            ],
+            [
+              64,
+              512
+            ],
+            [
+              96,
+              512
+            ],
+            [
+              128,
+              512
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              160,
+              512
+            ],
+            [
+              192,
+              512
+            ],
+            [
+              224,
+              512
+            ],
+            [
+              256,
+              512
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              288,
+              512
+            ],
+            [
+              320,
+              512
+            ],
+            [
+              352,
+              512
+            ],
+            [
+              384,
+              512
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              416,
+              512
+            ],
+            [
+              448,
+              512
+            ],
+            [
+              480,
+              512
+            ],
+            [
+              0,
+              544
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              32,
+              544
+            ],
+            [
+              64,
+              544
+            ],
+            [
+              96,
+              544
+            ],
+            [
+              128,
+              544
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              160,
+              544
+            ],
+            [
+              192,
+              544
+            ],
+            [
+              224,
+              544
+            ]
+          ]
+        }
+      }
+    },
+    "m2": {
+      "name": {
+        "ja": "M.2 SSDくん",
+        "en": "Mr. M.2 SSD"
+      },
+      "motif": {
+        "ja": "M.2 SSD（中央のチップが顔）",
+        "en": "An M.2 SSD — the central chip is its face"
+      },
+      "trait": {
+        "ja": "せっかち・素っ気ない",
+        "en": "Impatient, and curt"
+      },
+      "why": {
+        "ja": "SSDくんより更に速い。速すぎて、待つという概念が身に付かなかった。線が1本も要らない身軽さも自慢だが、そのぶん熱を持ちやすい。",
+        "en": "Faster still than the SSD — so fast it never learned what waiting is. It is proud of needing no cables at all, though that same slimness makes it run hot."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              544
+            ],
+            [
+              288,
+              544
+            ],
+            [
+              320,
+              544
+            ],
+            [
+              352,
+              544
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              544
+            ],
+            [
+              416,
+              544
+            ],
+            [
+              448,
+              544
+            ],
+            [
+              480,
+              544
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              576
+            ],
+            [
+              32,
+              576
+            ],
+            [
+              64,
+              576
+            ],
+            [
+              96,
+              576
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              576
+            ],
+            [
+              160,
+              576
+            ],
+            [
+              192,
+              576
+            ],
+            [
+              224,
+              576
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              576
+            ],
+            [
+              288,
+              576
+            ],
+            [
+              320,
+              576
+            ],
+            [
+              352,
+              576
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              384,
+              576
+            ],
+            [
+              416,
+              576
+            ],
+            [
+              448,
+              576
+            ],
+            [
+              480,
+              576
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              0,
+              608
+            ],
+            [
+              32,
+              608
+            ],
+            [
+              64,
+              608
+            ],
+            [
+              96,
+              608
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              608
+            ],
+            [
+              160,
+              608
+            ],
+            [
+              192,
+              608
+            ],
+            [
+              224,
+              608
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              256,
+              608
+            ],
+            [
+              288,
+              608
+            ],
+            [
+              320,
+              608
+            ]
+          ]
+        }
+      }
+    },
+    "mouse": {
+      "name": {
+        "ja": "マウスくん",
+        "en": "Mr. Mouse"
+      },
+      "motif": {
+        "ja": "マウス（本体の面が顔）",
+        "en": "A mouse — its shell is its face"
+      },
+      "trait": {
+        "ja": "落ち着きない・小動物",
+        "en": "Restless, like a small animal"
+      },
+      "why": {
+        "ja": "止まっている時間のほうが短い部品。少し動かされただけで反応してしまうので、じっとしていられない。",
+        "en": "A part that spends more time moving than still. The slightest nudge sets it off, so it never quite settles."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              608
+            ],
+            [
+              384,
+              608
+            ],
+            [
+              416,
+              608
+            ],
+            [
+              448,
+              608
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              608
+            ],
+            [
+              0,
+              640
+            ],
+            [
+              32,
+              640
+            ],
+            [
+              64,
+              640
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              640
+            ],
+            [
+              128,
+              640
+            ],
+            [
+              160,
+              640
+            ],
+            [
+              192,
+              640
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              640
+            ],
+            [
+              256,
+              640
+            ],
+            [
+              288,
+              640
+            ],
+            [
+              320,
+              640
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              640
+            ],
+            [
+              384,
+              640
+            ],
+            [
+              416,
+              640
+            ],
+            [
+              448,
+              640
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              480,
+              640
+            ],
+            [
+              0,
+              672
+            ],
+            [
+              32,
+              672
+            ],
+            [
+              64,
+              672
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              96,
+              672
+            ],
+            [
+              128,
+              672
+            ],
+            [
+              160,
+              672
+            ],
+            [
+              192,
+              672
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              672
+            ],
+            [
+              256,
+              672
+            ],
+            [
+              288,
+              672
+            ],
+            [
+              320,
+              672
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              352,
+              672
+            ],
+            [
+              384,
+              672
+            ],
+            [
+              416,
+              672
+            ]
+          ]
+        }
+      }
+    },
+    "keyboard": {
+      "name": {
+        "ja": "キーボードくん",
+        "en": "Mr. Keyboard"
+      },
+      "motif": {
+        "ja": "キーボード（中央の面が顔）",
+        "en": "A keyboard — the centre plate is its face"
+      },
+      "trait": {
+        "ja": "おしゃべり",
+        "en": "Talkative"
+      },
+      "why": {
+        "ja": "叩かれるたびに音を返す仕事なので、黙っていられない。動きも細かく、いつも何か言っている。",
+        "en": "Its whole job is answering back every time it is struck, so silence is not in it. Its movements are small and constant."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              448,
+              672
+            ],
+            [
+              480,
+              672
+            ],
+            [
+              0,
+              704
+            ],
+            [
+              32,
+              704
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              64,
+              704
+            ],
+            [
+              96,
+              704
+            ],
+            [
+              128,
+              704
+            ],
+            [
+              160,
+              704
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              192,
+              704
+            ],
+            [
+              224,
+              704
+            ],
+            [
+              256,
+              704
+            ],
+            [
+              288,
+              704
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              320,
+              704
+            ],
+            [
+              352,
+              704
+            ],
+            [
+              384,
+              704
+            ],
+            [
+              416,
+              704
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              448,
+              704
+            ],
+            [
+              480,
+              704
+            ],
+            [
+              0,
+              736
+            ],
+            [
+              32,
+              736
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              64,
+              736
+            ],
+            [
+              96,
+              736
+            ],
+            [
+              128,
+              736
+            ],
+            [
+              160,
+              736
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              192,
+              736
+            ],
+            [
+              224,
+              736
+            ],
+            [
+              256,
+              736
+            ],
+            [
+              288,
+              736
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              320,
+              736
+            ],
+            [
+              352,
+              736
+            ],
+            [
+              384,
+              736
+            ],
+            [
+              416,
+              736
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              448,
+              736
+            ],
+            [
+              480,
+              736
+            ],
+            [
+              0,
+              768
+            ]
+          ]
+        }
+      }
+    },
+    "monitor": {
+      "name": {
+        "ja": "モニターくん",
+        "en": "Mr. Monitor"
+      },
+      "motif": {
+        "ja": "ディスプレイ（画面が顔）",
+        "en": "A display — the screen is its face"
+      },
+      "trait": {
+        "ja": "表情豊か・素直",
+        "en": "Expressive and honest"
+      },
+      "why": {
+        "ja": "画面がそのまま顔なので、隠しごとができない。中で起きていることが全部そのまま出てしまう。",
+        "en": "Its screen is its face, so it cannot hide anything. Whatever happens inside shows up on it immediately."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "pc",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              32,
+              768
+            ],
+            [
+              64,
+              768
+            ],
+            [
+              96,
+              768
+            ],
+            [
+              128,
+              768
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              160,
+              768
+            ],
+            [
+              192,
+              768
+            ],
+            [
+              224,
+              768
+            ],
+            [
+              256,
+              768
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              288,
+              768
+            ],
+            [
+              320,
+              768
+            ],
+            [
+              352,
+              768
+            ],
+            [
+              384,
+              768
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              416,
+              768
+            ],
+            [
+              448,
+              768
+            ],
+            [
+              480,
+              768
+            ],
+            [
+              0,
+              800
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              32,
+              800
+            ],
+            [
+              64,
+              800
+            ],
+            [
+              96,
+              800
+            ],
+            [
+              128,
+              800
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              160,
+              800
+            ],
+            [
+              192,
+              800
+            ],
+            [
+              224,
+              800
+            ],
+            [
+              256,
+              800
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              288,
+              800
+            ],
+            [
+              320,
+              800
+            ],
+            [
+              352,
+              800
+            ],
+            [
+              384,
+              800
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              416,
+              800
+            ],
+            [
+              448,
+              800
+            ],
+            [
+              480,
+              800
+            ],
+            [
+              0,
+              832
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              32,
+              832
+            ],
+            [
+              64,
+              832
+            ],
+            [
+              96,
+              832
+            ]
+          ]
+        }
+      }
+    },
+    "arcade": {
+      "name": {
+        "ja": "アーケード筐体くん",
+        "en": "Mr. Arcade Cabinet"
+      },
+      "motif": {
+        "ja": "ゲームセンターの筐体（画面が顔）",
+        "en": "An arcade cabinet — the screen is its face"
+      },
+      "trait": {
+        "ja": "呼び込み役・にぎやか",
+        "en": "Loud, and always calling people over"
+      },
+      "why": {
+        "ja": "自分から出向くのではなく、人が来るのを待つ側。だからその場を動かず、看板を光らせている。",
+        "en": "It does not go to people; people come to it. So it stays where it is and keeps its marquee lit."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "game",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              832
+            ],
+            [
+              160,
+              832
+            ],
+            [
+              192,
+              832
+            ],
+            [
+              224,
+              832
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              256,
+              832
+            ],
+            [
+              288,
+              832
+            ],
+            [
+              320,
+              832
+            ],
+            [
+              352,
+              832
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              384,
+              832
+            ],
+            [
+              416,
+              832
+            ],
+            [
+              448,
+              832
+            ],
+            [
+              480,
+              832
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              864
+            ],
+            [
+              32,
+              864
+            ],
+            [
+              64,
+              864
+            ],
+            [
+              96,
+              864
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              128,
+              864
+            ],
+            [
+              160,
+              864
+            ],
+            [
+              192,
+              864
+            ],
+            [
+              224,
+              864
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              256,
+              864
+            ],
+            [
+              288,
+              864
+            ],
+            [
+              320,
+              864
+            ],
+            [
+              352,
+              864
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              384,
+              864
+            ],
+            [
+              416,
+              864
+            ],
+            [
+              448,
+              864
+            ],
+            [
+              480,
+              864
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              0,
+              896
+            ],
+            [
+              32,
+              896
+            ],
+            [
+              64,
+              896
+            ],
+            [
+              96,
+              896
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              128,
+              896
+            ],
+            [
+              160,
+              896
+            ],
+            [
+              192,
+              896
+            ]
+          ]
+        }
+      }
+    },
+    "handheld": {
+      "name": {
+        "ja": "携帯機くん",
+        "en": "Mr. Handheld"
+      },
+      "motif": {
+        "ja": "携帯ゲーム機（画面が顔）",
+        "en": "A handheld console — the screen is its face"
+      },
+      "trait": {
+        "ja": "身軽・どこへでも付いてくる",
+        "en": "Light on its feet, and always tagging along"
+      },
+      "why": {
+        "ja": "据え置きと違って持ち出される前提の子。だから身軽で、あちこちに現れる。",
+        "en": "Unlike the ones that stay put, it was made to be carried out. So it travels light and turns up everywhere."
+      },
+      "disclaimer": {
+        "ja": "この子の話すことは遊びです。規格や相性の表示も雰囲気づくりのためのもので、購入の判断には使えません。実際の対応可否は必ず製品の仕様をご確認ください。",
+        "en": "Anything this character says is for fun. The specs and compatibility marks are flavour, not buying advice — always check the actual product specifications."
+      },
+      "family": "game",
+      "motions": {
+        "idle": {
+          "ms": 140,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              896
+            ],
+            [
+              256,
+              896
+            ],
+            [
+              288,
+              896
+            ],
+            [
+              320,
+              896
+            ]
+          ]
+        },
+        "walk": {
+          "ms": 120,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              352,
+              896
+            ],
+            [
+              384,
+              896
+            ],
+            [
+              416,
+              896
+            ],
+            [
+              448,
+              896
+            ]
+          ]
+        },
+        "sit": {
+          "ms": 300,
+          "anchor": 0.8,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              480,
+              896
+            ],
+            [
+              0,
+              928
+            ],
+            [
+              32,
+              928
+            ],
+            [
+              64,
+              928
+            ]
+          ]
+        },
+        "climb": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": 0.34,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              928
+            ],
+            [
+              128,
+              928
+            ],
+            [
+              160,
+              928
+            ],
+            [
+              192,
+              928
+            ]
+          ]
+        },
+        "peek": {
+          "ms": 220,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": null,
+          "frames": [
+            [
+              224,
+              928
+            ],
+            [
+              256,
+              928
+            ],
+            [
+              288,
+              928
+            ],
+            [
+              320,
+              928
+            ]
+          ]
+        },
+        "happy": {
+          "ms": 130,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "note",
+          "frames": [
+            [
+              352,
+              928
+            ],
+            [
+              384,
+              928
+            ],
+            [
+              416,
+              928
+            ],
+            [
+              448,
+              928
+            ]
+          ]
+        },
+        "sleep": {
+          "ms": 620,
+          "anchor": 0.94,
+          "once": false,
+          "rope": null,
+          "mark": "zzz",
+          "frames": [
+            [
+              480,
+              928
+            ],
+            [
+              0,
+              960
+            ],
+            [
+              32,
+              960
+            ],
+            [
+              64,
+              960
+            ]
+          ]
+        },
+        "hang": {
+          "ms": 240,
+          "anchor": 0.06,
+          "once": false,
+          "rope": 0.05,
+          "mark": null,
+          "frames": [
+            [
+              96,
+              960
+            ],
+            [
+              128,
+              960
+            ],
+            [
+              160,
+              960
+            ],
+            [
+              192,
+              960
+            ]
+          ]
+        },
+        "surprised": {
+          "ms": 110,
+          "anchor": 0.94,
+          "once": true,
+          "rope": null,
+          "mark": "excl",
+          "frames": [
+            [
+              224,
+              960
+            ],
+            [
+              256,
+              960
+            ],
+            [
+              288,
+              960
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "marks": {
+    "zzz": {
+      "frames": [
+        [
+          0,
+          0
+        ],
+        [
+          16,
+          0
+        ],
+        [
+          32,
+          0
+        ]
+      ]
+    },
+    "excl": {
+      "frames": [
+        [
+          48,
+          0
+        ],
+        [
+          64,
+          0
+        ]
+      ]
+    },
+    "note": {
+      "frames": [
+        [
+          80,
+          0
+        ],
+        [
+          96,
+          0
+        ]
+      ]
+    },
+    "ok": {
+      "frames": [
+        [
+          112,
+          0
+        ]
+      ]
+    },
+    "warn": {
+      "frames": [
+        [
+          0,
+          16
+        ]
+      ]
+    },
+    "ng": {
+      "frames": [
+        [
+          16,
+          16
+        ]
+      ]
+    }
+  }
+}

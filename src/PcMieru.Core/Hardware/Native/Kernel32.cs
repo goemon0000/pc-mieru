@@ -73,6 +73,35 @@ internal static partial class Kernel32
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern uint GetDriveTypeW(string rootPath);
 
+    /// <summary>The handle FindFirstVolumeW returns when it fails (INVALID_HANDLE_VALUE).</summary>
+    public static readonly IntPtr InvalidFindHandle = new(-1);
+
+    /// <summary>ERROR_NO_MORE_FILES: how FindNextVolumeW says the list ended.</summary>
+    public const int ErrorNoMoreFiles = 18;
+
+    /// <summary>ERROR_MORE_DATA: the buffer was too small and the returned length is the one to use.</summary>
+    public const int ErrorMoreData = 234;
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindFirstVolumeW([Out] char[] volumeName, uint bufferLength);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FindNextVolumeW(IntPtr findVolume, [Out] char[] volumeName, uint bufferLength);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FindVolumeClose(IntPtr findVolume);
+
+    /// <summary>The drive letters and mount folders of a volume, as a list of null-terminated strings ended by an empty one.</summary>
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetVolumePathNamesForVolumeNameW(string volumeName, [Out] char[]? volumePathNames, uint bufferLength, out uint returnLength);
+
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

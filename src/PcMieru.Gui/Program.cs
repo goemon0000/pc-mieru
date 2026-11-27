@@ -84,12 +84,32 @@ internal static class Program
             }
         }
 
-        using var services = PcMieruServices.Create(options.CoreOptions);
+        // A smoke run's Startup page is served from memory in every case (with or without --fakes): the real startup manager would read the owner's HKCU/HKLM Run, StartupApproved and Startup folder.
+        using var services = PcMieruServices.Create(options.CoreOptions, options.SmokeOutput is not null ? SmokeStartupManager.Register : null);
         using var pump = new SnapshotPump(services, settings.IntervalMs);
         var readResult = options.MeasureOutput is null && options.SmokeOutput is null && !options.ForceFakes;
         var context = new GuiContext(services, pump, theme, settings, measure: marks, lastUpdate: readResult
             ? () => UpdateResultNote.Read(InstallGate.InstallFolderOf(Environment.ProcessPath!)) : null,
             recording: MeasureRecording.CreateHub(services, options.MeasureRecord));
+        if (readResult)
+        {
+            context.SiblingLanguageNotifier = static () => PcMieru.Core.Siblings.SiblingWindows.Notify(
+                PartyLauncher.ExeName, PcMieru.Core.Siblings.MieruMessages.LanguageChanged, allowForeground: false);
+
+            // Only a real start looks for old Parts Life progress (file existence only); the smoke run gives its own scratch folder and every test none (DESIGN-C 4.1 items 1-2). The way to the real
+            // roaming folder is handed over as a method, NOT called here: a redirected folder that is slow or gone must stall a worker thread, never the start (GuiContext.ResolvePartyRoamingRoot asks it there).
+            context.PartyRoamingRootResolver = PcMieru.Core.Siblings.PartyImportHint.RealRoamingRoot;
+
+            // The sign-in setting reads and writes the owner's HKCU Run key; only a real start gets the real store (a smoke run gets a memory one, every test none).
+            context.LogonStore = PcMieru.Core.Siblings.RegistryRunStore.ForCurrentUser();
+        }
+
+        // A smoke run's stand-ins (a scratch roaming folder, a launcher that starts nothing, an in-memory sign-in store) are in the context BEFORE any page exists, so even the page of --page never holds the real ones.
+        if (options.SmokeOutput is not null)
+        {
+            SmokeRun.Prepare(context);
+        }
+
         using var form = new MainForm(context);
 
         // --measure-record (test-only, with --measure): one recording started without a click, into the folder the script gave (see MeasureRecordPlan).
@@ -100,6 +120,11 @@ internal static class Program
 
         if (options.StartPage is { } page && !form.ShowPage(page))
         {
+            if (options.SmokeOutput is not null)
+            {
+                SmokeRun.Discard(context);
+            }
+
             MessageBox.Show("--page: " + page, "PCMieru", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
@@ -198,6 +223,7 @@ internal static class GuiArgs
         var dpi = 0;
         TextSize? textSize = null;
         var netMeter = false;
+        var openChecks = false;
         string? measure = null;
         var measureRecord = new Dictionary<string, string>(StringComparer.Ordinal);
         problem = string.Empty;
@@ -245,6 +271,10 @@ internal static class GuiArgs
                         return false;
                     }
 
+                    break;
+                case "--open-checks":
+                    // What the Parts Life window starts this exe with when no main window is open (DESIGN-C 3 item 3): the same as --page checks.
+                    openChecks = true;
                     break;
                 case "--smoke":
                     smoke = Next();
@@ -330,6 +360,17 @@ internal static class GuiArgs
                     problem = "unknown argument: " + args[i];
                     return false;
             }
+        }
+
+        if (openChecks)
+        {
+            if (page is not null && !string.Equals(page, "checks", StringComparison.Ordinal))
+            {
+                problem = "--open-checks is --page checks and is not combined with another --page";
+                return false;
+            }
+
+            page = "checks";
         }
 
         if (measure is not null && (smoke is not null || page is not null))

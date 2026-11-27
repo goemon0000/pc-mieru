@@ -61,7 +61,8 @@ internal sealed partial class SettingsPage : PageBase
         AddRow(grid, _netUnitLabel, _netUnit, 5);
         AddWide(grid, _onTop, 6);
         AddWide(grid, _netAutostart, 7);
-        var next = BuildUpdateSection(grid, 8);
+        BuildLogonRow(grid, 8);
+        var next = BuildUpdateSection(grid, 9);
         _about.Margin = new Padding(0, Px(20), 0, Px(4));
         _privacy.Margin = new Padding(0, 0, 0, 0);
         _privacy.SetTone(CellTone.Dim);
@@ -143,6 +144,7 @@ internal sealed partial class SettingsPage : PageBase
         context.Theme.Changed += OnThemeChanged;
         context.Pump.StateChanged += OnPumpState;
         ConnectUpdateSection();
+        ConnectLogon();
         ApplyLanguage();
     }
 
@@ -170,6 +172,9 @@ internal sealed partial class SettingsPage : PageBase
 
         // The write probe of the install folder: once per activation, off the UI thread, remembered (the page shows "checking" until it ends, then the answer).
         _ = Context.Updates.RefreshPlacement();
+
+        // The sign-in entry may have been changed in Task Manager or by another copy since the page was last shown: read it again (off the UI thread).
+        RefreshLogon();
     }
 
     public override void OnDeactivated() => _active = false;
@@ -201,6 +206,7 @@ internal sealed partial class SettingsPage : PageBase
             _netUnit.Items.Clear();
             _netUnit.Items.AddRange([.. NetworkUnits.All.Select(NetworkUnits.Label).Cast<object>()]);
             _netAutostart.Text = Strings.Get("gui.settings.netmeter.autostart");
+            ApplyLogonLanguage();
             ApplyUpdateLanguage();
             ShowCurrent();
             _about.Text = Strings.Format("gui.settings.about", Fmt.Dict(("version", AppInfo.Version)));
@@ -276,6 +282,7 @@ internal sealed partial class SettingsPage : PageBase
         _onTop.Checked = Context.Settings.AlwaysOnTop;
         _netUnit.SelectedIndex = Math.Max(0, Array.IndexOf(NetworkUnits.All, Context.Settings.NetworkUnit));
         _netAutostart.Checked = Context.Settings.NetMeterAutostart;
+        ShowLogon();
         ShowUpdate();
     }
 
@@ -333,6 +340,17 @@ internal static class SettingsStrings
         new("gui.settings.netmeter.autostart.tip", "オンにすると、PCミエルを開くたびに Windows の管理者の確認が出て、許可するとプロセスごとの通信量が計測されます。オフのままなら、プロセス画面の「通信量を計測」を押したときだけ計測します", "When on, Windows asks for administrator permission each time PC Mieru opens, and if you allow it, traffic is measured per process. When off, it is measured only after you press Measure network on the Processes page"),
         new("gui.settings.ontop", "常に最前面に表示", "Always on top"),
         new("gui.settings.ontop.tip", "ほかのウィンドウの前に出したままにします", "Keeps this window in front of the others"),
+        // The sign-in setting (DESIGN-C 3 item 5). "Parts Life" is the product's own name; the status lines say why the box is not simply on or off.
+        new("gui.settings.partylogon", "ログオン時にパーツぐらしを起動", "Start Parts Life at sign-in"),
+        new("gui.settings.partylogon.tip", "Windows にサインインしたときに、パーツぐらしを自動で開きます。オフにすると登録を消します", "Opens Parts Life by itself when you sign in to Windows. Turning it off removes the entry"),
+        new("gui.settings.partylogon.disabled", "Windows の設定で無効になっています。チェックを入れると、ログオン時に起動するよう戻します", "It is turned off in Windows settings. Tick the box to start it at sign-in again"),
+        new("gui.settings.partylogon.other", "別の場所のパーツぐらしが登録されています。チェックを入れると、こちらに置き換えます", "A Parts Life in another folder is registered. Tick the box to use this one instead"),
+        new("gui.settings.partylogon.unknown", "ログオンの設定を読めませんでした。ほかのページを開いてから戻ると、もう一度読みます", "Could not read the sign-in setting. Open another page and come back to try again"),
+        new("gui.settings.partylogon.failed", "ログオンの設定を変えられませんでした", "Could not change the sign-in setting"),
+        new("gui.settings.partylogon.check", "ログオン設定の復元を確認してください", "Please check the sign-in setting"),
+        // Ticking the box while the old Parts Life still starts at sign-in switches that start over (never two starts): how it ended.
+        new("gui.settings.partylogon.switched", "切り替えました。次のログオンから、旧パーツぐらしの代わりにこちらが起動します", "Switched: from your next sign-in, this one starts instead of the old Parts Life"),
+        new("gui.settings.partylogon.notswitched", "切り替えられませんでした。ログオン時は旧パーツぐらしのままです。チェックを入れると、もう一度試します", "Could not switch; the old Parts Life still starts at sign-in. Tick the box to try again"),
         new("gui.settings.about", "PCミエル {version}", "PC Mieru {version}"),
         // The one exception to "sends nothing" is the update check (DESIGN-B 4): it asks GitHub whether a new version exists, and only when it is switched on.
         new(

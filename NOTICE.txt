@@ -4,9 +4,10 @@ PC Mieru - third-party notices
 This folder is self-contained: it carries the .NET runtime, so no separate
 .NET installation is needed.
 
-.NET runtime and Windows Desktop runtime (WinForms)
+.NET runtime and Windows Desktop runtime (WinForms and WPF)
   Copyright (c) .NET Foundation and Contributors. MIT License.
-  https://github.com/dotnet/runtime , https://github.com/dotnet/winforms
+  https://github.com/dotnet/runtime , https://github.com/dotnet/winforms ,
+  https://github.com/dotnet/wpf
 
 System.Management and System.CodeDom (the WMI questions of the system check)
   Copyright (c) .NET Foundation and Contributors. MIT License.
@@ -227,6 +228,54 @@ goemon0000/parts-life and the owner's pl-sensors helper
       Documents\PartsLife\runs folder it lived in, so that the old runs can be
       listed and read (never written), from the owner's pl-sensors
       src/PartsLife.Checks/Recording/RunStore.cs
+  src/PcMieru.Party.Core (Adventure, Game, Hardware/GpuRoster.cs,
+  Hardware/GpuCounterName.cs, Shared, Ui) and assets/party/story.json and
+  adventure.json
+      the rules layer of Parts Life v0.7.4, moved whole with the namespace
+      renamed, from src/PartsLife.Core and assets of goemon0000/parts-life
+      (tag v0.7.4). The files below still name the old app in their text:
+  src/PcMieru.Party.Core/Game/PartyState.cs
+  src/PcMieru.Party.Core/Shared/GpuAliasRule.cs
+  src/PcMieru.Party/ResidentInstance.cs
+      the single-resident mutex name shared with the last Parts Life release,
+      so that the old app and the new window never run at the same time
+  src/PcMieru.Party.Core/Import/ImportEngine.cs
+  src/PcMieru.Party.Core/Import/ImportPaths.cs
+  src/PcMieru.Party.Core/Import/ImportVerdict.cs
+  src/PcMieru.Party.Core/Import/LegacyRunningProbe.cs
+  src/PcMieru.Party.Core/Import/PartyMutexNames.cs
+      the importer of the old Parts Life save (new code, not copied). It names
+      the old app only because it must: its folders (%APPDATA%\PartsLife and
+      %APPDATA%\PartsParty), its processes (PartsLife.exe, PartsParty.exe) and
+      the resident mutex name it shares with the last release
+  src/PcMieru.Party/ImportDialogModel.cs
+  src/PcMieru.Party/I18n/Strings.cs
+      the first-start dialogs of that import (new code, not copied) and their
+      texts, which say which old app (PartsLife, or its former name PartsParty)
+      the progress comes from
+  src/PcMieru.Core/Siblings/PartyImportHint.cs
+  src/PcMieru.Gui/Controls/PartyImportDialog.cs
+  src/PcMieru.Gui/Smoke/SmokeRun.Party.cs
+      the main window's side of that import (new code, not copied): a hint from
+      the existence of the old save files, and the notice with its texts, which
+      say which old app (PartsLife, or its former name PartsParty) the
+      progress comes from. The import itself is not in the main window.
+  src/PcMieru.Core/Siblings/RunSwitch.cs
+  src/PcMieru.Gui/Smoke/SmokeRun.Logon.cs
+      the one-time move of the sign-in start from the old app's Run value
+      (named PartsLife) to the new one (new code, not copied): it only needs
+      that value name and the old exe names; the smoke cases for the sign-in
+      start move (new code, not copied) name the old value as a stand-in
+      old command
+  src/PcMieru.Party (Rendering, Game/GameAssets.cs, I18n/Strings.cs and
+  PartyWindow.xaml with its .cs files) and assets/party/characters.png,
+  marks.png, atlas.json and PartsLife.ico
+      the board renderer, the window, its texts and the art of Parts Life
+      v0.7.4, ported to the new data source, from src/PartsLife and assets of
+      goemon0000/parts-life (tag v0.7.4). The art is under
+      assets/party/LICENSE-ART.
+  src/PcMieru.Party/PcMieru.Party.csproj
+      embeds those assets; the icon keeps its old file name
 
 Public specifications used (no code copied)
   NVMe Base Specification (SMART / Health Information log page), the ATA SMART

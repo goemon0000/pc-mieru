@@ -165,6 +165,117 @@ internal sealed class GuiContext
     /// <summary>Raised after the network unit changed. Every page that writes a network rate shows it again at once.</summary>
     public event Action? NetworkUnitChanged;
 
+    /// <summary>
+    /// Tells the Parts Life window that the language changed (DESIGN-C 3 item 4): a message to its window, which reads gui.ini again. Set only by a real run; the smoke, the
+    /// measure run, the fakes and every test leave it null, so none of them ever messages a window of the machine.
+    /// </summary>
+    internal Action? SiblingLanguageNotifier { get; set; }
+
+    private readonly object _roamingGate = new();
+    private string? _partyRoamingRoot;
+    private bool _roamingResolved;
+
+    /// <summary>
+    /// The roaming application-data folder the hint that old Parts Life progress is waiting looks in (<see cref="PcMieru.Core.Siblings.PartyImportHint"/>, file existence only), as far as it is KNOWN:
+    /// the smoke run sets a scratch folder; a real run leaves it null until <see cref="ResolvePartyRoamingRoot"/> (called off the UI thread) has asked <see cref="PartyRoamingRootResolver"/>. Null (every
+    /// test, a measurement, a trial on fakes, or "not resolved yet") means the code on the UI thread looks nowhere and says nothing, so no automated run ever names the owner's real folders.
+    /// </summary>
+    internal string? PartyRoamingRoot
+    {
+        get => Volatile.Read(ref _partyRoamingRoot);
+        set => Volatile.Write(ref _partyRoamingRoot, value);
+    }
+
+    /// <summary>
+    /// How a real run finds its roaming folder (Program.cs sets it in its real-run block only; the smoke run, a measurement and every test leave it null). Asking can stall when the folder is redirected to a
+    /// slow or disconnected place, so only <see cref="ResolvePartyRoamingRoot"/> calls it, on a worker thread, never the code that starts the window.
+    /// </summary>
+    internal Func<string?>? PartyRoamingRootResolver { get; set; }
+
+    /// <summary>True when there is a roaming folder to look in, or a way to find one: the work that needs it is worth starting (and starts off the UI thread).</summary>
+    internal bool PartyRoamingRootKnown => PartyRoamingRoot is not null || PartyRoamingRootResolver is not null;
+
+    /// <summary>
+    /// The roaming folder, asking <see cref="PartyRoamingRootResolver"/> the first time (at most once for the run, whoever asks first; the others wait for it and get the same answer). Call it from a worker
+    /// thread: the resolver may stall. Null when there is none (no resolver, or it failed).
+    /// </summary>
+    internal string? ResolvePartyRoamingRoot()
+    {
+        if (PartyRoamingRoot is { } known)
+        {
+            return known;
+        }
+
+        lock (_roamingGate)
+        {
+            if (PartyRoamingRoot is { } resolvedMeanwhile)
+            {
+                return resolvedMeanwhile;
+            }
+
+            if (_roamingResolved || PartyRoamingRootResolver is not { } resolver)
+            {
+                return null;
+            }
+
+            _roamingResolved = true;
+            try
+            {
+                var root = resolver();
+                PartyRoamingRoot = string.IsNullOrWhiteSpace(root) ? null : root;
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                // a folder that cannot be found is no hint: the window says nothing
+            }
+
+            return PartyRoamingRoot;
+        }
+    }
+
+    /// <summary>The launcher of the Parts Life page. Null (every real run) is the real one; a test passes one that starts nothing, so pressing the page's button never starts a process.</summary>
+    internal PartyLauncher? PartyLauncherOverride { get; set; }
+
+    /// <summary>
+    /// Where the setting "Start Parts Life at sign-in" keeps its Run value (DESIGN-C 3 item 5). Set to the real registry store only by a real run (Program.cs, the same block that sets
+    /// <see cref="PartyRoamingRootResolver"/>) and to an in-memory store by the smoke run; null (every test that does not pass one, a measurement, a trial on fakes) means the setting is shown
+    /// unavailable and does nothing, so no automated run ever reads or writes the owner's Run key.
+    /// </summary>
+    internal PcMieru.Core.Siblings.IRunStore? LogonStore { get; set; }
+
+    /// <summary>
+    /// True once the recovery at a real start (<see cref="MainForm.RecoverLogonAsync"/>) found a switch of the sign-in start that it could not settle (a restore failed, or an entry was changed in Windows
+    /// meanwhile): the setting's status line then says "please check the sign-in setting". Never set by a smoke run, a measurement or a test that does not ask for it.
+    /// </summary>
+    internal bool LogonNeedsCheck { get; set; }
+
+    /// <summary>
+    /// Seams of the sign-in setting for tests and the smoke run (null/default in every real run): what "the old exe is there" means for the offer, the name and the wait of the lock of the sign-in entries
+    /// (a test uses a lock of its own and a short wait), and how long the recovery at start waits between its tries while that lock is busy.
+    /// </summary>
+    internal LogonSeams LogonSeam { get; set; } = new();
+
+    /// <summary>
+    /// The journal of the switch from the old sign-in start: <c>run-switch.json</c> beside the save of Parts Life (the roaming folder this context names). Null when the folder is not known or cannot be
+    /// found. Call it off the UI thread (it may ask <see cref="PartyRoamingRootResolver"/>).
+    /// </summary>
+    internal string? ResolveLogonJournalPath()
+    {
+        try
+        {
+            return PartyRoamingRootKnown && ResolvePartyRoamingRoot() is { } root
+                ? PcMieru.Core.Siblings.RunSwitch.JournalPathFor(Path.Combine(root, "PCMieru", "party"))
+                : null;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The PCMieru.Party.exe the sign-in entry starts: the one beside the running PCMieru.exe (absolute). A test may point it elsewhere.</summary>
+    internal string PartyExePath { get; set; } = Path.GetFullPath(PartyLauncher.ExePath);
+
     public void SetLanguage(Language language)
     {
         if (Settings.Language == language && Strings.Current == language)
@@ -175,6 +286,7 @@ internal sealed class GuiContext
         Settings.Language = language;
         Strings.Current = language;
         Settings.Save();
+        SiblingLanguageNotifier?.Invoke();
         LanguageChanged?.Invoke();
     }
 
@@ -255,14 +367,27 @@ internal sealed class GuiContext
 
     public async Task<NetMeterState> StartNetMeterAsync()
     {
+        using var pending = BeginPendingUac();
+        return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
+    }
+
+    /// <summary>Marks a UAC prompt as on its way (<see cref="PendingUac"/> is set until the result is disposed): the network meter's start uses it, and a test uses it to stand in for a prompt.</summary>
+    internal IDisposable BeginPendingUac()
+    {
         Interlocked.Increment(ref _netMeterStarts);
-        try
+        return new PendingUacHold(this);
+    }
+
+    private sealed class PendingUacHold(GuiContext owner) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
         {
-            return await Task.Run(() => NetMeter.StartAsync()).ConfigureAwait(false);
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _netMeterStarts);
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                Interlocked.Decrement(ref owner._netMeterStarts);
+            }
         }
     }
 
@@ -317,3 +442,10 @@ internal sealed class GuiContext
         }
     }
 }
+
+/// <summary>See <see cref="GuiContext.LogonSeam"/>. Every member is null in a real run, which means the real behaviour (File.Exists, the per-user lock with its default wait, 5 seconds between tries).</summary>
+/// <param name="FileExists">The "is this file there" of the offer to switch from the old sign-in start.</param>
+/// <param name="LockName">The name of the lock of the sign-in entries.</param>
+/// <param name="LockWait">How long a change waits for that lock.</param>
+/// <param name="RetryDelay">The pause between the tries of the recovery at start while the lock is busy.</param>
+internal sealed record LogonSeams(Func<string, bool>? FileExists = null, string? LockName = null, TimeSpan? LockWait = null, TimeSpan? RetryDelay = null);

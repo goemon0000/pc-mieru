@@ -29,6 +29,8 @@ internal static class GuiStrings
         .. OverviewStrings.All,
         .. PerfStrings.All,
         .. StartupStrings.All,
+        .. PartyStrings.All,
+        .. PartyImportStrings.All,
         .. ServiceStrings.All,
         .. UsersStrings.All,
         .. HardwareStrings.All,

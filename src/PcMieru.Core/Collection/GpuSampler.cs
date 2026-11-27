@@ -16,6 +16,12 @@ internal sealed class GpuAdapterUsage
     public long? DedicatedUsed { get; set; }
 
     public long? SharedUsed { get; set; }
+
+    /// <summary>
+    /// Engine instances of this adapter were listed but none of them had a usable value (aggregate mode only; always false otherwise). When
+    /// <see cref="EngineInstances"/> is 0 as well, the adapter's load could not be read, which is not the same as "nothing is running".
+    /// </summary>
+    public bool EngineUnreadable { get; set; }
 }
 
 /// <summary>
@@ -33,13 +39,41 @@ internal sealed class GpuAggregator
     private readonly Dictionary<string, string> _typeNames = [];
     private readonly Dictionary<string, string>.AlternateLookup<ReadOnlySpan<char>> _typeLookup;
 
-    public GpuAggregator() => _typeLookup = _typeNames.GetAlternateLookup<ReadOnlySpan<char>>();
+    /// <summary>Aggregate mode only: adapters that have at least one engine row whose name parsed, valid or not (who a row belongs to is not the same as whether its value is usable).</summary>
+    private readonly HashSet<ulong> _engineRowAdapters = [];
+
+    private readonly bool _trackProcesses;
+    private readonly bool _flagUnreadable;
+
+    /// <param name="trackProcesses">
+    /// False for the aggregate-only source (Parts Life): the per-process dictionary is never filled, so <see cref="ProcessBusiest"/> stays empty.
+    /// The engine and adapter numbers are the same either way.
+    /// </param>
+    /// <param name="flagUnreadableEngines">
+    /// True for the aggregate-only source: an adapter whose load could not be read is marked <see cref="GpuAdapterUsage.EngineUnreadable"/> instead of
+    /// reading as idle (Parts Life must never earn on a load it could not read). That is an engine instance with an invalid status, and any adapter
+    /// that ends with no usable engine instance while the array held an instance whose name could not be parsed (that instance has no adapter to
+    /// blame, so it may have been this one's) or held no engine row (valid or not) for any other adapter (see <see cref="Finish"/>). The default
+    /// leaves the adapter table as it always was.
+    /// </param>
+    public GpuAggregator(bool trackProcesses = true, bool flagUnreadableEngines = false)
+    {
+        _trackProcesses = trackProcesses;
+        _flagUnreadable = flagUnreadableEngines;
+        _typeLookup = _typeNames.GetAlternateLookup<ReadOnlySpan<char>>();
+    }
+
+    /// <summary>How many (process, engine) cells are held right now; always 0 when built without per-process tracking.</summary>
+    internal int PerProcessEntries => _perProcess.Count;
 
     /// <summary>Instances whose name was in a format this parser does not know. They are left out, and counted so the result can say so.</summary>
     public int Unrecognized { get; private set; }
 
     /// <summary>Instances PDH could not compute a value for (a process that ended mid-interval, for example).</summary>
     public int Invalid { get; private set; }
+
+    /// <summary>The part of <see cref="Unrecognized"/> that came from the engine array. Such an instance names no adapter, so it cannot be charged to one.</summary>
+    public int UnrecognizedEngines { get; private set; }
 
     public IReadOnlyDictionary<ulong, GpuAdapterUsage> Adapters => _adapters;
 
@@ -52,7 +86,9 @@ internal sealed class GpuAggregator
         _adapters.Clear();
         _processBusiest.Clear();
         Unrecognized = 0;
+        UnrecognizedEngines = 0;
         Invalid = 0;
+        _engineRowAdapters.Clear();
     }
 
     public void AddEngine(ReadOnlySpan<char> instance, double value, uint cstatus)
@@ -60,20 +96,34 @@ internal sealed class GpuAggregator
         if (!GpuCounterName.TryParseEngine(instance, out var pid, out var key, out var type))
         {
             Unrecognized++;
+            UnrecognizedEngines++;
             return;
+        }
+
+        if (_flagUnreadable)
+        {
+            _engineRowAdapters.Add(key.Luid);
         }
 
         if (cstatus is not (Pdh.CStatusValidData or Pdh.CStatusNewData) || !double.IsFinite(value) || value < 0)
         {
             Invalid++;
+            if (_flagUnreadable)
+            {
+                Adapter(key.Luid).EngineUnreadable = true;
+            }
+
             return;
         }
 
         var typeName = _typeLookup.TryGetValue(type, out var known) ? known : Intern(type);
         _engines.TryGetValue(key, out var sum);
         _engines[key] = new EngineSum(sum.Value + value, typeName);
-        _perProcess.TryGetValue((pid, key), out var mine);
-        _perProcess[(pid, key)] = mine + value;
+        if (_trackProcesses)
+        {
+            _perProcess.TryGetValue((pid, key), out var mine);
+            _perProcess[(pid, key)] = mine + value;
+        }
     }
 
     public void AddAdapterMemory(ReadOnlySpan<char> instance, double value, uint cstatus, bool dedicated)
@@ -102,7 +152,14 @@ internal sealed class GpuAggregator
         }
     }
 
-    /// <summary>Call once after all instances were added.</summary>
+    /// <summary>
+    /// Call once after all instances were added. In the aggregate-only mode an adapter that ends with no usable engine instance is marked unreadable
+    /// unless the array can be trusted to have had none for it: it must have been read cleanly (no instance whose name could not be parsed, because
+    /// that instance could have been this adapter's), it must have no engine row of its own (an invalid one already marked it), and the array must
+    /// have listed an engine row, valid or not, for some other adapter (an array that lists no engine at all, while the memory counters answer, is
+    /// not an array that shows an idle machine). Whose row it is and whether its value can be used are two questions: a row that parsed names its
+    /// adapter even when its value is invalid, so the other adapters' invalid rows do not turn a genuinely idle card into a missing one.
+    /// </summary>
     public void Finish()
     {
         foreach (var (key, sum) in _engines)
@@ -112,6 +169,27 @@ internal sealed class GpuAggregator
             usage.EngineInstances++;
             usage.Busiest = Math.Max(usage.Busiest, value);
             usage.ByType[sum.Type] = Math.Max(usage.ByType.GetValueOrDefault(sum.Type), value);
+        }
+
+        if (_flagUnreadable)
+        {
+            var clean = UnrecognizedEngines == 0;
+            foreach (var (luid, usage) in _adapters)
+            {
+                if (usage.EngineInstances != 0)
+                {
+                    continue;
+                }
+
+                // Its own rows, all invalid (already flagged when they were added), or a name somewhere that could have been its own, or no engine row
+                // for anybody: no proof of idleness. Otherwise the array named other adapters and none of them was this one.
+                var ownRows = _engineRowAdapters.Contains(luid);
+                var othersListed = _engineRowAdapters.Count > (ownRows ? 1 : 0);
+                if (ownRows || !clean || !othersListed)
+                {
+                    usage.EngineUnreadable = true;
+                }
+            }
         }
 
         foreach (var ((pid, _), value) in _perProcess)
@@ -167,8 +245,23 @@ internal sealed record GpuReading(
 /// no collection happens, and after a while the query is closed. After a gap the first collection restarts PDH's window and
 /// reads as "not collected" instead of being averaged over the gap.
 /// </summary>
-internal sealed class GpuSampler : IDisposable
+internal sealed class GpuSampler : IGpuSampling
 {
+    /// <param name="aggregateOnly">
+    /// True for the aggregate-only source (Parts Life): adapter totals only, no per-process dictionary at all, and an adapter whose engine
+    /// entries were all unreadable reports its load as missing, never 0. The default keeps the old behaviour.
+    /// </param>
+    public GpuSampler(bool aggregateOnly = false)
+    {
+        AggregateOnly = aggregateOnly;
+        _aggregator = new GpuAggregator(trackProcesses: !aggregateOnly, flagUnreadableEngines: aggregateOnly);
+    }
+
+    public bool AggregateOnly { get; }
+
+    /// <summary>Per-process cells the last sample left in the aggregator (0 in aggregate mode, by construction). For tests.</summary>
+    internal int PerProcessEntries => _aggregator.PerProcessEntries;
+
     private const string EngineSource = "PDH GPU Engine";
     private const string MemorySource = "PDH GPU Adapter Memory";
     private const string AdapterSource = "DXGI";
@@ -176,7 +269,7 @@ internal sealed class GpuSampler : IDisposable
     private static readonly TimeSpan KeepQueryWhenIdle = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromSeconds(60);
 
-    private readonly GpuAggregator _aggregator = new();
+    private readonly GpuAggregator _aggregator;
     private readonly PdhArrayReader _reader = new();
     private PdhQuery? _query;
     private nint _engine;
@@ -290,13 +383,13 @@ internal sealed class GpuSampler : IDisposable
                 continue;
             }
 
-            if (usage is { EngineInstances: 0, DedicatedUsed: null, SharedUsed: null })
+            if (usage is { EngineInstances: 0, DedicatedUsed: null, SharedUsed: null, EngineUnreadable: false })
             {
                 continue;
             }
 
             seen.Add(adapter.Luid);
-            result.Add(Info(adapter.Id, adapter.Name, adapter.DedicatedBytes, data, usage, primed, missingDetail, missingStatus));
+            result.Add(Info(adapter.Id, adapter.Name, adapter.DedicatedBytes, adapter.PciBus, data, usage, primed, missingDetail, missingStatus));
         }
 
         if (primed && data is not null)
@@ -306,7 +399,7 @@ internal sealed class GpuSampler : IDisposable
             {
                 if (!known.Contains(luid) && usage.EngineInstances > 0 && seen.Add(luid))
                 {
-                    result.Add(Info(GpuCounterName.AdapterId(luid), "GPU " + GpuCounterName.AdapterId(luid), 0, data, usage, primed, missingDetail, missingStatus));
+                    result.Add(Info(GpuCounterName.AdapterId(luid), "GPU " + GpuCounterName.AdapterId(luid), 0, null, data, usage, primed, missingDetail, missingStatus));
                 }
             }
         }
@@ -332,7 +425,7 @@ internal sealed class GpuSampler : IDisposable
             ? Failed(lastPrimed, status, detail)
             : Describe(adapters, null, primed: false, detail, status);
 
-    private static GpuInfo Info(string id, string name, long dedicatedTotal, GpuAggregator? data, GpuAdapterUsage? usage, bool primed, string? missingDetail, ValueStatus missingStatus)
+    private static GpuInfo Info(string id, string name, long dedicatedTotal, uint? pciBus, GpuAggregator? data, GpuAdapterUsage? usage, bool primed, string? missingDetail, ValueStatus missingStatus)
     {
         Value<double> Missing(string source) => Value.Missing<double>(missingStatus, source, missingDetail);
 
@@ -347,6 +440,13 @@ internal sealed class GpuSampler : IDisposable
                 .ThenBy(static t => t.Key, StringComparer.Ordinal)
                 .Select(static t => new GpuEngineInfo(t.Key, Value.Ok(t.Value, EngineSource)))
                 .ToArray();
+        }
+        else if (usage is { EngineUnreadable: true })
+        {
+            // This adapter has no usable engine instance (an invalid one, or one whose name could not be parsed, or no engine listed at all):
+            // its load is unknown, which must not read as an idle 0.
+            utilization = Value.Missing<double>(ValueStatus.Error, EngineSource, "no usable GPU Engine instance for this adapter (invalid value, unknown name format, or none listed)");
+            engines = [];
         }
         else if (primed && missingDetail is null && usage is not null)
         {
@@ -380,7 +480,10 @@ internal sealed class GpuSampler : IDisposable
             Value.NotCollected<double>("SensorHost", "not read yet"),
             Value.NotCollected<double>("SensorHost", "not read yet"),
             Value.NotCollected<double>("SensorHost", "not read yet"),
-            Value.NotCollected<double>("SensorHost", "not read yet"));
+            Value.NotCollected<double>("SensorHost", "not read yet"))
+        {
+            PciBus = pciBus,
+        };
     }
 
     private GpuReading SampleOff()

@@ -1,0 +1,1055 @@
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
+using PcMieru.Core.Siblings;
+using PcMieru.Party.Game;
+using PcMieru.Party.Hardware;
+using PcMieru.Party.I18n;
+using PcMieru.Party.Rendering;
+using PcMieru.Party.Ui;
+
+namespace PcMieru.Party;
+
+/// <summary>
+/// パーツぐらしの窓（旧 Parts Life の MainWindow を移した物。DESIGN-C 8 の 4a）。数字は <see cref="IBoardFeed"/> から読み、
+/// <see cref="PartyComposition"/> で席を組み、<see cref="Director"/> を進めて描く。実測も保存の I/O も窓は持たない。
+/// 保存は <see cref="PartySaveWriter"/> に本文を渡すだけ（UI スレッドは <c>state.ToJson()</c> を取るところまで）。writer が null なら一切保存しない（--smoke）。
+/// </summary>
+internal sealed partial class PartyWindow : Window
+{
+    private readonly Atlas _atlas = Atlas.Load();
+    private readonly BoardRenderer _board;
+    private readonly IBoardFeed _feed;
+    private readonly PartySaveWriter? _writer;
+
+    private readonly PartyState _state;
+    private readonly Director _director;
+
+    // GPU の番号（席）。窓が 1 つ持ち、標本ごとに ApplyTo で決める。_state の変更は全部 UI スレッド（SamplerFeed は Latest を出すだけ）
+    private readonly GpuSlotMap _slotMap;
+    private GpuSlotFrame _gpuFrame = new([], [], false);
+    /// <summary>最後の標本で盤に居た席（番号のビット）。-1 は「まだ見ていない」。設定の GPU の番号の欄を作り直す目印（<see cref="GpuSlotsSettingsStale"/>）。</summary>
+    private int _presentSlotMask = -1;
+    /// <summary>標本を一度でも処理したか（席を決める処理を通したか）（または持ち主が明示で変えたか）。それまでは何も保存しない（番号を決める前の状態で、保存を書き換えない）。</summary>
+    private bool _saveAllowed;
+    private Action? _noticeOk;
+
+    private readonly DispatcherTimer _noticeTimer = new();
+
+    /// <summary>
+    /// 絵の拡大率。**整数でなくてもよい。**
+    /// 掴んで引けば自由に変わり、⤢ で整数（＝ドットが崩れない値）に揃う。
+    /// </summary>
+    private double _scale = 2.0;
+
+    /// <summary>数値欄がこれより狭くなると、GPU の型番が入らない。</summary>
+    private const double MinPanelWidth = 520;
+
+    /// <summary>数字を読みに行く間隔（秒）。フィードは 1 秒に 1 枚。Director へ渡す dt の上限はこの 2 倍。</summary>
+    private const double SensorPeriodSeconds = 1.0;
+
+    private bool _expanded;
+    private int _boardPixelWidth;
+
+    /// <summary>名札の出し方。パーツが増えると字が邪魔になる人もいるので選べるようにする。</summary>
+    private enum Labels { LevelOnly, NameAndLevel, None }
+    private Labels _labels = Labels.NameAndLevel;
+    private BoardFrame? _frame;
+    private Work _work = new(0, 0, 0, 0, 0);
+
+    /// <summary>絵のコマ送り。全キャラで同じ時計を使う（別々にすると揃わない）。</summary>
+    private readonly DispatcherTimer _frameTimer = new() { Interval = TimeSpan.FromMilliseconds(140) };
+    private readonly DispatcherTimer _sensorTimer = new() { Interval = TimeSpan.FromSeconds(SensorPeriodSeconds) };
+
+    /// <summary>前回 Director を進めた標本の印（単調時計）。同じ標本では二度進めない。順序も dt もこれだけで決める。</summary>
+    private long? _lastStamp;
+
+    /// <summary>標本が古い（max(3 × 周期, 6 秒)）。値を薄くして見せている。</summary>
+    private bool _stale;
+
+    /// <summary>
+    /// 60 秒ごとの保存。**標本を受け取る処理とは別の時計**で回す（フィードが止まったり同じ標本を繰り返したりして標本の処理が早く戻っても、
+    /// 溜まった進みと窓の位置は保存される）。
+    /// </summary>
+    private readonly DispatcherTimer _autosaveTimer = new() { Interval = TimeSpan.FromSeconds(60) };
+
+    /// <summary>Windows の終了・サインアウトが始まった。閉じるときの箱を出さない。</summary>
+    private bool _sessionEnding;
+
+    /// <summary>終了・サインアウトのときに最後の保存を待つ上限（箱は出せないので短く）。</summary>
+    private static readonly TimeSpan SessionEndFlush = TimeSpan.FromSeconds(2);
+
+    /// <summary>コマ送りの時計。**モーションごとの速さは絵の側が決めている。**</summary>
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
+    /// <summary>前回描いた絵の指紋。同じなら描き直さない。</summary>
+    private int _lastSignature;
+
+    /// <summary>前回名札を置いたときの指紋（<see cref="BoardLabel.Fingerprint"/>）。同じなら置き直さない。</summary>
+    private int _lastLabelKey;
+    private bool _labelKeySet;
+
+    private int _failures;
+
+    private readonly List<TextBlock> _levelLabels = new();
+
+    /// <summary>重ねたときに出す小さな札。WPF の ToolTip は遅延と再表示の癖が強いので自前で持つ。</summary>
+    private readonly System.Windows.Controls.Primitives.Popup _hoverTip = new()
+    {
+        AllowsTransparency = true,
+        Placement = System.Windows.Controls.Primitives.PlacementMode.Relative,
+    };
+    private readonly TextBlock _hoverTipText = new()
+    {
+        FontSize = 11,
+        Foreground = new SolidColorBrush(Color.FromRgb(0xDD, 0xE5, 0xF8)),
+        LineHeight = 15,
+    };
+
+    /// <summary>
+    /// いま盤に立っている顔ぶれ。**フィードの 1 枚から毎秒組み立て直す。**
+    /// 固定の並びにしていたため、GPU が2枚の機械でも GPU くんが1体しか立たなかった。
+    /// </summary>
+    private List<PartySlot> _slots = new();
+    private readonly Func<string?>? _readGuiLanguage;
+    private HwndSource? _hwndSource;
+
+    /// <param name="language">この回の言語。--lang があればそれ、無ければ保存の言語、無ければ OS（Program が決める）。保存へは書き戻さない（切り替えボタンを押したときだけ書く）。</param>
+    /// <param name="state">進み。smoke は <see cref="PartyState.Fresh"/>。</param>
+    /// <param name="feed">数字の出どころ。</param>
+    /// <param name="writer">保存の書き手。null なら一切保存しない。</param>
+    /// <param name="guiLanguage">gui.ini の language を読む手（"ja" / "en" / 読めなければ null）。PCMieru.LanguageChanged.v1 を受けたときだけ呼ぶ。null なら何もしない（smoke と試験は null: 実機の設定を読まない）。</param>
+    public PartyWindow(PartyLanguage language, PartyState state, IBoardFeed feed, PartySaveWriter? writer = null, Func<string?>? guiLanguage = null)
+    {
+        _state = state;
+        _readGuiLanguage = guiLanguage;
+        _slotMap = new GpuSlotMap(state.GpuSlots);
+        _feed = feed;
+        _writer = writer;
+        Strings.Lang = language == PartyLanguage.Ja ? "ja" : "en";
+        InitializeComponent();
+        Title = PartyStrings.Title(language);
+        _board = new BoardRenderer(_atlas);
+        _hoverTip.Child = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xF2, 0x10, 0x13, 0x19)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x5D, 0xD8, 0xBB)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 4, 7, 5),
+            Child = _hoverTipText,
+        };
+        _director = new Director(GameAssets.LoadStory(), _state, GameAssets.LoadAdventure());
+        _state.MigrateKeys();
+        _labels = _state.Labels switch
+        {
+            "level" => Labels.LevelOnly,
+            "none" => Labels.None,
+            _ => Labels.NameAndLevel,
+        };
+
+        _scale = _state.Zoom > 0 ? Math.Clamp(_state.Zoom, 0.8, 6.0) : 2.0;
+        Topmost = _state.Topmost;
+
+        Loaded += OnLoaded;
+        // 描かれたこと（開いただけでなく）。smoke の判定が使う
+        ContentRendered += (_, _) => Rendered = true;
+        Closing += (_, _) =>
+        {
+            // 最後の保存の間に次の読み取りが割り込まないよう、先に止める
+            _frameTimer.Stop();
+            _sensorTimer.Stop();
+            _autosaveTimer.Stop();
+            SaveOnClose();
+        };
+        Closed += (_, _) =>
+        {
+            if (Application.Current is { } app) app.SessionEnding -= OnSessionEnding;
+            _noticeTimer.Stop();
+            _frameTimer.Stop();
+            _sensorTimer.Stop();
+            _autosaveTimer.Stop();
+            _hoverTip.IsOpen = false;
+            _hwndSource?.RemoveHook(OnWindowMessage);
+            _hwndSource = null;
+        };
+        // 窓を動かしたり後ろに回ったりしたら、吹き出しは畳む。
+        // Popup は常に最前面に出るので、置き去りにすると独りで浮いて残る
+        LocationChanged += (_, _) => _hoverTip.IsOpen = false;
+        Deactivated += (_, _) => _hoverTip.IsOpen = false;
+        MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+
+        ExpandButton.Click += (_, _) => { SetExpanded(!_expanded); SaveState(); };
+        SizeButton.Click += (_, _) => { SnapScale(); SaveState(); };
+        LangButton.Click += (_, _) => ToggleLanguage();
+        TopmostButton.Click += (_, _) => ToggleTopmost();
+        CloseButton.Click += (_, _) => Close();
+        NoticeClose.Click += (_, _) => OnNoticeCloseClicked();
+        _noticeTimer.Tick += (_, _) => HideNotice();
+
+        Grip.DragDelta += OnGripDrag;
+        Grip.DragCompleted += (_, _) => SaveState();
+        BoardHost.MouseMove += OnBoardHover;
+        BoardHost.MouseLeave += (_, _) => _hoverTip.IsOpen = false;
+        MouseRightButtonUp += (_, e) => { ShowMenu(); e.Handled = true; };
+        PreviewKeyDown += OnTabKeys;
+
+        // **飾りのために巻き添えで落ちない。**
+        // 想定外の例外で常駐物が「動作を停止しました」を出すのは、それ自体が害になる。
+        // ただし黙って握りつぶすだけにはしない: 最初の 1 件は FirstFailure に残し、smoke の判定が見る。
+        _frameTimer.Tick += (_, _) => Guarded(() => { Redraw(); NoteFirstValue(); });
+        _sensorTimer.Tick += (_, _) => Guarded(OnSensorTick);
+        _autosaveTimer.Tick += (_, _) => Guarded(() => SaveState());
+    }
+
+    /// <summary>窓が実際に一度描かれた（作っただけでなく）。smoke が「ok」と言う条件。</summary>
+    public bool Rendered { get; private set; }
+
+    /// <summary>
+    /// Only a measuring start sets it (--measure): called once, on the UI thread, after the board has drawn its first measured value (at idle priority, which is after the render pass).
+    /// Null = nothing is watched and nothing is paid.
+    /// </summary>
+    internal Action? FirstValueShown { get; set; }
+
+    /// <summary>True in a measuring start (--measure): every command that starts or brings forward another program, or opens a real folder or page, does nothing.</summary>
+    internal bool Measuring { get; set; }
+    private bool _firstValueNoted;
+
+    private void NoteFirstValue()
+    {
+        if (_firstValueNoted || FirstValueShown is null || !_slots.Any(s => s.Measured)) return;
+        _firstValueNoted = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, (Action)(() => FirstValueShown?.Invoke()));
+    }
+
+    /// <summary>タイマーの中で握りつぶした最初の例外（無ければ null）。smoke の判定はこれが有れば失敗にする。</summary>
+    public string? FirstFailure { get; private set; }
+
+    private void Guarded(Action work)
+    {
+        try { work(); }
+        catch (Exception ex)
+        {
+            _failures++;
+            FirstFailure ??= ex.ToString();
+            if (_failures <= 3) System.Diagnostics.Debug.WriteLine(ex);
+            // 続けて失敗するなら、無言で回り続けるより静かに止まる方がまし
+            if (_failures > 60) { _frameTimer.Stop(); _sensorTimer.Stop(); }
+        }
+    }
+
+    /// <summary>
+    /// いまの窓の見た目そのままを 1 枚の絵にする（--smoke --shot）。**作り物のモックではなく、本物の描画をそのまま使う。**
+    /// 開いている窓から取る（描かれた後に呼ぶこと）。書き出しの間だけ掴みを隠す。
+    /// </summary>
+    internal System.Windows.Media.Imaging.BitmapSource RenderShot(bool expanded, double scale)
+    {
+        _scale = scale;
+        SetExpanded(expanded);
+        Grip.Visibility = Visibility.Collapsed;   // 宣材に掴みは要らない
+        try
+        {
+            Redraw(force: true);
+            UpdateLayout();
+            var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                (int)Math.Ceiling(Shell.ActualWidth), (int)Math.Ceiling(Shell.ActualHeight),
+                96, 96, PixelFormats.Pbgra32);
+            rtb.Render(Shell);
+            return rtb;
+        }
+        finally
+        {
+            Grip.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void OnLoaded(object? sender, RoutedEventArgs e)
+    {
+        ApplyLanguage();
+        TopmostButton.Opacity = Topmost ? 1.0 : 0.45;
+        OnSensorTick();
+        Redraw(force: true);
+        SetExpanded(_state.Expanded);
+        PlaceWindow();
+        _frameTimer.Start();
+        _sensorTimer.Start();
+        _autosaveTimer.Start();
+        // Windows の終了・サインアウトでは、Closing が来ないことがある。ここで最後の保存を試みる
+        if (Application.Current is { } app) app.SessionEnding += OnSessionEnding;
+        // 保存の GPU の番号が壊れていたとき: 一度だけ知らせる。OK を押すまで印は残る（押さなければ次の起動でも出る）
+        if (_state.GpuSlotsRepaired)
+            ShowNoticeWithOk(Strings.GpuSlotsRepairedNotice, () =>
+            {
+                _state.GpuSlotsRepaired = false;
+                SaveState(force: true);
+            });
+    }
+
+    /// <summary>
+    /// Windows の終了・サインアウト。**UI スレッドで本文を取り**（SaveState）、短い上限（2 秒）で書き切るのを待つ。箱は出さない。
+    /// 取り消さない（終了を止めるのは我々の仕事ではない）。
+    /// </summary>
+    private void OnSessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        _sessionEnding = true;
+        if (_writer is null || !_saveAllowed) return;
+        try
+        {
+            _frameTimer.Stop();
+            _sensorTimer.Stop();
+            _autosaveTimer.Stop();
+            SaveState();
+            _writer.Flush(SessionEndFlush);
+        }
+        catch (Exception ex)
+        {
+            FirstFailure ??= ex.ToString();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // お知らせの 1 行
+    // -----------------------------------------------------------------------
+
+    /// <summary>物語の下に 1 行のお知らせを出す。hideAfter 経てば畳む（null なら ✕ を押すまで）。</summary>
+    internal void ShowNotice(string text, TimeSpan? hideAfter = null)
+    {
+        NoticeText.Text = text;
+        NoticeText.ToolTip = text;
+        NoticeClose.Content = "✕";
+        _noticeOk = null;
+        NoticeBar.Visibility = Visibility.Visible;
+        _noticeTimer.Stop();
+        if (hideAfter is { } h) { _noticeTimer.Interval = h; _noticeTimer.Start(); }
+    }
+
+    /// <summary>OK を押すまで出し続けるお知らせ。押したときだけ <paramref name="onOk"/> を実行する（✕ ではなく OK の釦になる）。</summary>
+    internal void ShowNoticeWithOk(string text, Action onOk)
+    {
+        ShowNotice(text);
+        NoticeClose.Content = Strings.NoticeOk;
+        _noticeOk = onOk;
+    }
+
+    internal void HideNotice()
+    {
+        _noticeTimer.Stop();
+        NoticeBar.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnNoticeCloseClicked()
+    {
+        Dispatcher.VerifyAccess();
+        var ok = _noticeOk;
+        _noticeOk = null;
+        HideNotice();
+        ok?.Invoke();
+    }
+
+    // -----------------------------------------------------------------------
+    // 保存（本文を取るのは UI スレッド。書くのは PartySaveWriter）
+    // -----------------------------------------------------------------------
+
+    /// <summary>いまの進みを書き手へ渡す。すぐ戻る。writer が無ければ何もしない。</summary>
+    private void SaveState(bool force = false)
+    {
+        Dispatcher.VerifyAccess();      // 本文を取るのは UI スレッドだけ（変更と同じ操作の中で取る）
+        if (_writer is null) return;
+        // 番号を決める前（標本がまだ 1 枚も無い）は書かない。持ち主が明示で変えたとき（リセット・手放す・OK）だけは書く
+        if (force) _saveAllowed = true;
+        if (!_saveAllowed) return;
+
+        _state.Zoom = _scale;
+        if (WindowState == WindowState.Normal && !double.IsNaN(Left) && !double.IsNaN(Top))
+        {
+            _state.WindowLeft = Left;
+            _state.WindowTop = Top;
+        }
+        _state.LastSeenUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        _writer.Submit(_state.ToJson(), _state.SavePath);
+    }
+
+    /// <summary>
+    /// 閉じるときの保存。書き切るのを待つ。失敗したら「もう一度」か「保存せずに閉じる」かを聞く
+    /// （黙って閉じると、数時間ぶんの進みが消えたことに気づけない）。
+    /// </summary>
+    private void SaveOnClose()
+    {
+        if (_writer is null || !_saveAllowed) return;     // 標本が 1 枚も来ないまま閉じたら、保存は元のまま（変わっていない状態を書き戻さない）
+        if (_sessionEnding)
+        {
+            // Windows の終了・サインアウト中。箱は出せない（出すと終了が止まる）。SessionEnding で書いた分に、最後の分を短く足すだけ
+            SaveState();
+            _writer.Flush(SessionEndFlush);
+            return;
+        }
+
+        while (true)
+        {
+            SaveState();
+            var result = _writer.Flush(TimeSpan.FromSeconds(5));
+            if (result.Ok) return;
+            if (result.Blocked)
+            {
+                // 保存を止めてある回。書けなかったのではなく書かないので、「もう一度」は意味が無い。伝えるだけ（OK のみ・一度だけ）
+                bool top = Topmost;
+                Topmost = false;             // 確認の窓が最前面の後ろに隠れないように
+                try
+                {
+                    MessageBox.Show(this, Strings.SaveBlockedNote, Strings.SaveBlockedTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally { Topmost = top; }
+                return;
+            }
+
+            bool wasTopmost = Topmost;
+            Topmost = false;                 // 確認の窓が最前面の後ろに隠れないように
+            MessageBoxResult answer;
+            try
+            {
+                answer = MessageBox.Show(this, Strings.SaveFailedAsk(result.Message ?? ""), Strings.SaveFailedTitle,
+                                         MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.Yes);
+            }
+            finally { Topmost = wasTopmost; }
+            if (answer != MessageBoxResult.Yes) return;
+        }
+    }
+
+    /// <summary>
+    /// 前回の位置を覚えていればそこへ。無ければ主モニタの右上。
+    ///
+    /// **画面全体（仮想デスクトップ）で判定する。**
+    /// 主モニタの作業領域だけで見ていたため、副モニタに置いていた窓が
+    /// 起動のたび主モニタへ飛んでいた。左側の副モニタは座標が負になるので、
+    /// 「0未満なら未設定」という判定も間違いだった。
+    /// </summary>
+    private void PlaceWindow()
+    {
+        var area = SystemParameters.WorkArea;
+        if (_state.WindowLeft is { } sl && _state.WindowTop is { } st)
+        {
+            if (IsOnScreen(sl, st))
+            {
+                Left = sl;
+                Top = st;
+                return;
+            }
+
+            // 覚えていた位置が、いまのどのモニタの作業領域にも掛からない（モニタを外した）。主モニタの真ん中へ戻す
+            Left = area.Left + Math.Max(0, (area.Width - ActualWidth) / 2);
+            Top = area.Top + Math.Max(0, (area.Height - ActualHeight) / 2);
+            return;
+        }
+        Left = area.Right - ActualWidth - 16;
+        Top = area.Top + 16;
+    }
+
+    /// <summary>その位置に窓の頭が見えているか。モニタを外したあとに行方不明にならないよう確かめる。</summary>
+    private bool IsOnScreen(double left, double top)
+    {
+        // 掴める分（頭 80x40）が、**どれかのモニタの作業領域**に掛かっていれば良しとする。
+        // 仮想デスクトップの外枠で見ると、モニタを外した後の「どのモニタにも無い隙間」に窓が残って掴めなくなる
+        double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        return Monitors.IntersectsWorkArea(
+            (int)Math.Floor(left * scale), (int)Math.Floor(top * scale),
+            (int)Math.Ceiling((left + 80) * scale), (int)Math.Ceiling((top + 40) * scale));
+    }
+
+    private void SetExpanded(bool value)
+    {
+        _expanded = value;
+        _state.Expanded = value;
+        _feed.SetFolded(!value);   // 畳んでいる間は採取が 2 秒に 1 回（止めはしない）
+        DetailPanel.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        ExpandButton.Content = value ? "▲" : "▼";
+        ExpandButton.ToolTip = value ? Strings.CollapseTip : Strings.ExpandTip;
+        UpdateDetail();
+    }
+
+    // -----------------------------------------------------------------------
+    // 大きさ
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// 掴んで引いた分を拡大率に直す。横に引いた量で決める
+    /// （縦横を別々に伸ばすと、ドット絵の縦横比が崩れて別物に見える）。
+    /// </summary>
+    private void OnGripDrag(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+    {
+        double baseWidth = BoardRenderer.BoardWidth(BoardRenderer.PerRow(_slots.Count));
+        _scale = Math.Clamp(_scale + e.HorizontalChange / baseWidth, 0.8, 6.0);
+        Redraw(force: true);
+        KeepOnScreen();
+    }
+
+    /// <summary>
+    /// ⤢: **物理ピクセルで整数倍になる値**に揃える。
+    /// 拡大率が半端だと、ドットの太さが場所によって 2px と 3px に割れて汚くなる。
+    /// 表示倍率 125% の画面では 1.6 倍が「物理2倍」なので、そこへ寄せる。
+    /// </summary>
+    private void SnapScale()
+    {
+        double dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        if (dpi <= 0) dpi = 1;
+        int n = (int)Math.Round(_scale * dpi);
+        n = n % 3 + 1;                       // 1 → 2 → 3 → 1 と回す
+        _scale = n / dpi;
+        Redraw(force: true);
+        KeepOnScreen();
+    }
+
+    /// <summary>
+    /// 大きくしたときに画面からはみ出さないよう戻す。
+    /// **仮想デスクトップ全体で見る。** 主モニタだけで見ていたため、
+    /// 副モニタで大きくすると窓が主モニタへ引き戻されていた。
+    /// </summary>
+    private void KeepOnScreen()
+    {
+        double vl = SystemParameters.VirtualScreenLeft, vt = SystemParameters.VirtualScreenTop;
+        double vr = vl + SystemParameters.VirtualScreenWidth, vb = vt + SystemParameters.VirtualScreenHeight;
+        if (Left + ActualWidth > vr) Left = Math.Max(vl, vr - ActualWidth);
+        if (Top + ActualHeight > vb) Top = Math.Max(vt, vb - ActualHeight);
+    }
+
+    // -----------------------------------------------------------------------
+    // 描画
+    // -----------------------------------------------------------------------
+    private void Redraw(bool force = false)
+    {
+        if (_slots.Count == 0) return;
+
+        // 湯気だけは速い時計で動かす。姿のコマ送りより細かく揺れてほしい
+        bool anyHot = _slots.Any(s => s.Load >= 0.60);
+        int steamTick = anyHot ? (int)(_clock.ElapsedMilliseconds / 130) : 0;
+
+        var slots = new List<BoardSlot>(_slots.Count);
+        foreach (var s in _slots)
+        {
+            string motion = MotionFor(s.Load);
+            slots.Add(new BoardSlot(s.CharacterId, s.Kind, motion, FrameOf(s.CharacterId, motion),
+                                    _state.Level(s.Key), _state.LevelProgress(s.Key), s.Load, steamTick));
+        }
+
+        // **同じ絵なら描き直さない。**
+        // 常駐して置いておくものなので、何も変わっていないのに毎秒7回
+        // 盤を焼き直すのは、そのぶん誰かの CPU を食っているだけになる。
+        var sig = new HashCode();
+        sig.Add(_scale);
+        sig.Add((int)_labels);
+        foreach (var b in slots)
+        {
+            sig.Add(b.CharacterId);
+            sig.Add(b.Motion);
+            sig.Add(b.Frame);
+            sig.Add(b.Level);
+            sig.Add((int)(b.LevelProgress * 60));   // 経験値バーの見た目が変わる粒度まで
+            sig.Add((int)(b.Load * 40));
+            sig.Add(b.SteamTick);
+        }
+        int fingerprint = sig.ToHashCode();
+        if (!force && fingerprint == _lastSignature) return;
+        _lastSignature = fingerprint;
+
+        int minArtWidth = (int)Math.Ceiling(MinPanelWidth / Math.Max(_scale, 0.1));
+        BoardImage.Redraw(dc => _board.Draw(dc, slots, minArtWidth), _scale);
+
+        double w = Math.Round(BoardImage.ArtSize.Width * _scale);
+        double h = Math.Round(BoardImage.ArtSize.Height * _scale);
+        BoardHost.Width = w;
+        BoardHost.Height = h;
+        // **枠の幅は盤の幅と切り離す。**
+        // 段を折り返すと盤は細くなるが、数値欄まで一緒に細くすると
+        // GPU の型番が入らなくなる。狭いときは枠だけ広げて、盤を中央に置く。
+        double panel = Math.Max(w, MinPanelWidth);
+        _boardPixelWidth = (int)BoardImage.ArtSize.Width;
+        TabBar.Width = panel;
+        SettingsPanel.Width = panel;
+        StoryPanel.Width = panel;
+        ArrowBar.Width = panel;
+        DetailPanel.Width = panel;
+
+        PlaceLevelLabels();
+    }
+
+    /// <summary>レベルの字を、基板の帯の上に置く。字は絵と違って拡大せず、常に読める大きさで。</summary>
+    private void PlaceLevelLabels()
+    {
+        // **名札は、中身か置き場所が変わったときだけ置き直す**（C38）。コマ送りで盤を描き直すたびに、全部の名札を FormattedText で測り直し、
+        // 幅を 2 回書き換えて（cell → 最終の幅）レイアウトを起こしていたのが、旧アプリより重い一番の理由だった。
+        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var seats = new (string Title, int Level)[_slots.Count];
+        for (int i = 0; i < seats.Length; i++) seats[i] = (_slots[i].Title, _state.Level(_slots[i].Key));
+        int labelKey = BoardLabel.Fingerprint((int)_labels, _scale, dip, _boardPixelWidth, Strings.Lang, seats);
+        if (_labelKeySet && labelKey == _lastLabelKey) return;
+        _lastLabelKey = labelKey;
+        _labelKeySet = true;
+
+        while (_levelLabels.Count < _slots.Count)
+        {
+            var t = new TextBlock
+            {
+                TextAlignment = TextAlignment.Center,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xC9, 0xE8, 0xDD)),
+                FontWeight = FontWeights.SemiBold,
+            };
+            _levelLabels.Add(t);
+            LevelLayer.Children.Add(t);
+        }
+        for (int i = _slots.Count; i < _levelLabels.Count; i++) _levelLabels[i].Text = "";
+
+        double font = Math.Clamp(6 + 3 * _scale, 9, 15);
+        double cell = BoardRenderer.Cell * _scale;
+        int perRow = BoardRenderer.PerRow(_slots.Count);
+        // 名札が使える幅は、隣の子との間隔（盤の拡大に比例。最小倍率 0.8 でも 37px 台）から少し引いた分。
+        // 入らなければ名前を落として「Lv3」だけにする（BoardLabel.Text）
+        double pitch = (BoardRenderer.Cell + BoardRenderer.Gap) * _scale;
+        double maxWidth = pitch - 2;
+        var typeface = new Typeface(FontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+        double Measure(string text) => new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight, typeface, font, Brushes.White, dip).WidthIncludingTrailingWhitespace;
+
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            var t = _levelLabels[i];
+            t.FontSize = font;
+            int lv = seats[i].Level;
+            t.Text = _labels switch
+            {
+                Labels.None => "",
+                Labels.NameAndLevel => BoardLabel.Text(_slots[i].Title, Strings.Level, lv, maxWidth, Measure),
+                _ => Strings.Level + lv,
+            };
+            // 名前まで出すと 32px の枠には入らない。**枠を越えて、隣の子との間隔いっぱいまで中央に伸ばす**（幅は 1 回だけ書く: 途中の値を書くと、そのたびにレイアウトが起きる）
+            t.Width = _labels == Labels.NameAndLevel ? Math.Max(cell, pitch) : cell;
+            int row = i / perRow;
+            double left = (BoardRenderer.RowInset(_slots.Count, row, _boardPixelWidth)
+                           + BoardRenderer.SlotLeft(i % perRow)) * _scale;
+            Canvas.SetLeft(t, left - (t.Width - cell) / 2);
+            Canvas.SetTop(t, BoardRenderer.LabelBandTop(row) * _scale);
+        }
+    }
+
+    /// <summary>そのモーションのいまのコマ。速さは絵の側（アトラス）が持っている値に従う。</summary>
+    private int FrameOf(string characterId, string motion)
+    {
+        var m = _atlas.Motion(characterId, motion);
+        if (m is null || m.Frames.Count == 0) return 0;
+        return (int)(_clock.ElapsedMilliseconds / Math.Max(40, m.Ms)) % m.Frames.Count;
+    }
+
+    /// <summary>
+    /// 稼働状況を動きで表す。**数字は出さない。**
+    /// 判定に使う値は経験値と同じものを使う。表示と中身がずれると嘘くさくなる。
+    /// </summary>
+    private static string MotionFor(double load)
+    {
+        if (load >= 0.85) return "peek";   // 必死の顔
+        if (load >= 0.45) return "walk";   // 動きが速い
+        if (load <= 0.03) return "sleep";  // ほぼ何もしていない
+        return "idle";
+    }
+
+    // -----------------------------------------------------------------------
+    // フィード → 席 → 経験値 → 物語
+    // -----------------------------------------------------------------------
+    private void OnSensorTick()
+    {
+        Dispatcher.VerifyAccess();      // ApplyTo と Tick は _state を変える: UI スレッドだけ
+        if (_feed.Latest is not { } latest) return;
+        var frame = latest.Frame;
+        // 古さも順序も dt も単調時計の印だけで決める（壁時計が戻っても、新しい標本が古く見えて固まることがない）
+        SetStale(latest.AgeSeconds > IBoardFeed.StaleAfter(_feed.Period).TotalSeconds);
+        // 同じ標本で二度は進めない（時間だけが進んだことになり、経験値が二重に入る）
+        if (_lastStamp is { } previous && latest.Stamp <= previous) return;
+
+        // dt は標本と標本の間隔。最初の 1 枚は 0。止まっていた後に大きく入らないよう、周期の 2 倍までに丸める
+        double dt = _lastStamp is { } p
+            ? Math.Clamp(BoardSample.SecondsBetween(p, latest.Stamp), 0, 2 * _feed.Period.TotalSeconds)
+            : 0;
+        _lastStamp = latest.Stamp;
+
+        _frame = frame;
+        // 席を先に決める（Build / Tick より前）。GPU の鍵と「育てていい GPU」はここで決まる
+        _gpuFrame = _slotMap.ApplyTo(_state, frame);
+        // 席を決める処理を 1 回通した後なら保存してよい。一覧が読めない枚（AllGpus null）は席に触れないので、それでも書いて安全
+        // （一覧を待つと、GPU の一覧が読めない機械では CPU などの育成も一度も保存されない）
+        _saveAllowed = true;
+        if (_gpuFrame.SlotsChanged) SaveState();
+        // 設定の「GPU の番号」の欄は、席の記録が変わったとき・盤に居る席が変わったとき（差す・抜く・最初の標本）に作り直す。欄が開いているときだけ
+        if (GpuSlotsSettingsStale()) RefreshSettings();
+        _work =PartyComposition.WorkOf(frame, _gpuFrame);
+        _slots = PartyComposition.Build(frame, _gpuFrame, Strings.Lang);
+
+        int levelsBefore = LevelSum();
+        var produced = _director.Tick(dt, _work, _slots, Strings.Lang);
+        UpdateStoryText();
+
+        // 変わったとき（レベルが上がった・物語の行が出た）に保存する。60 秒ごとの保存は _autosaveTimer（標本とは別の時計）
+        bool changed = produced.Count > 0 || LevelSum() != levelsBefore;
+        if (changed) SaveState();
+
+        UpdateDetail();
+    }
+
+    /// <summary>
+    /// 設定の「GPU の番号」の欄（データのタブ）を作り直すべきか。席の記録が書き換わった（<see cref="GpuSlotFrame.SlotsChanged"/>）か、
+    /// 盤に居る席の組が前の標本と違う（GPU を差した・抜いた・最初の標本）とき、かつその欄が開いているときだけ真。
+    /// 居る席の組は、欄が閉じている間も追い続ける（開いた時点では欄を新しく作るので、古い印は残らない）。
+    /// </summary>
+    private bool GpuSlotsSettingsStale()
+    {
+        int mask = 0;
+        foreach (var a in _gpuFrame.Adapters)
+            if (a.Slot is { } n and >= 0 and < 31) mask |= 1 << n;
+        bool presenceChanged = mask != _presentSlotMask;
+        _presentSlotMask = mask;
+        return (_gpuFrame.SlotsChanged || presenceChanged) && _tab == SettingsTab.Data;
+    }
+
+    /// <summary>古い標本の値は薄く見せる（最新だと思わせない）。</summary>
+    private void SetStale(bool stale)
+    {
+        if (stale == _stale) return;
+        _stale = stale;
+        double opacity = stale ? 0.45 : 1.0;
+        BoardHost.Opacity = opacity;
+        DetailPanel.Opacity = opacity;
+    }
+
+    private int LevelSum()
+    {
+        int sum = 0;
+        foreach (var s in _slots) sum += _state.Level(s.Key);
+        return sum;
+    }
+
+    private void UpdateStoryText()
+    {
+        var log = _director.Recent;
+        // 章題の横に、いま一行が居る所（町か行き先）を小さく添える。
+        // 英語の名前は文中に差し込む形（"the steaming creek"）なので、見出しの形に直したものを使う
+        string where = _director.Adventure?.PlaceTitle(Strings.Lang) ?? "";
+        ChapterText.Text = _director.CurrentChapter.Title.For(Strings.Lang);
+        PlaceText.Text = where.Length > 0 ? "  ·  " + where : "";
+        StoryLine1.Text = log.Count > 0 ? log[0] : "";
+        StoryLine2.Text = log.Count > 1 ? log[1] : "";
+    }
+
+    /// <summary>
+    /// 絵の上を指したとき、それが何かを出す。
+    ///
+    /// **盤は1枚の絵なので、当たり判定は座標から自分で割り出す。**
+    /// 部品ごとに UI 要素を置く手もあるが、そうすると絵と当たり判定が
+    /// 二重管理になり、並びを変えたときにずれる。
+    /// </summary>
+    private void OnBoardHover(object sender, MouseEventArgs e)
+    {
+        int index = SlotAt(e.GetPosition(BoardHost));
+        if (index < 0 || index >= _slots.Count)
+        {
+            _hoverTip.IsOpen = false;
+            return;
+        }
+
+        var slot = _slots[index];
+        int lv = _state.Level(slot.Key);
+        // 測れていない席は 0% と言わない（Detail も「—」）
+        string load = slot.Measured ? $"{slot.Load * 100:0}%" : PartyComposition.Missing;
+        string detail = slot.Measured && slot.Detail.Length > 0 ? "\n" + slot.Detail : "";
+        string gear = _director.Adventure?.EquippedNames(slot.Key, Strings.Lang) ?? "";
+        _hoverTipText.Text =
+            $"{Director.DisplayName(slot.CharacterId, Strings.Lang)}  {Strings.Level}{lv}\n" +
+            $"{slot.Title}  {load}{detail}" +
+            (gear.Length > 0 ? $"\n{Strings.Gear}: {gear}" : "");
+
+        _hoverTip.PlacementTarget = BoardHost;
+        _hoverTip.Placement = System.Windows.Controls.Primitives.PlacementMode.Relative;
+        var p = e.GetPosition(BoardHost);
+        _hoverTip.HorizontalOffset = p.X + 14;
+        _hoverTip.VerticalOffset = p.Y + 18;
+        _hoverTip.IsOpen = true;
+    }
+
+    /// <summary>盤の中の座標から、何番目の子かを割り出す。外していれば -1。</summary>
+    private int SlotAt(Point p)
+    {
+        if (_slots.Count == 0 || _scale <= 0) return -1;
+        double ax = p.X / _scale, ay = p.Y / _scale;
+
+        int row = (int)(ay / BoardRenderer.RowHeight);
+        int perRow = BoardRenderer.PerRow(_slots.Count);
+        if (row < 0 || row >= BoardRenderer.RowsFor(_slots.Count)) return -1;
+
+        double top = BoardRenderer.RowTop(row) + BoardRenderer.BoardTop;
+        // 頭の少し上から、名札の帯までを当たりにする。厳密に体だけだと掴みにくい
+        if (ay < top - 3 || ay > top + BoardRenderer.Cell + BoardRenderer.SlotH) return -1;
+
+        double x = ax - BoardRenderer.RowInset(_slots.Count, row, _boardPixelWidth) - BoardRenderer.PadX;
+        if (x < 0) return -1;
+        int col = (int)(x / (BoardRenderer.Cell + BoardRenderer.Gap));
+        if (col >= perRow) return -1;
+        // 隙間を指しているときは何も出さない
+        if (x - col * (BoardRenderer.Cell + BoardRenderer.Gap) > BoardRenderer.Cell) return -1;
+
+        int index = row * perRow + col;
+        return index < _slots.Count ? index : -1;
+    }
+
+    /// <summary>
+    /// 「点検」を開く（DESIGN-C 3 item 3）。同じ階層の PCMieru.exe の窓が開いていれば PCMieru.OpenChecks.v1 を送るだけ（前に出す許可つき）。無ければ
+    /// 同じフォルダの PCMieru.exe を --open-checks で起こす。見つからない・起こせないときは一言出す。
+    /// </summary>
+    private void OpenChecks()
+    {
+        // A measuring start (--measure) must not start or bring forward PCMieru.exe (it would read the real gui.ini and Run key): the command does nothing.
+        if (Measuring) return;
+
+        const string mainExe = "PCMieru.exe";
+        if (SiblingWindows.Notify(mainExe, MieruMessages.OpenChecks, allowForeground: true) > 0) return;
+
+        var path = System.IO.Path.Combine(AppContext.BaseDirectory, mainExe);
+        if (!System.IO.File.Exists(path))
+        {
+            ShowNotice(Strings.ChecksUnavailable);
+            return;
+        }
+
+        try
+        {
+            using var started = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path, "--open-checks")
+            {
+                UseShellExecute = false,
+                WorkingDirectory = AppContext.BaseDirectory,
+            });
+            if (started is null) ShowNotice(Strings.ChecksUnavailable);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or System.IO.IOException)
+        {
+            ShowNotice(Strings.ChecksUnavailable);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PCMieru.LanguageChanged.v1（DESIGN-C 3 item 4）: 受けたら gui.ini の language だけを読み直して追う
+    // -----------------------------------------------------------------------
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        _hwndSource?.AddHook(OnWindowMessage);
+    }
+
+    private nint OnWindowMessage(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        // wParam・lParam は見ない。送り主も確かめない: 受けてすることは「設定ファイルを読み直す」ただ一つ。
+        if (MieruMessages.ForParty((uint)msg) == MieruMessageAction.ReloadLanguage)
+        {
+            FollowGuiLanguage();
+            handled = true;
+        }
+
+        return 0;
+    }
+
+    /// <summary>gui.ini の language に合わせる。読めない・無い・今と同じなら何もしない。この回の見た目だけを変え、保存（_state.Lang）には書かない。</summary>
+    internal void FollowGuiLanguage()
+    {
+        var lang = _readGuiLanguage?.Invoke();
+        if (lang is not ("ja" or "en") || lang == Strings.Lang) return;
+        SetWindowLanguage(lang, persist: false);
+    }
+
+    private void ConfirmReset(string ask, Action apply, string? title = null)
+    {
+        Dispatcher.VerifyAccess();       // apply は _state を変える: UI スレッドだけ。本文も同じ操作の中で取る
+        bool wasTopmost = Topmost;
+        Topmost = false;                 // 確認の窓が最前面の後ろに隠れないように
+        var answer = MessageBox.Show(this, ask, title ?? Strings.ResetTitle,
+                                     MessageBoxButton.OKCancel, MessageBoxImage.Warning,
+                                     MessageBoxResult.Cancel);
+        Topmost = wasTopmost;
+        if (answer != MessageBoxResult.OK) return;
+
+        apply();
+        SaveState(force: true);          // すぐ書き戻す。ここで落ちても戻らないように
+        _lastSignature = 0;
+        _labelKeySet = false;
+        UpdateStoryText();
+        Redraw(force: true);
+        UpdateDetail();
+    }
+
+    private void ApplyLanguage()
+    {
+        LangButton.Content = Strings.Lang == "ja" ? "JA" : "EN";
+        LangButton.ToolTip = Strings.LangTip;
+        CloseButton.ToolTip = Strings.Close;
+        SizeButton.ToolTip = Strings.SizeTip;
+        TopmostButton.ToolTip = Strings.TopmostTip;
+        Grip.ToolTip = Strings.ResizeTip;
+        ExpandButton.ToolTip = _expanded ? Strings.CollapseTip : Strings.ExpandTip;
+        BuildTabs();
+        RefreshSettings();
+        UpdateStoryText();
+        PlaceLevelLabels();
+        UpdateDetail();
+    }
+
+    // -----------------------------------------------------------------------
+    // 展開時の数値（BoardFrame から。値の無い所は「—」）
+    // -----------------------------------------------------------------------
+    private void UpdateDetail()
+    {
+        if (!_expanded) return;
+        DetailStack.Children.Clear();
+        if (_frame is not { } f) return;
+
+        // CPU は載っている数だけ。2ソケットなら2行出る。ソケットの割り当てが無ければ全体で 1 行
+        IReadOnlyList<BoardCpuSocket> sockets = f.Sockets is { Count: > 0 }
+            ? f.Sockets
+            : [new BoardCpuSocket(f.CpuPercent, f.LogicalProcessors)];
+        for (int p = 0; p < sockets.Count; p++)
+        {
+            var s = sockets[p];
+            DetailStack.Children.Add(BarRow(sockets.Count > 1 ? $"CPU{p}" : "CPU", Ratio(s.Percent),
+                s.Percent is { } pct ? $"{pct:0}%  {Strings.CoresSuffix(s.LogicalProcessors)}" : PartyComposition.Missing));
+        }
+
+        DetailStack.Children.Add(f.Memory is { } m
+            ? BarRow("MEM", Ratio(m.Percent), $"{Gb(m.UsedBytes):0.0} / {Gb(m.TotalBytes):0.0} GB")
+            : BarRow("MEM", 0, PartyComposition.Missing));
+
+        // GPU は**必ず台数ぶん並べる。**1枚しか出さないと、複数挿しの機械で嘘になる。
+        // 一覧そのものが読めていない（null）ときは「—」、読めて 0 枚のときは「見つかりません」
+        var gpus = f.Gpus;
+        if (gpus is null)
+        {
+            DetailStack.Children.Add(BarRow("GPU", 0, PartyComposition.Missing));
+        }
+        else if (gpus.Count == 0)
+        {
+            DetailStack.Children.Add(BarRow("GPU", 0, Strings.NoGpu));
+        }
+        else
+        {
+            for (int i = 0; i < Math.Min(gpus.Count, BoardFrame.MaxGpus); i++)
+            {
+                var g = gpus[i];
+                string label = gpus.Count == 1 ? "GPU" : $"GPU{i}";
+                string value = g.Percent is { } gp ? $"{gp:0}%" : PartyComposition.Missing;
+                DetailStack.Children.Add(BarRow(label, Ratio(g.Percent), $"{value}   {g.Name}"));
+                if (g.VramUsedBytes is { } used && g.VramTotalBytes is { } total && total > 0)
+                    DetailStack.Children.Add(BarRow(Strings.Vram, (double)used / total,
+                        $"{Gb(used):0.0} / {Gb(total):0.0} GB"));
+                else if (g.VramUsedBytes is { } only && only > 0)
+                    DetailStack.Children.Add(BarRow(Strings.Vram, 0, $"{Gb(only):0.0} GB"));
+                else if (g.VramUsedBytes is null)
+                    DetailStack.Children.Add(BarRow(Strings.Vram, 0, PartyComposition.Missing));
+            }
+        }
+
+        // 記憶装置は**種類ごとに**出す。総量ひとつだと、どれが動いているのか分からない
+        foreach (var slot in _slots.Where(s2 => s2.Key is "m2" or "ssd" or "hdd"))
+        {
+            var kind = f.DiskKinds?.FirstOrDefault(k => DiskSlots.For(k.Kind)?.Key == slot.Key);
+            double? bytes = kind is null ? f.Disk.BytesPerSec : kind.BytesPerSec;
+            string rate = bytes is { } b ? $"{Mb(b):0.0} MB/s" : PartyComposition.Missing;
+            string capacity = kind is { UsedBytes: { } u, TotalBytes: { } t } && t > 0
+                ? $"  ·  {Gb(u):0} / {Gb(t):0} GB" + (kind.DeviceCount > 1 ? $"  ×{kind.DeviceCount}" : "")
+                : "";
+            DetailStack.Children.Add(BarRow(slot.Title, slot.Load, rate + capacity));
+        }
+
+        double? disk = f.Disk.BytesPerSec is { } io && double.IsFinite(io) && io >= 0
+            ? Math.Clamp(io / DiskSlots.WorkScaleBytesPerSec, 0, 1)
+            : null;
+        DetailStack.Children.Add(BarRow("I/O", disk ?? 0,
+            f.Disk.BytesPerSec is { } io2 ? $"{Mb(io2):0.0} MB/s" : PartyComposition.Missing));
+
+        DetailStack.Children.Add(new TextBlock
+        {
+            Text = Strings.Disclaimer,
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+            // #8794B0: 枠（#101319）の上で 6.1:1、窓の後ろが真っ白でも 4.7:1（旧 #6E7A93 は 4.3:1 / 3.3:1）。Sub（#9AA7C4）よりは控えめ
+            Foreground = new SolidColorBrush(Color.FromRgb(0x87, 0x94, 0xB0)),
+        });
+    }
+
+    /// <summary>百分率（0..100）→ 0..1。無ければ 0（バーが空なだけで、数字の欄は「—」）。</summary>
+    private static double Ratio(double? percent) =>
+        percent is { } p && double.IsFinite(p) ? Math.Clamp(p / 100.0, 0, 1) : 0;
+
+    private static double Gb(long bytes) => bytes / 1024.0 / 1024.0 / 1024.0;
+    private static double Mb(double bytes) => bytes / 1024.0 / 1024.0;
+
+    private static Brush LoadBrush(double v) =>
+        v >= 0.85 ? new SolidColorBrush(Color.FromRgb(0xF0, 0x50, 0x70))
+      : v >= 0.60 ? new SolidColorBrush(Color.FromRgb(0xE7, 0xC8, 0x4B))
+                  : new SolidColorBrush(Color.FromRgb(0x5D, 0xD8, 0xBB));
+
+    private UIElement BarRow(string label, double ratio, string text)
+    {
+        var grid = NewRow(label, text);
+        var track = new Border
+        {
+            Height = 7,
+            Background = new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF)),
+            CornerRadius = new CornerRadius(2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var fill = new Border
+        {
+            Height = 7,
+            Background = LoadBrush(ratio),
+            CornerRadius = new CornerRadius(2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        track.SizeChanged += (_, e) => fill.Width = Math.Max(0, e.NewSize.Width * Math.Clamp(ratio, 0, 1));
+        var host = new Grid();
+        host.Children.Add(track);
+        host.Children.Add(fill);
+        Grid.SetColumn(host, 1);
+        grid.Children.Add(host);
+        return grid;
+    }
+
+    private static Grid NewRow(string label, string text)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var l = new TextBlock
+        {
+            Text = label, FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA7, 0xC4)),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(l, 0);
+        grid.Children.Add(l);
+
+        var t = new TextBlock
+        {
+            Text = text, FontSize = 11, Margin = new Thickness(8, 0, 0, 0),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xDD, 0xE5, 0xF8)),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            // **切れたら「…」を出す。**
+            // 黙って切れると「RTX 3080 Ti」が「RTX 3080」と読めてしまう
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = text,
+        };
+        Grid.SetColumn(t, 2);
+        grid.Children.Add(t);
+        return grid;
+    }
+}

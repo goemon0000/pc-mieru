@@ -1,0 +1,25 @@
+{
+  "Experience": {
+    "cpu": 5000,
+    "cpu-cooler": 4800,
+    "gpu": 7000,
+    "memory": 1000,
+    "ssd": 800
+  },
+  "Journey": 900,
+  "Chapter": 2,
+  "Scene": 9,
+  "Log": [],
+  "LastEventAt": {},
+  "RecentVignettes": [],
+  "UptimeSeconds": 0,
+  "LastSeenUnix": 0,
+  "Boots": 5,
+  "Lang": "en",
+  "Zoom": 2,
+  "WindowLeft": null,
+  "WindowTop": null,
+  "Topmost": true,
+  "Expanded": false,
+  "Labels": "level"
+}

@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/PcMieru.Wire/PcMieru.Wire.csproj" />
+    <Project Path="src/PcMieru.Party.Core/PcMieru.Party.Core.csproj" />
     <Project Path="src/PcMieru.Core/PcMieru.Core.csproj" />
     <Project Path="src/PcMieru.Checks/PcMieru.Checks.csproj" />
     <Project Path="src/PcMieru.Update/PcMieru.Update.csproj" />
     <Project Path="src/PcMieru.Gui/PcMieru.Gui.csproj" />
+    <Project Path="src/PcMieru.Party/PcMieru.Party.csproj" />
     <Project Path="src/PcMieru.Cli/PcMieru.Cli.csproj" />
     <Project Path="src/PcMieru.Helper/PcMieru.Helper.csproj" />
     <Project Path="src/PcMieru.Swap/PcMieru.Swap.csproj" />
@@ -13,6 +15,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PcMieru.Core.Tests/PcMieru.Core.Tests.csproj" />
+    <Project Path="tests/PcMieru.Party.Core.Tests/PcMieru.Party.Core.Tests.csproj" />
     <Project Path="tests/PcMieru.Checks.Tests/PcMieru.Checks.Tests.csproj" />
     <Project Path="tests/PcMieru.Update.Tests/PcMieru.Update.Tests.csproj" />
     <Project Path="tests/PcMieru.Cli.Tests/PcMieru.Cli.Tests.csproj" />

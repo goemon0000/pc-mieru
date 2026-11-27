@@ -20,14 +20,14 @@ internal sealed record PdhSystemReading(IReadOnlyList<DiskInfo> Disks, Value<dou
 /// between its own two collections, so the first collection after start yields nothing and says so.
 /// Counter paths are English (PdhAddEnglishCounterW), so a Japanese Windows needs no name table.
 /// </summary>
-internal sealed class PdhSystemSampler : IDisposable
+internal sealed class PdhSystemSampler : IPdhSampling
 {
     private const string DiskSource = "PDH PhysicalDisk";
     private const string ClockSource = "PDH Processor Information";
     private const string PowerSource = "PDH Energy Meter";
     private const double MinWindowMs = 200;
 
-    private readonly PdhQuery _query = new();
+    private readonly IPdhQuery _query;
     private readonly PdhArrayReader _reader = new();
     private readonly nint _idle;
     private readonly nint _read;
@@ -42,27 +42,47 @@ internal sealed class PdhSystemSampler : IDisposable
     private bool _baselineValid;
 
     public PdhSystemSampler()
+        : this(new PdhQuery())
     {
-        if (!_query.IsOpen)
+    }
+
+    /// <summary>
+    /// The sampler over a query that is already open. It owns the query from here: when setting it up throws (a counter that cannot be added, the
+    /// first collection failing), the query is closed before the exception goes on. The half-built object never reaches a caller, so nobody else
+    /// could close it, and every retry after a failed open would leak one PDH query handle.
+    /// </summary>
+    internal PdhSystemSampler(IPdhQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        _query = query;
+        try
         {
-            return;
+            if (!_query.IsOpen)
+            {
+                return;
+            }
+
+            _idle = _query.Add(@"\PhysicalDisk(*)\% Idle Time", out _);
+            _read = _query.Add(@"\PhysicalDisk(*)\Disk Read Bytes/sec", out _);
+            _write = _query.Add(@"\PhysicalDisk(*)\Disk Write Bytes/sec", out _);
+            _latency = _query.Add(@"\PhysicalDisk(*)\Avg. Disk sec/Transfer", out _);
+            _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
+            _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
+
+            // The CPU package power. Many PCs have no Energy Meter counter set: Add then gives 0 and the value says so, it is never a 0 W reading.
+            _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
+
+            // The first collection only starts PDH's clock. Doing it here lets the first tick already have rates.
+            if (_query.Collect() == Pdh.Success)
+            {
+                _lastStamp = Stopwatch.GetTimestamp();
+                _baselineValid = true;
+            }
         }
-
-        _idle = _query.Add(@"\PhysicalDisk(*)\% Idle Time", out _);
-        _read = _query.Add(@"\PhysicalDisk(*)\Disk Read Bytes/sec", out _);
-        _write = _query.Add(@"\PhysicalDisk(*)\Disk Write Bytes/sec", out _);
-        _latency = _query.Add(@"\PhysicalDisk(*)\Avg. Disk sec/Transfer", out _);
-        _frequency = _query.Add(@"\Processor Information(_Total)\Processor Frequency", out _);
-        _performance = _query.Add(@"\Processor Information(_Total)\% Processor Performance", out _);
-
-        // The CPU package power. Many PCs have no Energy Meter counter set: Add then gives 0 and the value says so, it is never a 0 W reading.
-        _energy = _query.Add(@"\Energy Meter(*)\Power", out _);
-
-        // The first collection only starts PDH's clock. Doing it here lets the first tick already have rates.
-        if (_query.Collect() == Pdh.Success)
+        catch
         {
-            _lastStamp = Stopwatch.GetTimestamp();
-            _baselineValid = true;
+            _query.Dispose();
+            throw;
         }
     }
 
@@ -90,9 +110,10 @@ internal sealed class PdhSystemSampler : IDisposable
         _lastStamp = Stopwatch.GetTimestamp();
         _baselineValid = true;
 
+        // Every counter array starts from nothing: a disk that one array leaves out has that reading missing, not the one of the last tick.
         foreach (var d in _disks.Values)
         {
-            d.Seen = false;
+            d.BeginTick();
         }
 
         ReadDisks(_idle, static (a, v) => a.Idle = v);
@@ -337,5 +358,12 @@ internal sealed class PdhSystemSampler : IDisposable
         public Reading Write { get; set; }
 
         public Reading Latency { get; set; }
+
+        /// <summary>Forgets everything the last tick read, so a counter array that omits this disk leaves its reading absent instead of stale.</summary>
+        public void BeginTick()
+        {
+            Seen = false;
+            Idle = Read = Write = Latency = default;
+        }
     }
 }

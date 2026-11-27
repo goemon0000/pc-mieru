@@ -41,6 +41,14 @@ public sealed record SystemInfo(
 {
     /// <summary>AC connected and battery charge/state, from the same Windows power status the hardware page reads. Missing values say why (a desktop has no battery).</summary>
     public PowerInfo Power { get; init; } = PowerInfo.NotCollected;
+
+    /// <summary>
+    /// The physical drives and local volumes a background reader last saw, for the Parts Life board to split the disk numbers by drive kind;
+    /// null when it has not been read (or the read failed): kinds are then unknown, never guessed. Public because that board is another assembly;
+    /// kept out of the JSON with an attribute, like <see cref="CpuInfo.Sockets"/>, so the snapshot schema is exactly what it was without it.
+    /// </summary>
+    [JsonIgnore]
+    public StorageTopology? Storage { get; init; }
 }
 
 /// <summary>
@@ -73,6 +81,14 @@ public sealed record CpuInfo(
     /// the reason when this PC's Windows has no such counters: never 0 W.
     /// </summary>
     public Value<double> PackagePowerWatts { get; init; } = Value.NotCollected<double>("none");
+
+    /// <summary>
+    /// Which entries of <see cref="PerLogicalPercent"/> belong to which CPU package, only when Core confirmed that mapping; null otherwise
+    /// (unknown, or not collected by the source). Public because the Parts Life board (another assembly) reads it; kept out of the JSON with an
+    /// attribute, like <see cref="GpuInfo.PciBus"/>, so the pcmi JSON, the recordings and the snapshot schema are exactly what they were without it.
+    /// </summary>
+    [JsonIgnore]
+    public CpuSockets? Sockets { get; init; }
 }
 
 public sealed record MemoryInfo(
@@ -128,6 +144,15 @@ public sealed record GpuInfo(
 
     /// <summary>Where the vendor values (temperature, power, fan, clock, limits) of this adapter came from. Null when none were merged. Never serialized.</summary>
     internal SourceOrigin? VendorOrigin { get; init; }
+
+    /// <summary>
+    /// The PCI bus number the kernel reports for this adapter (read once per adapter-list enumeration, not per tick). Null when the adapter has no PCI
+    /// address (a virtual copy) or the kernel could not be asked. Public because the Parts Life board (another assembly) tells two cards of one model apart
+    /// with it; unlike <see cref="VendorOrigin"/> it must cross the assembly line, so it is kept out of the JSON with an attribute instead of with
+    /// <c>internal</c>. Never serialized: the pcmi JSON, the recordings and the snapshot schema are exactly what they were without it.
+    /// </summary>
+    [JsonIgnore]
+    public uint? PciBus { get; init; }
 }
 
 public sealed record GpuEngineInfo(string Type, Value<double> Percent);

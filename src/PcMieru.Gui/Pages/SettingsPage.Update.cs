@@ -129,9 +129,9 @@ internal sealed partial class SettingsPage
         grid.Controls.Add(buttons, 0, row + 8);
         grid.SetColumnSpan(buttons, 2);
 
-        _updateMode.TabIndex = 8;
-        _updateCheckNow.TabIndex = 9;
-        _updateNotes.TabIndex = 10;
+        _updateMode.TabIndex = 9;
+        _updateCheckNow.TabIndex = 10;
+        _updateNotes.TabIndex = 11;
         return row + 9;
     }
 

@@ -3,7 +3,7 @@
   Builds the PC Mieru release folder, zip, outer manifest and SHA256.txt (the pcm-bundle/1 release).
 
 .DESCRIPTION
-  1. Publishes Gui, Cli and SensorHost one by one (self-contained, ReadyToRun) into separate work folders.
+  1. Publishes Gui, Cli, SensorHost and Party (PCMieru.Party.exe, WPF) one by one (self-contained, ReadyToRun) into separate work folders.
   2. Merges them into one folder. A file that exists in more than one work folder must be byte-identical
      (SHA256); if it is not, the script stops. Nothing is overwritten silently.
   3. Publishes the Helper, the network meter (PCMieru.NetMeter.exe) and the swapper (PCMieru.Swap.exe) with NativeAOT and checks each exe itself:
@@ -15,7 +15,7 @@
      the validator checks its exact SHA-256, which is fixed in src/PcMieru.Wire/Gate/GateFile.cs).
   4. Writes the inner manifest PCMieru.bundle.json into the folder: format, version, rid, a new buildId (a GUID, per publish),
      gateProtocol and every file of the folder (path with '/', bytes, sha256) except itself.
-  5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, PCMieru.exe --smoke, and the
+  5. With -Verify, runs the merged folder: pcmi version / ps / hw, the MCP handshake, PCMieru.exe --smoke, PCMieru.Party.exe --smoke, and the
      network meter started with no arguments (it must start and refuse with exit code 2; it opens nothing).
      The REAL bundle validator (tools/BundleCheck, the code the client will use) judges the folder before and after that run,
      so running the folder must not leave a stray file in it.
@@ -528,10 +528,11 @@ function Invoke-BundleCheck([string[]]$CheckArgs) {
     if ($LASTEXITCODE -ne 0) { throw "BundleCheck refused the bundle (exit code $LASTEXITCODE): $($CheckArgs[0])" }
 }
 
-function Merge-Folders([string[]]$Sources, [string]$Destination, [string[]]$FirstWins) {
+function Merge-Folders([string[]]$Sources, [string]$Destination, [string[]]$FirstWins, [string[]]$LastWins = @()) {
     $seen = @{}
     $conflicts = New-Object System.Collections.Generic.List[string]
     $first = @($FirstWins | ForEach-Object { $_.ToLowerInvariant() })
+    $last = @($LastWins | ForEach-Object { $_.ToLowerInvariant() })
     foreach ($source in $Sources) {
         $base = (Resolve-Path -LiteralPath $source).Path.TrimEnd('\')
         foreach ($file in Get-ChildItem -LiteralPath $base -Recurse -File -Force) {
@@ -543,6 +544,10 @@ function Merge-Folders([string[]]$Sources, [string]$Destination, [string[]]$Firs
                 if ($seen[$key].Hash -ne $hash) {
                     if ($first -contains $key) {
                         Write-Host ("kept {0} from {1} (differs from the {2} copy, allowed)" -f $relative, $seen[$key].From, (Split-Path -Leaf $base))
+                    } elseif ($last -contains $key) {
+                        Write-Host ("took {0} from {1} over the {2} copy (allowed)" -f $relative, (Split-Path -Leaf $base), $seen[$key].From)
+                        $seen[$key] = @{ Hash = $hash; From = (Split-Path -Leaf $base) }
+                        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $Destination $relative) -Force
                     } else {
                         $conflicts.Add("$relative differs: $($seen[$key].From) vs $(Split-Path -Leaf $base)")
                     }
@@ -627,6 +632,18 @@ function Invoke-VerifyRun([string]$Folder) {
     if (-not $report.ok) { throw "PCMieru.exe --smoke reported failures; see $smoke" }
     Write-Host ('PCMieru smoke  : ok, {0} checks, {1} dpi' -f @($report.checks).Count, $report.dpi)
     Remove-Item -LiteralPath $smoke -Force
+
+    # Parts Life: --smoke passes the start gate of this folder, takes the per-user resident mutex, shows the empty window for a moment, closes it, writes "party smoke ok" on stdout and ends with 0.
+    # It is a GUI-subsystem exe, so its output is read from files. A Parts Life that is running on this PC right now holds the mutex and makes this run end with 2: close it and run again.
+    $partyOut = Join-Path $work 'party-smoke.out'
+    $partyErr = Join-Path $work 'party-smoke.err'
+    $partyRun = Start-Process -FilePath (Join-Path $Folder 'PCMieru.Party.exe') -ArgumentList @('--smoke') -PassThru -Wait -RedirectStandardOutput $partyOut -RedirectStandardError $partyErr
+    # Get-Content -Raw of an empty file gives nothing, and in PowerShell 5.1 [string] of that nothing is still $null, so -join makes the string.
+    $partyText = (@(Get-Content -LiteralPath $partyOut -Raw) -join '').Trim()
+    $partyError = (@(Get-Content -LiteralPath $partyErr -Raw) -join '').Trim()
+    if ($partyRun.ExitCode -ne 0) { throw "PCMieru.Party.exe --smoke exited with $($partyRun.ExitCode): $partyError" }
+    if ($partyText -ne 'party smoke ok') { throw "PCMieru.Party.exe --smoke printed '$partyText' instead of 'party smoke ok'" }
+    Write-Host 'Party smoke    : ok (gate, resident mutex, window shown and closed)'
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -658,7 +675,9 @@ $common = @('-c', 'Release', '-r', $Runtime, "-p:Version=$Version", '-p:DebugTyp
 $apps = @(
     @{ Name = 'Gui'; Project = 'src\PcMieru.Gui\PcMieru.Gui.csproj' },
     @{ Name = 'Cli'; Project = 'src\PcMieru.Cli\PcMieru.Cli.csproj' },
-    @{ Name = 'SensorHost'; Project = 'src\PcMieru.SensorHost\PcMieru.SensorHost.csproj' }
+    @{ Name = 'SensorHost'; Project = 'src\PcMieru.SensorHost\PcMieru.SensorHost.csproj' },
+    # Parts Life: a WPF program of its own (DESIGN-C 7). Last, so that for the few names that the Gui's copy may win ($guiCopyWins) the Gui is still first.
+    @{ Name = 'Party'; Project = 'src\PcMieru.Party\PcMieru.Party.csproj' }
 )
 foreach ($app in $apps) {
     Write-Step ("Publish " + $app.Name)
@@ -676,8 +695,23 @@ Write-Step 'Merge (same-named files must be identical)'
 # identity (10.0.0.0) and the same public surface (1047 public types and members, compared with System.Reflection.Metadata: none missing
 # either way); only the bytes differ. The Gui is merged first, so its copy wins.
 $guiCopyWins = @('System.Drawing.dll', 'Microsoft.VisualBasic.dll', 'System.CodeDom.dll')
-$count = Merge-Folders -Sources @($apps | ForEach-Object { Join-Path $work $_.Name }) -Destination $folder -FirstWins $guiCopyWins
+# WindowsBase.dll goes the other way. The Gui (WinForms only) publishes the Desktop pack's 16 KB type-forward facade (assembly version 4.0.0.0);
+# Party (WPF) publishes the real WPF assembly (10.0.0.0, about 2 MB), same file version 10.0.926.27113 and the same public key token.
+# The real one is what the shared Windows Desktop runtime gives every WinForms app, and a reference to 4.0.0.0 binds to 10.0.0.0, so
+# Party's copy wins (Party is merged last). -Verify runs PCMieru.exe --smoke and pcmi on the merged folder, which is what shows the WinForms side still starts.
+$partyCopyWins = @('WindowsBase.dll')
+$count = Merge-Folders -Sources @($apps | ForEach-Object { Join-Path $work $_.Name }) -Destination $folder -FirstWins $guiCopyWins -LastWins $partyCopyWins
 Write-Host ("merged $count files from $($apps.Count) publishes")
+
+# What the WPF program costs the release: the files of its publish that no other publish has (the ones they share were merged above and cost nothing twice).
+$partyBase = (Resolve-Path -LiteralPath (Join-Path $work 'Party')).Path.TrimEnd('\')
+$othersHave = @{}
+foreach ($other in @($apps | Where-Object { $_.Name -ne 'Party' })) {
+    $otherBase = (Resolve-Path -LiteralPath (Join-Path $work $other.Name)).Path.TrimEnd('\')
+    foreach ($f in Get-ChildItem -LiteralPath $otherBase -Recurse -File -Force) { $othersHave[$f.FullName.Substring($otherBase.Length + 1).ToLowerInvariant()] = $true }
+}
+$partyOnly = @(Get-ChildItem -LiteralPath $partyBase -Recurse -File -Force | Where-Object { $_.Name -notlike '*.pdb' -and -not $othersHave.ContainsKey($_.FullName.Substring($partyBase.Length + 1).ToLowerInvariant()) })
+Write-Host ('Party adds    : {0} files, {1:N1} MB (not in the Gui, Cli or SensorHost publish)' -f $partyOnly.Count, (($partyOnly | Measure-Object -Property Length -Sum).Sum / 1MB))
 
 Publish-AotExe 'Helper' 'src\PcMieru.Helper\PcMieru.Helper.csproj' 'PCMieru.Helper.exe' $HelperMaxKB
 Publish-AotExe 'NetMeter' 'src\PcMieru.NetMeter\PcMieru.NetMeter.csproj' 'PCMieru.NetMeter.exe' $NetMeterMaxKB
@@ -689,13 +723,16 @@ foreach ($extra in @('LICENSE', 'NOTICE.txt')) {
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $folder $extra) }
 }
 
+# The CC BY 4.0 notice for the Party character art (assets\party\LICENSE-ART). It ships as LICENSE-ART.txt: the bundle name rules reject a bare LICENSE-ART.
+Copy-Item -LiteralPath (Join-Path $root 'assets\party\LICENSE-ART') -Destination (Join-Path $folder 'LICENSE-ART.txt')
+
 # The start gate file: the bytes of assets\PCMieru.gate.txt, copied as they are (no text conversion). The validator checks the exact SHA-256 (BundleFault.GateFileChanged),
 # so an asset that was changed by mistake stops the -Verify run; without -Verify the unit test of the asset (tests/PcMieru.Gate.Tests) is what stops it.
 Copy-Item -LiteralPath (Join-Path $root 'assets\PCMieru.gate.txt') -Destination (Join-Path $folder 'PCMieru.gate.txt')
 
 # System.Management.dll and System.CodeDom.dll are the Checks' dependencies (WMI for the hardware checks). A publish that drops
 # them would start fine and fail on the first check, so a release folder without them is not a release.
-$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Swap.exe', 'PCMieru.Core.dll', 'PCMieru.gate.txt', 'PcMieru.Update.dll', 'System.Management.dll', 'System.CodeDom.dll')
+$expected = @('PCMieru.exe', 'pcmi.exe', 'PCMieru.SensorHost.exe', 'PCMieru.Party.exe', 'PCMieru.Party.runtimeconfig.json', 'PCMieru.Party.deps.json', 'PcMieru.Party.Core.dll', 'PCMieru.Helper.exe', 'PCMieru.NetMeter.exe', 'PCMieru.Swap.exe', 'PCMieru.Core.dll', 'PCMieru.gate.txt', 'PcMieru.Update.dll', 'System.Management.dll', 'System.CodeDom.dll')
 foreach ($file in $expected) {
     if (-not (Test-Path -LiteralPath (Join-Path $folder $file))) { throw "missing from the release folder: $file" }
 }

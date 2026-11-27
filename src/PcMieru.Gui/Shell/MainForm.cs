@@ -1,4 +1,5 @@
 using System.Globalization;
+using PcMieru.Core.Siblings;
 using PcMieru.Update.Feed;
 using PcMieru.Update.Launch;
 using PcMieru.Update.Transaction;
@@ -303,6 +304,203 @@ internal sealed class MainForm : Form
         {
             StartHandOff(executable);
         }
+
+        // Last, and only after the update choice above has closed (it is modal): the notice that old Parts Life progress is waiting. Never two dialogs at once.
+        PartyNotice = NoticePartyImportAsync();
+
+        // And off the UI thread, quietly: an unfinished switch of the sign-in start (Parts Life's first start offers it) is put back; only one that cannot be settled shows a line on the setting.
+        LogonRecovery = RecoverLogonAsync();
+    }
+
+    /// <summary>The recovery that <see cref="StartUpdates"/> started (completed when nothing was started or it is over). A test awaits it; the window never does.</summary>
+    internal Task LogonRecovery { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// DESIGN-C 4.3, the window's side: at a real start, puts back what an unfinished switch of the sign-in start left (<see cref="RunSwitch.Recover"/>), off the UI thread. Nothing is asked and no
+    /// dialog opens; when the result needs a person (<see cref="RunSwitchResult.NeedsAttention"/>) the status line of the setting says so (<see cref="GuiContext.LogonNeedsCheck"/>). It needs both the
+    /// store and the roaming folder the context names (a real run sets them; a smoke run, a measurement and a test leave at least one out), and the journal is the one beside the save of Parts Life.
+    /// An exception shows nothing and never reaches the window.
+    /// </summary>
+    internal async Task RecoverLogonAsync()
+    {
+        try
+        {
+            if (_context.LogonStore is not { } store || !_context.PartyRoamingRootKnown)
+            {
+                return;
+            }
+
+            // The roaming folder is found on the worker thread too (a redirected folder may be slow or gone), with the recovery itself. While another program holds the lock of the sign-in entries
+            // (Parts Life's own start may be switching right now) the recovery says Busy: it is tried up to 3 more times, 5 seconds apart, in the background; still Busy = nothing this run, the journal
+            // stays for the next start.
+            var seam = _context.LogonSeam;
+            var delay = seam.RetryDelay ?? TimeSpan.FromSeconds(5);
+            RunSwitchResult? result = null;
+            for (var attempt = 0; attempt <= 3; attempt++)
+            {
+                if (attempt > 0)
+                {
+                    await Task.Delay(delay).ConfigureAwait(true);
+                }
+
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                result = await Task.Run(() =>
+                {
+                    if (_context.ResolveLogonJournalPath() is not { } journal)
+                    {
+                        return null;
+                    }
+
+                    return RunSwitch.Recover(store, new FileRunSwitchJournal(journal), seam.LockName, seam.LockWait, seam.FileExists);
+                }).ConfigureAwait(true);
+                if (result is not { Status: RunSwitchStatus.Busy })
+                {
+                    break;
+                }
+            }
+
+            if (result is not { NeedsAttention: true } || IsDisposed)
+            {
+                return;
+            }
+
+            _context.LogonNeedsCheck = true;
+            if (PageById("settings") is SettingsPage page)
+            {
+                await page.RefreshPartyLogon().ConfigureAwait(true);   // a page that is already open shows the line now; one that is not yet made shows it when it opens
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // nothing shown, nothing blocked: the setting still works as it did
+        }
+    }
+
+    /// <summary>The notice that <see cref="StartUpdates"/> started (completed when nothing was started or it is over). A test awaits it; the window never does.</summary>
+    internal Task PartyNotice { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// The first-run notice that old Parts Life progress is waiting (DESIGN-C 4.1 items 1-2). It only notices and sends the owner to PCMieru.Party.exe, whose first start does the import and
+    /// its choices. The look is a file-existence hint off the UI thread (<see cref="PartyImportHint"/>) in the folder the context names, which only a real run sets. Nothing is shown when a save
+    /// of the new window is there, when nothing old is, or when 「あとで」 was chosen before (gui.ini party.import=later). 「パーツぐらしを開く」 shows the Parts Life page and presses its button
+    /// (so a failure to start is told there); 「あとで」 is saved; the cross is "not answered" and saves nothing, so it comes again at the next start. An unattended run only logs.
+    /// </summary>
+    internal async Task NoticePartyImportAsync()
+    {
+        try
+        {
+            if (!_context.PartyRoamingRootKnown || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            // The folder is found on the worker thread too: the real one may be redirected to a slow or disconnected place, and the window must not wait for it.
+            var state = await Task.Run(() => _context.ResolvePartyRoamingRoot() is { } root ? PartyImportHint.Check(root) : PartyImportHintState.None).ConfigureAwait(true);
+            if (state == PartyImportHintState.None || IsDisposed || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            // The look may end while a dialog is open (the confirmation of a close during the hardware check, any message box): never open the notice over it, wait until the window is free.
+            if (!await WaitUntilFreeAsync().ConfigureAwait(true) || _context.Settings.PartyImportLater)
+            {
+                return;
+            }
+
+            ApplyPartyImportAnswer(PartyImportDialog.Show(this, _context.Theme, state));
+        }
+        catch (Exception ex)
+        {
+            _context.Report(Strings.Format("gui.status.failed", new Dictionary<string, string> { ["error"] = ex.Message }));
+        }
+    }
+
+    /// <summary>How often <see cref="WaitUntilFreeAsync"/> looks again while a dialog is open (a test lowers it).</summary>
+    internal int FreePollMs = 250;
+
+    /// <summary>
+    /// True while the window cannot take a new dialog of its own: it is closed or disposed, it is disabled (the native window of the owner of a dialog is disabled while that dialog is open, and so is the
+    /// managed state of a window a caller disabled), a modal form of the app is open, or a UAC prompt is on the screen (the network meter's start or the Helper waits on it: the secure desktop is no
+    /// form of ours, but a notice must not come up while the owner answers it).
+    /// </summary>
+    internal bool IsBlockedByDialog =>
+        IsDisposed || !Enabled || (IsHandleCreated && !IsWindowEnabled(Handle)) || _context.PendingUac || Application.OpenForms.Cast<Form>().Any(window => window != this && window.Modal);
+
+    /// <summary>Waits on the UI thread (a short timer, nothing blocked: the dialog that is open keeps running) until no dialog is open over the window. False when the window went away meanwhile.</summary>
+    internal async Task<bool> WaitUntilFreeAsync()
+    {
+        while (!IsDisposed && IsBlockedByDialog)
+        {
+            await Task.Delay(Math.Max(1, FreePollMs)).ConfigureAwait(true);
+        }
+
+        return !IsDisposed;
+    }
+
+    /// <summary>What the owner's answer to the notice does. A test calls it with a launcher that starts nothing (<see cref="GuiContext.PartyLauncherOverride"/>).</summary>
+    internal void ApplyPartyImportAnswer(PartyImportAnswer answer)
+    {
+        switch (answer)
+        {
+            case PartyImportAnswer.Open when !IsDisposed:
+                ShowPage("party");
+                (CurrentPage as PartyPage)?.Open();
+                break;
+            case PartyImportAnswer.Later:
+                PartyLaterSave = SavePartyImportLaterAsync();
+                break;
+        }
+    }
+
+    /// <summary>The save that 「あとで」 started (completed when none was). A test awaits it; the close of the window waits for it, bounded by <see cref="LaterCloseWait"/>.</summary>
+    internal Task PartyLaterSave = Task.CompletedTask;
+
+    /// <summary>How long a close waits for a 「あとで」 save that is still running (a test lowers it).</summary>
+    internal TimeSpan LaterCloseWait = TimeSpan.FromSeconds(3);
+
+    private bool _laterSettled;
+
+    /// <summary>Waits for the 「あとで」 save, at most <see cref="LaterCloseWait"/>, then closes again (the save of the settings after it then finds the lock free, or the save was lost to a lock that never went).</summary>
+    private async Task CloseAfterLaterSaveAsync()
+    {
+        try
+        {
+            await Task.WhenAny(PartyLaterSave, Task.Delay(LaterCloseWait)).ConfigureAwait(true);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // the save reports its own failure; the window closes anyway
+        }
+
+        if (!IsDisposed)
+        {
+            Close();
+        }
+    }
+
+    /// <summary>
+    /// Saves 「あとで」 off the UI thread (the lock retries and the flush to disk must not hold the window). A save that did not reach the file is said once on the status line: the notice then comes again at
+    /// the next start, which is what the line tells.
+    /// </summary>
+    private async Task SavePartyImportLaterAsync()
+    {
+        var saved = false;
+        try
+        {
+            saved = await _context.Settings.TrySavePartyImportLaterAsync().ConfigureAwait(true);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+        }
+
+        if (!saved && !IsDisposed)
+        {
+            _context.ReportKey("gui.party.import.later.failed");
+        }
     }
 
     private void StartHandOff(string executable)
@@ -397,6 +595,17 @@ internal sealed class MainForm : Form
             return;
         }
 
+        // 「あとで」 was clicked just before: its save runs on a worker and may still hold gui.ini.lock, and the synchronous Save below would wait for that lock on the UI thread (a close that won would also lose
+        // the Later write). So the close is held once: the save is awaited without blocking (bounded by LaterCloseWait, 3 s) and the close is asked again. Windows ending the session cannot wait (a cancelled
+        // close is what Windows reports as "this app is stopping the shutdown"): it goes on, and the late write is a best effort.
+        if (!_laterSettled && !PartyLaterSave.IsCompleted && e.CloseReason is not (CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing))
+        {
+            _laterSettled = true;
+            e.Cancel = true;
+            _ = CloseAfterLaterSaveAsync();
+            return;
+        }
+
         // A recording is never a reason to refuse the close (no question): it is stopped and saved first, the wait bounded to ExitBound (2 s). This
         // comes after the check's guard, so a check and a recording at once are both dealt with, the check first; a cancelled first pass left the recording alone.
         StopRecordingForClose();
@@ -481,10 +690,32 @@ internal sealed class MainForm : Form
     internal void ClickRecordingIndicator() =>
         typeof(Control).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(_recording, [EventArgs.Empty]);
 
+    /// <summary>
+    /// The one window message the Parts Life window may send (DESIGN-C 2.2): show the checks page, restore the window if it is minimised and bring it to the front. wParam and lParam are
+    /// not looked at and nothing else is done. True when the message was that one (the caller then does not pass it on).
+    /// </summary>
+    internal bool HandleSiblingMessage(uint message)
+    {
+        if (PcMieru.Core.Siblings.MieruMessages.ForMainWindow(message) != PcMieru.Core.Siblings.MieruMessageAction.ShowChecks)
+        {
+            return false;
+        }
+
+        ShowPage("checks");
+        PcMieru.Core.Siblings.SiblingWindows.RestoreIfMinimized(Handle);
+        Activate();
+        return true;
+    }
+
     protected override void WndProc(ref Message m)
     {
         // A plugged or removed device makes the hardware facts stale (B.md 6). Cheap: it only drops the provider's cache.
         _ = DeviceChange.Handle(m, _context.Services.Hardware);
+        if (HandleSiblingMessage((uint)m.Msg))
+        {
+            return;
+        }
+
         base.WndProc(ref m);
     }
 
@@ -698,4 +929,9 @@ internal sealed class MainForm : Form
         var most = Math.Max((int)(_statusBar.ClientSize.Width * 0.4), LogicalToDeviceUnits(160));
         _notice.Width = Math.Min(wanted, most);
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(nint window);
 }
+

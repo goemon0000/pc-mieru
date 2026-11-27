@@ -170,8 +170,10 @@ public sealed class UpdateIniTests
         var a = GuiSettings.Load(ini);
         var b = GuiSettings.Load(ini);
         // This test is about the two files' contents, not about how long a click may wait (M3: half a second in the app): on a busy machine, with the other tests running,
-        // 40 back-to-back saves of two writers can wait longer than that, so the patience is raised here (it failed once in a run of the tree before the round, at 2 s).
-        a.LockAttempts = b.LockAttempts = 500;
+        // 40 back-to-back saves of two writers can wait longer than any fixed count of tries. So here a save waits for the other writer without a limit: the lock is held
+        // only for the length of one save, so every wait ends, and the hang guard below is the only clock.
+        a.LockAttempts = b.LockAttempts = GuiSettings.UnlimitedLockAttempts;
+        a.LockWaitMs = b.LockWaitMs = 1;
         var failures = 0;
 
         Task Writer(GuiSettings settings, string key) => Task.Run(() =>
@@ -186,7 +188,7 @@ public sealed class UpdateIniTests
             }
         });
 
-        await Task.WhenAll(Writer(a, "writer.a"), Writer(b, "writer.b"));
+        await Task.WhenAll(Writer(a, "writer.a"), Writer(b, "writer.b")).WaitAsync(TimeSpan.FromMinutes(5)); // a hang guard (a deadlock), not a timing
 
         Assert.Equal(0, failures);
         var lines = File.ReadAllLines(ini);
